@@ -12,16 +12,25 @@ app.get('/fixture', (_req, res) => res.type('html').send(body.replace('</body>',
 <script src="/src/modules/kernel-state.js"></script>
 <script src="/src/app-core.js"></script>
 <script src="/src/modules/action-dispatcher.js"></script>
-<script src="/src/modules/overview-data.js"></script>
+<script type="module" src="/src/modules/overview-data.js"></script>
 <script src="/src/modules/todo-plan.js"></script>
 <script src="/src/modules/session-view-state.js"></script>
+<script src="/src/modules/runtime-status.js"></script>
 <script src="/src/modules/auth-client.js"></script>
 <script type="module" src="/src/modules/agent-loader-host.js"></script>
 <script>
   currentRuntimeAgentId = 'runtime-browser';
+  focusedAgentId = 'host-browser';
   allAgents = [{ id: 'host-browser' }];
-  applySessionViewPatch({ identity: { agentId: 'host-browser', sessionId: 'picked' } });
   FEATURE_TEMPLATE_MAP = { early: '/before.js' };
+  // R2 边界（首屏触达时序）：显式 identity patch 在身份变化时会调用 overview-data（ESM）
+  // 的 setCurrentHookInspector / setCurrentOverviewSnapshot 桥键，这两个键在 overview-data
+  // 求值前不存在，因此「显式身份」不能用于模块前的首屏。首屏身份改走 sessionMeta 推导
+  // ——同一条生产数据加载路径，classic 相即可落地原 host/session 身份，且在 gate 未放行
+  // （静态模块仍被延迟）时就能读到 identity 与 token。
+  applySessionViewPatch({ sessionMeta: { sessionId: 'picked' } });
+  window.preModuleIdentity = getCurrentSessionViewIdentity();
+  window.preModuleToken = captureSessionViewToken();
   window.started = false;
   (async () => {
     await window.__clawAuthReady;
@@ -57,6 +66,16 @@ try {
   }
   assert.equal(await page.evaluate(() => document.readyState), 'interactive');
   assert.equal(await page.evaluate(() => window.started), false, 'auth boot must not run before the static module');
+  // 首屏覆盖：静态模块仍被 gate 延迟时，classic 相已持有原 host/session 身份与 token。
+  assert.deepEqual(await page.evaluate(() => ({
+    identity: window.preModuleIdentity,
+    tokenIdentity: window.preModuleToken.identity,
+    tokenRuntime: window.preModuleToken.runtimeId,
+  })), {
+    identity: { agentId: 'host-browser', sessionId: 'picked' },
+    tokenIdentity: { agentId: 'host-browser', sessionId: 'picked' },
+    tokenRuntime: 'runtime-browser',
+  }, 'first screen must carry the original host/session identity before the static module runs');
   await page.evaluate(() => { FEATURE_TEMPLATE_MAP = { latest: '/latest-early.js' }; });
   release();
   await page.waitForFunction(() => window.finished === true);

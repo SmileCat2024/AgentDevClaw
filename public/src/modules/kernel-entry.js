@@ -22,3 +22,7 @@ import './workspace-surface-host.js';
 import './application-startup-host.js';
 import './stream-draft-logic.js';
 import './trim-ratio-core.js';
+// P2 消费方批次模块的生产装载入口（原 index.html classic 标签已删除）。
+// 放在最后：这些模块的桥键注册与 classic 相无交叉读写，与上面的宿主图之间
+// 也不存在求值期依赖；顺序理由与逐批清单见 p2-entry.js 头注。
+import './p2-entry.js';

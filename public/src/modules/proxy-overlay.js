@@ -2,10 +2,18 @@
  * proxy-overlay.js — 网络代理设置面板模块（从 model-settings.js 拆分）
  *
  * 包含：独立 overlay host、代理面板渲染、加载 / 保存 / 连接测试。
- * 依赖（全局）：escapeHtml, currentLanguage
+ *
+ * 依赖：escapeHtml（markdown-utils ESM）、currentLanguage（i18n 状态模块）。
+ * 兼容面：openProxySettings 仍被 classic 的 app-ui.js（设置菜单按钮）以裸
+ * 标识符调用，因此经 KernelState 桥键暴露，不用散装 window.X 赋值。
  */
 
-window._proxyData = null;
+import { escapeHtml } from './markdown-utils.js';
+import { getCurrentLanguage } from './i18n-environment-state.js';
+
+// 面板数据快照：原 window._proxyData，全部读写都在本模块内（零外部消费），
+// 直接收敛为模块私有状态。
+let _proxyData = null;
 
 function ensureProxyHost() {
   let host = document.getElementById('proxy-overlay-host');
@@ -17,7 +25,7 @@ function ensureProxyHost() {
   return host;
 }
 
-function openProxySettings() {
+export function openProxySettings() {
   window.ClawFW.proxyOverlayOpen = true;
   renderProxyOverlay();
   _loadProxyPanel();
@@ -35,7 +43,7 @@ function renderProxyOverlay() {
     host.innerHTML = '';
     return;
   }
-  let isZh = currentLanguage === 'zh';
+  let isZh = getCurrentLanguage() === 'zh';
   host.innerHTML = [
     '<div class="feature-detail-overlay">',
     '<div class="feature-detail-window" style="width:min(100%,520px);max-height:min(100%,640px);">',
@@ -54,18 +62,18 @@ function renderProxyOverlay() {
 async function _loadProxyPanel() {
   let container = document.getElementById('settings-proxy-container');
   if (!container) return;
-  let isZh = currentLanguage === 'zh';
+  let isZh = getCurrentLanguage() === 'zh';
 
   container.innerHTML = '<div class="proxy-info-text">' + (isZh ? '加载中...' : 'Loading...') + '</div>';
 
   try {
     let res = await fetch('/protoclaw/proxy_config');
-    window._proxyData = await res.json();
+    _proxyData = await res.json();
   } catch {
-    window._proxyData = { config: { enabled: false, url: '' }, detected: { url: null, source: 'none' }, active: { url: null, applied: false } };
+    _proxyData = { config: { enabled: false, url: '' }, detected: { url: null, source: 'none' }, active: { url: null, applied: false } };
   }
 
-  let d = window._proxyData;
+  let d = _proxyData;
 
   // Detected proxy info — clickable card that auto-fills URL + enables
   let detectedHtml = '';
@@ -155,7 +163,7 @@ async function _loadProxyPanel() {
 }
 
 async function _saveProxy() {
-  let isZh = currentLanguage === 'zh';
+  let isZh = getCurrentLanguage() === 'zh';
   let enabled = document.getElementById('settings-proxy-enabled').checked;
   let url = document.getElementById('settings-proxy-url').value.trim();
 
@@ -173,7 +181,7 @@ async function _saveProxy() {
     });
     let data = await res.json();
     if (res.ok) {
-      window._proxyData = data;
+      _proxyData = data;
       let msg = data.active && data.active.applied
         ? (isZh ? '已保存并应用: ' : 'Saved & Applied: ') + (data.active.url || '')
         : (isZh ? '已保存（代理已禁用）' : 'Saved (proxy disabled)');
@@ -187,7 +195,7 @@ async function _saveProxy() {
 }
 
 async function _testProxy() {
-  let isZh = currentLanguage === 'zh';
+  let isZh = getCurrentLanguage() === 'zh';
   _proxyStatus('loading', isZh ? '正在测试...' : 'Testing...');
 
   // Test the address currently in the input box (saved or not)
@@ -230,9 +238,20 @@ function _proxyStatus(type, text, detail) {
     + '</div>';
 }
 
-// ── window 导出 ──────────────────────────────────────────────
-window.openProxySettings = openProxySettings;
-// closeProxySettings 无其他消费面，已收敛为模块内函数（关闭动作经 proxy.close）
+// closeProxySettings 无其他消费面，是模块内函数（关闭动作经 proxy.close）。
+
+// ── 兼容桥（KernelState defineKey + claim）────────────────────────────
+// openProxySettings 仍是 classic app-ui.js 设置菜单按钮的裸标识符调用目标；
+// 桥键让该调用点语义不变。收敛条件：app-ui.js 迁入 ESM 并 import 本函数后
+// 删除 defineKey/claim（桥债审计见 .kernel-bridge-baseline.json）。
+const bridgeState = {
+  openProxySettings,
+};
+window.KernelState.defineKey('proxy-overlay', 'openProxySettings', openProxySettings);
+window.KernelState.claim('proxy-overlay', {
+  get: (key) => bridgeState[key],
+  set: (key, value) => { bridgeState[key] = value; },
+});
 
 // ── 分发器动作（原模板内联事件收编，命名空间 proxy.*）─────────────
 window.ClawFW.actions.registerMany({

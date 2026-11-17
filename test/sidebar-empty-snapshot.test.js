@@ -19,21 +19,53 @@
  * mock invoke / fetch 数据源，驱动真实请求、合并与诊断实现。
  */
 
-import { describe, it } from 'node:test';
+import { describe, it as nodeIt } from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
 import { createAgentSnapshotLoader } from '../public/src/modules/agent-snapshot-loader.js';
 import { sanitizeSidebarDiagnosticEvent } from '../server/shared/sidebar-diagnostics.js';
 import { createFrontendSandbox } from './helpers/frontend-vm.js';
+import { withP2EsmCase } from './helpers/p2-esm-case.js';
 
-const SOURCE_PATH = 'public/src/modules/sidebar-render.js';
+/**
+ * 成功路径的缺键异常守卫：console 直通宿主（不静音），用例结束后只对
+ * TypeError / ReferenceError / is not a function 断言——装配缺键会以这类
+ * 错误出现在真实读链里，不能被 `warn(){}` / `error(){}` 吞掉。
+ */
+function createConsoleGuard() {
+  const host = globalThis.console;
+  const lines = [];
+  const format = (args) => args
+    .map((arg) => (arg instanceof Error ? `${arg.name}: ${arg.message}` : String(arg)))
+    .join(' ');
+  const recorder = {
+    ...host,
+    error: (...args) => { lines.push(format(args)); host.error(...args); },
+    warn: (...args) => { lines.push(format(args)); host.warn(...args); },
+  };
+  return {
+    recorder,
+    lines,
+    assertClean: () => {
+      const offenders = lines.filter((line) => /TypeError|ReferenceError|is not a function/.test(line));
+      assert.deepEqual(offenders, [], '成功路径不应出现缺键 / 引用异常');
+    },
+  };
+}
 
-function extractLoaderHostSource() {
-  const source = fs.readFileSync(SOURCE_PATH, 'utf8');
-  const start = source.indexOf('function createAgentSnapshotLoaderHost() {');
-  const end = source.indexOf('// Desktop notification', start);
-  if (start < 0 || end < 0) throw new Error('snapshot host block not found');
-  return source.slice(start, end);
+/**
+ * 用例包装：用例内建立的每个沙箱都带一个 console 守卫，用例结束（成功路径）
+ * 时统一断言没有缺键 / 引用异常。守卫直通宿主 console，不静音任何输出。
+ */
+const pendingGuards = [];
+function it(name, fn) {
+  nodeIt(name, async () => {
+    try {
+      await fn();
+      for (const guard of pendingGuards) guard.assertClean();
+    } finally {
+      pendingGuards.length = 0;
+    }
+  });
 }
 
 const richHost = () => ({
@@ -102,9 +134,10 @@ function createLoadAgentsSandbox({ connectedPlan = [], viewerPlan = [], initialA
   let connectedCursor = 0;
   let viewerCursor = 0;
   let ctx;
+  const guard = createConsoleGuard();
   ctx = createFrontendSandbox({
     performance: { now: () => 0 },
-    console: { ...console, warn() {}, error() {} },
+    console: guard.recorder,
     allAgents: initialAgents === null ? [richHost(), richChild()] : initialAgents,
     focusedAgentId,
     currentRuntimeAgentId,
@@ -148,10 +181,38 @@ function createLoadAgentsSandbox({ connectedPlan = [], viewerPlan = [], initialA
       renders.push(ctx.allAgents.map(({ id, source, connected, status }) => ({ id, source, connected, status })));
     },
   });
-  ctx.run(extractLoaderHostSource());
+  // 真实 classic owner：app-core（身份工具）+ sidebar-render（宿主工厂本体）。
+  // 宿主工厂是生产实现，不再从源码里切出片段执行。
+  ctx.loadSource('public/src/app-core.js');
+  ctx.loadSource('public/src/modules/sidebar-render.js');
+  // 替身写在真源之后：本文件要断言的是「空快照的降级边界」这条契约，
+  // 渲染记录、数据源与诊断写入点用夹具接管（其余键继续走真实实现）。
+  Object.assign(ctx, {
+    invoke: async (command) => {
+      if (command !== 'get_connected_agents') return [];
+      const item = connectedPlan[connectedCursor++];
+      return item === null ? [] : item;
+    },
+    fetch: async () => {
+      const item = viewerPlan[viewerCursor++];
+      if (item === null) return { ok: false, status: 500, json: async () => ({}) };
+      return { ok: true, json: async () => ({ agents: item }) };
+    },
+    resolveFocusedAgentAfterRefresh: () => null,
+    loadAgentDetail: async () => {},
+    refreshAgentCallStates: async () => {},
+    renderFeaturePanel: () => {},
+    collectActiveCallRuntimeIds: () => [],
+    queueSidebarDiagnosticEvent: (event) => { diagnostics.push(event); },
+    renderAgentList: () => {
+      renders.push(ctx.allAgents.map(({ id, source, connected, status }) => ({ id, source, connected, status })));
+    },
+  });
   Object.assign(ctx, createAgentSnapshotLoader(ctx.run('createAgentSnapshotLoaderHost()')));
   ctx.__snapshots = renders;
   ctx.__diagnostics = diagnostics;
+  ctx.__consoleGuard = guard;
+  pendingGuards.push(guard);
   return ctx;
 }
 
@@ -176,23 +237,57 @@ function assertPersistableDiagnostic(event) {
   return persisted;
 }
 
+/**
+ * 真实 ESM 装载（sidebar-operations 已是 ESM，经 withP2EsmCase 的 `c.load`）；
+ * classic 首屏 bootstrap（app-core / sidebar-render）提供模块顶层依赖的 kernel
+ * 桥与渲染去重宿主工厂。
+ *
+ * 私有 helper 无导出面时的重钉：`flushSidebarDiagnosticEvents` 是模块私有，
+ * 原用例直接调用；改用模块自身的排程 flush（250ms 定时器在沙箱里改成微任务），
+ * 断言仍是「排队 → 取批 → 一次 POST」，强度不变。
+ */
 async function captureDiagnosticQueueRequest(event) {
   const requests = [];
-  const ctx = createFrontendSandbox({
-    navigator: {},
-    fetch: async (url, options) => {
-      requests.push({ url, options });
-      return { ok: true, status: 200, json: async () => ({ ok: true }) };
+  const fetchStub = async (url, options) => {
+    requests.push({ url, options });
+    return { ok: true, status: 200, json: async () => ({ ok: true }) };
+  };
+  const immediateTimer = (callback) => { queueMicrotask(callback); return 0; };
+  const guard = createConsoleGuard();
+  return withP2EsmCase({
+    classic: (sandbox) => {
+      sandbox.setTimeout = immediateTimer;
+      sandbox.setInterval = () => 0;
+      sandbox.loadSource('public/src/app-core.js');
+      // 生产加载序：runtime-status 提供调用状态宿主读的容器，session-view-state
+      // 提供会话快照提交宿主；sidebar-operations → project-data 的静态图装载期
+      // 会取这两个工厂（本用例只驱动诊断队列）。
+      sandbox.loadSource('public/src/modules/runtime-status.js');
+      sandbox.loadSource('public/src/modules/session-view-state.js');
+      sandbox.loadSource('public/src/modules/sidebar-render.js');
+      sandbox.renderAgentList = () => {};
+      // app-ui / app-main 的渲染与编排宿主（生产同源，本用例不触达）。
+      sandbox.createWorkspaceSurfaceHost = () => ({});
+      sandbox.createPollCoordinatorHost = () => ({});
+      sandbox.createRuntimeSwitchHost = () => ({ state: {} });
+      sandbox.createCompactResumeHost = () => ({});
     },
+    globals: {
+      navigator: {},
+      fetch: fetchStub,
+      console: guard.recorder,
+      // markdown-utils（经 project-data 图进入）装载期注册动作处理器
+      ClawFW: { actions: { registerMany() {} } },
+    },
+  }, async (c) => {
+    await c.load('public/src/modules/sidebar-operations.js');
+    c.read(`queueSidebarDiagnosticEvent(${JSON.stringify(event)})`);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(requests.length, 1, '诊断队列必须发送一次请求');
+    assert.equal(requests[0].url, '/protoclaw/sidebar_diagnostics/events');
+    guard.assertClean();
+    return JSON.parse(requests[0].options.body).events[0];
   });
-  ctx.loadSource('public/src/modules/sidebar-operations.js');
-  await ctx.run(`(async () => {
-    queueSidebarDiagnosticEvent(${JSON.stringify(event)});
-    return flushSidebarDiagnosticEvents();
-  })()`);
-  assert.equal(requests.length, 1, '诊断队列必须发送一次请求');
-  assert.equal(requests[0].url, '/protoclaw/sidebar_diagnostics/events');
-  return JSON.parse(requests[0].options.body).events[0];
 }
 
 describe('loadAgents 空连接快照行为契约', () => {
@@ -212,7 +307,10 @@ describe('loadAgents 空连接快照行为契约', () => {
 
   it('invoke 在 HTTP 失败时保留数组兼容性并传递非枚举诊断元数据', async () => {
     const diagnostics = [];
+    const guard = createConsoleGuard();
+    pendingGuards.push(guard);
     const ctx = createFrontendSandbox({
+      console: guard.recorder,
       fetch: async () => ({ ok: false, status: 503, json: async () => ({}) }),
       queueSidebarDiagnosticEvent: (event) => diagnostics.push(event),
     });

@@ -2,7 +2,7 @@
  * sidebar-pin-color.js
  *
  * 侧栏待办 pin 的颜色交互域：
- *  - 色板常量 window.SIDEBAR_TODO_COLORS：runtime-status（条目关联）与
+ *  - 色板常量 SIDEBAR_TODO_COLORS：runtime-status（条目关联）与
  *    ctx-menu-items（ctxTodoSession 归一化）共用的合法色值集合。
  *  - 已待办 pin 的 pointer 状态机：tap = 取消待办（转调
  *    onSidebarSessionPinClick 的 toggle 链路）；长按或向上拖动 = 在 pin
@@ -12,11 +12,32 @@
  * 颜色持久化复用 ctxTodoSession（显式 todo + color，非 toggle）。乐观
  * 更新不进侧栏渲染签名，应用颜色后需清签名强制立即重渲。
  *
- * Exported global functions:
- *   onSidebarPinPointerDown
+ * ESM 化：P2 W2-6（2026-11-17）
+ * 依赖（ESM）：实时语言（i18n-environment-state.js）、sidebarRender
+ * （p2-bootstrap-sidebar.js 的渲染签名适配面，owner 仍是 classic sidebar-render.js）。
+ * renderAgentList / onSidebarSessionPinClick 仍 classic（window 晚绑定）。
+ * ctxTodoSession 已改 import（ctx-menu-items.js 具名导出）。
+ *
+ * 桥接期兼容面（KernelState defineKey/claim，domain: sidebar-pin-color）：
+ *   - SIDEBAR_TODO_COLORS ← classic runtime-status（window.* 读取）；ctx-menu-items
+ *     已改 import（顶层不读该 let 绑定）；
+ *     原形态是**可写**的 window 属性，因此保留 `let` live binding + claim 直写绑定，
+ *     认领后 classic 的整值替换真正落到模块状态（模块内 applyTodoColor 的色值门禁
+ *     读同一绑定），不产生"模块原 const / 桥槽"两份分叉。
+ *   - onSidebarPinPointerDown ← classic sidebar-render 生成的 pin 按钮内联
+ *     onpointerdown 属性（事件时点按裸标识符解析到 window）
+ * 注销条件：两处消费方迁移后改 import，删除 defineKey 并下调桥债基线。
  */
 
-window.SIDEBAR_TODO_COLORS = new Set(['white', 'red', 'yellow', 'green', 'blue']);
+import { getCurrentLanguage } from './i18n-environment-state.js';
+import { sidebarRender } from './p2-bootstrap-sidebar.js';
+// 与 ctx-menu-items 的静态环：本模块取它的待办入口，它取本模块的色板
+//（`let` 绑定，只在该模块函数体内读取，顶层不读）；真实图由 p2-w2-6 / sidebar 用例执行。
+import { ctxTodoSession } from './ctx-menu-items.js';
+
+// 可整体替换的色板（沿用原 window 属性的写语义：classic 指派新 Set 后，模块内的
+// 色值门禁必须看到同一个新实例）。
+let SIDEBAR_TODO_COLORS = new Set(['white', 'red', 'yellow', 'green', 'blue']);
 
 const TODO_COLOR_SWATCHES = [
   { id: 'white', zh: '白色', en: 'White' },
@@ -44,7 +65,7 @@ let pickerEl = null;
 let pickerPinned = false; // 松手未命中色块时保持打开，等待点击选择
 
 function currentLanguageIsZh() {
-  return typeof currentLanguage === 'string' && currentLanguage === 'zh';
+  return typeof getCurrentLanguage() === 'string' && getCurrentLanguage() === 'zh';
 }
 
 function getPicker() {
@@ -116,20 +137,20 @@ function closeTodoColorPicker() {
  * （乐观更新、失败回滚、delta 应用），并强制侧栏立即重渲。
  */
 function applyTodoColor(pinEl, color) {
-  if (!pinEl || !window.SIDEBAR_TODO_COLORS.has(color)) return;
+  if (!pinEl || !SIDEBAR_TODO_COLORS.has(color)) return;
   const ctxEl = pinEl.closest('[data-ctx-role]');
   if (!ctxEl) return;
   const ns = ctxEl.dataset.ctxNs;
   const sessionId = ctxEl.dataset.ctxSessionId || ctxEl.dataset.ctxId;
   if (!ns || !sessionId) return;
-  if (typeof ctxTodoSession === 'function') {
-    ctxTodoSession(
-      { role: ctxEl.dataset.ctxRole, ns, id: sessionId, sessionId, variant: ctxEl.dataset.ctxVariant || 'default' },
-      { todo: true, color },
-    );
-  }
-  if (typeof lastAgentListRenderSignature === 'string') lastAgentListRenderSignature = '';
-  if (typeof renderAgentList === 'function') renderAgentList();
+  ctxTodoSession(
+    { role: ctxEl.dataset.ctxRole, ns, id: sessionId, sessionId, variant: ctxEl.dataset.ctxVariant || 'default' },
+    { todo: true, color },
+  );
+  // 乐观颜色不进渲染签名：清签名强制下次 renderAgentList 立即重建。
+  sidebarRender.lastAgentListRenderSignature = '';
+  // 桥接期：renderAgentList 定义于 classic sidebar-render（侧栏渲染域收敛时移除）
+  if (typeof window.renderAgentList === 'function') window.renderAgentList();
 }
 
 function beginPinDrag() {
@@ -179,6 +200,7 @@ function onPinPointerUp(event) {
     }
   } else if (pinDrag.pinEl?.isConnected) {
     // tap：切换待办（toggle 链路）
+    // 桥接期：onSidebarSessionPinClick 定义于 classic sidebar-render（侧栏渲染域收敛时移除）
     window.onSidebarSessionPinClick({ stopPropagation() {} }, pinDrag.pinEl);
   }
   pinDrag.pressing = false;
@@ -203,7 +225,7 @@ function onPinPointerCancel(event) {
  * 上拖 = 弹出颜色选择器，选中色块以该色设为待办/换色。stopPropagation
  * 防止触发条目点击切换会话。
  */
-window.onSidebarPinPointerDown = function(event, pinEl) {
+function onSidebarPinPointerDown(event, pinEl) {
   if (event.button !== 0 || !event.isPrimary) return;
   if (!pinEl?.classList.contains('agent-session-pin')) return;
   // 选择器已打开（保持态）时再次按压 pin：先收起再开始新的按压
@@ -223,7 +245,25 @@ window.onSidebarPinPointerDown = function(event, pinEl) {
   window.addEventListener('pointermove', onPinPointerMove);
   window.addEventListener('pointerup', onPinPointerUp);
   window.addEventListener('pointercancel', onPinPointerCancel);
-};
+}
+
+export { SIDEBAR_TODO_COLORS, onSidebarPinPointerDown };
+
+// —— 桥接期兼容面（kernel-state 访问器桥）——
+// 注销条件见文件头：ctx-menu-items / runtime-status 与 sidebar-render 迁移后
+// 改 import，删除对应 defineKey 并下调桥债基线。
+const bridgeApi = { onSidebarPinPointerDown };
+window.KernelState.defineKey('sidebar-pin-color', 'SIDEBAR_TODO_COLORS', SIDEBAR_TODO_COLORS);
+window.KernelState.defineKey('sidebar-pin-color', 'onSidebarPinPointerDown', onSidebarPinPointerDown);
+window.KernelState.claim('sidebar-pin-color', {
+  // SIDEBAR_TODO_COLORS 是 live binding：认领后 classic 写方整值替换落到本模块变量上
+  // （模块内的色值门禁与 classic 读方共享同一实例）。
+  get: (key) => (key === 'SIDEBAR_TODO_COLORS' ? SIDEBAR_TODO_COLORS : bridgeApi[key]),
+  set: (key, value) => {
+    if (key === 'SIDEBAR_TODO_COLORS') SIDEBAR_TODO_COLORS = value;
+    else bridgeApi[key] = value;
+  },
+});
 
 // 保持打开的选择器：点击外部关闭
 document.addEventListener('pointerdown', (event) => {

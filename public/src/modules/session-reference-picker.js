@@ -6,17 +6,21 @@
  * 本模块局部作用域，会话切换清空；发送失败归还（与 ClawSlash 激活通知的
  * consume/restore 模式同构）。
  *
- * window 命名空间导出（window.SessionReference）：
+ * 导出（window.SessionReference 为既有公开命名空间协议，保持不变）：
  *   add(entry) / addToTarget(entry, target) / remove(index) / clear()
  *   consume() / restore(refs) / peek()
  *   chipsHtml() — 引用 pill 的 HTML（_renderAttachmentPreview 拼接）
  *   openPicker() — + 菜单「会话」入口打开选择弹窗
  *
- * 依赖全局（运行时解析，加载顺序见 index.html）：
- *   currentLanguage, currentRuntimeAgentId, allAgents (app-core.js)
- *   escapeHtml (markdown-utils.js)
- *   ClawToast (toast-notify.js)
+ * 依赖：已迁 ESM 的 i18n 语言、orchestration 的当前 runtime、markdown 的
+ * escapeHtml、toast 均由 import 提供；仍 classic 的身份解析与附件预览函数
+ * 经 window 晚绑定（标注收敛条件）。
  */
+
+import { ClawToast } from './toast-notify.js';
+import { currentRuntimeAgentId } from './orchestration-state.js';
+import { escapeHtml } from './markdown-utils.js';
+import { getCurrentLanguage } from './i18n-environment-state.js';
 
 // ── 引用状态（模块局部） ──────────────────────────────────────────
 
@@ -33,11 +37,10 @@ const _sessionReferences = new Map(); // key → [{ agentId, sessionId, sessionT
 let _lastKnownRefKey = null;
 
 function _activeRefKey() {
-  const runtimeId = typeof currentRuntimeAgentId !== 'undefined'
-    ? String(currentRuntimeAgentId || '').trim()
-    : '';
-  const sessionId = runtimeId && typeof getRuntimeWorkspaceSessionId === 'function'
-    ? String(getRuntimeWorkspaceSessionId(runtimeId) || '').trim()
+  const runtimeId = String(currentRuntimeAgentId || '').trim();
+  // 桥接期：getRuntimeWorkspaceSessionId 仍定义于 app-core（身份域收敛时 import）。
+  const sessionId = runtimeId && typeof window.getRuntimeWorkspaceSessionId === 'function'
+    ? String(window.getRuntimeWorkspaceSessionId(runtimeId) || '').trim()
     : '';
   if (runtimeId && sessionId) {
     _lastKnownRefKey = `${runtimeId}::${sessionId}`;
@@ -80,26 +83,26 @@ function _appendRefToKey(key, ref) {
 
 /** 当前活跃会话的 (agentId, sessionId) 判定：同步读取 viewer 绑定，仅用于禁自引用提示。 */
 function _currentSessionIdentity() {
-  const runtimeId = typeof currentRuntimeAgentId !== 'undefined'
-    ? String(currentRuntimeAgentId || '').trim()
-    : '';
+  const runtimeId = String(currentRuntimeAgentId || '').trim();
   if (!runtimeId) return null;
-  const sessionId = typeof getRuntimeWorkspaceSessionId === 'function'
-    ? String(getRuntimeWorkspaceSessionId(runtimeId) || '').trim()
+  // 桥接期：以下三个解析函数仍定义于 app-core / app-main（身份域与列表域
+  // 收敛时改为 import）。
+  const sessionId = typeof window.getRuntimeWorkspaceSessionId === 'function'
+    ? String(window.getRuntimeWorkspaceSessionId(runtimeId) || '').trim()
     : '';
   if (!sessionId) return null;
-  const host = typeof getCurrentHostAgentRecord === 'function'
-    ? getCurrentHostAgentRecord()
+  const host = typeof window.getCurrentHostAgentRecord === 'function'
+    ? window.getCurrentHostAgentRecord()
     : null;
   const agentId = String(
-    (typeof getLogicalAgentId === 'function' && host && getLogicalAgentId(host))
+    (typeof window.getLogicalAgentId === 'function' && host && window.getLogicalAgentId(host))
     || host?.id
     || 'programming-helper',
   ).trim();
   return { agentId, sessionId };
 }
 
-function addSessionReference(entry) {
+export function addSessionReference(entry) {
   if (!entry || typeof entry.sessionId !== 'string' || !entry.sessionId.trim()) return false;
   const ref = {
     agentId: String(entry.agentId || '').trim() || 'programming-helper',
@@ -109,11 +112,11 @@ function addSessionReference(entry) {
   };
   const current = _currentSessionIdentity();
   if (current && current.agentId === ref.agentId && current.sessionId === ref.sessionId) {
-    if (typeof ClawToast !== 'undefined' && ClawToast?.show) {
+    if (ClawToast?.show) {
       ClawToast.show({
         id: 'session-ref-self',
         status: 'warning',
-        title: typeof currentLanguage !== 'undefined' && currentLanguage === 'zh'
+        title: getCurrentLanguage() === 'zh'
           ? '当前会话不能引用自身' : 'Cannot reference the current session',
         autoDismiss: 3200,
       });
@@ -131,7 +134,7 @@ function addSessionReference(entry) {
  * 切换过去后 pill 自然显示。自引用按目标会话身份判定：被拖会话恰好是
  * 目标条目自身时拦截（dragover 悬停期已先行禁止，这里是兜底）。
  */
-function addSessionReferenceToTarget(entry, target) {
+export function addSessionReferenceToTarget(entry, target) {
   if (!entry || typeof entry.sessionId !== 'string' || !entry.sessionId.trim()) return false;
   const runtimeId = String(target?.runtimeId || '').trim();
   const targetAgentId = String(target?.agentId || '').trim();
@@ -143,9 +146,9 @@ function addSessionReferenceToTarget(entry, target) {
     sessionType: String(entry.sessionType || 'main').trim() || 'main',
     title: String(entry.title || '').trim(),
   };
-  const zh = typeof currentLanguage !== 'undefined' && currentLanguage === 'zh';
+  const zh = getCurrentLanguage() === 'zh';
   const toast = (status, title) => {
-    if (typeof ClawToast !== 'undefined' && ClawToast?.show) {
+    if (ClawToast?.show) {
       ClawToast.show({ id: 'session-ref-drop', status, title, autoDismiss: 3200 });
     }
   };
@@ -161,14 +164,14 @@ function addSessionReferenceToTarget(entry, target) {
   return true;
 }
 
-function removeSessionReference(index) {
+export function removeSessionReference(index) {
   const refs = _refs();
   if (index < 0 || index >= refs.length) return;
   refs.splice(index, 1);
   _notifyPreviewChanged();
 }
 
-function clearSessionReferences() {
+export function clearSessionReferences() {
   const key = _activeRefKey();
   const refs = _sessionReferences.get(key);
   if (!Array.isArray(refs) || refs.length === 0) return;
@@ -177,7 +180,7 @@ function clearSessionReferences() {
 }
 
 /** 发送时消费：取走当前会话的全部引用（数组浅拷贝）并清空 pill。 */
-function consumeSessionReferences() {
+export function consumeSessionReferences() {
   const refs = _refs().slice();
   _sessionReferences.set(_activeRefKey(), []);
   _notifyPreviewChanged();
@@ -185,7 +188,7 @@ function consumeSessionReferences() {
 }
 
 /** 发送失败归还（consume 取走的引用原样放回），不覆盖期间新挂的引用。 */
-function restoreSessionReferences(refs) {
+export function restoreSessionReferences(refs) {
   if (!Array.isArray(refs) || refs.length === 0) return;
   const current = _refs();
   for (const ref of refs) {
@@ -197,19 +200,19 @@ function restoreSessionReferences(refs) {
 }
 
 /** 乐观气泡快照（不消费）。 */
-function peekSessionReferences() {
+export function peekSessionReferences() {
   return _refs().slice();
 }
 
 /** user-turn body 的 metadata 片段；无引用时返回 null（不产生空字段）。 */
-function buildTurnMetadata() {
+export function buildTurnMetadata() {
   const refs = _refs();
   if (refs.length === 0) return null;
   return { 'session-reference': refs.map(r => ({ ...r })) };
 }
 
 /** 引用 pill HTML（与图片缩略图同在附件预览区渲染）。 */
-function sessionReferenceChipsHtml() {
+export function sessionReferenceChipsHtml() {
   const refs = _refs();
   if (refs.length === 0) return '';
   return refs.map((ref, idx) => {
@@ -218,7 +221,7 @@ function sessionReferenceChipsHtml() {
       + '<svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>'
       + '<span class="session-ref-chip-label">' + escapeHtml(label) + '</span>'
       + '<button class="session-ref-chip-remove" type="button" data-action="sessionRef.removeChip" data-args="[' + idx + ']" title="'
-      + escapeHtml(typeof currentLanguage !== 'undefined' && currentLanguage === 'zh' ? '移除' : 'Remove')
+      + escapeHtml(getCurrentLanguage() === 'zh' ? '移除' : 'Remove')
       + '">×</button>'
       + '</div>';
   }).join('');
@@ -228,8 +231,8 @@ function _notifyPreviewChanged() {
   // 引用 key 随会话切换（input-composer 的 syncPersistentComposerSessionCard
   // 更新 dataset.sessionKey）后，附件预览必须按新 key 重渲染，否则旧会话的
   // pill 残留显示（DOM 不刷新）。_renderAttachmentPreview 定义于
-  // persistent-input.js，加载顺序在本模块之后，运行时解析。
-  if (typeof _renderAttachmentPreview === 'function') _renderAttachmentPreview();
+  // persistent-input.js（仍 classic，window 属性可达），收敛批次改为 import。
+  if (typeof window._renderAttachmentPreview === 'function') window._renderAttachmentPreview();
 }
 
 // ── 会话选择弹窗 ──────────────────────────────────────────────────
@@ -243,9 +246,9 @@ function closeSessionReferencePicker() {
   }
 }
 
-function openSessionReferencePicker() {
+export function openSessionReferencePicker() {
   if (_pickerEl) { _pickerEl.remove(); _pickerEl = null; }
-  const zh = typeof currentLanguage !== 'undefined' && currentLanguage === 'zh';
+  const zh = getCurrentLanguage() === 'zh';
 
   const overlay = document.createElement('div');
   overlay.className = 'session-ref-picker-overlay';
@@ -335,7 +338,7 @@ function openSessionReferencePicker() {
       if (entry && addSessionReference(entry)) added += 1;
     }
     closeSessionReferencePicker();
-    if (added > 0 && typeof ClawToast !== 'undefined' && ClawToast?.show) {
+    if (added > 0 && ClawToast?.show) {
       ClawToast.show({
         id: 'session-ref-added',
         status: 'success',
@@ -360,7 +363,7 @@ function openSessionReferencePicker() {
 
 // ── Composer / 侧栏条目拖拽投放（dragstart 写入引用 MIME 的两类源共用）──
 
-const SESSION_REF_MIME = 'application/x-claw-session-ref';
+export const SESSION_REF_MIME = 'application/x-claw-session-ref';
 
 // 拖拽中的源会话身份（dragstart 写入，dragend 清除）。dragover 只能读
 // dataTransfer.types 读不了数据，「拖到自己身上」的悬停期判定靠它：
@@ -368,7 +371,7 @@ const SESSION_REF_MIME = 'application/x-claw-session-ref';
 // 拖到其他会话（跨会话左栏 → 左栏、工作空间 → 左栏）不受影响。
 let _dragSourceEntry = null;
 
-function setDragSource(entry) {
+export function setDragSource(entry) {
   _dragSourceEntry = (entry && typeof entry.sessionId === 'string' && entry.sessionId.trim())
     ? {
         agentId: String(entry.agentId || '').trim(),
@@ -478,7 +481,8 @@ function bindSessionReferenceDrop() {
 
 bindSessionReferenceDrop();
 
-// ── window 命名空间导出 ───────────────────────────────────────────
+// ── window 命名空间导出（既有公开协议：persistent-input / input-composer /
+//    slash-menu / thread-store / sidebar-render / session-list-render 消费）──
 
 window.SessionReference = {
   add: addSessionReference,
@@ -501,6 +505,10 @@ window.SessionReference = {
   // dragover 据此在悬停期禁止「拖到自己身上」
   setDragSource,
 };
+
+// 命名导出与命名空间成员一一对应（activeKey / notify 沿用命名空间键名，
+// 内部实现名保持不变）。
+export { _activeRefKey as activeKey, _notifyPreviewChanged as notify };
 
 // ── 分发器动作（原模板内联事件收编，命名空间 sessionRef.*）────────
 // pill 移除走模块内 removeSessionReference；window.SessionReference.remove

@@ -21,11 +21,29 @@
  * 全局层装配的条目（layerId 'global'）在身份商店只读展示：移除入口在插件
  * 管理器。
  *
- * 外部依赖（通过全局作用域）：
- *   - escapeHtml (app-ui.js)
- *   - currentLanguage (app-core.js)
- *   - window._phRefreshMountsView (ph-settings.js，写操作后刷新工作空间插件页)
+ * 外部依赖：
+ *   - escapeHtml（markdown-utils.js 命名导出）
+ *   - catalog 快照/分组/装配事实失效（feature-catalog.js 命名导出）
+ *   - t（i18n.js 的 classic 顶层函数，经 window 晚绑定）
+ *   - currentLanguage（i18n-environment-state.js 命名导出）
+ *   - _phRefreshMountsView（ph-settings.js 具名导出，写操作后刷新工作空间插件页）
+ *   - window.ClawFW.phSurfaceDetail（可选钩子；全仓暂无写入方，卡片声明面行恒空）
+ *
+ * ESM 化（P2 迁移批次 6）：两态判定与即时保存来自 feature-setup-core.js 命名
+ * 导出。三个对外入口仍有 classic 消费方（ph-settings.js 的插件商店/移除动作、
+ * app-ui.js 设置菜单的插件管理器），保留三个桥键；其余函数与状态收敛为模块
+ * 私有（消费面只有本模块模板与动作表）。
  */
+
+import { fsFieldStates, fsControlValue, fsShowReset, fsWithField } from './feature-setup-core.js';
+import {
+  getFeatureCatalogSnapshot, groupFeaturesByType, loadFeatureCatalog, refreshMountFacts,
+} from './feature-catalog.js';
+import { getCurrentLanguage } from './i18n-environment-state.js';
+import { escapeHtml } from './markdown-utils.js';
+// 与 ph-settings 的静态环：本模块取它的装配清单刷新入口，ph-settings 取本模块
+// 的商店入口；两侧相互引用都只发生在函数体 / 动作回调内（顶层不读对方绑定）。
+import { _phRefreshMountsView } from './ph-settings.js';
 
 const _FS_IDENTITY_SCOPES = {
   main: { agentId: 'programming-helper', layerId: 'agent', labelZh: '编程小助手', labelEn: 'Programming Helper' },
@@ -47,7 +65,7 @@ let _fsState = {
 let _fsTickTimer = null;
 
 function _fsT(zh, en) {
-  return (typeof currentLanguage !== 'undefined' && currentLanguage === 'zh') ? zh : en;
+  return getCurrentLanguage() === 'zh' ? zh : en;
 }
 
 // install/rebuild 错误分类 → 用户文案（服务端 code 见 install-service.js）
@@ -128,10 +146,9 @@ async function _fsMutateLayer(identity, mutator) {
 async function _fsAfterChange(identity) {
   await _fsReloadOverview();
   // 当前工作空间设置页若正在展示同一身份的装配清单，同步刷新。
-  if (typeof window._phRefreshMountsView === 'function') window._phRefreshMountsView(identity);
+  _phRefreshMountsView(identity);
   // 右侧 Features 面板的来源分类消费同一份装配事实，强制失效缓存重拉
-  const fc = window.ClawFW && window.ClawFW.featureCatalog;
-  if (fc && typeof fc.refreshMountFacts === 'function') fc.refreshMountFacts();
+  refreshMountFacts();
 }
 
 // 安装计时：秒数展示（安装期间每秒重渲染，给"在动"的感知）
@@ -203,7 +220,7 @@ const _fsInstallBuiltin = async function(runtimeName) {
 };
 
 /** 挂载管理页的移除按钮：带身份参数，不依赖商店当前的打开状态。 */
-window._fsRemoveFor = async function(identity, runtimeName) {
+export async function _fsRemoveFor(identity, runtimeName) {
   if (_fsState.busy) return;
   _fsState.busy = true;
   try {
@@ -215,7 +232,7 @@ window._fsRemoveFor = async function(identity, runtimeName) {
     _fsState.busy = false;
     _fsRender();
   }
-};
+}
 
 const _fsSelectVersion = function(packageName, selectEl) {
   const card = selectEl.closest('[data-fs-package]');
@@ -230,12 +247,11 @@ function _fsMountedMap() {
 }
 
 /**
- * catalog 快照（window.ClawFW.featureCatalog 与面板/挂载页共用）。
+ * catalog 快照（feature-catalog 域与面板/挂载页共用同一份模块级缓存）。
  * 未就绪返回 null（分组落待归类兜底组）；phOpenFeatureStore 打开时预加载。
  */
 function _fsCatalog() {
-  const fc = window.ClawFW && window.ClawFW.featureCatalog;
-  return fc ? fc.getFeatureCatalogSnapshot() : null;
+  return getFeatureCatalogSnapshot();
 }
 
 /** 商店货架卡片：复用 Features 面板 feature-card 结构；surface 有值时带声明面数量行。 */
@@ -363,7 +379,6 @@ function _fsBuildTypeGroups(mountedMap, mountedByPackage) {
   ];
   if (!features.length) return [];
 
-  const fc = window.ClawFW && window.ClawFW.featureCatalog;
   const catalog = _fsCatalog();
   // enrich 兼容形状：声明面计数喂给能力推导（商店不提供能力筛选，仅供分组一致性）
   const feed = features.map((feature) => ({
@@ -376,8 +391,8 @@ function _fsBuildTypeGroups(mountedMap, mountedByPackage) {
   const commandFeatures = new Map(
     features.filter((i) => i.surface && i.surface.commands > 0).map((i) => [i.name, i.surface.commands]),
   );
-  return (fc && catalog)
-    ? fc.groupFeaturesByType(feed, catalog, 'all', 'all', { commandFeatures })
+  return catalog
+    ? groupFeaturesByType(feed, catalog, 'all', 'all', { commandFeatures })
     : [{ id: '_unmapped', features: feed }];
 }
 
@@ -396,7 +411,8 @@ function _fsRenderStoreBody(mountedMap, mountedByPackage) {
     { id: 'all', label: _fsT('全部', 'All'), count: totalCount },
     ...groups.map((group) => ({
       id: group.id,
-      label: t(group.id === '_unmapped' ? 'feature_cat_unmapped' : 'feature_type_' + group.id),
+      // 桥接期：t 定义于 i18n.js（classic 顶层函数，i18n 域收敛时移除）
+      label: window.t(group.id === '_unmapped' ? 'feature_cat_unmapped' : 'feature_type_' + group.id),
       count: group.features.length,
     })),
   ].map((tab) => '<button type="button" class="fs-category-tab' + (_fsState.category === tab.id ? ' active' : '')
@@ -496,7 +512,7 @@ function _fsRender() {
 
 // ── 面板开关（ph-settings 的入口卡片调用）────────────────
 
-window.phOpenFeatureStore = async function(identity) {
+export async function phOpenFeatureStore(identity) {
   _fsState.open = true;
   // 身份由打开上下文决定（配置编辑器/挂载管理页传入）；未传时默认 main
   _fsState.identity = _FS_IDENTITY_SCOPES[identity] ? identity : 'main';
@@ -511,12 +527,10 @@ window.phOpenFeatureStore = async function(identity) {
   // catalog 与 overview 并行预载；catalog 失败不阻断（分组落待归类兜底组）
   await Promise.all([
     _fsReloadOverview(),
-    (window.ClawFW && window.ClawFW.featureCatalog
-      ? window.ClawFW.featureCatalog.loadFeatureCatalog().catch(() => {})
-      : Promise.resolve()),
+    loadFeatureCatalog().catch(() => {}),
   ]);
   _fsRender();
-};
+}
 
 function phCloseFeatureStore() {
   _fsState.open = false;
@@ -593,7 +607,7 @@ let _fsSettings = {
  * resolved 为 resolved API 响应；scopeId 为当前编辑层。返回行数组：
  * { key, prop, state, controlValue, showReset, upstreamLabel, groupLabel }。
  */
-function _fsSettingsRows(manifestEntry, resolved, scopeId) {
+export function _fsSettingsRows(manifestEntry, resolved, scopeId) {
   const properties = manifestEntry?.manifest?.settings?.properties;
   if (!properties || typeof properties !== 'object') return null;
   const sections = [{ featureName: manifestEntry.featureName, props: properties, propKeys: Object.keys(properties) }];
@@ -712,7 +726,7 @@ function _pmOpenUpload() {
       _pmState.import = await resp.json();
       _pmRender();
     } catch (error) {
-      window.alert((currentLanguage === 'zh' ? '解析 tgz 失败：' : 'Failed to parse tgz: ') + (error?.message || error));
+      window.alert((getCurrentLanguage() === 'zh' ? '解析 tgz 失败：' : 'Failed to parse tgz: ') + (error?.message || error));
     }
   };
   input.click();
@@ -745,7 +759,7 @@ async function _pmConfirmImport() {
     await _fsAfterChange();
     await _pmReloadOverview();
   } catch (error) {
-    window.alert((currentLanguage === 'zh' ? '导入失败：' : 'Import failed: ') + (error?.message || error));
+    window.alert((getCurrentLanguage() === 'zh' ? '导入失败：' : 'Import failed: ') + (error?.message || error));
   } finally {
     _pmRender();
   }
@@ -918,7 +932,7 @@ function _pmRender() {
   ].join('');
 }
 
-window.clawOpenPluginManager = async function() {
+export async function clawOpenPluginManager() {
   _pmState.open = true;
   _pmState.overview = null;
   _pmState.error = '';
@@ -928,7 +942,7 @@ window.clawOpenPluginManager = async function() {
   _pmRender();
   await _pmReloadOverview();
   _pmRender();
-};
+}
 
 function _pmClosePluginManager() {
   _pmState.open = false;
@@ -959,7 +973,7 @@ window.ClawFW.actions.registerMany({
  * （'main' | 'coder'）时提供「全局默认 | 本空间」两层 tab，插件管理器的
  * 全局装配卡片无身份上下文（不传），只编辑全局默认层。
  */
-window._fsOpenSettings = async function(runtimeName, identityContext, options = {}) {
+async function _fsOpenSettings(runtimeName, identityContext, options = {}) {
   const scope = identityContext && _FS_IDENTITY_SCOPES[identityContext];
   const requestedScope = options.initialScope;
   const initialScope = scope && requestedScope !== 'global' ? 'agent' : 'global';
@@ -973,7 +987,7 @@ window._fsOpenSettings = async function(runtimeName, identityContext, options = 
     scopeId: initialScope,
     agentId: scope ? scope.agentId : 'programming-helper',
     hasIdentity: !!scope,
-    identityLabel: scope ? (currentLanguage === 'zh' ? scope.labelZh : scope.labelEn) : '',
+    identityLabel: scope ? (getCurrentLanguage() === 'zh' ? scope.labelZh : scope.labelEn) : '',
     error: '',
   };
   _fsSettingsRender();
@@ -1017,7 +1031,7 @@ function _fsSettingsTargetSparse() {
 /** 字段行 HTML：label/description 双语取 manifest 声明，控件按 type 分发。 */
 function _fsSettingsRowHtml(row) {
   const prop = row.prop || {};
-  const isZh = currentLanguage === 'zh';
+  const isZh = getCurrentLanguage() === 'zh';
   const label = (prop.label && (isZh ? prop.label.zh : prop.label.en)) || row.key.split('.').pop();
   const desc = prop.description && (isZh ? prop.description.zh : prop.description.en);
   const takeover = row.state?.status === 'takeover';
@@ -1118,14 +1132,14 @@ const _fsSettingsSave = async function(fullKey, value) {
   _fsSettingsRender();
 };
 
-window._fsCloseSettings = function() {
+function _fsCloseSettings() {
   _fsSettings.open = false;
   _fsSettingsRender();
-};
+}
 
 window.ClawFW.actions.registerMany({
-  'featureStore.openSettings': (el) => window._fsOpenSettings(el.dataset.name, el.dataset.identity || null, { initialScope: el.dataset.scope }),
-  'featureStore.closeSettings': () => window._fsCloseSettings(),
+  'featureStore.openSettings': (el) => _fsOpenSettings(el.dataset.name, el.dataset.identity || null, { initialScope: el.dataset.scope }),
+  'featureStore.closeSettings': () => _fsCloseSettings(),
   'featureStore.settingsTab': (el) => _fsSettingsSwitchTab(el.dataset.scope),
   'featureStore.settingsReset': (el) => _fsSettingsSave(el.dataset.key, null),
   'featureStore.settingsField': (el) => {
@@ -1136,4 +1150,14 @@ window.ClawFW.actions.registerMany({
     if (value === null) { el.classList.add('fs-input-error'); return; }
     _fsSettingsSave(el.dataset.key, value);
   },
+});
+
+// ── 兼容桥（classic 消费方收敛后注销）────────────────────────────
+// - clawOpenPluginManager：app-ui.js 设置菜单的插件管理器入口。
+// phOpenFeatureStore / _fsRemoveFor 已改由 ph-settings.js 直接 import，桥已注销。
+const bridgeState = { clawOpenPluginManager };
+window.KernelState.defineKey('feature-store', 'clawOpenPluginManager', bridgeState.clawOpenPluginManager);
+window.KernelState.claim('feature-store', {
+  get: (key) => bridgeState[key],
+  set: (key, value) => { bridgeState[key] = value; },
 });

@@ -16,176 +16,180 @@
  *
  * 后续 Phase 将在此模块上叠加 NavigationHandle 事务对象（beginNavigation）。
  *
- * 依赖（全局，由先序脚本或宿主环境提供）：fetch、window。
+ * 依赖：fetch、window（RemoteConnections 与身份解析的 classic 实现）。
+ * 消费面：ctx-menu-handlers / ctx-menu-items / sidebar-render 三个 classic
+ * 模块经 window.NavigationCore 命名空间调用（现有公开协议，保持 window 挂载）。
  */
-window.NavigationCore = (() => {
+
+/**
+ * 轮询轻量 runtime_status 端点直到目标 runtime 就绪。
+ *
+ * 等待分两段：基础预算（attempts × intervalMs，快路径语义不变）+ 慢启动
+ * 追加段（slowAttempts × slowIntervalMs）。追加段只在服务端确证目标
+ * runtime 进程存活且仍在启动（lifecycle=starting）时启用：桌面版冷启动
+ * （新装文件冷缓存 + 随包 Node 首次模块加载 + 同批恢复多个 runtime 的
+ * IO 竞争）下 runtime 就绪可超过基础预算，固定预算会在 runtime 即将就绪
+ * 时放弃导航——实测桌面版首启首次 open 等 10.7s 放弃、runtime 随后
+ * ready、第二次点击 1.3s 进入。stopped / missing 是终态，任何阶段命中
+ * 都立即中止，不会因追加段白等。
+ *
+ * @param {object} options
+ * @param {string} options.agentId 宿主 agent id
+ * @param {string} options.sessionId 目标会话 id
+ * @param {string} [options.expectRuntimeId] 要求就绪的 runtime 恰为该 id
+ *   （restart 场景：绑定该会话的还是旧 runtime 时继续等待）
+ * @param {string} [options.excludeRuntimeId] 排除的 runtime id（语义与
+ *   expectRuntimeId 互补，二者给其一即可）
+ * @param {number} [options.attempts=50] 基础轮询次数上限
+ * @param {number} [options.intervalMs=200] 基础轮询间隔
+ * @param {number} [options.slowAttempts=120] 慢启动追加轮询次数上限
+ *   （仅在观察到 lifecycle=starting 时生效；0 关闭追加段）
+ * @param {number} [options.slowIntervalMs=500] 慢启动追加轮询间隔
+ * @param {string} [options.operationId] 透传服务端诊断事件的操作 id
+ * @returns {Promise<object|null>} 就绪的 agent 条目；超时返回 null
+ * @throws {Error} code='target_runtime_stopped' — runtime 在就绪前停止/消失。
+ *   这是终态信号而非传输错误：继续轮询没有意义，调用方应中止导航。
+ */
+export async function waitForRuntimeReady(options) {
+  const {
+    agentId,
+    sessionId,
+    expectRuntimeId = '',
+    excludeRuntimeId = '',
+    attempts = 50,
+    intervalMs = 200,
+    slowAttempts = 120,
+    slowIntervalMs = 500,
+    operationId = '',
+  } = options || {};
+  const expect = String(expectRuntimeId || '').trim();
+  const exclude = String(excludeRuntimeId || '').trim();
+  if (!agentId || !sessionId) {
+    throw new Error('waitForRuntimeReady requires agentId and sessionId');
+  }
+  let sawStarting = false;
   /**
-   * 轮询轻量 runtime_status 端点直到目标 runtime 就绪。
-   *
-   * 等待分两段：基础预算（attempts × intervalMs，快路径语义不变）+ 慢启动
-   * 追加段（slowAttempts × slowIntervalMs）。追加段只在服务端确证目标
-   * runtime 进程存活且仍在启动（lifecycle=starting）时启用：桌面版冷启动
-   * （新装文件冷缓存 + 随包 Node 首次模块加载 + 同批恢复多个 runtime 的
-   * IO 竞争）下 runtime 就绪可超过基础预算，固定预算会在 runtime 即将就绪
-   * 时放弃导航——实测桌面版首启首次 open 等 10.7s 放弃、runtime 随后
-   * ready、第二次点击 1.3s 进入。stopped / missing 是终态，任何阶段命中
-   * 都立即中止，不会因追加段白等。
-   *
-   * @param {object} options
-   * @param {string} options.agentId 宿主 agent id
-   * @param {string} options.sessionId 目标会话 id
-   * @param {string} [options.expectRuntimeId] 要求就绪的 runtime 恰为该 id
-   *   （restart 场景：绑定该会话的还是旧 runtime 时继续等待）
-   * @param {string} [options.excludeRuntimeId] 排除的 runtime id（语义与
-   *   expectRuntimeId 互补，二者给其一即可）
-   * @param {number} [options.attempts=50] 基础轮询次数上限
-   * @param {number} [options.intervalMs=200] 基础轮询间隔
-   * @param {number} [options.slowAttempts=120] 慢启动追加轮询次数上限
-   *   （仅在观察到 lifecycle=starting 时生效；0 关闭追加段）
-   * @param {number} [options.slowIntervalMs=500] 慢启动追加轮询间隔
-   * @param {string} [options.operationId] 透传服务端诊断事件的操作 id
-   * @returns {Promise<object|null>} 就绪的 agent 条目；超时返回 null
-   * @throws {Error} code='target_runtime_stopped' — runtime 在就绪前停止/消失。
-   *   这是终态信号而非传输错误：继续轮询没有意义，调用方应中止导航。
+   * 单次探测。返回就绪且匹配的 agent 条目，本轮无结论（继续等待）返回
+   * null；stopped / missing 抛终态错误；观察到 starting 置位慢启动资格。
    */
-  async function waitForRuntimeReady(options) {
-    const {
-      agentId,
-      sessionId,
-      expectRuntimeId = '',
-      excludeRuntimeId = '',
-      attempts = 50,
-      intervalMs = 200,
-      slowAttempts = 120,
-      slowIntervalMs = 500,
-      operationId = '',
-    } = options || {};
-    const expect = String(expectRuntimeId || '').trim();
-    const exclude = String(excludeRuntimeId || '').trim();
-    if (!agentId || !sessionId) {
-      throw new Error('waitForRuntimeReady requires agentId and sessionId');
-    }
-    let sawStarting = false;
-    /**
-     * 单次探测。返回就绪且匹配的 agent 条目，本轮无结论（继续等待）返回
-     * null；stopped / missing 抛终态错误；观察到 starting 置位慢启动资格。
-     */
-    const probe = async () => {
-      try {
-        const params = new URLSearchParams({ agentId, sessionId });
-        if (operationId) params.set('operationId', operationId);
-        const response = await fetch('/protoclaw/runtime_status?' + params.toString());
-        if (response.ok) {
-          const result = await response.json();
-          if (result?.ready === true && result?.agent) {
-            const runtimeId = String(
-              result.agent.runtime_session_id || result.agent.id || '',
-            ).trim();
-            if (exclude && runtimeId === exclude) {
-              // 绑定该会话的仍是旧 runtime（restart 未换代），继续等待。
-            } else if (expect && runtimeId !== expect) {
-              // 绑定该会话的不是期望的新 runtime，继续等待。
-            } else {
-              return result.agent;
-            }
-          } else if (result?.lifecycle === 'stopped' || result?.lifecycle === 'missing') {
-            const error = new Error(
-              `Runtime ${result.lifecycle} before becoming ready: ${agentId}/${sessionId}`,
-            );
-            error.code = 'target_runtime_stopped';
-            throw error;
-          } else if (result?.lifecycle === 'starting') {
-            sawStarting = true;
+  const probe = async () => {
+    try {
+      const params = new URLSearchParams({ agentId, sessionId });
+      if (operationId) params.set('operationId', operationId);
+      const response = await fetch('/protoclaw/runtime_status?' + params.toString());
+      if (response.ok) {
+        const result = await response.json();
+        if (result?.ready === true && result?.agent) {
+          const runtimeId = String(
+            result.agent.runtime_session_id || result.agent.id || '',
+          ).trim();
+          if (exclude && runtimeId === exclude) {
+            // 绑定该会话的仍是旧 runtime（restart 未换代），继续等待。
+          } else if (expect && runtimeId !== expect) {
+            // 绑定该会话的不是期望的新 runtime，继续等待。
+          } else {
+            return result.agent;
           }
+        } else if (result?.lifecycle === 'stopped' || result?.lifecycle === 'missing') {
+          const error = new Error(
+            `Runtime ${result.lifecycle} before becoming ready: ${agentId}/${sessionId}`,
+          );
+          error.code = 'target_runtime_stopped';
+          throw error;
+        } else if (result?.lifecycle === 'starting') {
+          sawStarting = true;
         }
-      } catch (error) {
-        if (error?.code === 'target_runtime_stopped') throw error;
-        // 轮询传输错误既不是会话失败也不是启动失败，静默重试。
       }
-      return null;
-    };
-    for (let attempt = 0; attempt < attempts; attempt += 1) {
+    } catch (error) {
+      if (error?.code === 'target_runtime_stopped') throw error;
+      // 轮询传输错误既不是会话失败也不是启动失败，静默重试。
+    }
+    return null;
+  };
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    const agent = await probe();
+    if (agent) return agent;
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+  if (sawStarting) {
+    for (let attempt = 0; attempt < slowAttempts; attempt += 1) {
       const agent = await probe();
       if (agent) return agent;
-      await new Promise((resolve) => setTimeout(resolve, intervalMs));
+      await new Promise((resolve) => setTimeout(resolve, slowIntervalMs));
     }
-    if (sawStarting) {
-      for (let attempt = 0; attempt < slowAttempts; attempt += 1) {
-        const agent = await probe();
-        if (agent) return agent;
-        await new Promise((resolve) => setTimeout(resolve, slowIntervalMs));
-      }
-    }
-    return null;
   }
+  return null;
+}
 
-  /**
-   * 等待远程目录投影出目标会话的 runtime（ADR-0011/0012 远程写链路的就绪
-   * 观察）。远程 catalog 由 RemoteConnections 周期刷新，此处是本地缓存查询
-   * 轮询，不打网络。超时返回 null——目录未及时出现交给 catalog 轮询自然
-   * 带出，不构成失败。
-   */
-  async function waitForRemoteRuntimeRef(namespacedSessionId, attempts = 50) {
-    if (typeof window.RemoteConnections?.waitForRuntimeForSession === 'function') {
-      return window.RemoteConnections.waitForRuntimeForSession(namespacedSessionId, attempts);
-    }
-    return null;
+/**
+ * 等待远程目录投影出目标会话的 runtime（ADR-0011/0012 远程写链路的就绪
+ * 观察）。远程 catalog 由 RemoteConnections 周期刷新，此处是本地缓存查询
+ * 轮询，不打网络。超时返回 null——目录未及时出现交给 catalog 轮询自然
+ * 带出，不构成失败。
+ */
+export async function waitForRemoteRuntimeRef(namespacedSessionId, attempts = 50) {
+  if (typeof window.RemoteConnections?.waitForRuntimeForSession === 'function') {
+    return window.RemoteConnections.waitForRuntimeForSession(namespacedSessionId, attempts);
   }
+  return null;
+}
 
-  // ── 身份解析（ADR-0014 Phase 2）────────────────────────────────────────
-  // 侧栏统一投影后，child 叶子的 id 是 runtime id，而服务端写类接口
-  //（stop_agent / restart_agent / archive）按（宿主 agentId, sessionId）寻址。
-  // 历史上各 ctx-menu 动作各自手写 parent_id 回退，2026-09-06 的"关闭会话
-  // 无反应"事故正是三处手写漏了一处（服务端收到 runtime id 静默 no-op）。
-  // 以下三个函数是这些解析的唯一权威实现。
+// ── 身份解析（ADR-0014 Phase 2）────────────────────────────────────────
+// 侧栏统一投影后，child 叶子的 id 是 runtime id，而服务端写类接口
+//（stop_agent / restart_agent / archive）按（宿主 agentId, sessionId）寻址。
+// 历史上各 ctx-menu 动作各自手写 parent_id 回退，2026-09-06 的"关闭会话
+// 无反应"事故正是三处手写漏了一处（服务端收到 runtime id 静默 no-op）。
+// 以下三个函数是这些解析的唯一权威实现。
 
-  /**
-   * 条目 → 服务端寻址宿主 id。child 条目经 parent_id 解析；无 parent_id
-   * （prebuilt / 解析失败）回退 fallbackId（通常是条目自身 id 或调用上下文
-   * 的宿主 id）。
-   */
-  function resolveHostAgentId(entry, fallbackId = '') {
-    return String(entry?.parent_id || fallbackId || '').trim();
+/**
+ * 条目 → 服务端寻址宿主 id。child 条目经 parent_id 解析；无 parent_id
+ * （prebuilt / 解析失败）回退 fallbackId（通常是条目自身 id 或调用上下文
+ * 的宿主 id）。
+ */
+export function resolveHostAgentId(entry, fallbackId = '') {
+  return String(entry?.parent_id || fallbackId || '').trim();
+}
+
+/**
+ * 从响应包装提取 runtime 引用，接受三种形态：
+ *   - start/restart 响应：{ runtime: { id | viewerAgentId }, agent: {...} }
+ *   - mutation 响应：{ agent: <child 条目> }
+ *   - 裸 agent 条目：直接解析
+ * 剥壳后的条目解析委托 getRuntimeId（app-core 权威实现：alias 链 + source
+ * 判定，宿主条目不误取自身 id 当 runtime）；此函数只补响应包装的剥壳层。
+ * 无 getRuntimeId 的环境（单测）回退到裸 alias 链。
+ */
+export function extractRuntimeId(source) {
+  if (!source || typeof source !== 'object') return '';
+  if (source.runtime && typeof source.runtime === 'object') {
+    const fromRuntime = String(source.runtime.id || source.runtime.viewerAgentId || '').trim();
+    if (fromRuntime) return fromRuntime;
   }
-
-  /**
-   * 从响应包装提取 runtime 引用，接受三种形态：
-   *   - start/restart 响应：{ runtime: { id | viewerAgentId }, agent: {...} }
-   *   - mutation 响应：{ agent: <child 条目> }
-   *   - 裸 agent 条目：直接解析
-   * 剥壳后的条目解析委托 getRuntimeId（app-core 权威实现：alias 链 + source
-   * 判定，宿主条目不误取自身 id 当 runtime）；此函数只补响应包装的剥壳层。
-   * 无 getRuntimeId 的环境（单测沙箱）回退到裸 alias 链。
-   */
-  function extractRuntimeId(source) {
-    if (!source || typeof source !== 'object') return '';
-    if (source.runtime && typeof source.runtime === 'object') {
-      const fromRuntime = String(source.runtime.id || source.runtime.viewerAgentId || '').trim();
-      if (fromRuntime) return fromRuntime;
-    }
-    const agent = source.agent && typeof source.agent === 'object' ? source.agent : source;
-    if (typeof getRuntimeId === 'function') {
-      return getRuntimeId(agent) || '';
-    }
-    return String(agent.runtime_session_id || agent.runtimeSessionId || agent.id || '').trim();
+  const agent = source.agent && typeof source.agent === 'object' ? source.agent : source;
+  // 桥接期：getRuntimeId 仍定义于 app-core（身份域收敛时改为 import）。
+  if (typeof window.getRuntimeId === 'function') {
+    return window.getRuntimeId(agent) || '';
   }
+  return String(agent.runtime_session_id || agent.runtimeSessionId || agent.id || '').trim();
+}
 
-  /**
-   * 停止正在查看的 runtime 后的视图落点：条目所属宿主入口优先（child/external
-   * 条目带 parent_id），否则交给 fallbackResolver（resolveWorkspaceFallbackAgentId）。
-   * prebuilt/managed 条目无 parent_id，结果与直接调 resolver 等价。
-   */
-  function resolveStoppedRuntimeFallback(entry, fallbackResolver) {
-    const hostId = String(entry?.parent_id || '').trim();
-    if (hostId) return hostId;
-    return typeof fallbackResolver === 'function' ? (fallbackResolver(entry) || '') : '';
-  }
+/**
+ * 停止正在查看的 runtime 后的视图落点：条目所属宿主入口优先（child/external
+ * 条目带 parent_id），否则交给 fallbackResolver（resolveWorkspaceFallbackAgentId）。
+ * prebuilt/managed 条目无 parent_id，结果与直接调 resolver 等价。
+ */
+export function resolveStoppedRuntimeFallback(entry, fallbackResolver) {
+  const hostId = String(entry?.parent_id || '').trim();
+  if (hostId) return hostId;
+  return typeof fallbackResolver === 'function' ? (fallbackResolver(entry) || '') : '';
+}
 
-  return {
-    waitForRuntimeReady,
-    waitForRemoteRuntimeRef,
-    resolveHostAgentId,
-    extractRuntimeId,
-    resolveStoppedRuntimeFallback,
-  };
-})();
+// ── window 命名空间（现有公开协议：ctx-menu-handlers / ctx-menu-items /
+//    sidebar-render 三个 classic 模块消费）─────────────────────────────
+window.NavigationCore = {
+  waitForRuntimeReady,
+  waitForRemoteRuntimeRef,
+  resolveHostAgentId,
+  extractRuntimeId,
+  resolveStoppedRuntimeFallback,
+};

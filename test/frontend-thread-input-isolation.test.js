@@ -10,6 +10,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
 import { createFrontendSandbox } from './helpers/frontend-vm.js';
+import { withThreadDomainCase } from './p2-thread-case.js';
 
 const threadStoreSource = fs.readFileSync(new URL('../public/src/modules/thread-store.js', import.meta.url), 'utf8');
 
@@ -113,15 +114,37 @@ test('_syncActiveThreadSubscription：等待重绑豁免以宿主焦点为界—
     '宿主未切走：等待重绑豁免保留线程指向');
 });
 
-test('openConversationTarget 接续等待分支：switchAgent 收到 awaitSessionId（聊天加载表面，不落首页）', async () => {
-  const ctx = loadThreadStore({ hostAgentId: 'programming-helper', runtimeId: 'rt-ph', runtimeSessionId: 'sess-A', threads: [WT] });
-  ctx.run('currentRuntimeAgentId = "rt-ph"; focusedAgentId = "programming-helper";');
-  const calls = [];
-  ctx.window.switchAgent = (id, options) => { calls.push({ id, options }); return Promise.resolve(); };
-  const result = await ctx.run(`window.openConversationTarget({ agentId: 'coder', threadId: 'wt-1' })`);
-  assert.ok(result?.ok, '等待分支挂线程成功');
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0].id, 'coder');
-  assert.equal(calls[0].options?.awaitSessionId, 'sess-head',
-    '接续窗口点击：切换目标携带等待会话身份（awaitSessionId）');
+test('openConversationTarget 接续等待分支：切换落在该会话的聊天加载表面（不落首页）', async () => {
+  // 迁移后 switchAgent 是具名 import（不再是可替换的 window 桩）：观察点改到
+  // runtime-switch 的宿主缝在公共状态上的结果——工作空间 surface 分支以
+  // `awaitSession` 进入聊天加载表面（挂起导航 + 聊天 tab + 加载态），而不是
+  // 停在宿主首页。
+  await withThreadDomainCase({
+    threads: [WT],
+    fixtures: {
+      focusedAgentId: 'programming-helper',
+      currentRuntimeAgentId: 'rt-ph',
+      allAgents: [
+        { id: 'coder', source: 'prebuilt', kind: 'workspace' },
+        { id: 'programming-helper', source: 'prebuilt' },
+      ],
+      getCurrentHostAgentRecord: () => ({ id: 'programming-helper', source: 'prebuilt' }),
+      getRuntimeWorkspaceSessionId: (runtimeId) => (runtimeId === 'rt-ph' ? 'sess-A' : ''),
+      setViewerSessionBinding: () => {},
+      renderAgentList: () => {},
+      renderCurrentMainView: () => {},
+      updateQueueIndicator: () => {},
+      updateThreadHeaderIndicator: () => {},
+    },
+    fetch: async () => ({ ok: true, json: async () => ({ ok: true, messages: [] }) }),
+  }, async ({ c, domain }) => {
+    const result = await domain.openConversationTarget({ agentId: 'coder', threadId: 'wt-1' });
+    assert.ok(result?.ok, '等待分支挂线程成功');
+    assert.equal(c.read('focusedAgentId'), 'coder', '切换到线程宿主工作空间');
+    assert.equal(c.read('currentWorkspaceTab'), 'chat', '落在聊天表面，不落宿主首页');
+    const pending = c.read('_pendingSessionNavigation');
+    assert.equal(pending?.sessionId, 'sess-head',
+      '接续窗口点击：切换目标携带等待会话身份（awaitSessionId）');
+    assert.equal(pending?.phase, 'committing');
+  });
 });

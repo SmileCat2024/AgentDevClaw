@@ -53,7 +53,6 @@
       "chatViewportSettlementRaf",
       "chatViewportSettlementTimer",
       "chatViewportSettlementToken",
-      "choiceInputState",
       "compactBranchAction",
       "compactContextMenu",
       "compactSummaryAction",
@@ -145,6 +144,15 @@
       "clearPendingSessionNavigation",
       "convertLegacyWorkspaceToUi",
       "createCallInterruptHost",
+      "createP2BootstrapAssemblyHost",
+      "createP2BootstrapCallActivityHost",
+      "createP2BootstrapChatSurfaceHost",
+      "createP2BootstrapContextMenuHost",
+      "createP2BootstrapDebugPanelHost",
+      "createP2BootstrapDomHost",
+      "createP2BootstrapPhSessionHost",
+      "createP2BootstrapSessionSwitchHost",
+      "createP2BootstrapSidebarHost",
       "createRuntimeViewCacheHost",
       "createViewerReadinessHost",
       "fetch",
@@ -189,6 +197,7 @@
       "resetUserCollapseStateForContext",
       "resolveIdentityAliases",
       "resolveWorkspaceFallbackAgentId",
+      "setCurrentLogs",
       "setInterruptTargetId",
       "setViewerSessionBinding",
       "updatePendingSessionNavigation"
@@ -284,7 +293,6 @@
       "groupAssemblyRunsByProject",
       "isChatSurfaceActive",
       "isEditingWorkspaceForm",
-      "loadPreflight",
       "refreshVisibleWorkspacePanelData",
       "registerFeaturePanel",
       "renderAssemblyFeatureCards",
@@ -327,110 +335,10 @@
       "ClawFW"
     ]
   },
-  "public/src/modules/agent-data-loader.js": {
-    "state": [],
-    "behavior": [
-      "createRuntimeStatusLoaderHost",
-      "createSessionDataLoaderHost"
-    ]
-  },
   "public/src/modules/annotations.js": {
     "state": [],
     "behavior": [
       "ClawAnnotations"
-    ]
-  },
-  "public/src/modules/app-chat-input.js": {
-    "state": [],
-    "behavior": [
-      "AppChatInput"
-    ]
-  },
-  "public/src/modules/app-info.js": {
-    "state": [
-      "_appInfo",
-      "_brandArea",
-      "_brandCard"
-    ],
-    "behavior": [
-      "_externalLinkSvg",
-      "_githubIconSvg",
-      "_initAppInfo",
-      "_setBrandCardOpen",
-      "renderBrandCard"
-    ]
-  },
-  "public/src/modules/assembly-actions.js": {
-    "state": [],
-    "behavior": [
-      "applyWorkspaceBundle",
-      "canonicalizeAssemblyFeatureSelection",
-      "chooseWorkspaceDirectory",
-      "createAssemblyEnvironment",
-      "deleteAssemblySessionRecord",
-      "deleteSavedAssemblyConfig",
-      "fwLaunchConfig",
-      "fwResumeRun",
-      "getSavedAssemblyConfigs",
-      "jumpAssemblyStage",
-      "launchAssemblyConfig",
-      "launchAssemblyInstance",
-      "launchSavedAssemblyRun",
-      "loadAssemblySessionIntoDraft",
-      "loadSavedAssemblyConfig",
-      "newIdempotencyKey",
-      "resetAssemblyDraft",
-      "resetWorkspaceForm",
-      "saveCurrentAssemblyConfig",
-      "saveWorkspaceForm",
-      "stopAssemblySessionRuntime",
-      "switchAssemblyEditingTarget",
-      "toggleAssemblyControlPanel",
-      "toggleWorkspaceSelection",
-      "updateWorkspaceFormDraft"
-    ]
-  },
-  "public/src/modules/assembly-data.js": {
-    "state": [],
-    "behavior": [
-      "buildAutoSavedAssemblyConfigs",
-      "buildWorkspaceProjectKey",
-      "captureAssemblyFieldFocus",
-      "collectAssemblyProjectFeatureConfigs",
-      "commitAssemblyDraftField",
-      "findAssemblyConfigConflict",
-      "getAgentCreatorOutputDirectory",
-      "getAssemblyDisplayName",
-      "getAssemblyEditorMode",
-      "getAssemblyEnvironmentState",
-      "getAssemblyEnvironmentStatusLabel",
-      "getAssemblyEnvironmentStatusTone",
-      "getAssemblySavedConfigSummary",
-      "getAssemblySessionStatus",
-      "getExpectedAssemblyEnvDir",
-      "getFeatureCreatorOutputDirectory",
-      "getWorkspaceFormDraft",
-      "isAssemblySession",
-      "isAssemblySessionRunning",
-      "isValidAgentCreatorName",
-      "isValidFeatureCreatorName",
-      "normalizeAssemblyDirectoryToken",
-      "normalizeAssemblyDraft",
-      "normalizeFeatureCreatorStartupDraft",
-      "normalizeProgrammingHelperStartupDraft",
-      "normalizeWorkspaceStartupDraft",
-      "persistWorkspaceState",
-      "renderAssemblyStatusChip",
-      "requestAssemblyEnvironmentCreate",
-      "resetWorkspaceFormDraft",
-      "restoreAssemblyFieldFocus",
-      "sanitizeWorkspacePathFragment",
-      "saveWorkspaceFormDraft",
-      "scheduleAssemblyWorkbenchRender",
-      "syncAssemblyEnvironmentDraft",
-      "toggleAssemblyStage",
-      "updateAssemblyDraftField",
-      "updateAssemblyDraftWithoutRender"
     ]
   },
   "public/src/modules/auth-client.js": {
@@ -442,32 +350,6 @@
       "closeAuthSettings",
       "fetch",
       "openAuthSettings"
-    ]
-  },
-  "public/src/modules/auto-title.js": {
-    "state": [
-      "AUTO_TITLE_FETCH_TIMEOUT_MS",
-      "AUTO_TITLE_MAX_ATTEMPTS",
-      "AUTO_TITLE_RETRY_BACKOFF_MS",
-      "_autoTitlePending"
-    ],
-    "behavior": [
-      "_findSessionOwner",
-      "_messagesEqual",
-      "_tryTitleForSession",
-      "autoGenerateSessionTitle",
-      "checkGlobalChoiceAlerts",
-      "findFirstChangedMessageIndex",
-      "getAutoTitleSessionInfo",
-      "isAppOwnedTitlePolicy",
-      "isPlaceholderTitleState",
-      "isShellTitleTriggerDisabled",
-      "isValidTitleEvent",
-      "markAutoTitleCandidate",
-      "newIdempotencyKey",
-      "recheckAutoTitleCandidate",
-      "titleCandidateState",
-      "tryAutoTitleGeneration"
     ]
   },
   "public/src/modules/bg-panel.js": {
@@ -506,47 +388,6 @@
       "_showCcbPopup",
       "_showTitlePopup",
       "updateChatContextBar"
-    ]
-  },
-  "public/src/modules/chat-nav-timeline.js": {
-    "state": [
-      "_navActiveBar",
-      "_navAutoScrollDir",
-      "_navAutoScrollTimer",
-      "_navBandBottom",
-      "_navBandTop",
-      "_navBars",
-      "_navCapacity",
-      "_navCardEl",
-      "_navEdgeHysteresis",
-      "_navObserver",
-      "_navReady",
-      "_navRebuildTimer",
-      "_navResizeTimer",
-      "_navScrollRaf",
-      "_navSlots",
-      "_navTimelineEl",
-      "_navUserIndices",
-      "_navWindowManual",
-      "_navWindowStart"
-    ],
-    "behavior": [
-      "_buildEdgeBand",
-      "_computeNavCapacity",
-      "_handleNavEdgeHover",
-      "_hideNavCard",
-      "_initChatNavTimeline",
-      "_onBarClick",
-      "_onNavScroll",
-      "_onSlotHover",
-      "_positionNavTimeline",
-      "_rebuildNavTimeline",
-      "_resetWave",
-      "_scheduleNavRebuild",
-      "_showNavCard",
-      "_slideNavWindow",
-      "_stopNavAutoScroll",
-      "_updateActiveNavBar"
     ]
   },
   "public/src/modules/chat-renderer.js": {
@@ -609,14 +450,6 @@
       "toggleErrorGroup",
       "toggleMessage",
       "updateLastMessage"
-    ]
-  },
-  "public/src/modules/chat-row-visibility.js": {
-    "state": [],
-    "behavior": [
-      "clearMeasuredChatRows",
-      "refreshMeasuredChatRows",
-      "revealMeasuredChatRow"
     ]
   },
   "public/src/modules/chat-scroll.js": {
@@ -699,34 +532,6 @@
       "updateFollowLatestButtonPosition"
     ]
   },
-  "public/src/modules/choice-input.js": {
-    "state": [
-      "_rejectedRequests",
-      "_submittedRequests"
-    ],
-    "behavior": [
-      "buildChoiceAnswer",
-      "collapseChoiceRequest",
-      "collapsePrimaryChoiceRequest",
-      "confirmChoiceQuestion",
-      "expandChoiceRequest",
-      "getChoiceInteractionSignature",
-      "getChoiceOptionCount",
-      "getChoiceRequestById",
-      "getChoiceState",
-      "handleChoiceCustomKey",
-      "handleChoiceKey",
-      "isChoiceInputConsumed",
-      "isChoiceInputRequest",
-      "rejectChoiceRequest",
-      "rememberCurrentChoice",
-      "renderChoiceInputRequest",
-      "rerenderChoiceRequest",
-      "selectChoiceOption",
-      "toggleChoiceContext",
-      "updateChoiceCustomText"
-    ]
-  },
   "public/src/modules/claw-host.js": {
     "state": [],
     "behavior": [
@@ -739,102 +544,10 @@
       "ClawSelect"
     ]
   },
-  "public/src/modules/container-images.js": {
-    "state": [
-      "CI_DELETE_ARM_MS",
-      "CI_ICON_DELETE",
-      "CI_ICON_REFRESH",
-      "CI_POLL_MS",
-      "_ciContainerId",
-      "_ciData",
-      "_ciDeleteArmed",
-      "_ciHostAgentId",
-      "_ciLoading",
-      "_ciPollTimer"
-    ],
-    "behavior": [
-      "ciBadge",
-      "ciContainer",
-      "ciDetailRow",
-      "ciDisarmDelete",
-      "ciEnvRow",
-      "ciEscape",
-      "ciFetchOverview",
-      "ciFormatRelative",
-      "ciFormatSize",
-      "ciFormatTime",
-      "ciGroupHead",
-      "ciImageRow",
-      "ciIsZh",
-      "ciOccupancyFor",
-      "ciRender",
-      "ciRenderAgentGroup",
-      "ciRenderBuildSection",
-      "ciRenderContainersSection",
-      "ciRenderEnvironmentSection",
-      "ciRenderImagesSection",
-      "ciSchedulePoll",
-      "ciSetStatus",
-      "ciStopPoll",
-      "ciUnknownReason",
-      "loadContainerImagesPanel",
-      "onCiBuildClick",
-      "onCiDeleteClick",
-      "onCiRefresh",
-      "registerContainerImagesHost",
-      "stopContainerImagesPanel"
-    ]
-  },
   "public/src/modules/context-guard-toggle.js": {
     "state": [],
     "behavior": [
       "ContextGuardToggle"
-    ]
-  },
-  "public/src/modules/context-menu.js": {
-    "state": [],
-    "behavior": [
-      "closeAgentContextMenu",
-      "closeCompactMenu",
-      "closeFeatureRepoContextMenu",
-      "closeProjectContextMenu",
-      "openAgentContextMenu",
-      "openCompactMenu",
-      "openFeatureRepoContextMenu",
-      "openProjectContextMenu"
-    ]
-  },
-  "public/src/modules/conversation-export-dialog.js": {
-    "state": [],
-    "behavior": [
-      "openConversationExportDialog"
-    ]
-  },
-  "public/src/modules/ctx-menu-handlers.js": {
-    "state": [],
-    "behavior": [
-      "isDeletedAgentFocused",
-      "newIdempotencyKey",
-      "openAgentActions"
-    ]
-  },
-  "public/src/modules/ctx-menu-items.js": {
-    "state": [],
-    "behavior": [
-      "_copyTextWithToast",
-      "afterThreadMutation",
-      "ctxArchiveAndStopRuntime",
-      "ctxArchiveSession",
-      "ctxGenerateTitle",
-      "ctxRenameSession",
-      "ctxRestartAgent",
-      "ctxStopAgent",
-      "ctxThreadRequest",
-      "ctxTodoSession",
-      "dispatchCtxAction",
-      "getCtxMenuItems",
-      "newIdempotencyKey",
-      "resolveSidebarSessionsPolicy"
     ]
   },
   "public/src/modules/debug-features-hooks.js": {
@@ -936,38 +649,6 @@
       "tryIncrementalLogsUpdate"
     ]
   },
-  "public/src/modules/debug-mcp.js": {
-    "state": [],
-    "behavior": [
-      "loadMcpInfo",
-      "renderMcpItems",
-      "renderMcpPanel",
-      "setCurrentMcpInfo"
-    ]
-  },
-  "public/src/modules/debug-overview.js": {
-    "state": [
-      "lifecycleDocs"
-    ],
-    "behavior": [
-      "closeFeatureDetails",
-      "closeRepositoryPackageDetails",
-      "formatMetricNumber",
-      "formatRate",
-      "getLatestCallSummary",
-      "getUsageBreakdown",
-      "openFeatureDetails",
-      "openRepositoryPackageDetails",
-      "renderCacheCard",
-      "renderContextChip",
-      "renderMonitorPanel",
-      "renderRateRing",
-      "renderStructurePanel",
-      "renderTokenBar",
-      "renderUsageCard",
-      "selectOverviewLifecycle"
-    ]
-  },
   "public/src/modules/debug-panel-host.js": {
     "state": [
       "_panelBodyHtmlCache",
@@ -988,40 +669,6 @@
       "toggleFeaturePanel",
       "unmountContainerPanel",
       "wrapPanelContent"
-    ]
-  },
-  "public/src/modules/debug-preflight.js": {
-    "state": [
-      "CHECK_LABELS",
-      "PREFLIGHT_STATE"
-    ],
-    "behavior": [
-      "loadPreflight",
-      "renderPreflightPanel",
-      "renderPreflightStatusPill"
-    ]
-  },
-  "public/src/modules/debug-summary-upload.js": {
-    "state": [
-      "_summaryGenGuard",
-      "featureUploadFile",
-      "summaryPopupData"
-    ],
-    "behavior": [
-      "_summaryRequestAgentId",
-      "closeFeatureUploadDialog",
-      "closeSummaryPopup",
-      "getOrCreateSummaryOverlay",
-      "handleFeatureUploadFile",
-      "newIdempotencyKey",
-      "openFeatureUploadDialog",
-      "openSummaryPopup",
-      "regenerateSummary",
-      "renderSummaryBodyContent",
-      "setRepoSearchQuery",
-      "setRepoSourceFilter",
-      "submitFeatureUpload",
-      "updateSummaryOverlayDOM"
     ]
   },
   "public/src/modules/desktop-notify.js": {
@@ -1065,19 +712,6 @@
       "normalizeOpenRequest",
       "parseOpenRequestFromSearch",
       "runOpenRequest"
-    ]
-  },
-  "public/src/modules/dir-config-dialog.js": {
-    "state": [
-      "_dirConfigEditor"
-    ],
-    "behavior": [
-      "_dirConfigCurrentDir",
-      "_dirConfigHost",
-      "_featureConfigDialogShell",
-      "phCloseDirConfig",
-      "phOpenDirConfig",
-      "phOpenProjectConfig"
     ]
   },
   "public/src/modules/dispatch-actions.js": {
@@ -1140,44 +774,10 @@
       "renderDispatchModal"
     ]
   },
-  "public/src/modules/external-runtime.js": {
+  "public/src/modules/feature-catalog.js": {
     "state": [],
     "behavior": [
-      "closeExternalRuntime",
-      "closeSidebarExternalRuntime",
-      "getExternalRuntimeAgent",
-      "isAssemblyExternalRuntime",
-      "refreshSidebarRuntimeAfterMutation",
-      "resolveSidebarAssemblyRuntimeTarget",
-      "restartExternalRuntime",
-      "restartSidebarExternalRuntime"
-    ]
-  },
-  "public/src/modules/feature-catalog.js": {
-    "state": [
-      "FALLBACK_GROUPS",
-      "_catalog",
-      "_catalogPromise",
-      "_mountFacts",
-      "_mountFactsPromise"
-    ],
-    "behavior": [
-      "ClawFW",
-      "countFeaturesBySource",
-      "deriveRuntimeCapabilities",
-      "enrichFeatureEntry",
-      "fetchFeatureCatalog",
-      "getFeatureCatalogSnapshot",
-      "getMountFactsSnapshot",
-      "groupFeaturesByType",
-      "loadFeatureCatalog",
-      "loadMountFacts",
-      "normalizeCapFilter",
-      "provenanceI18nKey",
-      "refreshMountFacts",
-      "resolveDisplayName",
-      "resolveMountedNames",
-      "typeCollapsedByDefault"
+      "ClawFW"
     ]
   },
   "public/src/modules/feature-communication.js": {
@@ -1186,137 +786,10 @@
       "ClawFeatureCommunication"
     ]
   },
-  "public/src/modules/feature-config-editor.js": {
-    "state": [
-      "_FCE_GEAR_SVG",
-      "_fceSeq"
-    ],
-    "behavior": [
-      "_fceT",
-      "createFeatureConfigEditor"
-    ]
-  },
   "public/src/modules/feature-config.js": {
     "state": [],
     "behavior": [
-      "ClawFW",
-      "_fwAddConfigDirectory",
-      "_fwAddConfigFile",
-      "_fwCommitFeatureConfigValue",
-      "_fwControlTarget",
-      "_fwPickFeatureConfigDirectory",
-      "_fwPickFeatureConfigFile",
-      "_fwRefreshFeatureCapabilities",
-      "_fwRemoveConfigDirectory",
-      "_fwRemoveConfigFile",
-      "_fwResetFeatureConfig",
-      "_fwSyncManifestRange",
-      "_fwUpdateConfigDirectoryPath",
-      "_fwUpdateConfigFilePath",
-      "buildFeatureConfigLookupKeys",
-      "coerceFeatureManifestValue",
-      "featureConfigKeyMatches",
-      "featureControlDomId",
-      "findFeatureConfigMapEntry",
-      "findFeatureManifestForSelection",
-      "formatManifestDefaultValue",
-      "getFeatureConfig",
-      "getFeatureConfigStatusMeta",
-      "getFeatureManifestDisplayName",
-      "getFeatureManifestPropertyEntries",
-      "matchesFeatureConfigAccept",
-      "normalizeAcceptList",
-      "normalizeFeatureConfigEntry",
-      "normalizeFeatureConfigMap",
-      "normalizeManifestComparableValue",
-      "parseInlineDataValue",
-      "removeMatchingFeatureConfigAliases",
-      "renderFWFeatureSettings",
-      "renderFeatureConfigControl",
-      "resolveFeaturePackageRecord",
-      "updateFeatureConfigField",
-      "writeFeatureConfig"
-    ]
-  },
-  "public/src/modules/feature-setup-core.js": {
-    "state": [],
-    "behavior": [
-      "fsBaseName",
-      "fsClassifyField",
-      "fsControlValue",
-      "fsDeletePath",
-      "fsFieldStates",
-      "fsGetPathValue",
-      "fsHasField",
-      "fsPropFor",
-      "fsSetPath",
-      "fsShowReset",
-      "fsUpstreamInfo",
-      "fsWithField"
-    ]
-  },
-  "public/src/modules/feature-store.js": {
-    "state": [
-      "_FS_IDENTITY_SCOPES",
-      "_PM_GLOBAL_SCOPE",
-      "_fsCloseSettings",
-      "_fsInstall",
-      "_fsInstallBuiltin",
-      "_fsOpenSettings",
-      "_fsRemoveFor",
-      "_fsSelectVersion",
-      "_fsSettings",
-      "_fsSettingsSave",
-      "_fsState",
-      "_fsTickTimer",
-      "_pmInstallGlobal",
-      "_pmRemoveGlobal",
-      "_pmSelectVersion",
-      "_pmState"
-    ],
-    "behavior": [
-      "_fsAfterChange",
-      "_fsBuildTypeGroups",
-      "_fsCard",
-      "_fsCatalog",
-      "_fsFetchJson",
-      "_fsHost",
-      "_fsInstallErrorText",
-      "_fsInstallSeconds",
-      "_fsLoadLayerSparse",
-      "_fsMountedCard",
-      "_fsMountedMap",
-      "_fsMutateLayer",
-      "_fsReloadOverview",
-      "_fsRender",
-      "_fsRenderStoreBody",
-      "_fsRuntimeKey",
-      "_fsSaveLayer",
-      "_fsServerInstalling",
-      "_fsSettingsHost",
-      "_fsSettingsRender",
-      "_fsSettingsRow",
-      "_fsSettingsRowHtml",
-      "_fsSettingsRows",
-      "_fsSettingsSwitchTab",
-      "_fsSettingsTargetSparse",
-      "_fsStartTick",
-      "_fsStopTick",
-      "_fsT",
-      "_pmCancelImport",
-      "_pmClosePluginManager",
-      "_pmConfirmImport",
-      "_pmGlobalMountedMap",
-      "_pmHost",
-      "_pmOpenUpload",
-      "_pmReloadOverview",
-      "_pmRender",
-      "_pmRenderGlobalSection",
-      "_pmRenderImportDialog",
-      "_pmRenderPackageSections",
-      "clawOpenPluginManager",
-      "phCloseFeatureStore",
-      "phOpenFeatureStore"
+      "ClawFW"
     ]
   },
   "public/src/modules/feature-ui-registry.js": {
@@ -1328,94 +801,13 @@
   "public/src/modules/fw-config-panel.js": {
     "state": [],
     "behavior": [
-      "ClawFW",
-      "fwBackToList",
-      "fwClickPickerItem",
-      "fwCommitFeatureQuery",
-      "fwConfirmCreateAgent",
-      "fwCreateNewAgent",
-      "fwGetFeatureQuery",
-      "fwHandlePromptInput",
-      "fwHandlePromptKeydown",
-      "fwOpenFeatureImport",
-      "fwOpenProjectDetail",
-      "fwOpenProjectPicker",
-      "fwOpenPromptEditor",
-      "fwRerender",
-      "fwSetFeatureFilter",
-      "fwSetFeatureQuery",
-      "fwSetPickerCategory",
-      "fwSetPickerSearch",
-      "fwSwitchSection",
-      "fwToggleFeature",
-      "renderProjectListBlock",
-      "updateFWPromptDraft"
+      "ClawFW"
     ]
   },
   "public/src/modules/generative-ui-panel.js": {
     "state": [],
     "behavior": [
       "GenUIPanel"
-    ]
-  },
-  "public/src/modules/generative-ui-renderer.js": {
-    "state": [
-      "_CHART_TONES",
-      "_COMPONENT_HANDLERS",
-      "_SVG_NS",
-      "_guiChartGradSeq"
-    ],
-    "behavior": [
-      "_alignToCss",
-      "_chartTicks",
-      "_chartToneColor",
-      "_collectSubmissionFields",
-      "_executeAction",
-      "_formatChartNumber",
-      "_gapToCss",
-      "_genUiRenderRow",
-      "_getCurrentFieldValue",
-      "_niceStep",
-      "_renderAccordion",
-      "_renderAlert",
-      "_renderAvatar",
-      "_renderBadge",
-      "_renderButton",
-      "_renderCard",
-      "_renderCarousel",
-      "_renderChart",
-      "_renderCheckbox",
-      "_renderCodeBlock",
-      "_renderDateInput",
-      "_renderDivider",
-      "_renderElement",
-      "_renderGrid",
-      "_renderImage",
-      "_renderLink",
-      "_renderNumberInput",
-      "_renderProgress",
-      "_renderRadioGroup",
-      "_renderSegmentedControl",
-      "_renderSelect",
-      "_renderSkeleton",
-      "_renderSlider",
-      "_renderSparkline",
-      "_renderSpinner",
-      "_renderStack",
-      "_renderStat",
-      "_renderSteps",
-      "_renderSwitch",
-      "_renderTable",
-      "_renderTabs",
-      "_renderText",
-      "_renderTextInput",
-      "_renderTextarea",
-      "_renderTooltip",
-      "_svgEl",
-      "_svgText",
-      "_wrapWithLabel",
-      "createGenUIViewState",
-      "renderGenUISpec"
     ]
   },
   "public/src/modules/git-graph.js": {
@@ -1537,8 +929,7 @@
       "_COMPOSER_THINKING_CHEVRON_SVG",
       "_COMPOSER_THINKING_ICON_SVG",
       "_attachMenuEl",
-      "_composerCard",
-      "_sessionInputCache"
+      "_composerCard"
     ],
     "behavior": [
       "_attachMenuOutsideHandler",
@@ -1564,66 +955,13 @@
   "public/src/modules/input-helpers.js": {
     "state": [],
     "behavior": [
-      "_notifyActionSubmitFailed",
-      "applyConversationProcessState",
-      "autoResize",
-      "canRollbackMessage",
-      "captureInputViewToken",
-      "commitInputViewPatch",
-      "getAvailableCallIndices",
-      "getPrimaryInputRequest",
-      "getRollbackInputRequest",
-      "isInputViewTokenCurrent",
-      "newIdempotencyKey",
-      "requestSupportsAction",
-      "saveChatProcessVisibility",
-      "submitInputAction",
-      "syncAssistantProcessOnlyRows",
-      "syncRollbackActionButtons",
-      "toggleChatProcessVisibility",
-      "updateChatProcessToggle",
-      "updateRollbackActionVisibility"
+      "updateChatProcessToggle"
     ]
   },
   "public/src/modules/input-model-switcher.js": {
-    "state": [
-      "ANTHROPIC_EFFORT_LABELS",
-      "OPENAI_EFFORT_LABELS",
-      "_inputModelDropdown",
-      "_inputModelDropdownLoading",
-      "_inputThinkingDropdown",
-      "_modelSelectionChannelOk",
-      "_restoreFailureNotified"
-    ],
+    "state": [],
     "behavior": [
-      "ClawFW",
-      "_closeInputModelDropdown",
-      "_closeThinkingEffortDropdown",
-      "_currentModelSupportsThinking",
-      "_ensureModelSelectionChannel",
-      "_getCurrentPreset",
-      "_getCurrentPresetProtocol",
-      "_getCurrentThinkingEffort",
-      "_getEffortLabel",
-      "_getEffortList",
-      "_getInputAgentId",
-      "_getInputDefaultPresetName",
-      "_inputModelDropdownOutsideClick",
-      "_inputThinkingDropdownOutsideClick",
-      "_isModelSelectionTargetPending",
-      "_isSessionOperationConflict",
-      "_modelSelectionTarget",
-      "_notifyModelSelectionNotReady",
-      "_notifyModelSelectionRequestError",
-      "_notifyModelSelectionTargetUnavailable",
-      "_notifyModelSelectionUnavailable",
-      "_notifySessionOperationInProgress",
-      "_performInputModelSwap",
-      "_performThinkingEffortSwap",
-      "toggleInputModelDropdown",
-      "toggleThinkingEffortDropdown",
-      "updateInputModelSwitcher",
-      "updateThinkingEffortSwitcher"
+      "ClawFW"
     ]
   },
   "public/src/modules/input-render.js": {
@@ -1648,249 +986,10 @@
       "KernelState"
     ]
   },
-  "public/src/modules/lazy-tool-content.js": {
-    "state": [
-      "WINDOW_ABOVE",
-      "WINDOW_BELOW",
-      "_cachedClientHeight",
-      "_cachedRows",
-      "_largeDeltaPending",
-      "_lastScrollTop",
-      "_lastTopIdx",
-      "_lastWindowEnd",
-      "_lastWindowStart",
-      "_preToggleViewportIdx",
-      "_rowCache",
-      "_rowIdxMap",
-      "_scrollListenerAttached",
-      "_scrollRafPending",
-      "_scrollStopTimer",
-      "_winPixBottom",
-      "_winPixTop",
-      "_windowingDisabled",
-      "_windowingFrozen"
-    ],
-    "behavior": [
-      "_applyIncrementalProcessRows",
-      "_applyWindow",
-      "_buildRowCache",
-      "_findViewportTopRowIdx",
-      "_foldRowIfOutside",
-      "_onScrollForWindowing",
-      "_onScrollStop",
-      "_rowHasProcess",
-      "_rowIsCvHidden",
-      "_runCollapseScan",
-      "_setRowCvVisible",
-      "_updatePixBounds",
-      "applyProcessDistance",
-      "clearProcessDistance",
-      "freezeProcessWindowing",
-      "precomputeViewportIdx",
-      "runLandingCollapseScan",
-      "setProcessWindowingDisabled",
-      "unfreezeProcessWindowing"
-    ]
-  },
-  "public/src/modules/mcp-gateway-ui.js": {
-    "state": [
-      "SVG_BACK",
-      "SVG_DELETE",
-      "SVG_EDIT",
-      "SVG_REFRESH",
-      "SVG_SERVER",
-      "SVG_TOOL",
-      "_detail",
-      "_detailLoading",
-      "_editing",
-      "_expandedSchemas",
-      "_gatewayAdd",
-      "_gatewayBackToList",
-      "_gatewayCancelEdit",
-      "_gatewayConfig",
-      "_gatewayData",
-      "_gatewayDelete",
-      "_gatewayEdit",
-      "_gatewayOpen",
-      "_gatewayRefreshDetail",
-      "_gatewayRestart",
-      "_gatewaySaveEdit",
-      "_gatewayToggleCustom",
-      "_gatewayToggleSystem",
-      "_gatewayTransportChange",
-      "_gatewayViewDetail",
-      "_loadGatewayData",
-      "_loading",
-      "_refreshTimer",
-      "_toggleGatewaySchema",
-      "_view"
-    ],
-    "behavior": [
-      "_ensureGatewayHost",
-      "_fmtTime",
-      "_loadGatewayData",
-      "_pollForStatus",
-      "_renderCustomItem",
-      "_renderCustomSection",
-      "_renderDetailRow",
-      "_renderDetailView",
-      "_renderEditFields",
-      "_renderEditForm",
-      "_renderSystemItem",
-      "_renderSystemSection",
-      "_renderToolCard",
-      "_startAutoRefresh",
-      "_statusBadge",
-      "_statusDotClass",
-      "_stopAutoRefresh",
-      "_toggleGatewayServer",
-      "closeMcpGateway",
-      "openMcpGateway",
-      "renderGatewayOverlay"
-    ]
-  },
-  "public/src/modules/message-timeline.js": {
-    "state": [
-      "ECHO_SEPARATOR_SLACK_MS",
-      "TIME_SEPARATOR_GAP_MS"
-    ],
-    "behavior": [
-      "attachMessagesTimestamps",
-      "formatChatTimestamp",
-      "prependTimeSeparatorHtml",
-      "renderTimeSeparatorHtml",
-      "resolveEchoTimeSeparator",
-      "resolveUserTimeSeparator"
-    ]
-  },
-  "public/src/modules/model-preset-cache.js": {
-    "state": [],
-    "behavior": [
-      "ClawFW",
-      "clawModelPresetsMatchSession",
-      "ensureClawModelPresets",
-      "ensureClawModelPresetsForSession",
-      "getClawModelPresets",
-      "setClawModelPresets"
-    ]
-  },
-  "public/src/modules/model-settings.js": {
-    "state": [
-      "ANTHROPIC_EFFORTS",
-      "MODEL_ENDPOINT_SUFFIXES",
-      "OPENAI_EFFORTS",
-      "OPENCODE_GO_BASE_URL",
-      "OPENCODE_ZEN_BASE_URL",
-      "_opencodeKeySaveTimer",
-      "addSettingsHeaderRow",
-      "onSettingsHeaderModeChange",
-      "onThinkingBudgetInput",
-      "onThinkingToggleChange",
-      "populateThinkingEffortOptions",
-      "switchSettingsTab"
-    ],
-    "behavior": [
-      "addCatalogModel",
-      "addCatalogModels",
-      "addSelectedCatalogModels",
-      "addSettingsPreset",
-      "applySettingsPreset",
-      "cancelSettingsEdit",
-      "canonicalProviderOptions",
-      "closeCodexConnectionView",
-      "closeSettings",
-      "createSettingsHeaderRowHTML",
-      "deleteSettingsPreset",
-      "editSettingsPreset",
-      "ensureSettingsHost",
-      "flushOpenCodeKeySave",
-      "getCodexServiceTiers",
-      "getModelEndpointSuffix",
-      "isCodexPreset",
-      "modelCatalogPresetCard",
-      "modelConfigMatchesPreset",
-      "newPresetGenerationDefaults",
-      "normalizeModelBaseUrl",
-      "onOpenCodeKeyInput",
-      "onOpenCodeServiceChange",
-      "onProviderChangeUpdateThinking",
-      "openCodexConnectionView",
-      "openSettings",
-      "presetSourceLabel",
-      "refreshModelCatalog",
-      "renderActiveModelBanner",
-      "renderBaseEndpointField",
-      "renderCatalogEmptyState",
-      "renderModelCatalogSettingsOverlay",
-      "renderOverviewContent",
-      "renderSettingsEditForm",
-      "renderSettingsOverlay",
-      "renderThinkingEffortSelect",
-      "saveModelConnection",
-      "saveSettingsConfig",
-      "saveSettingsPreset",
-      "selectedCodexTier",
-      "setCatalogModelSelection",
-      "stripModelEndpointSuffix",
-      "syncBaseEndpointBadge",
-      "toggleApiKeyVisibility",
-      "toggleCatalogMultiSelect",
-      "toggleOpenCodeKeyVisibility",
-      "toggleSettingsPresetStar",
-      "updateOpenCodeSaveFeedback",
-      "validateProviderOptionsDraft"
-    ]
-  },
   "public/src/modules/navigation-core.js": {
     "state": [],
     "behavior": [
       "NavigationCore"
-    ]
-  },
-  "public/src/modules/oauth-flow.js": {
-    "state": [
-      "_oauthPollTimer",
-      "_openCodeModelsCache"
-    ],
-    "behavior": [
-      "activateCodexAccountBtn",
-      "checkOAuthProxy",
-      "codexAccountRowHtml",
-      "copyOAuthUserCode",
-      "fetchOpenCodeModels",
-      "getEditingProviderName",
-      "logoutCodexAccountBtn",
-      "logoutOAuth",
-      "oauthProviderNeedsSave",
-      "onOpenCodeModelSelect",
-      "onOpenCodeTierChange",
-      "onProtocolChange",
-      "pollOAuthLogin",
-      "refreshOAuthStatus",
-      "renameCodexAccountBtn",
-      "renderCodexAccountsList",
-      "renderOAuthLoginArea",
-      "resolveOpenCodeProtocolClient",
-      "startOAuthLogin"
-    ]
-  },
-  "public/src/modules/overview-data.js": {
-    "state": [
-      "FULL_HOOK_LIFECYCLE_ORDER",
-      "MESSAGE_PROBE_CHANGE_KINDS"
-    ],
-    "behavior": [
-      "extractMessagesProbe",
-      "getEmptyOverviewSnapshot",
-      "getHookInspectorSignature",
-      "getOverviewSignature",
-      "normalizeHookInspector",
-      "normalizeOverviewSnapshot",
-      "normalizeRuntimeSnapshot",
-      "setCurrentHookInspector",
-      "setCurrentLogs",
-      "setCurrentOverviewSnapshot",
-      "shortenSourcePath"
     ]
   },
   "public/src/modules/persistent-input.js": {
@@ -1898,14 +997,7 @@
       "_CAPSULE_CLOCK_SVG",
       "_SENDING_MIN_VISIBLE_MS",
       "_callFinishTimerInterval",
-      "_lastCallFinishTime",
-      "_lastQueueBubbleSignature",
-      "_localQueuedInputPending",
       "_pendingImageBuckets",
-      "_pendingQueuedCount",
-      "_persistentUiSyncInFlight",
-      "_queuedProjectionRuntimeId",
-      "_queuedTexts",
       "_runCapsuleStartAt",
       "_runCapsuleStartConfirmed",
       "_sendingHoldTimer",
@@ -1927,7 +1019,6 @@
       "_nextPaint",
       "_renderAttachmentPreview",
       "_renderLastCallElapsed",
-      "_renderQueueBubbles",
       "_resolvePendingImagesForTarget",
       "_restoreActionBtnAfterSubmit",
       "_setActionBtnInterrupting",
@@ -1935,10 +1026,7 @@
       "_setActionBtnSending",
       "_setActionBtnStop",
       "_syncPersistentActionButton",
-      "_syncPersistentInputUi",
-      "_syncQueueFromBackend",
       "_uploadImageEntryTo",
-      "applyQueuedInputsTexts",
       "clearPendingInputImages",
       "formatCallElapsed",
       "formatRunningElapsed",
@@ -1951,186 +1039,13 @@
       "rebindQueueProjectionForRuntime",
       "renderPersistentInput",
       "resetCallElapsedForSwitch",
-      "submitQueuedInput",
-      "updateQueueIndicator"
-    ]
-  },
-  "public/src/modules/ph-project-actions.js": {
-    "state": [
-      "_phLoadMoreObserver",
-      "_phLoadingMoreSessions",
-      "_phSubmenuCloseTimer"
-    ],
-    "behavior": [
-      "ClawFW",
-      "_phBrowsingOwnershipParams",
-      "_phCloseDirectorySubmenus",
-      "_phCurrentBrowsingProjectId",
-      "_phManageRefreshViews",
-      "_phSyncDropdownAria",
-      "_phSyncSessionPanelsInPlace",
-      "phAutoSaveModelConfig",
-      "phCloseSettings",
-      "phDeleteProject",
-      "phFetchSessionsPage",
-      "phLoadMoreSessions",
-      "phLoadProjectSessions",
-      "phModelSlotChanged",
-      "phOpenDirectorySubmenu",
-      "phOpenInExplorer",
-      "phOpenManageProjectsDialog",
-      "phOpenNewProjectDialog",
-      "phOpenProject",
-      "phOpenProjectDirectory",
-      "phOpenSettings",
-      "phRebindProject",
-      "phScheduleDirectorySubmenuClose",
-      "phSetProcessMode",
-      "phSettingsAgentId",
-      "phSetupLoadMoreAutoScroll",
-      "phSwitchProject",
-      "phToggleModelSlot",
-      "phToggleProjectDropdown"
-    ]
-  },
-  "public/src/modules/ph-search-locate.js": {
-    "state": [
-      "PH_LOCATE_MAX_WAIT_MS",
-      "_backSerial",
-      "_locateActive",
-      "_locateBarEl",
-      "_locateBarWatch",
-      "_locateSerial",
-      "_prepareCapture"
-    ],
-    "behavior": [
-      "ClawFW",
-      "_dismissLocateBar",
-      "_ensureLocateBar",
-      "_locateResolveTarget",
-      "_locateScrollToRow",
-      "_locateTeardownActive",
-      "_locateTryFinish",
-      "_showLocateBar",
-      "_showLocateFailedBar",
-      "_unwatchLocateBar",
-      "_viewIdentitySnapshot",
-      "_watchLocateBar",
-      "phSearchLocateAfterOpen",
-      "phSearchLocateBack",
-      "phSearchLocateDismiss",
-      "phSearchLocateLatest",
-      "phSearchLocatePrepare"
-    ]
-  },
-  "public/src/modules/ph-session-list.js": {
-    "state": [
-      "_buildPhSearchPanelHtml",
-      "_phSearch"
-    ],
-    "behavior": [
-      "ClawFW",
-      "_applyPhSessionTabDom",
-      "_loadPhTopicGroups",
-      "_phHighlightText",
-      "_phMatchHtml",
-      "_phReadableExcerpt",
-      "_phResultRowHtml",
-      "_phRoleLabel",
-      "_phScopeLabel",
-      "_phScopeTabsHtml",
-      "_phSearchFetch",
-      "_phSearchIdentity",
-      "_phSearchRequestIsCurrent",
-      "_phSearchResetResults",
-      "_phSearchSnippetHtml",
-      "_phSearchStateMatches",
-      "_phSortToggleHtml",
-      "_phTopicHtmlByKey",
-      "_phTopicKey",
-      "_phTopicKeyFromAttrs",
-      "_phTopicRenderKey",
-      "_phTopicState",
-      "_phTopicStateByKey",
-      "_updatePhSearchPanelDom",
-      "applyPhSessionTabDom",
-      "ensurePhTopicGroups",
-      "phClearSearch",
-      "phOnSearchInput",
-      "phSearchLoadMore",
-      "phSearchResetState",
-      "phSearchRetry",
-      "phSearchToggleExpand",
-      "phSetSearchScope",
-      "phSetSearchScopeByValue",
-      "phShowSessionCtxMenu",
-      "phToggleSearchSort",
-      "phToggleSessionSort",
-      "phTopicPanelInnerHtml",
-      "switchPhSessionTab"
-    ]
-  },
-  "public/src/modules/ph-session-move.js": {
-    "state": [],
-    "behavior": [
-      "ClawFW",
-      "_phMoveScopeKey",
-      "_phMoveState",
-      "_phResolveSessionOwnership",
-      "_phResolveSessionOwnershipFromServer",
-      "phOpenSessionMoveDialog",
-      "phSessionMoveReset",
-      "phSessionMoveSyncScope",
-      "phToggleSessionSelectMode",
-      "phToggleSessionSelection"
-    ]
-  },
-  "public/src/modules/ph-settings.js": {
-    "state": [
-      "PH_CODER_INCLUDE_FEATURES",
-      "PH_FEATURE_PAGES",
-      "_phCurrentProject",
-      "_phFeatureConfigTarget",
-      "_phFeatureEditor",
-      "_phFeatureSubTab",
-      "_phMountData",
-      "_phOpenFeatureConfig",
-      "_phRebuildBusy",
-      "_phRebuildEnv",
-      "_phRefreshMountsView",
-      "_phResetFeaturePageState",
-      "_phRuntimeSubTab",
-      "_phSettingsTab",
-      "_phSwitchFeatureSubTab",
-      "_phSwitchRuntimeSubTab",
-      "_phSwitchSettingsTab",
-      "_phToggleNotificationFinish",
-      "phSaveCoderThreadLimit",
-      "phSetCoderRotationStrategy",
-      "phSetCoderRuntimeMode"
-    ],
-    "behavior": [
-      "_closePhFeatureEditor",
-      "_phEnvNoticeHtml",
-      "_phLoadCoderPolicy",
-      "_phLoadNotificationSettings",
-      "_phMountCard",
-      "_phRenderMountsBody",
-      "_phRenderMountsView",
-      "_renderModelConfigContent",
-      "_renderProcessModeContent",
-      "ensurePhSettingsHost",
-      "renderPhSettingsOverlay"
+      "submitQueuedInput"
     ]
   },
   "public/src/modules/ph-thread-history.js": {
-    "state": [
-      "__phThreadHistoryAgentId",
-      "__phThreadHistoryThreadId"
-    ],
+    "state": [],
     "behavior": [
-      "PhThreadHistory",
-      "phOpenThreadHistory"
+      "PhThreadHistory"
     ]
   },
   "public/src/modules/plugin-manifest.js": {
@@ -2143,59 +1058,7 @@
   "public/src/modules/project-data.js": {
     "state": [],
     "behavior": [
-      "ClawFW",
-      "_phActivityDirKey",
-      "_phActivitySignals",
-      "_phBrowsingTargetStorageKey",
-      "_phProjectActivityAt",
-      "_phSortProjectsByRecency",
-      "applyManagedPrebuiltAgent",
-      "canEnterWorkspaceChat",
-      "clearPhBrowsingTarget",
-      "compareByRecency",
-      "ensurePhProjectEntitiesLoaded",
-      "getAgentCreatorProjects",
-      "getAgentProjectDisplayName",
-      "getAgentWorkspaceState",
-      "getFeatureCreatorProjects",
-      "getFeatureProjectDisplayName",
-      "getFeatureSessionDisplayName",
-      "getPathLeaf",
-      "getPhBrowsingTarget",
-      "getPhCurrentDirectoryContext",
-      "getPhDirectoryNavigationList",
-      "getPhProjectBoundDirectoryBucket",
-      "getPhProjectsInDirectory",
-      "getPhSessionOwnershipParams",
-      "getProgrammingHelperProjectDisplayName",
-      "getProgrammingHelperProjects",
-      "getProjectLocalHostAgentId",
-      "getWorkspaceBlockData",
-      "getWorkspaceFormStorageKey",
-      "hasWorkspaceSessions",
-      "normalizePhProjectEntity",
-      "phDirIdOf",
-      "phFetchSessionsWithOwnership",
-      "resolveSidebarChildProjectGroup",
-      "setPhBrowsingTarget",
-      "toFeatureDisplayName",
-      "updateAgentRecord",
-      "updateAgentWorkspaceState"
-    ]
-  },
-  "public/src/modules/proxy-overlay.js": {
-    "state": [
-      "_proxyData"
-    ],
-    "behavior": [
-      "_loadProxyPanel",
-      "_proxyStatus",
-      "_saveProxy",
-      "_testProxy",
-      "closeProxySettings",
-      "ensureProxyHost",
-      "openProxySettings",
-      "renderProxyOverlay"
+      "ClawFW"
     ]
   },
   "public/src/modules/rail-customize.js": {
@@ -2206,26 +1069,6 @@
       "closeRailCustomizeModal"
     ]
   },
-  "public/src/modules/recap-hint.js": {
-    "state": [
-      "RECAP_AWAY_THRESHOLD_MS",
-      "RECAP_DISABLED",
-      "_currentRecapText",
-      "_recapDismissedForSession",
-      "_recapFetchInFlight",
-      "_recapLastSeenBySession",
-      "_recapPendingTrigger",
-      "_recapShownForSession"
-    ],
-    "behavior": [
-      "_clearRecapForNewMessage",
-      "_dismissRecap",
-      "_getRecapAgentAndSession",
-      "_maybeFetchRecap",
-      "_renderRecapHint",
-      "_trackRecapSessionPresence"
-    ]
-  },
   "public/src/modules/remote-claw-settings.js": {
     "state": [],
     "behavior": [
@@ -2233,7 +1076,6 @@
       "connectRemoteClaw",
       "createRemoteClawPairing",
       "disconnectRemoteClaw",
-      "openRemoteClawSettings",
       "remoteClawResetPairing",
       "remoteClawSetView",
       "unregisterRemoteClaw",
@@ -2339,45 +1181,14 @@
       "ClawPanels"
     ]
   },
-  "public/src/modules/rollback-dialog.js": {
-    "state": [
-      "_compactTimerInterval",
-      "_partialCompactContextKey",
-      "_partialCompactInFlight",
-      "_partialCompactRuntimeId",
-      "_rollbackAwaitInFlight",
-      "_rollbackDialogOpen",
-      "_rollbackLeasePollIntervalMs",
-      "_rollbackLeaseWaitTimeoutMs"
-    ],
-    "behavior": [
-      "_ensureRollbackLeaseAfterInterrupt",
-      "_notifyRollbackAwaitBusy",
-      "_notifyRollbackAwaitTimeout",
-      "_notifyRollbackInterrupting",
-      "_notifyRollbackNoLease",
-      "_notifyRollbackNoTargets",
-      "_rollbackToast",
-      "clearPartialCompactStartedAt",
-      "clearPartialCompactState",
-      "getPartialCompactStorageKey",
-      "readPartialCompactStartedAt",
-      "requestRollbackEdit",
-      "showRollbackActionDialog",
-      "writePartialCompactStartedAt"
-    ]
-  },
   "public/src/modules/runtime-status.js": {
     "state": [
       "_agentSuspended",
       "_contextGuardPageLoadedAt",
       "_contextGuardToastKey",
-      "_lastRenderedNotificationRuntime",
       "_notificationClockTimer",
       "_runtimeStatusMemory",
-      "_threadSidebarEntries",
-      "currentRuntimeConnected",
-      "lastNotificationStatusPayload"
+      "_threadSidebarEntries"
     ],
     "behavior": [
       "applyContextGuardStatus",
@@ -2421,146 +1232,10 @@
       "updateNotificationStatus"
     ]
   },
-  "public/src/modules/session-dialogs.js": {
-    "state": [
-      "_renameOverlay",
-      "branchDialog",
-      "branchDialogState",
-      "branchFooterInfo",
-      "branchRoundList"
-    ],
-    "behavior": [
-      "_closeRenameDialog",
-      "closeBranchDialog",
-      "handleBranchRoundClick",
-      "newIdempotencyKey",
-      "openBranchDialog",
-      "phOpenRenameDialog",
-      "renderBranchRoundList",
-      "renderPreambleItem",
-      "submitBranch",
-      "updateBranchFooterInfo"
-    ]
-  },
-  "public/src/modules/session-list-render.js": {
-    "state": [
-      "_PH_EMPTY_ARCHIVE_ICON",
-      "_PH_EMPTY_CHAT_ICON"
-    ],
-    "behavior": [
-      "_renderAgentCreatorSessionList",
-      "_renderFeatureCreatorSessionList",
-      "_renderGenericSessionList",
-      "_renderProgrammingHelperSessionList",
-      "onPhSessionDragStart",
-      "phConversationArchived",
-      "phIsThreadArchivedMember",
-      "phPartitionSessions",
-      "phThreadArchiveCount",
-      "projectViewIdentity",
-      "renderPhSessionItemHtml",
-      "renderPhSessionsEmptyCard",
-      "renderSessionThreadBadge",
-      "renderWorkspaceSessionList",
-      "viewCapabilityEnabled"
-    ]
-  },
-  "public/src/modules/session-menu-decls.js": {
-    "state": [],
-    "behavior": [
-      "_resolveSessionMenuLabel",
-      "_sessionMenuAgentRecord",
-      "_sessionMenuIsRemoteNs",
-      "getDeclaredSessionMenuItems",
-      "sessionOpsAllowed"
-    ]
-  },
-  "public/src/modules/session-mutation.js": {
-    "state": [],
-    "behavior": [
-      "archiveSessionAfterMutation",
-      "beginSessionReplacementMutation",
-      "clearSessionReplacementMutation",
-      "getSessionReplacementMutation",
-      "markSessionArchivedForMutation",
-      "navigateToSessionMutationTarget",
-      "reconcileArchivedSourceRuntime"
-    ]
-  },
-  "public/src/modules/session-readonly-view.js": {
-    "state": [],
-    "behavior": [
-      "closeReadOnlySession",
-      "getReadOnlySessionTarget",
-      "openReadOnlySession",
-      "updateReadOnlySessionIndicator"
-    ]
-  },
   "public/src/modules/session-reference-picker.js": {
-    "state": [
-      "SESSION_REF_MIME",
-      "_dragSourceEntry",
-      "_lastKnownRefKey",
-      "_pickerEl",
-      "_sessionReferences"
-    ],
+    "state": [],
     "behavior": [
-      "SessionReference",
-      "_activeRefKey",
-      "_appendRefToKey",
-      "_clearDropTargetHighlights",
-      "_composerCardFromEvent",
-      "_currentSessionIdentity",
-      "_notifyPreviewChanged",
-      "_refKey",
-      "_refs",
-      "_sidebarItemFromEvent",
-      "_sidebarItemIdentity",
-      "_sidebarItemTitle",
-      "addSessionReference",
-      "addSessionReferenceToTarget",
-      "bindSessionReferenceDrop",
-      "buildTurnMetadata",
-      "clearSessionReferences",
-      "closeSessionReferencePicker",
-      "consumeSessionReferences",
-      "openSessionReferencePicker",
-      "peekSessionReferences",
-      "removeSessionReference",
-      "restoreSessionReferences",
-      "sessionReferenceChipsHtml",
-      "setDragSource"
-    ]
-  },
-  "public/src/modules/session-ui.js": {
-    "state": [
-      "PH_OPEN_SESSIONS_CARD_DISABLED",
-      "_buildPhOpenSessionsCardHtml",
-      "_modelInfoCache",
-      "_phOpenSessionsCache"
-    ],
-    "behavior": [
-      "_cacheModelInfo",
-      "_resolveAgentKey",
-      "generateSessionTitle",
-      "getSessionCompressRatio",
-      "getSessionContextLength",
-      "getWorkspaceSessionById",
-      "getWorkspaceSessions",
-      "handleSessionTitleDoubleClick",
-      "isCompactedResumeSession",
-      "newIdempotencyKey",
-      "phDismissOpenSessions",
-      "phLoadOpenSessionsCard",
-      "phRestoreAllOpenSessions",
-      "phRestoreOneOpenSession",
-      "refreshSessionTokenCount",
-      "renderSessionArchivedBadge",
-      "renderSessionResumeBadge",
-      "renderSessionTitleAiButton",
-      "renderSessionTodoBadge",
-      "renderSessionTokenBar",
-      "sortPhSessionsByMode"
+      "SessionReference"
     ]
   },
   "public/src/modules/session-view-state.js": {
@@ -2588,85 +1263,6 @@
       "ClawSidebarLayout"
     ]
   },
-  "public/src/modules/sidebar-operations.js": {
-    "state": [
-      "_pendingRuntimeStops",
-      "_pendingSessionUpserts",
-      "_sessionReplacementMutations",
-      "_sidebarDiagnosticEventQueue",
-      "_sidebarDiagnosticFlushInFlight",
-      "_sidebarDiagnosticFlushTimer",
-      "_sidebarMutationEpoch",
-      "_sidebarOperationSequence",
-      "_sidebarOperationVersion",
-      "_sidebarOperations"
-    ],
-    "behavior": [
-      "applySessionMutationDelta",
-      "applySidebarMutationDeltaWithDiagnostics",
-      "beginSidebarOperation",
-      "beginSidebarOperationMainThreadObservation",
-      "buildSidebarDiagnosticPhaseEvent",
-      "captureSidebarSnapshotToken",
-      "createSidebarOperationId",
-      "findSidebarOperation",
-      "finishSidebarOperation",
-      "flushSidebarDiagnosticEvents",
-      "getPendingSessionRemovalIds",
-      "getSidebarOperation",
-      "getSidebarOperationVersion",
-      "getWorkspaceRevision",
-      "getWorkspaceSnapshotOwnership",
-      "inferSidebarDiagnosticResult",
-      "invalidateSidebarProjection",
-      "isRuntimeStopPending",
-      "isSidebarSnapshotTokenCurrent",
-      "listSidebarOperations",
-      "markPendingRuntimeStop",
-      "markPendingSessionUpsert",
-      "markSidebarAuthoritativeMutation",
-      "mergeWorkspaceSessionSnapshots",
-      "normalizeSidebarOperation",
-      "pendingRuntimeStopKey",
-      "queueSidebarDiagnosticEvent",
-      "reconcilePendingRuntimeStops",
-      "recordSidebarOperationCheckpoint",
-      "recordSidebarOperationPhase",
-      "releasePendingRuntimeStop",
-      "retainPendingSessionUpserts",
-      "scheduleSidebarDiagnosticFlush",
-      "sidebarDiagnosticNow",
-      "updateSidebarOperation",
-      "waitForSidebarTargetRuntime"
-    ]
-  },
-  "public/src/modules/sidebar-pin-color.js": {
-    "state": [
-      "PIN_DRAG_THRESHOLD",
-      "PIN_LONGPRESS_MS",
-      "TODO_COLOR_SWATCHES",
-      "pickerEl",
-      "pickerPinned",
-      "pinDrag"
-    ],
-    "behavior": [
-      "SIDEBAR_TODO_COLORS",
-      "applyTodoColor",
-      "beginPinDrag",
-      "closeTodoColorPicker",
-      "currentLanguageIsZh",
-      "getPicker",
-      "hitTestColorDot",
-      "onPinPointerCancel",
-      "onPinPointerMove",
-      "onPinPointerUp",
-      "onSidebarPinPointerDown",
-      "openTodoColorPicker",
-      "positionPicker",
-      "releasePinListeners",
-      "setPickerHover"
-    ]
-  },
   "public/src/modules/sidebar-render.js": {
     "state": [
       "AGENT_ICONS",
@@ -2681,6 +1277,7 @@
       "anyContextMenuOpen",
       "createAgentCallStatesHost",
       "createAgentSnapshotLoaderHost",
+      "createP2BootstrapSidebarRenderHost",
       "getAgentIconHtml",
       "getAgentListRenderSignature",
       "onSidebarItemPointerLeave",
@@ -2698,187 +1295,16 @@
       "waitForTargetRuntimeSession"
     ]
   },
-  "public/src/modules/slash-commands.js": {
-    "state": [],
-    "behavior": [
-      "_currentSessionContext",
-      "_handleSummary",
-      "_handleTrim",
-      "_isThreadCarriedSession",
-      "_manualSessionOpsApplicable",
-      "_manualSessionOpsContext",
-      "_resolveSessionContext"
-    ]
-  },
   "public/src/modules/slash-menu.js": {
-    "state": [
-      "_activeTa",
-      "_dirtyKeys",
-      "_filtered",
-      "_formCmd",
-      "_handoffActivations",
-      "_highlightIdx",
-      "_hostCommands",
-      "_lastFetchKey",
-      "_lastPromptKey",
-      "_menuEl",
-      "_pendingPromptBuckets",
-      "_promptSubmitInFlight",
-      "_sessionCommands",
-      "_visible"
-    ],
-    "behavior": [
-      "ClawSlash",
-      "SlashMenu",
-      "_activePromptKey",
-      "_allCommands",
-      "_applyShowWhen",
-      "_cancelForm",
-      "_clearPrompts",
-      "_collectFormArgs",
-      "_completeCommand",
-      "_currentPrompts",
-      "_currentTa",
-      "_currentTarget",
-      "_dispatchPrompts",
-      "_ensureMenuEl",
-      "_execute",
-      "_fieldId",
-      "_focusFirstField",
-      "_hide",
-      "_invokeSessionCommand",
-      "_isInputTextarea",
-      "_matchRank",
-      "_maybeFetchSessionCommands",
-      "_paintRange",
-      "_position",
-      "_postCapabilityInvoke",
-      "_remainingText",
-      "_removePillBar",
-      "_render",
-      "_renderFieldHtml",
-      "_renderForm",
-      "_renderPillBar",
-      "_shortName",
-      "_show",
-      "_submitForm",
-      "_syncFromInput"
-    ]
-  },
-  "public/src/modules/speech-config-cache.js": {
     "state": [],
     "behavior": [
-      "ClawFW",
-      "ensureClawSpeechModelConfig",
-      "getClawSpeechModelConfig",
-      "getClawSpeechPresets",
-      "setClawSpeechModelConfig",
-      "setClawSpeechPresets"
-    ]
-  },
-  "public/src/modules/speech-settings.js": {
-    "state": [],
-    "behavior": [
-      "addSpeechPreset",
-      "applySpeechPreset",
-      "cancelSpeechPresetEdit",
-      "deleteSpeechPreset",
-      "editSpeechPreset",
-      "normalizeSpeechApiTypeValue",
-      "renderSpeechModelSection",
-      "renderSpeechPresetEditForm",
-      "saveSpeechFullConfig",
-      "saveSpeechPreset",
-      "speechApiTypeLabel",
-      "toggleSpeechApiKeyVisibility"
+      "ClawSlash"
     ]
   },
   "public/src/modules/sse-client.js": {
-    "state": [
-      "OPTIMISTIC_QUEUED_TTL_MS",
-      "THREAD_EVENT_NAMES",
-      "WATCHDOG_INTERVAL_MS",
-      "WATCHDOG_SILENT_MS",
-      "_active",
-      "_cooldownUntil",
-      "_fatalFailures",
-      "_lastFrameAt",
-      "_lastQueuedSnapshots",
-      "_mode",
-      "_observedQueuedIds",
-      "_optimisticQueued",
-      "_retryTimer",
-      "_source",
-      "_threadHandlers",
-      "_threadsParamOnConnect",
-      "_unauthorized",
-      "_watchdogTimer"
-    ],
+    "state": [],
     "behavior": [
-      "ClawFW",
-      "bootSseClient",
-      "connect",
-      "dispatch",
-      "getLastQueuedSnapshot",
-      "handleAppNotificationEvent",
-      "handleConnectionEvent",
-      "handleInputRequestsEvent",
-      "handleMessagesEvent",
-      "handleNotificationEvent",
-      "handleOverviewEvent",
-      "handleQueuedInputsEvent",
-      "handleThreadEvent",
-      "handleTodoEvent",
-      "isClaimedQueuedItem",
-      "isSameRuntime",
-      "isSseActive",
-      "isUserQueuedItem",
-      "noteQueuedOptimistic",
-      "notifyChoiceAlerts",
-      "onHello",
-      "onResync",
-      "onShutdown",
-      "onSourceError",
-      "probeAuthThenRetry",
-      "reconcileQueuedTexts",
-      "refreshThreadSubscription",
-      "scheduleRetry",
-      "sseModeFromUrl",
-      "startWatchdog",
-      "subscribeThreadEvents",
-      "threadsQueryParam",
-      "watchdogDecide"
-    ]
-  },
-  "public/src/modules/template-engine.js": {
-    "state": [
-      "MAX_HIGHLIGHT_LINES",
-      "RENDER_TEMPLATES",
-      "_fullHighlightData",
-      "_highlightIdCounter",
-      "self",
-      "templateCache"
-    ],
-    "behavior": [
-      "applyTemplate",
-      "clearFeatureTemplateCache",
-      "clearTruncatedHighlightData",
-      "collectTemplateNames",
-      "compactCodeReadMarkup",
-      "expandTruncatedResult",
-      "formatError",
-      "getAgentDisplayId",
-      "getAgentRuntimeId",
-      "getTemplateFallback",
-      "getToolDisplayName",
-      "getToolRenderTemplate",
-      "interpolateTemplate",
-      "loadTemplate",
-      "parseToolResult",
-      "renderJsonHighlight",
-      "resolveTemplatePath",
-      "stripHljsPunctuationSpans",
-      "warmTemplatesInBackground"
+      "ClawFW"
     ]
   },
   "public/src/modules/theme-lang.js": {
@@ -2906,26 +1332,18 @@
       "_currentActiveSession",
       "_handoffActive",
       "_isZh",
-      "_loadAwaitSurfaceMessages",
       "_rebindConversationToThreadHead",
       "_rebuildIndexes",
       "_reconcileConversationWithThreadHead",
       "_scheduleRebindRetry",
       "_syncActiveThreadSubscription",
-      "enterThreadAwaitSurface",
-      "enterThreadAwaitView",
-      "getActiveConversationTarget",
+      "createThreadStoreHost",
       "getActiveThreadInputTarget",
       "getThreadById",
       "getThreadForSession",
-      "getThreadPendingTexts",
       "isThreadHostAgentId",
       "jumpToThreadHead",
-      "openConversationTarget",
       "refreshThreads",
-      "registerSessionActivateTarget",
-      "submitThreadInput",
-      "threadAdvanceHead",
       "updateThreadHeaderIndicator"
     ]
   },
@@ -2959,137 +1377,6 @@
       "updatePlanBadge"
     ]
   },
-  "public/src/modules/tool-progress.js": {
-    "state": [
-      "_toolProgressByCallId",
-      "_toolProgressDomCount",
-      "_toolProgressOwner"
-    ],
-    "behavior": [
-      "_escapeAttrSelector",
-      "_formatProgressDuration",
-      "_formatProgressTimeout",
-      "_isZhUi",
-      "applyToolProgressNotification",
-      "buildToolProgressHtml",
-      "clearToolProgressState",
-      "ensureToolProgressOwner",
-      "getToolProgressOwner",
-      "normalizeToolProgressEntry",
-      "resolveToolProgressForCall",
-      "syncToolProgressDom"
-    ]
-  },
-  "public/src/modules/trim-page.js": {
-    "state": [
-      "SKILL_INVOKE_STEPS",
-      "TRIM_PAGE_RATIO_STORAGE_KEY",
-      "trimPageArchiveRow",
-      "trimPageArchiveToggle",
-      "trimPageEl",
-      "trimPageKeepSkillControl",
-      "trimPageKeepSkillDec",
-      "trimPageKeepSkillInc",
-      "trimPageKeepSkillToggle",
-      "trimPageKeepSkillValue",
-      "trimPageList",
-      "trimPageManualConfig",
-      "trimPageModeBtns",
-      "trimPageRatioConfig",
-      "trimPageRatioInput",
-      "trimPageRatioSlider",
-      "trimPageReadout",
-      "trimPageSeq",
-      "trimPageState",
-      "trimPageSubmitBtn",
-      "trimPageSummaryToggle",
-      "trimPageTitle"
-    ],
-    "behavior": [
-      "L",
-      "aggregateRounds",
-      "applyMode",
-      "applyRatioFromControl",
-      "buildRoundDetail",
-      "clampRatio",
-      "closeTrimPage",
-      "computeSafeCutSet",
-      "fmtChars",
-      "foldToolSummaries",
-      "getSkillStepIndex",
-      "isThreadCarriedSession",
-      "onRatioWheelAdjust",
-      "openTrimPage",
-      "readStoredRatio",
-      "renderCutNode",
-      "renderList",
-      "renderManualRoundNode",
-      "renderPreambleNode",
-      "renderRatioRoundNode",
-      "renderRatioUnsupported",
-      "renderSkillStepper",
-      "storeRatio",
-      "submitTrimPage",
-      "updateReadout",
-      "updateSubmitLabel"
-    ]
-  },
-  "public/src/modules/usage-info-overlay.js": {
-    "state": [
-      "USAGE_INFO_CHEVRON_SVG",
-      "_usageInfoMenu",
-      "_usageInfoMenuCleanup"
-    ],
-    "behavior": [
-      "bindUsageInfoSearchCommit",
-      "bindUsageInfoTooltip",
-      "closeUsageInfo",
-      "closeUsageInfoMenu",
-      "ensureUsageInfoHost",
-      "getUsageInfoState",
-      "loadUsageInfoCalendarData",
-      "loadUsageInfoData",
-      "moveUsageInfoTooltip",
-      "openUsageInfo",
-      "openUsageInfoMenu",
-      "queueUsageInfoSearch",
-      "renderUsageInfoBars",
-      "renderUsageInfoCalendar",
-      "renderUsageInfoChartControls",
-      "renderUsageInfoEvents",
-      "renderUsageInfoGroupControls",
-      "renderUsageInfoGroups",
-      "renderUsageInfoMainChart",
-      "renderUsageInfoOverlay",
-      "renderUsageInfoTrend",
-      "renderUsageMetric",
-      "scrollUsageInfoCalendarToLatest",
-      "setUsageInfoChartView",
-      "setUsageInfoGuide",
-      "setUsageInfoRange",
-      "setUsageInfoSearch",
-      "toggleUsageInfoChartModelMenu",
-      "toggleUsageInfoGroupMenu",
-      "usageInfoAddBreakdown",
-      "usageInfoBucketRows",
-      "usageInfoDateDaysAgo",
-      "usageInfoDateRange",
-      "usageInfoDefaults",
-      "usageInfoEmptyBreakdown",
-      "usageInfoEventDate",
-      "usageInfoEventHour",
-      "usageInfoFullNumber",
-      "usageInfoLabel",
-      "usageInfoLocalDateString",
-      "usageInfoModelOptions",
-      "usageInfoNumber",
-      "usageInfoParseLocalDate",
-      "usageInfoPct",
-      "usageInfoRangeDates",
-      "usageInfoSmoothPath",
-      "usageInfoToday"
-    ]
-  },
   "public/src/modules/voice-input.js": {
     "state": [
       "_audioCueBuffers",
@@ -3101,10 +1388,7 @@
       "_voiceCacheKey",
       "_voiceCancelled",
       "_voiceMediaRecorder",
-      "_voicePendingSend",
-      "_voiceRecording",
       "_voiceStarting",
-      "_voiceStopping",
       "_voiceStreamActiveText",
       "_voiceStreamCommitted",
       "_voiceStreamComposing",
@@ -3113,10 +1397,7 @@
       "_voiceStreamProcessor",
       "_voiceStreamSource",
       "_voiceStreamTrack",
-      "_voiceStreamWs",
-      "_voiceTargetBtn",
-      "_voiceTargetId",
-      "_voiceTranscribing"
+      "_voiceStreamWs"
     ],
     "behavior": [
       "_applyStreamTextToDraft",
@@ -3482,116 +1763,17 @@
       "WorkGroupUI"
     ]
   },
-  "public/src/modules/workspace-actions.js": {
-    "state": [
-      "_activateRemoteHistorySession",
-      "_appConversationActionInFlight",
-      "_createRemoteWorkspaceSession"
-    ],
-    "behavior": [
-      "_waitForRemoteRuntimeForSession",
-      "newIdempotencyKey",
-      "resolveStudioSessionDirectory",
-      "runWorkspaceAction"
-    ]
-  },
   "public/src/modules/workspace-agents.js": {
     "state": [],
     "behavior": [
       "ClawFW"
     ]
   },
-  "public/src/modules/workspace-blocks.js": {
-    "state": [
-      "ASSEMBLY_BUNDLE_FEATURES",
-      "ASSEMBLY_PRESET_FEATURES"
-    ],
-    "behavior": [
-      "applyAssemblyPreset",
-      "buildAssemblyGeneratedPrompt",
-      "formatAssemblyFeatureToken",
-      "formatRepoFileSize",
-      "getAssemblyFeatureLabel",
-      "getAssemblyFeaturePackageToken",
-      "getAssemblyPresetDescription",
-      "getAssemblyPresetLabel",
-      "getAssemblyPromptValue",
-      "getAssemblyStageLabel",
-      "getCompatibilityTagLabel",
-      "getDirectorySummaryData",
-      "getFeatureCapabilityLabel",
-      "getFeatureRepositoryData",
-      "getFeatureTypeLabel",
-      "getRepoLocaleText",
-      "normalizeRepoUrl",
-      "parseWorkspaceListField",
-      "renderActionButton",
-      "renderAssemblyWorkbenchBlock",
-      "renderDirectorySummaryPanel",
-      "renderFeatureRepositoryBlock",
-      "renderFlowEditorBlock",
-      "renderRepoLink",
-      "renderWorkspaceActionGroup",
-      "renderWorkspaceField",
-      "renderWorkspaceForm",
-      "renderWorkspaceHero",
-      "renderWorkspaceLauncherGrid",
-      "renderWorkspaceStatusGrid",
-      "serializeWorkspaceListField",
-      "setBundleFilter",
-      "shouldRenderBlock"
-    ]
-  },
   "public/src/modules/workspace-docset.js": {
     "state": [],
     "behavior": [
-      "buildArtifactPreview",
-      "cancelProjectRequirementEdit",
-      "getArtifactKindLabel",
       "getCurrentProjectDocset",
-      "getProjectDocsetData",
-      "getProjectDocsetPage",
-      "getProjectRequirementDraft",
-      "getSelectedArtifactId",
-      "getSelectedProjectDocsetDetail",
-      "getWorkspaceArtifactData",
-      "getWorkspaceLabelFromId",
-      "getWorkspaceUiBlock",
-      "importProjectMaterialsByPath",
-      "isProjectRequirementEditing",
-      "openProjectMaterialImport",
-      "renderArtifactPayloadDetails",
-      "renderProjectDocsetBlock",
-      "renderProjectDocsetContent",
-      "renderProjectDocsetDetailList",
-      "renderProjectDocsetDetailPane",
-      "renderProjectDocsetFields",
-      "renderProjectDocsetList",
-      "renderProjectDocsetSidebarItem",
-      "renderProjectRequirementCards",
-      "renderWorkspaceArtifactsBlock",
-      "resetProjectRequirementDraft",
-      "resolveProjectDocsetDetail",
-      "saveProjectRequirementForm",
-      "setProjectDocsetPage",
-      "startProjectRequirementEdit",
-      "toggleProjectDocsetOverlay",
       "updateProjectDocsetChrome"
-    ]
-  },
-  "public/src/modules/workspace-settings.js": {
-    "state": [
-      "NOTIFICATION_AUDIT_ITEMS"
-    ],
-    "behavior": [
-      "closeWorkspaceSettings",
-      "ensureWorkspaceSettingsHost",
-      "loadWorkspaceSettingsPanel",
-      "onWorkspaceQuotaChange",
-      "onWorkspaceVisibilityChange",
-      "openWorkspaceSettings",
-      "renderNotificationAuditSection",
-      "renderWorkspaceSettingsOverlay"
     ]
   },
   "public/src/plugins/memo/settings.js": {

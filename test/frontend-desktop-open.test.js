@@ -93,6 +93,28 @@ describe('desktop-open 右键唤起请求', () => {
     assert.deepEqual(calls[3], ['open', 'D:\\two']);
   });
 
+  it('二次实例投递窗口：classic 相即刻可用，不依赖任何 ESM 模块执行', async () => {
+    // 该文件刻意保持 classic（bootstrap 边界）：壳的 webview eval
+    // （desktop/src/main.rs deliver_open_request）在页面装载期间就可能到达，
+    // `&&` 守卫不是排队，入口不得因 ESM 下载/求值被推迟。本用例在同一个
+    // 同步轮次内（loadSource 之后立刻、无任何 await / 模块求值）投递请求。
+    const ctx = createFrontendSandbox({ URLSearchParams });
+    ctx.run(`
+      window.__calls = [];
+      window.handlePrebuiltAgentClick = async (id) => { window.__calls.push(['switch', id]); };
+      window.phOpenProjectDirectory = async (dir) => { window.__calls.push(['open', dir]); };
+    `);
+    ctx.loadSource('public/src/modules/desktop-open.js');
+    // 同步可用性：classic 顶层赋值，此刻尚无任何 ESM 模块执行
+    assert.equal(typeof ctx.run('window.__clawConsumeOpenRequest'), 'function');
+    ctx.run("window.__clawConsumeOpenRequest({ action: 'open', cwd: 'D:/early' });");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.deepEqual(callsOf(ctx), [
+      ['switch', 'programming-helper'],
+      ['open', 'D:/early'],
+    ]);
+  });
+
   it('boot 消费：命中 query 先清 URL 再执行动作；无 query 不动', async () => {
     const ctx = loadModule();
     ctx.run(`

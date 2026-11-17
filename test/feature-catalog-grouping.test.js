@@ -14,15 +14,64 @@
  * 方案：docs/plans/2026-09-13-feature-registry-p1-panel-visibility.md
  */
 
-import { describe, it } from 'node:test';
+import { describe, it, after, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { createFrontendSandbox } from './helpers/frontend-vm.js';
+import fs from 'node:fs';
+import { loadModuleOnce } from './helpers/esm-module-loader.js';
 
-function loadModule() {
-  const ctx = createFrontendSandbox();
-  ctx.loadSource('public/src/modules/feature-catalog.js');
-  return ctx;
+// feature-catalog（ESM）直接 import 已迁移的 render-entry-state，后者 import 期
+// claim KernelState。测试的 window 桩因此必须装真实桥机制本体（classic IIFE，
+// 只经 window 取用全局）。
+const KERNEL_STATE_SOURCE = fs.readFileSync(
+  new URL('../public/src/modules/kernel-state.js', import.meta.url), 'utf8');
+
+function installKernelState(windowStub) {
+  new Function('window', KERNEL_STATE_SOURCE)(windowStub);
 }
+
+/**
+ * 真实 import 路线（ESM 迁移 P2 批次 2）：模块只在调用时读 window（fetch /
+ * activeFeaturePanel / renderFeaturePanel / ClawFW），因此测试用最小 window
+ * 桩驱动，不经 vm 沙箱。
+ */
+let windowRestore = null;
+
+function installWindow(windowStub) {
+  const prevWindow = globalThis.window;
+  globalThis.window = windowStub;
+  return () => {
+    if (prevWindow === undefined) delete globalThis.window; else globalThis.window = prevWindow;
+  };
+}
+
+afterEach(() => {
+  if (windowRestore) { windowRestore(); windowRestore = null; }
+});
+
+/** 装最小 window 桩并真实 import 一份全新模块实例（模块级缓存在实例内）。 */
+async function loadCatalog({ fetch: fetchImpl, track = true } = {}) {
+  const restore = installWindow({ fetch: fetchImpl, ClawFW: {} });
+  installKernelState(globalThis.window);
+  if (track) windowRestore = restore;
+  else baseRestore = restore;
+  const { module } = await loadModuleOnce('public/src/modules/feature-catalog.js', { installGlobals: false });
+  return module;
+}
+
+let baseRestore = null;
+after(() => { if (baseRestore) baseRestore(); });
+
+/**
+ * 以真实模块导出为 `catalog` 绑定的表达式求值：测试表达式里的
+ * window.ClawFW.featureCatalog 一律改写为 catalog（不是沙箱变换）。
+ */
+function makeRunner(module) {
+  return (expr) => new Function('catalog',
+    `return (${expr.replaceAll('window.ClawFW.featureCatalog', 'catalog')});`)(module);
+}
+
+const catalog = await loadCatalog({ track: false });
+const run = makeRunner(catalog);
 
 const CATALOG = {
   schemaVersion: 1,
@@ -67,8 +116,7 @@ function inspectorFeature(name, extra = {}) {
 // ── groupFeaturesByType ────────────────────────────────────────────
 
 describe('feature-catalog: groupFeaturesByType', () => {
-  const ctx = loadModule();
-  const fn = ctx.run;
+  const fn = run;
 
   it('groups by type vocabulary order, empty groups dropped', () => {
     const groups = fn(`window.ClawFW.featureCatalog.groupFeaturesByType(
@@ -241,8 +289,7 @@ describe('feature-catalog: groupFeaturesByType', () => {
 // ── enrichFeatureEntry / deriveRuntimeCapabilities ─────────────────
 
 describe('feature-catalog: enrichFeatureEntry', () => {
-  const ctx = loadModule();
-  const fn = ctx.run;
+  const fn = run;
 
   it('mapped entry carries seed metadata; capabilities come from runtime signals', () => {
     const entry = fn(`window.ClawFW.featureCatalog.enrichFeatureEntry(
@@ -307,8 +354,7 @@ describe('feature-catalog: enrichFeatureEntry', () => {
 // ── countFeaturesBySource ──────────────────────────────────────────
 
 describe('feature-catalog: countFeaturesBySource', () => {
-  const ctx = loadModule();
-  const fn = ctx.run;
+  const fn = run;
 
   it('counts per source group; capFilter narrows counts consistently', () => {
     const input = `[
@@ -354,8 +400,7 @@ describe('feature-catalog: countFeaturesBySource', () => {
 // ── resolveMountedNames ────────────────────────────────────────────
 
 describe('feature-catalog: resolveMountedNames', () => {
-  const ctx = loadModule();
-  const fn = ctx.run;
+  const fn = run;
 
   it('selects the identity set by host APP (ADR-0025: coder is a standalone APP)', () => {
     const facts = `({ main: new Set(['playwright-shell']), coder: new Set(['github']) })`;
@@ -382,8 +427,7 @@ describe('feature-catalog: resolveMountedNames', () => {
 // ── resolveDisplayName ─────────────────────────────────────────────
 
 describe('feature-catalog: resolveDisplayName', () => {
-  const ctx = loadModule();
-  const fn = ctx.run;
+  const fn = run;
 
   it('resolves {zh,en} object by language', () => {
     assert.equal(fn(`window.ClawFW.featureCatalog.resolveDisplayName({ displayName: { zh: '甲', en: 'A' }, name: 'x' }, 'zh')`), '甲');
@@ -407,8 +451,7 @@ describe('feature-catalog: resolveDisplayName', () => {
 // ── provenanceI18nKey ──────────────────────────────────────────────
 
 describe('feature-catalog: provenanceI18nKey', () => {
-  const ctx = loadModule();
-  const fn = ctx.run;
+  const fn = run;
 
   it('maps provenances in the server-provided vocabulary to i18n keys', () => {
     const vocab = JSON.stringify(['builtin', 'ecosystem', 'local', 'inline', 'packaged']);
@@ -433,12 +476,11 @@ describe('feature-catalog: provenanceI18nKey', () => {
 describe('feature-catalog: response contract', () => {
   it('accepts current contract (provenances + features) and caches snapshot', async () => {
     const calls = [];
-    const ctx = createFrontendSandbox({
+    const catalogModule = await loadCatalog({
       fetch: async (url) => { calls.push(url); return { ok: true, json: async () => CATALOG }; },
     });
-    ctx.loadSource('public/src/modules/feature-catalog.js');
-    await ctx.run('window.ClawFW.featureCatalog.loadFeatureCatalog(true)');
-    const snap = ctx.run('window.ClawFW.featureCatalog.getFeatureCatalogSnapshot()');
+    await catalogModule.loadFeatureCatalog(true);
+    const snap = catalogModule.getFeatureCatalogSnapshot();
     assert.equal(calls.length, 1);
     assert.equal(calls[0], '/api/feature-catalog');
     assert.ok(Array.isArray(snap.provenances));
@@ -446,15 +488,11 @@ describe('feature-catalog: response contract', () => {
   });
 
   it('rejects responses missing provenances instead of half-loading', async () => {
-    const ctx = createFrontendSandbox({
+    const catalogModule = await loadCatalog({
       fetch: async () => ({ ok: true, json: async () => ({ features: CATALOG.features }) }),
     });
-    ctx.loadSource('public/src/modules/feature-catalog.js');
-    await assert.rejects(
-      ctx.run('window.ClawFW.featureCatalog.loadFeatureCatalog(true)'),
-      /malformed/
-    );
-    const snap = ctx.run('window.ClawFW.featureCatalog.getFeatureCatalogSnapshot()');
+    await assert.rejects(catalogModule.loadFeatureCatalog(true), /malformed/);
+    const snap = catalogModule.getFeatureCatalogSnapshot();
     assert.equal(snap, null);
   });
 });
@@ -471,12 +509,11 @@ describe('feature-catalog: mount facts contract', () => {
         coder: {},
       },
     };
-    const ctx = createFrontendSandbox({
+    const catalogModule = await loadCatalog({
       fetch: async (url) => { calls.push(url); return { ok: true, json: async () => overview }; },
     });
-    ctx.loadSource('public/src/modules/feature-catalog.js');
-    await ctx.run('window.ClawFW.featureCatalog.loadMountFacts(true)');
-    const snap = ctx.run('window.ClawFW.featureCatalog.getMountFactsSnapshot()');
+    await catalogModule.loadMountFacts(true);
+    const snap = catalogModule.getMountFactsSnapshot();
     assert.equal(calls.length, 1);
     assert.equal(calls[0], '/api/feature-store/overview');
     assert.equal(snap.main.has('playwright-shell'), true);
@@ -484,14 +521,10 @@ describe('feature-catalog: mount facts contract', () => {
   });
 
   it('rejects malformed mounts and leaves the snapshot unset for retry', async () => {
-    const ctx = createFrontendSandbox({
+    const catalogModule = await loadCatalog({
       fetch: async () => ({ ok: true, json: async () => ({ base: {} }) }),
     });
-    ctx.loadSource('public/src/modules/feature-catalog.js');
-    await assert.rejects(
-      ctx.run('window.ClawFW.featureCatalog.loadMountFacts(true)'),
-      /malformed/
-    );
-    assert.equal(ctx.run('window.ClawFW.featureCatalog.getMountFactsSnapshot()'), null);
+    await assert.rejects(catalogModule.loadMountFacts(true), /malformed/);
+    assert.equal(catalogModule.getMountFactsSnapshot(), null);
   });
 });

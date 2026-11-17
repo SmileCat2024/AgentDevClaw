@@ -9,7 +9,7 @@
  *    ?since / ?tail 增量在 app-main.js runMessagesProbeCycle 拼回全量），
  *    渲染下标不因分页偏移。
  *  - 错误组折叠不是回扫猜测：用 chat-renderer 的
- *    computeAssistantErrorGroups(messages).plan 做精确数据映射——组内
+ *    window.computeAssistantErrorGroups(messages).plan 做精确数据映射——组内
  *    非首消息由组首行（`eg-<startIndex>`）统一渲染，目标在组内时定位到
  *    组首行并经 toggleErrorGroup 展开（用户态跨全量渲染保持）。
  *  - 身份守卫含 runtime + session：定位以第一次身份匹配落定的
@@ -17,25 +17,33 @@
  *    serial 代次让旧定位的迟到回调失效，不抢新会话滚动位置。
  *  - 浮动条生命周期绑定同一锚：container 渲染漂移后身份不匹配即自动
  *  收起，不遗留到别的会话；返回/回最新不依赖 render 中发网络，全部
- *  读本地 ClawFW.phSearch 状态。
+ *  读本地搜索状态（ph-session-list 的 `_phSearch` 命名导出）。
  *
- * 依赖全局:
- *   container (app-core.js — #chat-container，唯一滚动容器)
- *   readCurrentSessionViewState (modules/session-view-state.js — 身份守卫，
- *     返回 { runtimeId, identity: { agentId, sessionId }, messages })
- *   computeAssistantErrorGroups (modules/chat-renderer.js — 错误组权威 plan)
- *   registerManualScrollIntent, requestFollowLatest (modules/chat-viewport.js)
- *   selectWorkspaceSurface (app-ui.js — selectWorkspaceSurface(agentId, options))
- *   currentLanguage, escapeHtml (app-core.js)
- * 入口（workspace-actions.js open_session 流程挂钩）:
- *   window.phSearchLocatePrepare(action) — 导航开始前调用（进入前捕获
- *     .ph-session-tabs dataset 项目身份 + 搜索列表滚动位置）
- *   window.phSearchLocateAfterOpen(action) — 导航落定后调用；action 携带
+ * ESM 化：P2 W2-8（2026-11-17）。原位转换，定位/守卫/浮条生命周期语义零变化。
+ *
+ * 依赖（ESM）: p2-bootstrap-dom（container = #chat-container，唯一滚动容器）、
+ *   ph-session-list（`_phSearch` 搜索状态：homeScrollTop）、
+ *   i18n-environment-state（实时语言）、markdown-utils（escapeHtml）、
+ *   workspace-surface-host（selectWorkspaceSurface，返回工作区首页 surface）。
+ * 仍 classic（window 晚绑定）: session-view-state（readCurrentSessionViewState 身份守卫）、
+ *   chat-renderer（computeAssistantErrorGroups 权威 plan、toggleErrorGroup /
+ *   toggleMessage）、chat-viewport（registerManualScrollIntent / requestFollowLatest）、
+ *   remote-connections（isRemoteNamespaceAgentId / RemoteConnections.*）。
+ *
+ * 时序（R1/R2/R4）：首屏同步链零触达（实测探针）；顶层只定义常量、模块状态与
+ * 动作注册。入口（workspace-actions.js open_session 流程挂钩）：
+ *   phSearchLocatePrepare(action) — 导航开始前调用（进入前捕获 .ph-session-tabs
+ *     项目身份 + 搜索列表滚动位置）
+ *   phSearchLocateAfterOpen(action) — 导航落定后调用；action 携带
  *     { sessionId, messageIndex }。messageIndex 缺席时 no-op（正常列表
  *     进入行为不变）。
  */
 
-window.ClawFW = window.ClawFW || {};
+import { escapeHtml } from './markdown-utils.js';
+import { getCurrentLanguage } from './i18n-environment-state.js';
+import { domRefs } from './p2-bootstrap-dom.js';
+import { _phSearch, setPhSurfaceViewProjectId } from './ph-session-list.js';
+import { selectWorkspaceSurface } from './workspace-surface-host.js';
 
 // 事件驱动等待的绝对上限兜底（身份/数据一直不满足时防观察器悬挂）。
 const PH_LOCATE_MAX_WAIT_MS = 8000;
@@ -49,11 +57,11 @@ let _locateBarWatch = null; // { anchor, observer } 浮条生命周期身份锚
 
 function _viewIdentitySnapshot() {
   try {
-    if (typeof readCurrentSessionViewState === 'function') {
-      const view = readCurrentSessionViewState();
+    if (typeof window.readCurrentSessionViewState === 'function') {
+      const view = window.readCurrentSessionViewState();
       const runtimeId = String(view?.runtimeId || '');
       // 远程 runtime 不在本机 allAgents，会话身份由远程目录 accessor 持有。
-      const remote = typeof isRemoteNamespaceAgentId === 'function' && isRemoteNamespaceAgentId(runtimeId);
+      const remote = typeof window.isRemoteNamespaceAgentId === 'function' && window.isRemoteNamespaceAgentId(runtimeId);
       const sessionId = remote
         ? window.RemoteConnections.getEntryRuntimeSessionId(runtimeId)
         : view?.identity?.sessionId;
@@ -73,8 +81,8 @@ function _locateResolveTarget(messages, messageIndex) {
   if (!Array.isArray(messages) || messageIndex >= messages.length) {
     return null; // 数据未提交到位，继续等
   }
-  const plan = typeof computeAssistantErrorGroups === 'function'
-    ? computeAssistantErrorGroups(messages).plan
+  const plan = typeof window.computeAssistantErrorGroups === 'function'
+    ? window.computeAssistantErrorGroups(messages).plan
     : null;
   const groupEntry = plan ? plan[messageIndex] : null;
   if (groupEntry) {
@@ -110,18 +118,18 @@ function _locateTeardownActive() {
 }
 
 function _locateScrollToRow(row) {
-  if (typeof registerManualScrollIntent === 'function') {
+  if (typeof window.registerManualScrollIntent === 'function') {
     // 定位是用户主动改变阅读位置：中断跟随动画，否则 follow-latest 会把
     // 位置重新拉回底部（与 chat-nav-timeline 导航点击同语义）。
-    registerManualScrollIntent({ interrupt: true });
+    window.registerManualScrollIntent({ interrupt: true });
   }
-  const cRect = container.getBoundingClientRect();
+  const cRect = domRefs.container.getBoundingClientRect();
   const rRect = row.getBoundingClientRect();
-  const delta = rRect.top - cRect.top + container.scrollTop;
-  container.scrollTop = Math.max(0, delta - 72);
+  const delta = rRect.top - cRect.top + domRefs.container.scrollTop;
+  domRefs.container.scrollTop = Math.max(0, delta - 72);
   // 行窗口化（content-visibility）按滚动位置揭露；显式补发一次滚动事件，
   // 确保目标行立即参与绘制。
-  try { container.dispatchEvent(new Event('scroll')); } catch { /* The next native scroll also reveals the row. */ }
+  try { domRefs.container.dispatchEvent(new Event('scroll')); } catch { /* The next native scroll also reveals the row. */ }
   row.classList.add('chat-locate-flash');
   setTimeout(() => row.classList.remove('chat-locate-flash'), 2000);
 }
@@ -172,11 +180,11 @@ function _locateTryFinish(active) {
 /**
  * 导航开始前的捕获入口（workspace-actions open_session 早期挂钩）：
  * 此刻搜索面 DOM 还在——从 .ph-session-tabs dataset 读项目身份，
- * 保存搜索列表滚动位置（写进搜索模块预留的 ClawFW.phSearch.homeScrollTop）。
- * 搜索词/筛选/展开本就活在 ClawFW.phSearch / phSearchQuery 中，随首页
+ * 保存搜索列表滚动位置（写进 ph-session-list 的 `_phSearch.homeScrollTop`）。
+ * 搜索词/筛选/展开本就活在 `_phSearch` / phSearchQuery 中，随首页
  * 重渲染自然恢复。
  */
-window.phSearchLocatePrepare = (action) => {
+export const phSearchLocatePrepare = (action) => {
   const sessionId = String(action?.sessionId || '').trim();
   const messageIndex = Number(action?.messageIndex);
   if (!sessionId || !Number.isInteger(messageIndex) || messageIndex < 0) return;
@@ -187,10 +195,10 @@ window.phSearchLocatePrepare = (action) => {
       : null;
   } catch { /* A search surface may have been replaced during navigation. */ }
   const dataset = root?.dataset || {};
-  const scrollTop = (typeof container !== 'undefined' && container)
-    ? Math.max(0, Number(container.scrollTop) || 0)
+  const scrollTop = (typeof domRefs.container !== 'undefined' && domRefs.container)
+    ? Math.max(0, Number(domRefs.container.scrollTop) || 0)
     : 0;
-  const searchState = window.ClawFW?.phSearch;
+  const searchState = _phSearch;
   if (searchState) searchState.homeScrollTop = scrollTop;
   _prepareCapture = {
     hostAgentId: String(dataset.searchHostId || ''),
@@ -204,11 +212,11 @@ window.phSearchLocatePrepare = (action) => {
  * 会话身份落地 + 消息数据提交，再精确滚动。消息 render 同步重建 DOM，
  * MutationObserver 驱动重检，不轮询；绝对上限兜底中止。
  */
-window.phSearchLocateAfterOpen = (action) => {
+export const phSearchLocateAfterOpen = (action) => {
   const sessionId = String(action?.sessionId || '').trim();
   const messageIndex = Number(action?.messageIndex);
   if (!sessionId || !Number.isInteger(messageIndex) || messageIndex < 0) return;
-  if (typeof MutationObserver === 'undefined' || !container) return;
+  if (typeof MutationObserver === 'undefined' || !domRefs.container) return;
 
   _locateSerial += 1;
   const serial = _locateSerial;
@@ -231,7 +239,7 @@ window.phSearchLocateAfterOpen = (action) => {
     if (!_locateActive || _locateActive.serial !== serial) return;
     _locateTryFinish(_locateActive);
   });
-  active.observer.observe(container, { childList: true, subtree: true });
+  active.observer.observe(domRefs.container, { childList: true, subtree: true });
   active.abortTimer = setTimeout(() => {
     if (_locateActive && _locateActive.serial === serial) {
       const view = _viewIdentitySnapshot();
@@ -258,7 +266,7 @@ function _ensureLocateBar() {
 /** 浮条挂上身份锚观察：container 渲染漂移后身份不再匹配 → 自动收起。 */
 function _watchLocateBar(anchor) {
   _unwatchLocateBar();
-  if (typeof MutationObserver === 'undefined' || !container) return;
+  if (typeof MutationObserver === 'undefined' || !domRefs.container) return;
   const watch = { anchor, observer: null };
   watch.observer = new MutationObserver(() => {
     const view = _viewIdentitySnapshot();
@@ -267,7 +275,7 @@ function _watchLocateBar(anchor) {
       _dismissLocateBar();
     }
   });
-  watch.observer.observe(container, { childList: true, subtree: true });
+  watch.observer.observe(domRefs.container, { childList: true, subtree: true });
   _locateBarWatch = watch;
 }
 
@@ -278,7 +286,7 @@ function _unwatchLocateBar() {
 }
 
 function _showLocateBar(anchor) {
-  const isZh = currentLanguage === 'zh';
+  const isZh = getCurrentLanguage() === 'zh';
   const bar = _ensureLocateBar();
   bar.innerHTML = [
     '<span class="ph-locate-bar-label">' + escapeHtml(isZh ? '已定位到匹配消息' : 'Located match') + '</span>',
@@ -297,7 +305,7 @@ function _dismissLocateBar() {
 
 /** 定位超时/索引失效的轻量反馈：可关闭、可返回搜索。 */
 function _showLocateFailedBar() {
-  const isZh = currentLanguage === 'zh';
+  const isZh = getCurrentLanguage() === 'zh';
   const bar = _ensureLocateBar();
   bar.innerHTML = [
     '<span class="ph-locate-bar-label">' + escapeHtml(isZh ? '未定位到匹配消息，会话内容可能已更新或精简' : 'Match not located; conversation may have changed') + '</span>',
@@ -307,46 +315,45 @@ function _showLocateFailedBar() {
   bar.classList.add('show');
 }
 
-window.phSearchLocateDismiss = () => {
+const phSearchLocateDismiss = () => {
   _dismissLocateBar();
 };
 
 /** 回最新：复用 follow-latest 机制（强制重新启用跟随并跳到底部）。 */
-window.phSearchLocateLatest = () => {
+export const phSearchLocateLatest = () => {
   _dismissLocateBar();
-  if (typeof requestFollowLatest === 'function') {
-    requestFollowLatest({ forceEnable: true });
-  } else if (container) {
-    container.scrollTop = container.scrollHeight;
+  if (typeof window.requestFollowLatest === 'function') {
+    window.requestFollowLatest({ forceEnable: true });
+  } else if (domRefs.container) {
+    domRefs.container.scrollTop = domRefs.container.scrollHeight;
   }
 };
 
 /**
  * 返回搜索：回工作区首页 surface（selectWorkspaceSurface(agentId, options)
  * ——ph 的非 chat 工作区偏好缺席时落首个非 chat tab = home）。搜索词/筛选/
- * 展开活在 ClawFW.phSearch / phSearchQuery，随重渲染自然恢复；远程项目
- * 视图经 phSurfaceViewProjectId 恢复（session-list-render 消费）。列表
+ * 展开活在 ph-session-list 的 `_phSearch` 与 phSearchQuery，随重渲染自然恢复；
+ * 远程项目视图经 ph-session-list 的 `setPhSurfaceViewProjectId` 恢复
+ * （session-list-render 经同模块 getter 消费）。列表
  * 滚动位置在 home 骨架重渲染后恢复，恢复前校验仍在搜索面（防迟到抢位）。
  */
-window.phSearchLocateBack = () => {
+export const phSearchLocateBack = () => {
   _dismissLocateBar();
   _locateTeardownActive();
   const capture = _prepareCapture || {};
   const hostAgentId = capture.hostAgentId || 'programming-helper';
-  const savedScrollTop = Math.max(0, Number(window.ClawFW?.phSearch?.homeScrollTop || 0));
-  if (capture.remoteOnly && capture.projectId && window.ClawFW) {
-    window.ClawFW.phSurfaceViewProjectId = capture.projectId;
+  const savedScrollTop = Math.max(0, Number(_phSearch.homeScrollTop || 0));
+  if (capture.remoteOnly && capture.projectId) {
+    setPhSurfaceViewProjectId(capture.projectId);
   }
-  if (typeof selectWorkspaceSurface === 'function') {
-    selectWorkspaceSurface(hostAgentId);
-  }
-  if (savedScrollTop > 0 && typeof container !== 'undefined' && container) {
+  selectWorkspaceSurface(hostAgentId);
+  if (savedScrollTop > 0 && typeof domRefs.container !== 'undefined' && domRefs.container) {
     _backSerial += 1;
     const serial = _backSerial;
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
         if (serial !== _backSerial) return;
-        if (!container) return;
+        if (!domRefs.container) return;
         let onSearchSurface = false;
         try {
           const root = document.querySelector('.ph-session-tabs');
@@ -354,8 +361,8 @@ window.phSearchLocateBack = () => {
             && root.dataset.searchHostId === capture.hostAgentId
             && root.dataset.searchProjectId === capture.projectId;
         } catch { /* Do not restore into an unavailable search surface. */ }
-        if (onSearchSurface && container.scrollHeight >= savedScrollTop) {
-          container.scrollTop = savedScrollTop;
+        if (onSearchSurface && domRefs.container.scrollHeight >= savedScrollTop) {
+          domRefs.container.scrollTop = savedScrollTop;
         }
       });
     });
@@ -363,10 +370,19 @@ window.phSearchLocateBack = () => {
 };
 
 // ── 浮动条动作（data-action="phSearch.*"）──────────────────
-// 浮条按钮的内联事件收编。Back / Latest / Dismiss 保留 window 导出
-// （test/frontend-ph-search-locate 直调），handler 经 window 转调。
+// 浮条按钮的内联事件收编。handler 直接调用本模块导出（本批无其它生产消费方）。
 window.ClawFW.actions.registerMany({
-  'phSearch.back': () => window.phSearchLocateBack(),
-  'phSearch.latest': () => window.phSearchLocateLatest(),
-  'phSearch.dismiss': () => window.phSearchLocateDismiss(),
+  'phSearch.back': () => phSearchLocateBack(),
+  'phSearch.latest': () => phSearchLocateLatest(),
+  'phSearch.dismiss': () => phSearchLocateDismiss(),
 });
+
+// —— 桥接期兼容面：无 ——
+// 本域已零桥键，且不再注册该域的 kernel-state 认领（空 owner 不为假想需求保留）。
+// 已注销（classic 消费方归零）：phSearchLocatePrepare / phSearchLocateAfterOpen
+//   —— 唯一消费方 workspace-actions 已验收为 ESM，在文件头具名 import 这两个
+//   入口（导航前捕获搜索面身份 / 落定后定位命中消息）。未来若再出现 classic
+//   消费方，按配方重新 defineKey + claim 即可。
+// 模块私有（仅浮条动作注册块自用，不导出）：phSearchLocateDismiss。
+// 无桥（仅浮条动作注册块自用 + 既有测试直调，导出保留）：phSearchLocateLatest /
+//   phSearchLocateBack。

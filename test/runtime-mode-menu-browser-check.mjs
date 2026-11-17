@@ -1,9 +1,12 @@
 // Run explicitly: node test/runtime-mode-menu-browser-check.mjs
 // 编程小助手「新建对话」悬停运行模式菜单的手势级回归（真实 Chromium 指针
-// 事件）：悬停约 220ms 展开菜单（中文文案，验证 currentLanguage 裸引用共享
-// 而非 window）；点击入口仍是普通创建（不带 runtimeMode）；移入菜单选择
-// 注入所选 runtimeMode 后走统一 runWorkspaceAction；离开联合区收起；Esc
-// 收起；菜单外点击自然收起且不吞事件。样式来自真实 components.css。
+// 事件）：悬停约 220ms 展开菜单（中文文案，语言来自 i18n 状态域——模块经
+// 真实 import 取 getCurrentLanguage，值由 classic 相 KernelState.defineKey
+// 注册的 currentLanguage 真初值提供）；点击入口仍是普通创建（不带
+// runtimeMode）；移入菜单选择注入所选 runtimeMode 后走统一
+// runWorkspaceAction；离开联合区收起；Esc 收起；菜单外点击自然收起且不吞
+// 事件。样式来自真实 components.css。模块经真实 <script type="module"> 加载
+// （runtime-mode-menu.js 已是 ESM，classic 标签会 SyntaxError）。
 import assert from 'node:assert/strict';
 import express from 'express';
 import path from 'node:path';
@@ -26,14 +29,23 @@ app.get('/fixture', (_req, res) => res.type('html').send(`<!doctype html><html><
   <button id="other-btn" type="button" onclick="window.__otherClicks.push(1)">别处</button>
   <div style="height:120vh"></div>
   <div id="outside-blank" style="height:40vh"></div>
+  <script src="/src/modules/kernel-state.js"></script>
+  <script src="/src/modules/action-dispatcher.js"></script>
   <script>
-  let currentLanguage = 'zh'; // 与 app-core 同形：顶层 let，不挂 window
-  function escapeHtml(s){ return String(s ?? '').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+  // classic 先行相（与生产 app-core / markdown-bootstrap 同形）：语言与转义
+  // 的真实桥键由 classic 首屏注册真初值，运行时模式菜单（ESM）经 KernelState
+  // claim 后读同一份状态。
+  (function () {
+    function escapeHtml(s){ return String(s ?? '').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+    window.KernelState.defineKey('i18n-environment', 'currentLanguage', 'zh');
+    window.KernelState.defineKey('markdown-utils', 'escapeHtml', escapeHtml);
+    function runWorkspaceAction(raw, el) { window.__actions.push({ action: JSON.parse(raw), el }); }
+    window.runWorkspaceAction = runWorkspaceAction;
+  })();
   window.__actions = [];
   window.__otherClicks = [];
-  function runWorkspaceAction(raw, el) { window.__actions.push({ action: JSON.parse(raw), el }); }
   </script>
-  <script src="/src/modules/runtime-mode-menu.js"></script>
+  <script type="module" src="/src/modules/runtime-mode-menu.js"></script>
   </body></html>`));
 const server = app.listen(0, '127.0.0.1');
 await new Promise(resolve => server.once('listening', resolve));
@@ -84,7 +96,8 @@ try {
   const afterScrollButton = await page.locator('#entry-a').boundingBox();
   const afterScrollMenu = await menu.boundingBox();
   assert.ok(beforeScrollButton && afterScrollButton && afterScrollMenu, 'button and menu remain measurable after scroll');
-  assert.ok(Math.abs(afterScrollMenu.top - (afterScrollButton.bottom + 6)) < 2, 'menu follows the anchor after page scroll');
+  // boundingBox 是视口坐标 {x, y, width, height}：菜单顶边必须仍贴在入口底边 + 6。
+  assert.ok(Math.abs(afterScrollMenu.y - (afterScrollButton.y + afterScrollButton.height + 6)) < 2, 'menu follows the anchor after page scroll');
   console.log('PASS menu follows the anchor while scrolling');
 
   // 2. 悬停后点击入口本身：普通创建（无 runtimeMode），菜单收起
@@ -154,6 +167,26 @@ try {
   assert.equal(acts.length, 4);
   assert.equal(acts[3].action.runtimeMode, 'container');
   console.log('PASS keyboard Enter on a menu item chooses the mode');
+
+  // 9. 语言桥实证：中文断言无法区分「桥确实是 zh」与「桥未初始化、isZh 把
+  //    undefined 兜底成中文」。先经真实 i18n owner 断言当前语言是 classic 相
+  //    播种的 zh，再切到 en 断言英文菜单文案——桥若断裂，英文断言必失败。
+  const readLanguage = () => page.evaluate(async () => (
+    await import('/src/modules/i18n-environment-state.js')
+  ).getCurrentLanguage());
+  assert.equal(await readLanguage(), 'zh', 'currentLanguage 真初值已由 i18n owner 认领');
+  await page.evaluate(async () => {
+    const i18n = await import('/src/modules/i18n-environment-state.js');
+    i18n.setCurrentLanguage('en');
+  });
+  await hoverEntry();
+  await page.waitForTimeout(OPEN + 80);
+  assert.equal(await menuCount(), 1, 'menu opens after the language switch');
+  assert.equal(await items.nth(0).textContent(), 'StandardRun directly on this host');
+  assert.equal(await items.nth(1).textContent(), 'ContainerRun in an isolated container');
+  assert.equal(await menu.getAttribute('aria-label'), 'Choose runtime mode');
+  await page.keyboard.press('Escape');
+  console.log('PASS language bridge drives the menu copy (zh → en)');
 
   assert.deepEqual(errors, [], 'no page errors expected');
   console.log('ALL PASS');

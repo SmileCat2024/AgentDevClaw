@@ -1,3 +1,20 @@
+import { escapeHtml } from './markdown-utils.js';
+import { getCurrentLanguage } from './i18n-environment-state.js';
+import { allAgents } from './agent-store-state.js';
+import { getClawModelPresets } from './model-preset-cache.js';
+import { createFeatureConfigEditor } from './feature-config-editor.js';
+import { phOpenFeatureStore, _fsRemoveFor } from './feature-store.js';
+import { registerContainerImagesHost, loadContainerImagesPanel } from './container-images.js';
+import { enhanceAll } from './claw-select.js';
+import { getThinkingEffortOptions } from './input-model-switcher.js';
+import { getFeatureCreatorProjects } from './project-data.js';
+import {
+  phCloseSettings,
+  phModelSlotChanged,
+  phAutoSaveModelConfig,
+  phSetProcessMode,
+} from './ph-project-actions.js';
+
 /**
  * ph-settings.js — 编程小助手「工作空间设置」面板（UI 标题：工作空间设置）
  *
@@ -6,22 +23,51 @@
  * 插件及配置页内部区分功能配置（装配清单）与参数配置；Coder智能体页
  * 另含策略分页（原「Coder 策略」独立页签并入，默认落策略）；运行环境页
  * 含本地运行设置与容器运行设置分页（原「进程模式」「容器镜像」独立页签并入，
- * 默认落本地运行设置）。
- * 历史名 ph-model-config：面板早期只有模型选择器，职责扩张后更名，勿再回用旧名。
+ * 默认落本地运行设置）。历史名 ph-model-config：面板早期只有模型选择器，
+ * 职责扩张后更名，勿再回用旧名。
  *
- * 外部依赖（通过全局作用域）：
- *   - escapeHtml (app-ui.js)
- *   - currentLanguage (app-core.js)
- *   - createFeatureConfigEditor (feature-config-editor.js)
+ * ESM 化：P2 W2-8（2026-11-17）。原位转换，分页记忆、装配/策略/通知读取与
+ * 保存时序零变化（装载相由加载期推迟到模块执行期；本文件无加载期副作用）。
  *
- * 入口：window.phOpenSettings() → renderPhSettingsOverlay()
- * 面板内交互经 data-action="phSettings.*" 分发（action-dispatcher.js），
- * 处理器收敛在本模块局部；跨模块动作（关闭 phCloseSettings、模型槽位
- * phModelSlotChanged、进程模式 phSetProcessMode、Feature 仓库
- * phOpenFeatureStore / _fsRemoveFor）由 handler 经 window 转调，
- * 其收敛随各自模块批次处理。
+ * 依赖（ESM，装载顺序由 import 图确定）:
+ *   - feature-config-editor：createFeatureConfigEditor（参数配置页共享编辑器）
+ *   - feature-store：phOpenFeatureStore / _fsRemoveFor（插件仓库入口）
+ *   - container-images：registerContainerImagesHost / loadContainerImagesPanel
+ *   - claw-select：enhanceAll（自绘下拉增强，幂等）
+ *   - input-model-switcher：getThinkingEffortOptions（思考档位表）
+ *   - project-data：getFeatureCreatorProjects（process mode 记忆键来源）
+ *   - agent-store-state：allAgents（live binding）；model-preset-cache：getClawModelPresets
+ *   - i18n-environment-state：实时语言；markdown-utils：escapeHtml
+ *
+ * 仍 classic / 命名空间协议（window 晚绑定）:
+ *   - app-main：getCurrentAgentRecord（编排域，P3 收敛）
+ *   - ClawFW._coderModelPresets（ph-project-actions 写入的 coder 预置缓存；写方属
+ *     工作区动作域，本模块只读，改 import 需先由写方提供命名面）
+ *
+ * 与 ph-project-actions 的静态环（双向直接 import，见文件顶部 import 段）：
+ *   本模块取它的 phCloseSettings / phModelSlotChanged / phAutoSaveModelConfig /
+ *   phSetProcessMode，它取本模块的 renderPhSettingsOverlay / _phResetFeaturePageState
+ *   等。环内两侧都只在函数体内调用对端绑定，任何一侧的顶层都不解引用对方，
+ *   因此装载期无 TDZ 风险；真实整图由 p2-w2-8-project-domain 用例执行。
+ *
+ * 本模块持有面板身份（原 window.phSettingsAgentId）：ph-project-actions 经
+ * getPhSettingsAgentId / setPhSettingsAgentId 读写，全仓无其它消费方。
+ *
+ * 入口：ph-project-actions 的「设置」动作 → renderPhSettingsOverlay()；面板内交互
+ * 经 data-action="phSettings.*" 分发（action-dispatcher.js），处理器收敛在本模块局部。
  */
-'use strict';
+let phSettingsAgentId = '';
+// 打开面板时记录当前项目（原 window._phCurrentProject）：全仓无读取方，
+// 只写不读的历史状态，保持模块私有；后续清理时可直接删除。
+let _phCurrentProject = null;
+
+/** 设置面板身份（唯一持有方；ph-project-actions 经这两个导出读写）。 */
+export function getPhSettingsAgentId() {
+  return phSettingsAgentId;
+}
+export function setPhSettingsAgentId(value) {
+  phSettingsAgentId = value;
+}
 
 let _phSettingsTab = 'model'; // 'model' | 'runtime' | 'feature' | 'coder'
 let _phFeatureSubTab = 'mounts'; // 当前身份页的视图：策略（仅 coder）| 装配清单 | 参数配置
@@ -29,7 +75,7 @@ let _phRuntimeSubTab = 'local'; // 运行环境页视图：本地运行设置 | 
 let _phFeatureEditor = null;
 let _phFeatureConfigTarget = null;
 
-function _closePhFeatureEditor() {
+export function _closePhFeatureEditor() {
   if (_phFeatureEditor) {
     _phFeatureEditor.close();
     _phFeatureEditor = null;
@@ -49,11 +95,11 @@ function ensurePhSettingsHost() {
 // ── Model config content ──────────────────────────────────────
 
 function _renderModelConfigContent(agent, presets) {
-  const isZh = currentLanguage === 'zh';
+  const isZh = getCurrentLanguage() === 'zh';
   const current = agent.modelPresets || {};
   // coder APP（独立工作空间，ADR-0025）的模型配置存 agent-configs/coder.json，
   // 与主 APP 分文件；编程小助手面板代管展示，打开时单独 fetch 缓存。
-  const showCoderRow = window.phSettingsAgentId === 'programming-helper';
+  const showCoderRow = getPhSettingsAgentId() === 'programming-helper';
   const coderCurrent = (window.ClawFW && window.ClawFW._coderModelPresets) || {};
   const roles = [
     { key: 'default', label: isZh ? '编程小助手' : 'Programming Helper', desc: isZh ? '对话和编码任务' : 'Chat & coding tasks' },
@@ -85,9 +131,7 @@ function _renderModelConfigContent(agent, presets) {
   const buildThinkingSelect = (roleKey, slot, presetName, roleConfig) => {
     const preset = presets.find(function(p) { return p.name === presetName; });
     const protocol = preset && (preset.provider || preset.protocol);
-    const options = window.ClawFW && window.ClawFW.getThinkingEffortOptions
-      ? window.ClawFW.getThinkingEffortOptions(protocol)
-      : [];
+    const options = getThinkingEffortOptions(protocol);
     const configured = roleConfig?.thinkingEffort && roleConfig.thinkingEffort[slot];
     const selected = configured || preset?.thinkingEffort || '';
     const disabled = !preset || options.length === 0;
@@ -180,7 +224,7 @@ let _phMountData = null;         // 最近一次拉取的工作空间插件装�
 async function _phRenderMountsView(identityKey) {
   const host = document.getElementById('ph-feature-mounts-host');
   if (!host) return;
-  host.innerHTML = '<div class="ph-settings-empty">' + escapeHtml(currentLanguage === 'zh' ? '正在读取装配…' : 'Loading assembly…') + '</div>';
+  host.innerHTML = '<div class="ph-settings-empty">' + escapeHtml(getCurrentLanguage() === 'zh' ? '正在读取装配…' : 'Loading assembly…') + '</div>';
   try {
     const res = await fetch('/api/feature-store/overview');
     const data = await res.json();
@@ -219,7 +263,7 @@ async function _phRenderMountsView(identityKey) {
 
 /** 纯渲染（数据取 _phMountData 缓存）：筛选切换与 catalog 就绪后的重渲染入口。 */
 function _phRenderMountsBody(host) {
-  const isZh = currentLanguage === 'zh';
+  const isZh = getCurrentLanguage() === 'zh';
   const entries = _phMountData.entries;
   const features = entries.map(function(e) {
     return { name: e.name, description: e.description, _entry: e };
@@ -269,7 +313,7 @@ let _phRebuildBusy = false;
 
 /** 环境缺失轻警告（Q3=C：可点击立即恢复；下次启动自愈兜底保留）。 */
 function _phEnvNoticeHtml() {
-  const isZh = currentLanguage === 'zh';
+  const isZh = getCurrentLanguage() === 'zh';
   const env = _phMountData?.envReady;
   if (!env || !env.hasEnv || env.ready) return '';
   if (_phRebuildBusy) {
@@ -313,7 +357,7 @@ const _phRebuildEnv = async function() {
 };
 
 // 商店写操作后的刷新钩子：插件页当前显示清单时重拉。
-window._phRefreshMountsView = function(identityKey) {
+export const _phRefreshMountsView = (identityKey) => {
   const page = PH_FEATURE_PAGES[_phSettingsTab];
   if (page && page.identityKey === (identityKey || page.identityKey) && _phFeatureSubTab === 'mounts') {
     _phRenderMountsView(page.identityKey);
@@ -321,7 +365,7 @@ window._phRefreshMountsView = function(identityKey) {
 };
 
 // 关闭弹窗时清理本页的临时数据；设置弹窗记忆当前一级页签。
-window._phResetFeaturePageState = function() {
+export const _phResetFeaturePageState = () => {
   _phMountData = null;
   _phFeatureSubTab = PH_FEATURE_PAGES[_phSettingsTab]?.defaultSubTab || 'mounts';
   _phFeatureConfigTarget = null;
@@ -355,7 +399,7 @@ function _phMountCard(name, displayName, description, provHtml, badgesHtml, deta
 // ── Process mode content ──────────────────────────────────────
 
 function _renderProcessModeContent(agent) {
-  const isZh = currentLanguage === 'zh';
+  const isZh = getCurrentLanguage() === 'zh';
   const supportsProcessModes = agent?.id === 'programming-helper';
   const phProcessMode = agent?.processMode || 'isolated';
 
@@ -406,7 +450,7 @@ function _renderProcessModeContent(agent) {
 async function _phLoadCoderPolicy() {
   const host = document.getElementById('ph-coder-policy-host');
   if (!host) return;
-  const isZh = currentLanguage === 'zh';
+  const isZh = getCurrentLanguage() === 'zh';
   try {
     const response = await fetch('/protoclaw/workspace_settings');
     if (!response.ok) throw new Error('HTTP ' + response.status);
@@ -500,7 +544,7 @@ async function _phLoadCoderPolicy() {
 
 const phSetCoderRuntimeMode = async function(mode) {
   if (!['standard', 'container', 'agent-choice'].includes(mode)) return;
-  const isZh = currentLanguage === 'zh';
+  const isZh = getCurrentLanguage() === 'zh';
   const status = document.getElementById('ph-coder-policy-status');
   try {
     const response = await fetch('/protoclaw/workspace_settings/resource_policy', {
@@ -517,7 +561,7 @@ const phSetCoderRuntimeMode = async function(mode) {
 };
 
 const phSetCoderRotationStrategy = async function(strategy) {
-  const isZh = currentLanguage === 'zh';
+  const isZh = getCurrentLanguage() === 'zh';
   const status = document.getElementById('ph-coder-policy-status');
   const setStatus = (message) => { if (status) status.textContent = message; };
   if (strategy !== 'adaptive' && strategy !== 'trim' && strategy !== 'summary') return;
@@ -540,7 +584,7 @@ const phSetCoderRotationStrategy = async function(strategy) {
 };
 
 const phSaveCoderThreadLimit = async function(rawValue) {
-  const isZh = currentLanguage === 'zh';
+  const isZh = getCurrentLanguage() === 'zh';
   const status = document.getElementById('ph-coder-policy-status');
   const setStatus = (message) => { if (status) status.textContent = message; };
   const trimmed = String(rawValue || '').trim();
@@ -580,7 +624,7 @@ const phSaveCoderThreadLimit = async function(rawValue) {
 async function _phLoadNotificationSettings() {
   const host = document.getElementById('ph-notification-host');
   if (!host) return;
-  const isZh = currentLanguage === 'zh';
+  const isZh = getCurrentLanguage() === 'zh';
   let resourcePolicy = {};
   try {
     const response = await fetch('/protoclaw/workspace_settings');
@@ -629,7 +673,7 @@ async function _phLoadNotificationSettings() {
 }
 
 const _phToggleNotificationFinish = async function(agentId, checked) {
-  const isZh = currentLanguage === 'zh';
+  const isZh = getCurrentLanguage() === 'zh';
   const status = document.getElementById('ph-notification-status');
   const setStatus = (message) => { if (status) status.textContent = message; };
   try {
@@ -652,7 +696,7 @@ const _phToggleNotificationFinish = async function(agentId, checked) {
 
 // ── Main panel render ─────────────────────────────────────────
 
-function renderPhSettingsOverlay(agent, presets, { initialTab } = {}) {
+export function renderPhSettingsOverlay(agent, presets, { initialTab } = {}) {
   if (initialTab && (initialTab === 'model' || initialTab === 'feature' || initialTab === 'coder')) {
     _phSettingsTab = initialTab;
     if (PH_FEATURE_PAGES[initialTab]) {
@@ -676,31 +720,30 @@ function renderPhSettingsOverlay(agent, presets, { initialTab } = {}) {
     _phSettingsTab = 'runtime';
     _phRuntimeSubTab = 'container';
   }
-  if (_phSettingsTab === 'notification' && window.phSettingsAgentId !== 'programming-helper') {
+  if (_phSettingsTab === 'notification' && getPhSettingsAgentId() !== 'programming-helper') {
     _phSettingsTab = 'model';
   }
   // 容器运行设置分页仅编程小助手域可见；他域记忆值回退本地运行设置
-  if (_phSettingsTab === 'runtime' && _phRuntimeSubTab === 'container' && window.phSettingsAgentId !== 'programming-helper') {
+  if (_phSettingsTab === 'runtime' && _phRuntimeSubTab === 'container' && getPhSettingsAgentId() !== 'programming-helper') {
     _phRuntimeSubTab = 'local';
   }
-  const isZh = currentLanguage === 'zh';
+  const isZh = getCurrentLanguage() === 'zh';
 
   // Store current project for process mode key
-  const projects = (typeof getFeatureCreatorProjects === 'function')
-    ? getFeatureCreatorProjects(agent) : [];
-  window._phCurrentProject = projects.find(p => p.openDirectory === agent?.workspace_state?.openDirectory) || projects[0] || null;
+  const projects = getFeatureCreatorProjects(agent);
+  _phCurrentProject = projects.find(p => p.openDirectory === agent?.workspace_state?.openDirectory) || projects[0] || null;
 
   const featurePage = PH_FEATURE_PAGES[_phSettingsTab];
   _closePhFeatureEditor();
 
   const tabs = [
-    ...(window.phSettingsAgentId === 'programming-helper' ? [
+    ...(getPhSettingsAgentId() === 'programming-helper' ? [
       { key: 'feature', label: isZh ? '插件及配置' : 'Plugins & Config', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3"/></svg>' },
       { key: 'coder', label: isZh ? 'Coder智能体' : 'Coder Agent', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m8 8-4 4 4 4M16 8l4 4-4 4M14 4l-4 16"/></svg>' },
     ] : []),
     { key: 'model', label: isZh ? '模型配置' : 'Model Config', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>' },
     { key: 'runtime', label: isZh ? '运行环境' : 'Runtime Environment', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></svg>' },
-    ...(window.phSettingsAgentId === 'programming-helper' ? [{
+    ...(getPhSettingsAgentId() === 'programming-helper' ? [{
       key: 'notification',
       label: isZh ? '通知' : 'Notifications',
       icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>',
@@ -747,7 +790,7 @@ function renderPhSettingsOverlay(agent, presets, { initialTab } = {}) {
     // 两分页内容原样平移；容器分页对非编程小助手域不显示。
     const runtimeSubTabs = [
       { key: 'local', label: isZh ? '本地运行设置' : 'Local Runtime' },
-      ...(window.phSettingsAgentId === 'programming-helper'
+      ...(getPhSettingsAgentId() === 'programming-helper'
         ? [{ key: 'container', label: isZh ? '容器运行设置' : 'Container Runtime' }] : []),
     ].map((item) => '<button type="button" class="ph-session-tab' + (_phRuntimeSubTab === item.key ? ' active' : '')
       + '" data-action="phSettings.switchRuntimeSubTab" data-sub="' + item.key + '">' + item.label + '</button>').join('');
@@ -798,7 +841,7 @@ function renderPhSettingsOverlay(agent, presets, { initialTab } = {}) {
   if (featurePage && _phFeatureSubTab === 'mounts') {
     _phRenderMountsView(featurePage.identityKey);
   }
-  if (featurePage && _phFeatureSubTab === 'config' && typeof createFeatureConfigEditor === 'function') {
+  if (featurePage && _phFeatureSubTab === 'config') {
     const target = _phFeatureConfigTarget;
     _phFeatureEditor = createFeatureConfigEditor({
       host: document.getElementById('ph-feature-config-host'),
@@ -812,17 +855,15 @@ function renderPhSettingsOverlay(agent, presets, { initialTab } = {}) {
   if (_phSettingsTab === 'runtime' && _phRuntimeSubTab === 'container') {
     // 容器运行设置分页：声明域宿主（服务端按名册 host 关系圈定本工作空间 + 子应用），
     // 模块内部以 host 元素是否在 DOM 判断活跃
-    window.registerContainerImagesHost?.('ph-container-images-host', window.phSettingsAgentId || 'programming-helper');
-    window.loadContainerImagesPanel?.();
+    registerContainerImagesHost('ph-container-images-host', getPhSettingsAgentId() || 'programming-helper');
+    loadContainerImagesPanel();
   }
   if (_phSettingsTab === 'notification') _phLoadNotificationSettings();
 
   // Enhance native selects with custom dropdown
-  if (window.ClawSelect) {
-    requestAnimationFrame(function() {
-      window.ClawSelect.enhanceAll(host);
-    });
-  }
+  requestAnimationFrame(function() {
+    enhanceAll(host);
+  });
 }
 const _phSwitchSettingsTab = (tab) => {
   // 插件清单与能力参数只属于主工作空间插件页；Coder 使用独立配置页；
@@ -833,7 +874,7 @@ const _phSwitchSettingsTab = (tab) => {
   }
   if (tab === 'runtime') _phRuntimeSubTab = 'local';
   _phSettingsTab = tab;
-  const agent = (typeof getCurrentAgentRecord === 'function') ? getCurrentAgentRecord() : null;
+  const agent = (typeof window.getCurrentAgentRecord === 'function') ? window.getCurrentAgentRecord() : null;
   if (agent) {
     const presets = getClawModelPresets();
     renderPhSettingsOverlay(agent, presets);
@@ -847,7 +888,7 @@ const _phSwitchFeatureSubTab = (sub) => {
   if (sub !== 'config' && sub !== 'mounts' && !(sub === 'policy' && page.policy)) return;
   if (sub !== 'config') _phFeatureConfigTarget = null;
   _phFeatureSubTab = sub;
-  const agent = (typeof getCurrentAgentRecord === 'function') ? getCurrentAgentRecord() : null;
+  const agent = (typeof window.getCurrentAgentRecord === 'function') ? window.getCurrentAgentRecord() : null;
   if (agent) {
     const presets = getClawModelPresets();
     renderPhSettingsOverlay(agent, presets);
@@ -857,9 +898,9 @@ const _phSwitchFeatureSubTab = (sub) => {
 const _phSwitchRuntimeSubTab = (sub) => {
   // 容器运行设置分页仅编程小助手域持有
   if (sub !== 'local' && sub !== 'container') return;
-  if (sub === 'container' && window.phSettingsAgentId !== 'programming-helper') return;
+  if (sub === 'container' && getPhSettingsAgentId() !== 'programming-helper') return;
   _phRuntimeSubTab = sub;
-  const agent = (typeof getCurrentAgentRecord === 'function') ? getCurrentAgentRecord() : null;
+  const agent = (typeof window.getCurrentAgentRecord === 'function') ? window.getCurrentAgentRecord() : null;
   if (agent) {
     const presets = getClawModelPresets();
     renderPhSettingsOverlay(agent, presets);
@@ -878,13 +919,13 @@ const _phOpenFeatureConfig = (el) => {
 window.ClawFW.actions.bindEventType('toggle', { capture: true });
 
 window.ClawFW.actions.registerMany({
-  'phSettings.autoSaveModel': () => window.phAutoSaveModelConfig(),
-  'phSettings.modelSlotChanged': (el) => window.phModelSlotChanged(el),
+  'phSettings.autoSaveModel': () => phAutoSaveModelConfig(),
+  'phSettings.modelSlotChanged': (el) => phModelSlotChanged(el),
   'phSettings.switchTab': (el) => _phSwitchSettingsTab(el.dataset.tab),
-  'phSettings.openFeatureStore': (el) => window.phOpenFeatureStore(el.dataset.identity),
-  'phSettings.removeMountFeature': (el) => window._fsRemoveFor(el.dataset.identity, el.dataset.name),
+  'phSettings.openFeatureStore': (el) => phOpenFeatureStore(el.dataset.identity),
+  'phSettings.removeMountFeature': (el) => _fsRemoveFor(el.dataset.identity, el.dataset.name),
   'phSettings.rebuildEnv': () => _phRebuildEnv(),
-  'phSettings.setProcessMode': (el) => window.phSetProcessMode(el.dataset.mode),
+  'phSettings.setProcessMode': (el) => phSetProcessMode(el.dataset.mode),
   'phSettings.setCoderRotationStrategy': (el) => phSetCoderRotationStrategy(el.dataset.mode),
   'phSettings.setCoderRuntimeMode': (el) => phSetCoderRuntimeMode(el.dataset.mode),
   'phSettings.saveCoderThreadLimit': (el) => phSaveCoderThreadLimit(el.value),
@@ -892,5 +933,17 @@ window.ClawFW.actions.registerMany({
   'phSettings.switchFeatureSubTab': (el) => _phSwitchFeatureSubTab(el.dataset.sub),
   'phSettings.switchRuntimeSubTab': (el) => _phSwitchRuntimeSubTab(el.dataset.sub),
   'phSettings.openFeatureConfig': (el) => _phOpenFeatureConfig(el),
-  'phSettings.close': () => window.phCloseSettings(),
+  'phSettings.close': () => phCloseSettings(),
 });
+
+// —— 兼容面 ——
+// 桥已注销（本域零 window 消费方）：_phRefreshMountsView 由 feature-store 直接
+//   import；与 feature-store 互为静态依赖（两侧顶层都不读对方绑定）。
+// 已改 direct import（不再经 window）：ph-project-actions 的四个动作入口
+//   （phAutoSaveModelConfig / phModelSlotChanged / phCloseSettings / phSetProcessMode）、
+//   createFeatureConfigEditor、phOpenFeatureStore / _fsRemoveFor、
+//   registerContainerImagesHost / loadContainerImagesPanel、getFeatureCreatorProjects。
+// 命名导出但不上桥：renderPhSettingsOverlay —— 唯一调用方 ph-project-actions 已 import。
+// 模块状态收回（原 window 键）：phSettingsAgentId → 本模块 get/set 导出；
+//   _phCurrentProject 零外部消费 → 模块私有；_phResetFeaturePageState 由
+//   ph-project-actions import。

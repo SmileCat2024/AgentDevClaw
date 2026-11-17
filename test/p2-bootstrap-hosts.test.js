@@ -28,7 +28,6 @@ const FACTORY_NAMES = [
   'createP2BootstrapSidebarHost',
   'createP2BootstrapSidebarRenderHost',
   'createP2BootstrapSessionSwitchHost',
-  'createP2BootstrapChoiceInputHost',
 ];
 
 const ADAPTER_FILES = {
@@ -40,7 +39,6 @@ const ADAPTER_FILES = {
   assemblyUi: 'public/src/modules/p2-bootstrap-assembly.js',
   sidebar: 'public/src/modules/p2-bootstrap-sidebar.js',
   sessionSwitch: 'public/src/modules/p2-bootstrap-session-switch.js',
-  choiceInput: 'public/src/modules/p2-bootstrap-choice-input.js',
 };
 
 /** 按真实加载序跑 classic 文件（app-core 是状态 owner，sidebar-render 提供渲染签名）。 */
@@ -134,8 +132,10 @@ test('classic 时点可用：工厂在 classic 解析后即可调用，初值与
   assert.equal(sessionSwitch.templateWarmupToken, 0);
   assert.equal(sessionSwitch.prebuiltSessionSwitchInFlight, false);
 
-  const choice = ctx.run('createP2BootstrapChoiceInputHost()');
-  assert.equal(choice.state, ctx.run('choiceInputState'));
+  // 选择卡交互草稿已是 choice-input 的模块私有状态（classic 零读取），
+  // 不再有 bootstrap 宿主工厂；确认 classic 侧没有该声明或工厂残留。
+  assert.equal(ctx.run('typeof createP2BootstrapChoiceInputHost'), 'undefined');
+  assert.equal(ctx.run('typeof choiceInputState'), 'undefined');
 });
 
 test('适配模块导出面就是后续工单的导入契约', async () => {
@@ -152,7 +152,6 @@ test('适配模块导出面就是后续工单的导入契约', async () => {
       assemblyUi: ['assemblyUi'],
       sidebar: ['sidebarRender', 'sidebarUi'],
       sessionSwitch: ['sessionSwitch'],
-      choiceInput: ['choiceInput'],
     };
     for (const [name, file] of Object.entries(ADAPTER_FILES)) {
       const { module } = await loadModuleOnce(file, { installGlobals: false });
@@ -175,7 +174,6 @@ test('const 只读语义：无可写入口的键在 ESM strict 下写入抛 Type
     // 就地可变对象同样只给引用
     assert.throws(() => { adapters.debugPanel.logFilters = {}; }, TypeError);
     assert.throws(() => { adapters.phSessionUi.savedPhTabState = {}; }, TypeError);
-    assert.throws(() => { adapters.choiceInput.state = {}; }, TypeError);
     // 常量字符串
     assert.throws(() => { adapters.chatSurface.CHAT_PROCESS_VISIBILITY_KEY = 'x'; }, TypeError);
     // 引用未被破坏
@@ -240,8 +238,6 @@ test('classic 与 ESM 双向一致：同一状态、同一容器引用', async (
     assert.equal(adapters.debugPanel.logFilters.level, 'warn');
     adapters.debugPanel.logFilters.level = 'all';
     assert.equal(ctx.run('logFilters.level'), 'all');
-    adapters.choiceInput.state.req1 = { picked: true };
-    assert.equal(JSON.stringify(ctx.run('choiceInputState.req1')), JSON.stringify({ picked: true }));
 
     // 侧栏渲染签名：清空即强制下次重建，classic 写方与 ESM 共用同一 let
     ctx.run('lastAgentListRenderSignature = "sig-classic"');

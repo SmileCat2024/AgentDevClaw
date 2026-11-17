@@ -1,5 +1,5 @@
 /**
- * chat-nav-timeline.js — 聊天消息导航时间线
+ * chat-nav-timeline.js — 聊天消息导航时间线（ESM 域）
  *
  * 在聊天区域左侧渲染一组竖向小条，每条对应一条 user 消息。
  * 支持 hover 波形预览、点击暴力跳转、滚动高亮当前消息。
@@ -7,12 +7,25 @@
  * 完全自包含：通过 MutationObserver 监听 container 的结构变化，
  * 不依赖 chat-renderer.js / chat-viewport.js 的任何调用点。
  *
- * 依赖（全局变量，声明于 app-core.js）:
- *   - container: 聊天容器 DOM (#chat-container)
- *   - currentMessages: 当前消息列表
- * 依赖（全局函数）:
- *   - escapeHtml (modules/markdown-utils.js)
+ * ESM 迁移（P2 第二波批次 1，原位转换）：全部 `_nav*` 状态与 helper 收敛为模块
+ * 私有（零生产消费者、零导出、零桥）。初始化时点按原样保留：原 classic 标签在
+ * body 中段执行时 readyState 为 'loading'，因此等 DOMContentLoaded 再初始化；
+ * deferred 模块执行相 readyState 已是 'interactive'，故启动分支改为「只有已完整
+ * 装载（'complete'）才立即初始化」，未完成装载一律等 DOMContentLoaded——与迁移
+ * 前的初始化时点、首次重建语义一致（不提前、不等待、不补画）。
+ *
+ * 依赖（已迁移部分直接 import）：
+ *   - domRefs（p2-bootstrap-dom：container）
+ *   - currentMessages（session-view-storage，live binding：与原全局词法绑定同源）
+ *   - escapeHtml（markdown-utils）
+ * 依赖（classic，显式 window 晚绑定；classic 脚本先于 deferred 模块执行，故模块
+ * 执行相取用即已定义）：
+ *   - window.registerManualScrollIntent（chat-viewport.js 顶层函数，调用点保留原
+ *     `typeof … === 'function'` 可选守卫）
  */
+import { domRefs } from './p2-bootstrap-dom.js';
+import { currentMessages } from './session-view-storage.js';
+import { escapeHtml } from './markdown-utils.js';
 
 var _navTimelineEl = null;
 var _navCardEl = null;
@@ -41,7 +54,7 @@ function _initChatNavTimeline() {
   if (_navReady) return;
   _navTimelineEl = document.getElementById('chat-nav-timeline');
   _navCardEl = document.getElementById('chat-nav-card');
-  if (!_navTimelineEl || !_navCardEl || !container) return;
+  if (!_navTimelineEl || !_navCardEl || !domRefs.container) return;
 
   _navReady = true;
 
@@ -49,10 +62,10 @@ function _initChatNavTimeline() {
   _navObserver = new MutationObserver(function () {
     _scheduleNavRebuild();
   });
-  _navObserver.observe(container, { childList: true, subtree: false });
+  _navObserver.observe(domRefs.container, { childList: true, subtree: false });
 
   // 滚动监听（passive，不干扰现有 scroll 管理）
-  container.addEventListener('scroll', _onNavScroll, { passive: true });
+  domRefs.container.addEventListener('scroll', _onNavScroll, { passive: true });
 
   // 窗口尺寸变化时重新定位
   window.addEventListener('resize', function () {
@@ -65,7 +78,7 @@ function _initChatNavTimeline() {
     var navRO = new ResizeObserver(function () {
       _positionNavTimeline();
     });
-    navRO.observe(container);
+    navRO.observe(domRefs.container);
   }
 
   // 鼠标离开整个时间线区域时重置波形
@@ -97,10 +110,10 @@ function _scheduleNavRebuild() {
 }
 
 function _positionNavTimeline() {
-  if (!_navTimelineEl || !container) return;
-  var mainContent = container.parentElement;
+  if (!_navTimelineEl || !domRefs.container) return;
+  var mainContent = domRefs.container.parentElement;
   if (!mainContent) return;
-  var cRect = container.getBoundingClientRect();
+  var cRect = domRefs.container.getBoundingClientRect();
   var mRect = mainContent.getBoundingClientRect();
   _navTimelineEl.style.top = (cRect.top - mRect.top) + 'px';
   _navTimelineEl.style.height = cRect.height + 'px';
@@ -110,7 +123,7 @@ function _rebuildNavTimeline() {
   if (!_navReady) return;
 
   // 查找 DOM 中的 user 消息行
-  var rows = container.querySelectorAll('.message-row.user');
+  var rows = domRefs.container.querySelectorAll('.message-row.user');
   if (rows.length === 0) {
     _navTimelineEl.classList.add('hidden');
     _hideNavCard();
@@ -308,7 +321,7 @@ function _onNavScroll() {
 function _updateActiveNavBar() {
   if (_navBars.length === 0) return;
 
-  var containerTop = container.getBoundingClientRect().top;
+  var containerTop = domRefs.container.getBoundingClientRect().top;
   var bestIdx = -1;
   var bestTop = -Infinity;
 
@@ -392,7 +405,7 @@ function _showNavCard(globalIndex) {
     '<div class="chat-nav-card-body">' + escapeHtml(preview) + '</div>';
 
   var slotRect = _navSlots[localIndex].getBoundingClientRect();
-  var mainRect = container.parentElement.getBoundingClientRect();
+  var mainRect = domRefs.container.parentElement.getBoundingClientRect();
 
   _navCardEl.style.top = (slotRect.top - mainRect.top) + 'px';
   _navCardEl.classList.add('show');
@@ -416,15 +429,15 @@ function _onBarClick(globalIndex) {
   // 导航点击是用户主动改变阅读位置，语义上等同于手动滚轮/拖动。
   // 先中断跟随动画和未完成的 settlement，再写入目标位置；否则
   // 距离较小时 follow-latest 会把这次跳转重新拉回底部。
-  if (typeof registerManualScrollIntent === 'function') {
-    registerManualScrollIntent({ interrupt: true });
+  if (typeof window.registerManualScrollIntent === 'function') {
+    window.registerManualScrollIntent({ interrupt: true });
   }
 
   // 暴力切：直接设置 scrollTop，不做平滑动画
-  var cRect = container.getBoundingClientRect();
+  var cRect = domRefs.container.getBoundingClientRect();
   var rRect = row.getBoundingClientRect();
-  var delta = rRect.top - cRect.top + container.scrollTop;
-  container.scrollTop = delta - 16;
+  var delta = rRect.top - cRect.top + domRefs.container.scrollTop;
+  domRefs.container.scrollTop = delta - 16;
 
   // 短暂闪烁高亮目标行
   row.classList.add('nav-flash');
@@ -436,9 +449,15 @@ function _onBarClick(globalIndex) {
 }
 
 // ── 启动 ───────────────────────────────────────────
-
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', _initChatNavTimeline);
-} else {
+// 初始化时点保持原样：原 classic 标签在 body 中段执行，此时 readyState 是
+// 'loading' → 注册 DOMContentLoaded 后再初始化。转成 deferred 模块后，模块
+// 执行相 readyState 已是 'interactive'（deferred 脚本在 readyState 置
+// interactive 之后、DOMContentLoaded 派发之前执行），沿用 `=== 'loading'` 会
+// 变成「装载即初始化」，比原来早一个事件。因此只把「已完整装载」判为立即初始化，
+// 其余未完成装载的状态一律等 DOMContentLoaded——与迁移前的初始化时点与首次
+// 重建语义一致。
+if (document.readyState === 'complete') {
   _initChatNavTimeline();
+} else {
+  document.addEventListener('DOMContentLoaded', _initChatNavTimeline);
 }

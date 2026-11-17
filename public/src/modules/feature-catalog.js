@@ -9,11 +9,16 @@
  * 的 mounts 声明（官方选装 builtin 与用户 tgz 扩展）是运行时真值，seed 的
  * 静态 group 仅在装配事实不可用时兜底（见 resolveMountedNames）。
  *
- * 纯函数不依赖 t() / escapeHtml / DOM（语言经参数传入），保证 frontend-vm 沙箱可测。
+ * 纯函数不依赖 t() / escapeHtml / DOM（语言经参数传入，node:test 可直接真实 import）。
  * 设计：docs/plans/2026-09-13-feature-registry-p1-panel-visibility.md
+ *
+ * ESM 迁移（P2 批次 2）：实现为命名导出，模块级缓存是唯一 owner；
+ * activeFeaturePanel 直接 import 已迁移的 render-entry-state；
+ * window.ClawFW.featureCatalog 是既有公开命名空间协议，服务尚未迁移的 classic
+ * 消费方（feature-store.js / debug-features-hooks.js），待其迁移后注销。
  */
 
-window.ClawFW = window.ClawFW || {};
+import { activeFeaturePanel } from './render-entry-state.js';
 
 // ── catalog 加载（低频；agent 切换不强制刷新）──────────────────────
 
@@ -21,7 +26,7 @@ let _catalog = null;        // 已 resolve 的快照（同步渲染入口）
 let _catalogPromise = null; // 进行中的拉取（失败不缓存，下次可重试）
 
 async function fetchFeatureCatalog() {
-  const resp = await fetch('/api/feature-catalog');
+  const resp = await window.fetch('/api/feature-catalog');
   if (!resp.ok) throw new Error('/api/feature-catalog ' + resp.status);
   const data = await resp.json();
   if (!data || !Array.isArray(data.provenances) || !Array.isArray(data.types)
@@ -37,15 +42,17 @@ async function fetchFeatureCatalog() {
  * catalog 未就绪的首帧 feature 全落 _unmapped，靠本回调修正而非等轮询周期。
  * 与筛选切换一致走 renderFeaturePanel 直渲染（乐观、无 poll 往返迟滞）。
  */
-async function loadFeatureCatalog(force = false) {
+export async function loadFeatureCatalog(force = false) {
   if (_catalogPromise && !force) return _catalogPromise;
   _catalogPromise = (async () => {
     const data = await fetchFeatureCatalog();
     const firstLoad = !_catalog;
     _catalog = data;
+    // activeFeaturePanel 属已迁移的 render-entry 域：直接 import 读实时绑定；
+    // renderFeaturePanel 仍是 classic debug-panel-host 顶层函数
     if (firstLoad && typeof activeFeaturePanel !== 'undefined'
-      && activeFeaturePanel === 'hooks' && typeof renderFeaturePanel === 'function') {
-      renderFeaturePanel();
+      && activeFeaturePanel === 'hooks' && typeof window.renderFeaturePanel === 'function') {
+      window.renderFeaturePanel();
     }
     return data;
   })().catch(err => {
@@ -56,7 +63,7 @@ async function loadFeatureCatalog(force = false) {
 }
 
 /** 同步取已加载快照；未就绪返回 null（渲染层兜底进 _unmapped 组）。 */
-function getFeatureCatalogSnapshot() {
+export function getFeatureCatalogSnapshot() {
   return _catalog;
 }
 
@@ -69,10 +76,10 @@ function getFeatureCatalogSnapshot() {
 let _mountFacts = null;         // { [identity]: Set<runtimeName> } | null（null = 未就绪）
 let _mountFactsPromise = null;
 
-async function loadMountFacts(force = false) {
+export async function loadMountFacts(force = false) {
   if (_mountFactsPromise && !force) return _mountFactsPromise;
   _mountFactsPromise = (async () => {
-    const resp = await fetch('/api/feature-store/overview');
+    const resp = await window.fetch('/api/feature-store/overview');
     if (!resp.ok) throw new Error('/api/feature-store/overview ' + resp.status);
     const data = await resp.json();
     if (!data || typeof data.mounts !== 'object' || data.mounts === null) {
@@ -85,8 +92,8 @@ async function loadMountFacts(force = false) {
     const needsRender = _mountFacts === null || force;
     _mountFacts = facts;
     if (needsRender && typeof activeFeaturePanel !== 'undefined'
-      && activeFeaturePanel === 'hooks' && typeof renderFeaturePanel === 'function') {
-      renderFeaturePanel();
+      && activeFeaturePanel === 'hooks' && typeof window.renderFeaturePanel === 'function') {
+      window.renderFeaturePanel();
     }
     return facts;
   })().catch(err => {
@@ -97,12 +104,12 @@ async function loadMountFacts(force = false) {
 }
 
 /** 同步取已加载装配事实；未就绪返回 null（渲染层回退 seed 静态 group）。 */
-function getMountFactsSnapshot() {
+export function getMountFactsSnapshot() {
   return _mountFacts;
 }
 
 /** 商店写操作后强制失效缓存；成功且面板打开时自动重渲染。 */
-function refreshMountFacts() {
+export function refreshMountFacts() {
   return loadMountFacts(true).catch(() => { /* 失败保留旧快照，下次渲染重试 */ });
 }
 
@@ -118,7 +125,7 @@ const FALLBACK_GROUPS = [{ id: '_unmapped' }];
  * 见 AgentDev packages/mcp/src/client.ts 的工具命名）。
  * skills / commands 带数据源可用性回退，在 enrichFeatureEntry 内处理。
  */
-function deriveRuntimeCapabilities(feature) {
+export function deriveRuntimeCapabilities(feature) {
   const caps = [];
   const tools = Array.isArray(feature.tools) ? feature.tools : [];
   if (tools.length > 0 || (feature.toolCount || 0) > 0) caps.push('tools');
@@ -133,7 +140,7 @@ function deriveRuntimeCapabilities(feature) {
  * coder 两 APP 专属，键 = IDENTITY_SCOPES 的 identity）时返回 null，
  * 调用方回退 seed 静态 group。
  */
-function resolveMountedNames(mountFacts, hostAgentId) {
+export function resolveMountedNames(mountFacts, hostAgentId) {
   if (!mountFacts) return null;
   const identity = hostAgentId === 'coder' ? 'coder'
     : (hostAgentId === 'programming-helper' ? 'main' : '');
@@ -158,7 +165,7 @@ function resolveMountedNames(mountFacts, hostAgentId) {
  * mountedNames: Set<string> | null }
  * commandFeatures = feature 名 → slash 命令数（null = 数据不可用）。
  */
-function enrichFeatureEntry(feature, catalog, runtime) {
+export function enrichFeatureEntry(feature, catalog, runtime) {
   const entry = catalog && catalog.features
     ? catalog.features.find(seed => seed.name === feature.name)
     : null;
@@ -205,7 +212,7 @@ function enrichFeatureEntry(feature, catalog, runtime) {
  * 分组顺序 = 响应携带的 types 词表顺序，_unmapped 恒在最后；空组剔除。
  * catalog 为 null 时全部进 _unmapped。features 为空返回 []。
  */
-function groupFeaturesByType(features, catalog, filter = 'all', capFilter = 'all', runtime) {
+export function groupFeaturesByType(features, catalog, filter = 'all', capFilter = 'all', runtime) {
   if (!Array.isArray(features) || features.length === 0) return [];
   const types = (catalog && Array.isArray(catalog.types) && catalog.types.length > 0)
     ? catalog.types.map(t => (typeof t === 'string' ? t : t.id))
@@ -229,7 +236,7 @@ function groupFeaturesByType(features, catalog, filter = 'all', capFilter = 'all
  * 计数应用当前能力筛选（capFilter），与点击后的实际结果一致。
  * 与 groupFeaturesByType 同一套 enrich/判定，保证数字与列表永不脱节。
  */
-function countFeaturesBySource(features, catalog, capFilter = 'all', runtime) {
+export function countFeaturesBySource(features, catalog, capFilter = 'all', runtime) {
   const counts = { all: 0, bundled: 0, installed: 0 };
   if (!Array.isArray(features)) return counts;
   for (const feature of features) {
@@ -245,7 +252,7 @@ function countFeaturesBySource(features, catalog, capFilter = 'all', runtime) {
  * 能力筛选值归一：'all' 与词表内的能力 id 原样通过，
  * 词表外/持久化的过期值归一为 'all'（词表演进时存储值不至于过滤成空）。
  */
-function normalizeCapFilter(value, catalog) {
+export function normalizeCapFilter(value, catalog) {
   if (value === 'all') return 'all';
   const ids = catalog && Array.isArray(catalog.capabilities)
     ? catalog.capabilities.map(c => (typeof c === 'string' ? c : c.id))
@@ -257,7 +264,7 @@ function normalizeCapFilter(value, catalog) {
  * type → 默认折叠态。词表由响应携带（[{ id, collapsed }]）；
  * 未声明 collapsed 或词表缺失视为展开。
  */
-function typeCollapsedByDefault(typeId, catalog) {
+export function typeCollapsedByDefault(typeId, catalog) {
   const t = catalog && Array.isArray(catalog.types)
     ? catalog.types.find(x => (typeof x === 'string' ? x : x.id) === typeId)
     : null;
@@ -268,7 +275,7 @@ function typeCollapsedByDefault(typeId, catalog) {
  * displayName 解析：{zh,en} 对象按语言取值（非 zh 取 en）；
  * 纯字符串原样；缺失/非法回退 name。
  */
-function resolveDisplayName(entry, lang) {
+export function resolveDisplayName(entry, lang) {
   const dn = entry && entry.displayName;
   if (dn && typeof dn === 'object' && typeof dn.zh === 'string' && typeof dn.en === 'string') {
     return lang === 'zh' ? dn.zh : dn.en;
@@ -281,12 +288,17 @@ function resolveDisplayName(entry, lang) {
  * provenance → i18n key。词表由 API 响应携带（catalog.provenances，单一权威），
  * 命中返回 key（渲染层 t(key)）；不在词表内返回 null（渲染层原样透传或隐藏）。
  */
-function provenanceI18nKey(provenance, provenances) {
+export function provenanceI18nKey(provenance, provenances) {
   return Array.isArray(provenances) && provenances.includes(provenance)
     ? 'feature_prov_' + provenance
     : null;
 }
 
+/**
+ * 兼容面挂载点：既有公开命名空间协议。对象成员与命名导出同源（同一批函数
+ * 引用），不另维护一份实现；消费方迁移完成后删除本挂载点。
+ */
+window.ClawFW = window.ClawFW || {};
 window.ClawFW.featureCatalog = {
   loadFeatureCatalog,
   getFeatureCatalogSnapshot,

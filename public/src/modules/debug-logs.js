@@ -6,7 +6,18 @@
  *   - getFilteredLogs, renderLogsPanel
  *
  * safePrettyJson 被 renderLogsPanel 和 renderMcpPanel（debug-mcp.js）共用。
- * 本文件先于 debug-mcp.js 加载，全局作用域下后者可直接引用。
+ * 本文件整体是 safePrettyJson 的唯一实现：debug-mcp 已转 ESM，取的是本文件的
+ * classic 顶层函数（window.safePrettyJson），不复制第二份。
+ *
+ * P2 保留边界（R4，整文件保持 classic，不进 ESM 批次）：
+ *   - 日志面板的 render 入口（renderLogsPanel）与 onOpen 入口（loadLogs）由
+ *     app-ui.js 的 registerFeaturePanel('logs') 闭包持有；
+ *   - 本面板在注册表里带 order（可自定义），rail 按钮在首屏同步链
+ *     （app-main 顶层 applyLanguage → renderCurrentMainView → syncRailButtons）
+ *     就生成并可见，该点击不受认证闸保护，早于 deferred ESM 求值。
+ *   入口移入模块后，classic 相点击会抛 ReferenceError（面板空开）——同
+ *   todo-plan 先例（p2-w2-4 头注），等 app-ui 面板注册与 rail 时序联合迁移
+ *   后再转换。不得以 typeof 守卫、隐藏按钮、延后监听或 ready 队列规避。
  *
  * 依赖（全局变量，声明于 app-core.js）：
  *   - logFilters, currentLogs, currentLogsTruncation

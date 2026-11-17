@@ -16,12 +16,20 @@
  *    （src 路径数组），双向一致：清单外标签报错（module 入口的首次执行时机 =
  *    首个 import 它的模块执行时，改变装载时序，必须有意识登记），登记路径在
  *    标签中不存在也报错（入口删除时同步注销登记，不许留悬置清单项）。
+ *
+ * 5. classic 标签不得装载 ESM 语法文件：classic script 顶层出现 import/export
+ *    语句会在解析期直接 SyntaxError（整条脚本不执行，页面静默残废）。判定走
+ *    `vm.Script` 真实编译而不是正则——注释、字符串里的 import/export 字样不会
+ *    误报，`import()` 动态导入是合法 classic 语法也不会被拦。文件转为 ESM 后
+ *    必须从 index.html 删除 classic 标签，改由 module 入口 import（P2 批次收口
+ *    在 modules/p2-entry.js）。
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import vm from 'node:vm';
 
 const ROOT = path.resolve(import.meta.dirname, '..');
 const HTML = path.join(ROOT, 'public/index.html');
@@ -65,6 +73,14 @@ const MODULE_ENTRIES = [
   './src/modules/orchestration-state.js',
   './src/modules/kernel-entry.js',
   './src/modules/markdown-utils.js',
+];
+
+// 由已登记的 module 入口经 static import 带入的生产装载入口（不在 index.html
+// 里占标签）。R4 同样适用：它们的首次执行时机由 import 边决定，改装载链就是
+// 改时序，所以必须显式登记；登记项必须真被某个登记入口 import，且文件是 ESM
+// 语法。P2 消费方批次收口在 p2-entry.js（原 69 条 classic 标签删于此）。
+const MODULE_ENTRY_IMPORTS = [
+  './src/modules/p2-entry.js',
 ];
 
 function scriptSources(html) {
@@ -155,4 +171,103 @@ test('module 入口双向一致：登记了但标签不存在也报错', async (
     [],
     `MODULE_ENTRIES 登记的入口在 index.html 中不存在：${stale.join(', ')}——入口标签已删除时应同步注销登记`,
   );
+});
+
+/** 登记入口文件的 static side-effect / 具名 import 目标（相对路径解析后）。 */
+function importTargets(file) {
+  const source = readFileSync(file, 'utf8');
+  const specs = [...source.matchAll(/^\s*(?:import|export)\s+(?:[^'"]*?\sfrom\s+)?["']([^"']+)["']/gm)]
+    .map((m) => m[1])
+    .filter((spec) => spec.startsWith('.'));
+  return specs.map((spec) => path.posix.normalize(
+    path.posix.join(path.posix.dirname(file), spec),
+  ));
+}
+
+test('装载入口登记：必须真被登记 module 入口 import，且文件是 ESM 语法', async () => {
+  const entryFiles = MODULE_ENTRIES.map((entry) => path.join(ROOT, 'public', normPath(entry)));
+  const stale = [];
+  const notEsm = [];
+  for (const entryImport of MODULE_ENTRY_IMPORTS) {
+    const target = path.join(ROOT, 'public', normPath(entryImport));
+    if (!entryFiles.some((file) => importTargets(file).includes(target))) {
+      stale.push(entryImport);
+      continue;
+    }
+    try {
+      new vm.Script(readFileSync(target, 'utf8'), { filename: target });
+      notEsm.push(entryImport);
+    } catch {
+      // classic 相编译失败 = 文件确实含 ESM 语法，符合预期
+    }
+  }
+  assert.deepEqual(
+    stale,
+    [],
+    `登记的装载入口没有被任何 module 入口 import：${stale.join(', ')}——装载链已改变，需同步注销或补 import 边`,
+  );
+  assert.deepEqual(
+    notEsm,
+    [],
+    `登记的装载入口不含 ESM 语法：${notEsm.join(', ')}——它应是被 import 的 ESM 模块，不是 classic 脚本`,
+  );
+});
+
+test('module 入口必须静态非 async（async 绕过 DOMContentLoaded 等待）', async () => {
+  const html = await readFile(HTML, 'utf8');
+  const moduleTags = [...html.matchAll(/<script\b[^>]*>/g)]
+    .map((match) => match[0])
+    .filter((tag) => /\btype=["']module["']/.test(tag));
+  const asyncEntries = moduleTags.filter((tag) => /\basync\b/.test(tag));
+  assert.deepEqual(
+    asyncEntries,
+    [],
+    `出现 async module 入口：${asyncEntries.join(' | ')}——认证初始化（auth-client 等 `
+      + 'DOMContentLoaded）与首屏时序依赖"静态非 async 模块早于 DOMContentLoaded 求值"，'
+      + 'async 入口会让入口求值越过该等待（plan R4）',
+  );
+});
+
+async function readClassicTags() {
+  const moduleTags = new Set(await readModuleTags());
+  return (await readTags()).filter((tag) => !moduleTags.has(tag));
+}
+
+test('classic 标签不得装载 ESM 语法文件（classic 相解析即 SyntaxError）', async () => {
+  const failures = [];
+  for (const tag of await readClassicTags()) {
+    const norm = normPath(tag);
+    if (norm.startsWith(VENDOR_PREFIX) || /^https?:/.test(norm)) continue;
+    const file = path.join(ROOT, 'public', norm);
+    if (!existsSync(file)) continue; // 死标签由上面的存在性断言负责
+    try {
+      new vm.Script(readFileSync(file, 'utf8'), { filename: file });
+    } catch (error) {
+      failures.push(`${tag}: ${String(error.message).split('\n')[0]}`);
+    }
+  }
+  assert.deepEqual(
+    failures,
+    [],
+    `classic 标签装到了含 import/export 的文件：${failures.join(' | ')}——文件转 ESM 后必须删除 classic 标签，`
+      + '改由 module 入口 import（P2 批次收口在 modules/p2-entry.js）',
+  );
+});
+
+test('ESM 语法判定口径：真实 import/export 拦截，注释 / 字符串 / 动态 import 不误报', () => {
+  const compiles = (source) => {
+    try {
+      new vm.Script(source, { filename: 'probe-classic.js' });
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  // 反向取证：这两类正是 classic 相会炸的写法
+  assert.equal(compiles("import './dependency.js';"), false);
+  assert.equal(compiles('const value = 1;\nexport { value };'), false);
+  // 不误报：注释、字符串字面量、动态 import() 都是合法 classic 语法
+  assert.equal(compiles('// import "./dependency.js";\nconst value = 1;'), true);
+  assert.equal(compiles('const hint = "export const value = 1";'), true);
+  assert.equal(compiles("const lazy = import('./dependency.js');"), true);
 });

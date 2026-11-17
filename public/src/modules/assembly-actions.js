@@ -29,15 +29,55 @@
  *     - saveWorkspaceForm: 保存 workspace 表单（feature-creator / agent-creator / assembly）
  *     - resetWorkspaceForm: 重置 workspace 表单
  *
- * 依赖：
- *   - app-core.js: 全局变量 + 公共函数 (currentLanguage, shouldAnimateWorkspaceSurface, etc.)
- *   - assembly-data.js: normalizeAssemblyDraft, syncAssemblyEnvironmentDraft, 等
- *   - app-ui.js: renderCurrentMainView, scheduleAssemblyWorkbenchRender, maybeWarnAssemblySessionDrift
- *   - app-main.js (域 U/M/O): requestSwitch, loadAgents, runWorkspaceAction, selectWorkspaceSurface
- *   - workspace-blocks.js: renderAgentList
- *   - project-data.js: applyManagedPrebuiltAgent
- *   - context-menu.js: openCompactMenu
+ * ESM（P2 W2-10 装配工作台批次）：语言、渲染/编排状态与已迁模块（assembly-data /
+ * workspace-blocks / feature-config / fw-config-panel）显式 import；已 ESM 的
+ * 加载、切换、表面导航与 project-data 数据面走 import；仍为 classic 的宿主
+ * 函数（app-main / app-ui / app-core invoke）经 window 晚绑定并注明收敛批次。
+ *
+ * 本模块原 `window.*` 函数是本批兼容面：仍有 classic 消费方（app-ui 的
+ * assembly.* 动作与内联 onclick、workspace-actions、ctx-menu-handlers），
+ * 逐键清单与注销条件见文件末尾。
  */
+
+import { getCurrentLanguage } from './i18n-environment-state.js';
+import { setCurrentWorkspaceTab, setShouldAnimateWorkspaceSurface } from './render-entry-state.js';
+import { currentRuntimeAgentId } from './orchestration-state.js';
+import { allAgents } from './agent-store-state.js';
+import { assemblyUi } from './p2-bootstrap-assembly.js';
+import {
+  normalizeAssemblyDraft,
+  normalizeWorkspaceStartupDraft,
+  findAssemblyConfigConflict,
+  isValidAgentCreatorName,
+  isValidFeatureCreatorName,
+  isAssemblySessionRunning,
+  resetWorkspaceFormDraft,
+  getFeatureCreatorOutputDirectory,
+  getAgentCreatorOutputDirectory,
+  syncAssemblyEnvironmentDraft,
+  requestAssemblyEnvironmentCreate,
+  getAssemblyDisplayName,
+  getAssemblyEnvironmentState,
+  persistWorkspaceState,
+  getWorkspaceFormDraft,
+  saveWorkspaceFormDraft,
+  scheduleAssemblyWorkbenchRender,
+  collectAssemblyProjectFeatureConfigs,
+} from './assembly-data.js';
+import { parseWorkspaceListField, serializeWorkspaceListField } from './workspace-blocks.js';
+import { normalizeFeatureConfigMap } from './feature-config.js';
+import { loadAgents } from './agent-snapshot-loader-host.js';
+import { getWorkspaceSessionById } from './session-ui.js';
+import { applySessionMutationDelta } from './sidebar-operations.js';
+import { requestSwitch } from './runtime-switch-host.js';
+import { selectWorkspaceSurface } from './workspace-surface-host.js';
+import { maybeWarnAssemblySessionDrift } from './fw-config-panel.js';
+import {
+  applyManagedPrebuiltAgent,
+  getAgentWorkspaceState,
+  updateAgentRecord,
+  updateAgentWorkspaceState,
+} from './project-data.js';
 
 // ── 幂等键（ADR-0011）：写类提交统一携带（本地忽略、远程强制）───────────
 function newIdempotencyKey() {
@@ -49,14 +89,13 @@ function newIdempotencyKey() {
 }
 
 
-'use strict';
 
 // ═══════════════════════════════════════════════════════════════════
 // 域 P — Workspace Form Draft 操作
 // ═══════════════════════════════════════════════════════════════════
 
-window.updateWorkspaceFormDraft = (formId, fieldName, value) => {
-  const agent = getCurrentAgentRecord();
+function updateWorkspaceFormDraft(formId, fieldName, value) {
+  const agent = window.getCurrentAgentRecord();
   if (!agent?.id) return;
   const draft = getWorkspaceFormDraft(agent);
   draft[formId] = draft[formId] || {};
@@ -72,18 +111,18 @@ window.updateWorkspaceFormDraft = (formId, fieldName, value) => {
   if ((agent.id === 'feature-creator' || agent.id === 'agent-creator') && formId === 'startup-form') {
     const directoryDisplay = document.querySelector('[data-workspace-form-display="startup-form:target_dir"]');
     if (directoryDisplay) {
-      directoryDisplay.value = draft[formId].target_dir || t('workspace_directory_not_selected');
+      directoryDisplay.value = draft[formId].target_dir || window.t('workspace_directory_not_selected');
     }
     const outputNote = document.querySelector('[data-workspace-output-note="startup-form"]');
     if (outputNote) {
       const nextOutputDir = agent.id === 'feature-creator'
         ? getFeatureCreatorOutputDirectory(agent, draft[formId])
         : getAgentCreatorOutputDirectory(agent, draft[formId]);
-      outputNote.textContent = nextOutputDir ? `${t('feature_creator_output_dir')}: ${nextOutputDir}` : '';
+      outputNote.textContent = nextOutputDir ? `${window.t('feature_creator_output_dir')}: ${nextOutputDir}` : '';
     }
     if (fieldName === 'install_mode') {
-      shouldAnimateWorkspaceSurface = false;
-      renderCurrentMainView();
+      setShouldAnimateWorkspaceSurface(false);
+      window.renderCurrentMainView();
     }
     return;
   }
@@ -91,12 +130,12 @@ window.updateWorkspaceFormDraft = (formId, fieldName, value) => {
     scheduleAssemblyWorkbenchRender();
     return;
   }
-  shouldAnimateWorkspaceSurface = false;
-  renderCurrentMainView();
-};
+  setShouldAnimateWorkspaceSurface(false);
+  window.renderCurrentMainView();
+}
 
-window.toggleWorkspaceSelection = async (formId, fieldName, value) => {
-  const agent = getCurrentAgentRecord();
+async function toggleWorkspaceSelection(formId, fieldName, value) {
+  const agent = window.getCurrentAgentRecord();
   if (!agent?.id) return;
   const token = String(value || '').trim();
   if (!token) return;
@@ -119,12 +158,12 @@ window.toggleWorkspaceSelection = async (formId, fieldName, value) => {
   } catch (error) {
     console.error('Failed to persist workspace selection:', error);
   }
-  shouldAnimateWorkspaceSurface = false;
-  renderCurrentMainView();
-};
+  setShouldAnimateWorkspaceSurface(false);
+  window.renderCurrentMainView();
+}
 
-window.applyWorkspaceBundle = async (formId, bundle) => {
-  const agent = getCurrentAgentRecord();
+async function applyWorkspaceBundle(formId, bundle) {
+  const agent = window.getCurrentAgentRecord();
   if (!agent?.id) return;
   const draft = getWorkspaceFormDraft(agent);
   draft[formId] = draft[formId] || {};
@@ -146,34 +185,34 @@ window.applyWorkspaceBundle = async (formId, bundle) => {
   } catch (error) {
     console.error('Failed to persist workspace bundle:', error);
   }
-  shouldAnimateWorkspaceSurface = false;
-  renderCurrentMainView();
-};
+  setShouldAnimateWorkspaceSurface(false);
+  window.renderCurrentMainView();
+}
 
 // ═══════════════════════════════════════════════════════════════════
 // 域 Q — Assembly 环境创建 / 实例启动
 // ═══════════════════════════════════════════════════════════════════
 
-window.createAssemblyEnvironment = async () => {
-  const agent = getCurrentAgentRecord();
+async function createAssemblyEnvironment() {
+  const agent = window.getCurrentAgentRecord();
   if (!agent?.id) return;
   const draft = getWorkspaceFormDraft(agent);
   const form = normalizeAssemblyDraft(draft['assembly-form'] || {});
   const name = String(form.assembly_name || '').trim();
   const selectedFeatures = parseWorkspaceListField(form.selected_features);
   if (!name) {
-    window.alert(currentLanguage === 'zh' ? '请先填写 Agent 名称' : 'Please provide an agent name first');
+    window.alert(getCurrentLanguage() === 'zh' ? '请先填写 Agent 名称' : 'Please provide an agent name first');
     return;
   }
   const conflicts = findAssemblyConfigConflict(agent, form);
   if (conflicts.conflictingName) {
-    window.alert(currentLanguage === 'zh'
+    window.alert(getCurrentLanguage() === 'zh'
       ? `Agent 项目 "${name}" 已存在，请先加载它再配置环境。`
       : `An Agent project named "${name}" already exists. Load it before configuring the environment.`);
     return;
   }
   if (conflicts.conflictingDirectory) {
-    window.alert(currentLanguage === 'zh'
+    window.alert(getCurrentLanguage() === 'zh'
       ? `当前环境目录已经被项目 "${conflicts.conflictingDirectory.name || conflicts.conflictingDirectory.id}" 占用，请先加载那个项目，或重置当前草稿。`
       : `This environment directory already belongs to "${conflicts.conflictingDirectory.name || conflicts.conflictingDirectory.id}". Load that project or reset the current draft first.`);
     return;
@@ -181,7 +220,7 @@ window.createAssemblyEnvironment = async () => {
   try {
     await syncAssemblyEnvironmentDraft(agent, draft, {
       env_status: 'creating',
-      env_status_message: currentLanguage === 'zh'
+      env_status_message: getCurrentLanguage() === 'zh'
         ? '正在准备用户环境目录...'
         : 'Preparing the user environment directory...',
     });
@@ -190,13 +229,13 @@ window.createAssemblyEnvironment = async () => {
       result = await requestAssemblyEnvironmentCreate(name, { selectedFeatures });
     } catch (error) {
       if (error?.code === 'ASSEMBLY_ENV_EXISTS') {
-        const confirmed = window.confirm(currentLanguage === 'zh'
+        const confirmed = window.confirm(getCurrentLanguage() === 'zh'
           ? `目录已存在：\n${error.directory}\n\n是否继续按当前配置重新准备这个环境？`
           : `The environment directory already exists:\n${error.directory}\n\nDo you want to reconfigure this environment with the current setup?`);
         if (!confirmed) {
           await syncAssemblyEnvironmentDraft(agent, draft, {
             env_status: 'stale',
-            env_status_message: currentLanguage === 'zh'
+            env_status_message: getCurrentLanguage() === 'zh'
               ? '检测到同名目录，已取消重新配置。'
               : 'An existing directory was detected, and reconfiguration was cancelled.',
           });
@@ -214,8 +253,8 @@ window.createAssemblyEnvironment = async () => {
       env_configured_features: serializeWorkspaceListField(selectedFeatures),
       env_status: 'ready',
       env_status_message: result.existed
-        ? (currentLanguage === 'zh' ? '已复用并确认现有环境目录。' : 'Reused and confirmed the existing environment directory.')
-        : (currentLanguage === 'zh' ? '环境目录已创建完成。' : 'Environment directory created.'),
+        ? (getCurrentLanguage() === 'zh' ? '已复用并确认现有环境目录。' : 'Reused and confirmed the existing environment directory.')
+        : (getCurrentLanguage() === 'zh' ? '环境目录已创建完成。' : 'Environment directory created.'),
     }, {
       persist: true,
       openDirectory: result.directory || '',
@@ -224,36 +263,36 @@ window.createAssemblyEnvironment = async () => {
     console.error('Failed to create assembly environment:', error);
     await syncAssemblyEnvironmentDraft(agent, draft, {
       env_status: 'error',
-      env_status_message: (currentLanguage === 'zh' ? '环境创建失败：' : 'Environment creation failed: ') + (error?.message || error),
+      env_status_message: (getCurrentLanguage() === 'zh' ? '环境创建失败：' : 'Environment creation failed: ') + (error?.message || error),
     }).catch(e => console.warn(e));
     window.alert('Failed to create environment: ' + (error?.message || error));
   }
-};
+}
 
-window.launchAssemblyInstance = async () => {
-  const agent = getCurrentAgentRecord();
+async function launchAssemblyInstance() {
+  const agent = window.getCurrentAgentRecord();
   if (!agent?.id) return;
-  assemblyLaunchInProgress = true;
+  assemblyUi.assemblyLaunchInProgress = true;
   const _t0 = performance.now();
   console.log(`[PERF-CLIENT] launchAssemblyInstance BEGIN assembly=${(getWorkspaceFormDraft(agent)['assembly-form'] || {}).assembly_name}`);
   const draft = getWorkspaceFormDraft(agent);
   const form = normalizeAssemblyDraft(draft['assembly-form'] || {});
   if (!isValidAgentCreatorName(form.assembly_name)) {
-    assemblyLaunchInProgress = false;
+    assemblyUi.assemblyLaunchInProgress = false;
     window.alert('Assembly name must use lowercase letters, numbers, and hyphens only.');
     return;
   }
   const conflicts = findAssemblyConfigConflict(agent, form);
   if (conflicts.conflictingName) {
-    assemblyLaunchInProgress = false;
-    window.alert(currentLanguage === 'zh'
+    assemblyUi.assemblyLaunchInProgress = false;
+    window.alert(getCurrentLanguage() === 'zh'
       ? `Agent 项目 "${form.assembly_name}" 已存在，请先加载对应项目再启动。`
       : `An Agent project named "${form.assembly_name}" already exists. Load that project before launching.`);
     return;
   }
   if (conflicts.conflictingDirectory) {
-    assemblyLaunchInProgress = false;
-    window.alert(currentLanguage === 'zh'
+    assemblyUi.assemblyLaunchInProgress = false;
+    window.alert(getCurrentLanguage() === 'zh'
       ? `当前环境目录已经被项目 "${conflicts.conflictingDirectory.name || conflicts.conflictingDirectory.id}" 占用，请先切换到那个项目。`
       : `This environment directory already belongs to "${conflicts.conflictingDirectory.name || conflicts.conflictingDirectory.id}". Switch to that project first.`);
     return;
@@ -272,7 +311,7 @@ window.launchAssemblyInstance = async () => {
         console.log(`[PERF-CLIENT] launchAssemblyInstance env needs config, calling requestAssemblyEnvironmentCreate`);
         await syncAssemblyEnvironmentDraft(agent, draft, {
           env_status: 'installing',
-          env_status_message: currentLanguage === 'zh'
+          env_status_message: getCurrentLanguage() === 'zh'
             ? `正在配置环境并安装依赖${selectedFeatures.length ? `（${selectedFeatures.length} 个 Feature）` : ''}...`
             : `Preparing environment and installing dependencies${selectedFeatures.length ? ` (${selectedFeatures.length} feature(s))` : ''}...`,
         });
@@ -286,8 +325,8 @@ window.launchAssemblyInstance = async () => {
             env_configured_features: serializeWorkspaceListField(selectedFeatures),
             env_status: 'ready',
             env_status_message: envResult.existed
-              ? (currentLanguage === 'zh' ? '已复用环境目录并刷新依赖。' : 'Reused the environment directory and refreshed dependencies.')
-              : (currentLanguage === 'zh' ? '环境目录与依赖已准备完成。' : 'Environment directory and dependencies are ready.'),
+              ? (getCurrentLanguage() === 'zh' ? '已复用环境目录并刷新依赖。' : 'Reused the environment directory and refreshed dependencies.')
+              : (getCurrentLanguage() === 'zh' ? '环境目录与依赖已准备完成。' : 'Environment directory and dependencies are ready.'),
           }, {
             persist: true,
             openDirectory: envResult.directory || '',
@@ -301,7 +340,7 @@ window.launchAssemblyInstance = async () => {
               env_configured_name: assemblyName,
               env_configured_features: serializeWorkspaceListField(selectedFeatures),
               env_status: 'ready',
-              env_status_message: currentLanguage === 'zh'
+              env_status_message: getCurrentLanguage() === 'zh'
                 ? '已复用环境目录并刷新依赖。'
                 : 'Reused the environment directory and refreshed dependencies.',
             }, {
@@ -316,7 +355,7 @@ window.launchAssemblyInstance = async () => {
         console.log(`[PERF-CLIENT] launchAssemblyInstance env already ready, skipping create (${(performance.now() - _t0).toFixed(0)}ms)`);
         await syncAssemblyEnvironmentDraft(agent, draft, {
           env_status: 'ready',
-          env_status_message: currentLanguage === 'zh'
+          env_status_message: getCurrentLanguage() === 'zh'
             ? '已使用当前已配置环境，直接启动实例。'
             : 'Using the existing configured environment for launch.',
         });
@@ -324,7 +363,7 @@ window.launchAssemblyInstance = async () => {
     }
     await syncAssemblyEnvironmentDraft(agent, draft, {
       env_status: 'starting',
-      env_status_message: currentLanguage === 'zh'
+      env_status_message: getCurrentLanguage() === 'zh'
         ? '正在启动 Agent 测试实例...'
         : 'Starting the chatbot instance...',
     });
@@ -346,37 +385,37 @@ window.launchAssemblyInstance = async () => {
     console.log(`[PERF-CLIENT] launchAssemblyInstance /assembly_runtime/start response received (${(performance.now() - _t0).toFixed(0)}ms)`);
     await syncAssemblyEnvironmentDraft(agent, draft, {
       env_status: 'running',
-      env_status_message: currentLanguage === 'zh'
+      env_status_message: getCurrentLanguage() === 'zh'
         ? 'Chatbot 已启动，运行环境位于用户目录；宿主工作目录仍保持在 Claw。'
         : 'Chatbot is running in the user environment directory while the host workdir remains in Claw.',
     }, {
       persist: true,
     });
     console.log(`[PERF-CLIENT] launchAssemblyInstance persist running done (${(performance.now() - _t0).toFixed(0)}ms)`);
-    assemblyLaunchInProgress = false;
+    assemblyUi.assemblyLaunchInProgress = false;
     await loadAgents();
     console.log(`[PERF-CLIENT] launchAssemblyInstance loadAgents done (${(performance.now() - _t0).toFixed(0)}ms)`);
-    shouldAnimateWorkspaceSurface = false;
-    renderCurrentMainView();
+    setShouldAnimateWorkspaceSurface(false);
+    window.renderCurrentMainView();
     console.log(`[PERF-CLIENT] launchAssemblyInstance COMPLETE (${(performance.now() - _t0).toFixed(0)}ms total)`);
   } catch (error) {
     console.error('Failed to launch assembly runtime:', error);
-    assemblyLaunchInProgress = false;
+    assemblyUi.assemblyLaunchInProgress = false;
     await syncAssemblyEnvironmentDraft(agent, draft, {
       env_status: 'error',
-      env_status_message: (currentLanguage === 'zh' ? '启动失败：' : 'Launch failed: ') + (error && error.message ? error.message : error),
+      env_status_message: (getCurrentLanguage() === 'zh' ? '启动失败：' : 'Launch failed: ') + (error && error.message ? error.message : error),
     }, {
       persist: true,
     }).catch(e => console.warn(e));
     window.alert('Assembly runtime failed: ' + (error && error.message ? error.message : error));
   }
-};
+}
 
 // ═══════════════════════════════════════════════════════════════════
 // 域 Q — 纯读取辅助函数
 // ═══════════════════════════════════════════════════════════════════
 
-function getSavedAssemblyConfigs(agent = getCurrentAgentRecord()) {
+function getSavedAssemblyConfigs(agent = window.getCurrentAgentRecord()) {
   const configs = Array.isArray(getAgentWorkspaceState(agent)?.assemblyConfigs)
     ? getAgentWorkspaceState(agent).assemblyConfigs
     : [];
@@ -439,8 +478,8 @@ function canonicalizeAssemblyFeatureSelection(agent, values) {
 // 域 Q — Config 保存 / 重置 / 切换
 // ═══════════════════════════════════════════════════════════════════
 
-window.saveCurrentAssemblyConfig = async () => {
-  const agent = getCurrentAgentRecord();
+async function saveCurrentAssemblyConfig() {
+  const agent = window.getCurrentAgentRecord();
   if (!agent?.id) return;
   const draft = getWorkspaceFormDraft(agent);
   const form = normalizeAssemblyDraft(draft['assembly-form'] || {});
@@ -454,13 +493,13 @@ window.saveCurrentAssemblyConfig = async () => {
   const allConfigs = getSavedAssemblyConfigs(agent);
   const conflicts = findAssemblyConfigConflict(agent, form);
   if (conflicts.conflictingName) {
-    window.alert(currentLanguage === 'zh'
+    window.alert(getCurrentLanguage() === 'zh'
       ? `Agent 项目 "${name}" 已存在，请换一个名字，或先加载它再编辑。`
       : `An Agent project named "${name}" already exists. Choose another name or load it before editing.`);
     return;
   }
   if (conflicts.conflictingDirectory) {
-    window.alert(currentLanguage === 'zh'
+    window.alert(getCurrentLanguage() === 'zh'
       ? `当前环境目录已经被项目 "${conflicts.conflictingDirectory.name || conflicts.conflictingDirectory.id}" 占用，请先切换到那个项目，或重新配置当前项目的环境。`
       : `This environment directory already belongs to "${conflicts.conflictingDirectory.name || conflicts.conflictingDirectory.id}". Load that project or reconfigure the current environment first.`);
     return;
@@ -524,12 +563,12 @@ window.saveCurrentAssemblyConfig = async () => {
   const nextState = await response.json();
   updateAgentWorkspaceState(agent.id, nextState);
   saveWorkspaceFormDraft(agent.id, nextState.forms || {});
-  shouldAnimateWorkspaceSurface = false;
-  renderCurrentMainView();
-};
+  setShouldAnimateWorkspaceSurface(false);
+  window.renderCurrentMainView();
+}
 
-window.resetAssemblyDraft = async () => {
-  const agent = getCurrentAgentRecord();
+async function resetAssemblyDraft() {
+  const agent = window.getCurrentAgentRecord();
   if (!agent?.id) return;
   const draft = getWorkspaceFormDraft(agent);
   draft['assembly-form'] = normalizeAssemblyDraft({
@@ -548,43 +587,43 @@ window.resetAssemblyDraft = async () => {
   await persistWorkspaceState(agent, draft, { openDirectory: '' }).catch((error) => {
     console.error('Failed to reset assembly draft:', error);
   });
-  setPreferredUnitMode('assembly', agent);
+  window.setPreferredUnitMode('assembly', agent);
   if (agent?.id === 'flow-workspace' && window.ClawFW?.mode === 'detail') {
-    currentWorkspaceTab = 'workspace';
+    setCurrentWorkspaceTab('workspace');
   } else {
-    currentWorkspaceTab = 'assembly';
+    setCurrentWorkspaceTab('assembly');
   }
-  shouldAnimateWorkspaceSurface = false;
-  renderCurrentMainView();
-};
+  setShouldAnimateWorkspaceSurface(false);
+  window.renderCurrentMainView();
+}
 
-window.switchAssemblyEditingTarget = async (target) => {
+async function switchAssemblyEditingTarget(target) {
   const normalized = String(target || '').trim();
   if (!normalized || normalized === '__new__') {
-    await window.resetAssemblyDraft();
+    await resetAssemblyDraft();
     return;
   }
-  await window.loadSavedAssemblyConfig(normalized);
-};
+  await loadSavedAssemblyConfig(normalized);
+}
 
-window.toggleAssemblyControlPanel = () => {
-  assemblyControlPanelOpen = !assemblyControlPanelOpen;
-  shouldAnimateWorkspaceSurface = false;
-  renderCurrentMainView();
-};
+function toggleAssemblyControlPanel() {
+  assemblyUi.assemblyControlPanelOpen = !assemblyUi.assemblyControlPanelOpen;
+  setShouldAnimateWorkspaceSurface(false);
+  window.renderCurrentMainView();
+}
 
-window.jumpAssemblyStage = (stageKey) => {
-  const agent = getCurrentAgentRecord();
+function jumpAssemblyStage(stageKey) {
+  const agent = window.getCurrentAgentRecord();
   if (!agent?.id) return;
-  window.updateWorkspaceFormDraft('assembly-form', 'assembly_stage', stageKey);
-};
+  updateWorkspaceFormDraft('assembly-form', 'assembly_stage', stageKey);
+}
 
 // ═══════════════════════════════════════════════════════════════════
 // 域 Q — Config 加载 / 启动 / 删除
 // ═══════════════════════════════════════════════════════════════════
 
-window.loadSavedAssemblyConfig = async (configId) => {
-  const agent = getCurrentAgentRecord();
+async function loadSavedAssemblyConfig(configId) {
+  const agent = window.getCurrentAgentRecord();
   if (!agent?.id) return;
   const config = getSavedAssemblyConfigs(agent).find((item) => item.id === String(configId || '').trim());
   if (!config) return;
@@ -615,10 +654,10 @@ window.loadSavedAssemblyConfig = async (configId) => {
     env_configured_features: serializeWorkspaceListField(knownConfiguredFeatures),
     env_status: config.envStatus || (previousMatchesConfig ? previousForm.env_status : '') || (knownEnvDir ? 'ready' : ''),
     env_status_message: knownEnvDir
-      ? (currentLanguage === 'zh'
+      ? (getCurrentLanguage() === 'zh'
         ? (config.envStatus === 'stale' ? '已载入配置；环境需要按当前能力重新配置。' : '已载入配置，可继续修改或重新启动实例。')
         : (config.envStatus === 'stale' ? 'Setup loaded. Reconfigure the environment for the current capabilities.' : 'Setup loaded. You can keep editing or launch a new instance.'))
-      : (currentLanguage === 'zh'
+      : (getCurrentLanguage() === 'zh'
         ? '已载入配置；如果这是首次启动，请先配置环境目录。'
         : 'Setup loaded. Configure the environment directory before the first launch.'),
     model_preset: config.modelPreset || '',
@@ -631,20 +670,20 @@ window.loadSavedAssemblyConfig = async (configId) => {
   } catch (error) {
     console.error('Failed to load assembly config:', error);
   }
-  setPreferredUnitMode('assembly', agent);
+  window.setPreferredUnitMode('assembly', agent);
   if (agent?.id === 'flow-workspace' && window.ClawFW?.mode === 'detail') {
-    currentWorkspaceTab = 'workspace';
+    setCurrentWorkspaceTab('workspace');
   } else {
-    currentWorkspaceTab = 'assembly';
+    setCurrentWorkspaceTab('assembly');
   }
-  shouldAnimateWorkspaceSurface = false;
-  renderCurrentMainView();
-};
+  setShouldAnimateWorkspaceSurface(false);
+  window.renderCurrentMainView();
+}
 
-window.launchAssemblyConfig = async (configId) => {
+async function launchAssemblyConfig(configId) {
   const _t0 = performance.now();
   console.log(`[PERF-CLIENT] launchAssemblyConfig BEGIN configId=${configId}`);
-  const agent = getCurrentAgentRecord();
+  const agent = window.getCurrentAgentRecord();
   if (!agent?.id) return;
   const config = getSavedAssemblyConfigs(agent).find((item) => item.id === String(configId || '').trim());
   if (!config) return;
@@ -678,11 +717,11 @@ window.launchAssemblyConfig = async (configId) => {
     console.error('Failed to stage assembly config for launch:', error);
   }
   console.log(`[PERF-CLIENT] launchAssemblyConfig calling launchAssemblyInstance (${(performance.now() - _t0).toFixed(0)}ms)`);
-  await window.launchAssemblyInstance();
-};
+  await launchAssemblyInstance();
+}
 
-window.deleteSavedAssemblyConfig = async (configId) => {
-  const agent = getCurrentAgentRecord();
+async function deleteSavedAssemblyConfig(configId) {
+  const agent = window.getCurrentAgentRecord();
   if (!agent?.id) return;
   const normalizedId = String(configId || '').trim();
   const keep = getSavedAssemblyConfigs(agent).filter((item) => item.id !== normalizedId);
@@ -722,19 +761,19 @@ window.deleteSavedAssemblyConfig = async (configId) => {
   const nextState = await response.json();
   updateAgentWorkspaceState(agent.id, nextState);
   saveWorkspaceFormDraft(agent.id, nextState.forms || {});
-  shouldAnimateWorkspaceSurface = false;
-  renderCurrentMainView();
-};
+  setShouldAnimateWorkspaceSurface(false);
+  window.renderCurrentMainView();
+}
 
 // ═══════════════════════════════════════════════════════════════════
 // 域 Q — Session 运行恢复 / 按钮包装
 // ═══════════════════════════════════════════════════════════════════
 
-window.launchSavedAssemblyRun = async (sessionId) => {
+async function launchSavedAssemblyRun(sessionId) {
   const _t0 = performance.now();
   console.log(`[PERF-CLIENT] launchSavedAssemblyRun BEGIN sessionId=${sessionId}`);
   try {
-    const currentAgent = getCurrentAgentRecord();
+    const currentAgent = window.getCurrentAgentRecord();
     const session = getWorkspaceSessionById(currentAgent, sessionId);
     if (session && isAssemblySessionRunning(currentAgent, session)) {
       const liveRuntime = allAgents.find((item) => (
@@ -771,57 +810,57 @@ window.launchSavedAssemblyRun = async (sessionId) => {
         return;
       }
       selectWorkspaceSurface('agent-creator', { skipFeaturePanel: true });
-      shouldAnimateWorkspaceSurface = false;
-      renderCurrentMainView();
+      setShouldAnimateWorkspaceSurface(false);
+      window.renderCurrentMainView();
     };
     await maybeWarnAssemblySessionDrift(currentAgent, sessionId, launchRuntime);
   } catch (error) {
     console.error('Failed to relaunch assembly runtime:', error);
     window.alert('Assembly runtime failed: ' + (error && error.message ? error.message : error));
   }
-};
+}
 
-window.fwLaunchConfig = async (configId, btn) => {
-  if (btn) { btn.classList.add('fw-btn-busy'); btn.disabled = true; btn.textContent = currentLanguage === 'zh' ? '启动中...' : 'Launching...'; }
-  assemblyLaunchInProgress = true;
+async function fwLaunchConfig(configId, btn) {
+  if (btn) { btn.classList.add('fw-btn-busy'); btn.disabled = true; btn.textContent = getCurrentLanguage() === 'zh' ? '启动中...' : 'Launching...'; }
+  assemblyUi.assemblyLaunchInProgress = true;
   const _t0 = performance.now();
   console.log(`[PERF-CLIENT] fwLaunchConfig BEGIN configId=${configId}`);
   try {
-    await window.launchAssemblyConfig(configId);
+    await launchAssemblyConfig(configId);
     console.log(`[PERF-CLIENT] fwLaunchConfig COMPLETE (${(performance.now() - _t0).toFixed(0)}ms)`);
   } catch (e) {
     console.error(`[PERF-CLIENT] fwLaunchConfig FAILED (${(performance.now() - _t0).toFixed(0)}ms)`, e);
-    if (btn) { btn.classList.remove('fw-btn-busy'); btn.disabled = false; btn.textContent = currentLanguage === 'zh' ? '启动' : 'Launch'; }
+    if (btn) { btn.classList.remove('fw-btn-busy'); btn.disabled = false; btn.textContent = getCurrentLanguage() === 'zh' ? '启动' : 'Launch'; }
   } finally {
-    assemblyLaunchInProgress = false;
+    assemblyUi.assemblyLaunchInProgress = false;
   }
-};
+}
 
-window.fwResumeRun = async (sessionId, btn) => {
-  if (btn) { btn.classList.add('fw-btn-busy'); btn.disabled = true; btn.textContent = currentLanguage === 'zh' ? '启动中...' : 'Launching...'; }
-  assemblyLaunchInProgress = true;
+async function fwResumeRun(sessionId, btn) {
+  if (btn) { btn.classList.add('fw-btn-busy'); btn.disabled = true; btn.textContent = getCurrentLanguage() === 'zh' ? '启动中...' : 'Launching...'; }
+  assemblyUi.assemblyLaunchInProgress = true;
   const _t0 = performance.now();
   console.log(`[PERF-CLIENT] fwResumeRun BEGIN sessionId=${sessionId}`);
   try {
-    await window.launchSavedAssemblyRun(sessionId);
+    await launchSavedAssemblyRun(sessionId);
     console.log(`[PERF-CLIENT] fwResumeRun COMPLETE (${(performance.now() - _t0).toFixed(0)}ms)`);
   } catch (e) {
     console.error(`[PERF-CLIENT] fwResumeRun FAILED (${(performance.now() - _t0).toFixed(0)}ms)`, e);
-    if (btn) { btn.classList.remove('fw-btn-busy'); btn.disabled = false; btn.textContent = currentLanguage === 'zh' ? '继续' : 'Continue'; }
+    if (btn) { btn.classList.remove('fw-btn-busy'); btn.disabled = false; btn.textContent = getCurrentLanguage() === 'zh' ? '继续' : 'Continue'; }
   } finally {
-    assemblyLaunchInProgress = false;
+    assemblyUi.assemblyLaunchInProgress = false;
   }
-};
+}
 
 // ═══════════════════════════════════════════════════════════════════
 // 域 Q — Session 记录管理
 // ═══════════════════════════════════════════════════════════════════
 
-window.deleteAssemblySessionRecord = async (sessionId) => {
-  const agent = getCurrentAgentRecord();
+async function deleteAssemblySessionRecord(sessionId) {
+  const agent = window.getCurrentAgentRecord();
   if (!agent?.id) return;
   const session = getWorkspaceSessionById(agent, sessionId);
-  const confirmed = window.confirm(currentLanguage === 'zh'
+  const confirmed = window.confirm(getCurrentLanguage() === 'zh'
     ? `确认删除这个实例记录？\n${session?.agentName || sessionId}`
     : `Delete this instance record?\n${session?.agentName || sessionId}`);
   if (!confirmed) return;
@@ -842,9 +881,7 @@ window.deleteAssemblySessionRecord = async (sessionId) => {
       throw new Error(await response.text().catch(() => 'delete session failed'));
     }
     const result = await response.json();
-    if (typeof applySessionMutationDelta === 'function') {
-      applySessionMutationDelta(agent.id, result);
-    }
+    applySessionMutationDelta(agent.id, result);
     if (result?.assemblyRuntime?.status === 'stopped' || result?.assemblyRuntime?.status === 'stopping') {
       await loadAgents();
       if (currentRuntimeAgentId) {
@@ -862,8 +899,8 @@ window.deleteAssemblySessionRecord = async (sessionId) => {
     } else if (deletedWasActive) {
       applyManagedPrebuiltAgent(agent.id, null);
     }
-    renderAgentList();
-    renderCurrentMainView();
+    window.renderAgentList();
+    window.renderCurrentMainView();
 
     const nextRuntimeId = result?.agent?.runtime_session_id || result?.agent?.runtimeSessionId || null;
     if (nextRuntimeId && currentRuntimeAgentId === affectedRuntimeId) {
@@ -873,12 +910,12 @@ window.deleteAssemblySessionRecord = async (sessionId) => {
     }
   } catch (error) {
     console.error('Failed to delete assembly session record:', error);
-    window.alert((currentLanguage === 'zh' ? '删除实例记录失败：' : 'Failed to delete instance record: ') + (error?.message || error));
+    window.alert((getCurrentLanguage() === 'zh' ? '删除实例记录失败：' : 'Failed to delete instance record: ') + (error?.message || error));
   }
-};
+}
 
-window.loadAssemblySessionIntoDraft = async (sessionId) => {
-  const agent = getCurrentAgentRecord();
+async function loadAssemblySessionIntoDraft(sessionId) {
+  const agent = window.getCurrentAgentRecord();
   if (!agent?.id) return;
   const session = getWorkspaceSessionById(agent, sessionId);
   if (!session) return;
@@ -886,7 +923,7 @@ window.loadAssemblySessionIntoDraft = async (sessionId) => {
   const currentDraft = getWorkspaceFormDraft(agent);
 
   if (savedConfig) {
-    await window.loadSavedAssemblyConfig(savedConfig.id);
+    await loadSavedAssemblyConfig(savedConfig.id);
   } else {
     currentDraft['assembly-form'] = normalizeAssemblyDraft({
       ...(currentDraft['assembly-form'] || {}),
@@ -898,8 +935,8 @@ window.loadAssemblySessionIntoDraft = async (sessionId) => {
       env_configured_name: String(session.agentName || '').trim(),
       env_status: isAssemblySessionRunning(agent, session) ? 'running' : 'ready',
       env_status_message: isAssemblySessionRunning(agent, session)
-        ? (currentLanguage === 'zh' ? '这个实例当前正在运行。' : 'This chatbot instance is currently running.')
-        : (currentLanguage === 'zh' ? '已从历史实例恢复基础信息。' : 'Restored base information from the previous instance.'),
+        ? (getCurrentLanguage() === 'zh' ? '这个实例当前正在运行。' : 'This chatbot instance is currently running.')
+        : (getCurrentLanguage() === 'zh' ? '已从历史实例恢复基础信息。' : 'Restored base information from the previous instance.'),
     });
     saveWorkspaceFormDraft(agent.id, currentDraft);
     await persistWorkspaceState(agent, currentDraft, {
@@ -907,17 +944,17 @@ window.loadAssemblySessionIntoDraft = async (sessionId) => {
     });
   }
 
-  setPreferredUnitMode('assembly', agent);
+  window.setPreferredUnitMode('assembly', agent);
   if (agent?.id === 'flow-workspace' && window.ClawFW?.mode === 'detail') {
-    currentWorkspaceTab = 'workspace';
+    setCurrentWorkspaceTab('workspace');
   } else {
-    currentWorkspaceTab = 'assembly';
+    setCurrentWorkspaceTab('assembly');
   }
-  shouldAnimateWorkspaceSurface = false;
-  renderCurrentMainView();
-};
+  setShouldAnimateWorkspaceSurface(false);
+  window.renderCurrentMainView();
+}
 
-window.stopAssemblySessionRuntime = async (sessionId) => {
+async function stopAssemblySessionRuntime(sessionId) {
   try {
     const response = await fetch('/protoclaw/assembly_runtime/stop', {
       method: 'POST',
@@ -928,7 +965,7 @@ window.stopAssemblySessionRuntime = async (sessionId) => {
       throw new Error(await response.text().catch(() => 'stop assembly runtime failed'));
     }
     await response.json();
-    const currentAgent = getCurrentAgentRecord();
+    const currentAgent = window.getCurrentAgentRecord();
     if (currentAgent?.id === 'agent-creator') {
       const draft = getWorkspaceFormDraft(currentAgent);
       const form = normalizeAssemblyDraft(draft['assembly-form'] || {});
@@ -936,7 +973,7 @@ window.stopAssemblySessionRuntime = async (sessionId) => {
       if (session && String(form.assembly_name || '').trim() === String(session.agentName || '').trim()) {
         await syncAssemblyEnvironmentDraft(currentAgent, draft, {
           env_status: 'ready',
-          env_status_message: currentLanguage === 'zh'
+          env_status_message: getCurrentLanguage() === 'zh'
             ? '实例已关闭，配置仍可继续编辑或重新启动。'
             : 'Instance stopped. The setup remains available for editing or relaunching.',
         }, {
@@ -948,24 +985,24 @@ window.stopAssemblySessionRuntime = async (sessionId) => {
     if (currentRuntimeAgentId && !allAgents.some((item) => item.id === currentRuntimeAgentId)) {
       selectWorkspaceSurface('agent-creator', { skipFeaturePanel: true });
     }
-    shouldAnimateWorkspaceSurface = false;
-    renderCurrentMainView();
+    setShouldAnimateWorkspaceSurface(false);
+    window.renderCurrentMainView();
   } catch (error) {
     console.error('Failed to stop assembly runtime:', error);
-    window.alert((currentLanguage === 'zh' ? '关闭实例失败：' : 'Failed to stop instance: ') + (error?.message || error));
+    window.alert((getCurrentLanguage() === 'zh' ? '关闭实例失败：' : 'Failed to stop instance: ') + (error?.message || error));
   }
-};
+}
 
 // ═══════════════════════════════════════════════════════════════════
 // 域 Q — 通用 Workspace 表单操作
 // ═══════════════════════════════════════════════════════════════════
 
-window.chooseWorkspaceDirectory = async (formId, fieldName) => {
-  const agent = getCurrentAgentRecord();
+async function chooseWorkspaceDirectory(formId, fieldName) {
+  const agent = window.getCurrentAgentRecord();
   if (!agent?.id) return;
   try {
     const useExistingDirectory = agent.id === 'programming-helper';
-    const selected = await invoke(useExistingDirectory ? 'select_directory' : 'select_empty_directory');
+    const selected = await window.invoke(useExistingDirectory ? 'select_directory' : 'select_empty_directory');
     if (selected?.cancelled || !selected?.path) {
       return;
     }
@@ -973,18 +1010,18 @@ window.chooseWorkspaceDirectory = async (formId, fieldName) => {
     draft[formId] = draft[formId] || {};
     draft[formId][fieldName] = selected?.path || '';
     saveWorkspaceFormDraft(agent.id, draft);
-    shouldAnimateWorkspaceSurface = false;
-    renderCurrentMainView();
+    setShouldAnimateWorkspaceSurface(false);
+    window.renderCurrentMainView();
     persistWorkspaceState(agent, draft).catch((error) => {
       console.error('Failed to persist directory selection:', error);
     });
   } catch (error) {
-    window.alert(t('workspace_pick_directory_failed') + (error && error.message ? error.message : error));
+    window.alert(window.t('workspace_pick_directory_failed') + (error && error.message ? error.message : error));
   }
-};
+}
 
-window.saveWorkspaceForm = async (formId, rawAction) => {
-  const agent = getCurrentAgentRecord();
+async function saveWorkspaceForm(formId, rawAction) {
+  const agent = window.getCurrentAgentRecord();
   if (!agent?.id) return;
   const draft = getWorkspaceFormDraft(agent);
   let openDirectoryOverride = null;
@@ -992,11 +1029,11 @@ window.saveWorkspaceForm = async (formId, rawAction) => {
     const startupDraft = normalizeWorkspaceStartupDraft(agent, draft[formId] || {});
     draft[formId] = startupDraft;
     if (!isValidFeatureCreatorName(startupDraft.feature_name)) {
-      window.alert(t('feature_creator_invalid_name'));
+      window.alert(window.t('feature_creator_invalid_name'));
       return;
     }
     if (startupDraft.install_mode === 'custom' && !startupDraft.target_dir) {
-      window.alert(t('workspace_pick_directory_hint'));
+      window.alert(window.t('workspace_pick_directory_hint'));
       return;
     }
     if (rawAction) {
@@ -1015,7 +1052,7 @@ window.saveWorkspaceForm = async (formId, rawAction) => {
         const result = await response.json();
         openDirectoryOverride = result?.outputDir || getFeatureCreatorOutputDirectory(agent, startupDraft);
       } catch (error) {
-        window.alert(t('feature_creator_init_failed') + (error && error.message ? error.message : error));
+        window.alert(window.t('feature_creator_init_failed') + (error && error.message ? error.message : error));
         return;
       }
     }
@@ -1027,7 +1064,7 @@ window.saveWorkspaceForm = async (formId, rawAction) => {
       return;
     }
     if (startupDraft.install_mode === 'custom' && !startupDraft.target_dir) {
-      window.alert(t('workspace_pick_directory_hint'));
+      window.alert(window.t('workspace_pick_directory_hint'));
       return;
     }
     if (rawAction) {
@@ -1068,14 +1105,14 @@ window.saveWorkspaceForm = async (formId, rawAction) => {
     return;
   }
   if (rawAction) {
-    await window.runWorkspaceAction(rawAction);
+    await window.runWorkspaceAction(rawAction); // 桥接期：定义于 workspace-actions（P2 工作空间动作批次收敛）
     return;
   }
-  renderCurrentMainView();
-};
+  window.renderCurrentMainView();
+}
 
-window.resetWorkspaceForm = async (formId) => {
-  const agent = getCurrentAgentRecord();
+async function resetWorkspaceForm(formId) {
+  const agent = window.getCurrentAgentRecord();
   if (!agent?.id) return;
   const draft = getWorkspaceFormDraft(agent);
   if (formId) {
@@ -1089,5 +1126,85 @@ window.resetWorkspaceForm = async (formId) => {
   } catch (error) {
     console.error('Failed to reset workspace form state:', error);
   }
-  renderCurrentMainView();
+  window.renderCurrentMainView();
+}
+
+// ── 兼容桥（classic 消费方收敛后注销）────────────────────────────────
+// 消费面（grep public/src，排除本批文件）：
+//   updateWorkspaceFormDraft / toggleWorkspaceSelection / createAssemblyEnvironment /
+//   toggleAssemblyControlPanel / jumpAssemblyStage / switchAssemblyEditingTarget /
+//   chooseWorkspaceDirectory / fwLaunchConfig / fwResumeRun —— app-ui 的
+//   assembly.* / fw.* 动作注册（window 转调）
+//   launchAssemblyInstance —— workspace-actions 的 workspace 动作分派
+//   resetAssemblyDraft / loadSavedAssemblyConfig / launchAssemblyConfig /
+//   deleteSavedAssemblyConfig / launchSavedAssemblyRun / deleteAssemblySessionRecord /
+//   loadAssemblySessionIntoDraft / stopAssemblySessionRuntime —— app-ui 的
+//   项目/实例卡片模板内联 onclick=window.* 与动作注册；deleteSavedAssemblyConfig
+//   另由 ctx-menu-handlers 的删除确认调用
+//   getSavedAssemblyConfigs —— app-ui 的 FW 列表/详情与 ctx-menu-handlers 的
+//   项目删除确认
+// 收敛条件：上列文件（app-ui / workspace-actions / ctx-menu-handlers）迁入 ESM
+// 并改为 import 本模块后逐键注销。
+// 不上桥（零跨批消费面，或唯一消费方已 ESM import）：
+//   - applyWorkspaceBundle —— 唯一消费方是 workspace-actions 的 apply_workspace_bundle
+//     动作分派，已 import（桥注销，仍作命名导出）；
+//   - saveWorkspaceForm / resetWorkspaceForm —— 唯一消费方是本批 workspace-blocks
+//     的动作注册，已 import；
+//   - saveCurrentAssemblyConfig —— 全仓（含 test/）零调用方，按配方收敛为模块私有
+//     （既不上桥也不导出）。
+// 已 ESM 的同批外部依赖改为 direct import：session-ui（S 系列动作）、
+// sidebar-operations（applySessionMutationDelta），不再经 window 晚绑定。
+const bridgeState = {
+  updateWorkspaceFormDraft,
+  toggleWorkspaceSelection,
+  createAssemblyEnvironment,
+  launchAssemblyInstance,
+  resetAssemblyDraft,
+  switchAssemblyEditingTarget,
+  toggleAssemblyControlPanel,
+  jumpAssemblyStage,
+  loadSavedAssemblyConfig,
+  launchAssemblyConfig,
+  deleteSavedAssemblyConfig,
+  launchSavedAssemblyRun,
+  fwLaunchConfig,
+  fwResumeRun,
+  deleteAssemblySessionRecord,
+  loadAssemblySessionIntoDraft,
+  stopAssemblySessionRuntime,
+  chooseWorkspaceDirectory,
+  getSavedAssemblyConfigs,
+};
+for (const [key, value] of Object.entries(bridgeState)) {
+  window.KernelState.defineKey('assembly-actions', key, value);
+}
+window.KernelState.claim('assembly-actions', {
+  get: (key) => bridgeState[key],
+  set: (key, value) => { bridgeState[key] = value; },
+});
+
+export {
+  updateWorkspaceFormDraft,
+  toggleWorkspaceSelection,
+  applyWorkspaceBundle,
+  createAssemblyEnvironment,
+  launchAssemblyInstance,
+  resetAssemblyDraft,
+  switchAssemblyEditingTarget,
+  toggleAssemblyControlPanel,
+  jumpAssemblyStage,
+  loadSavedAssemblyConfig,
+  launchAssemblyConfig,
+  deleteSavedAssemblyConfig,
+  launchSavedAssemblyRun,
+  fwLaunchConfig,
+  fwResumeRun,
+  deleteAssemblySessionRecord,
+  loadAssemblySessionIntoDraft,
+  stopAssemblySessionRuntime,
+  chooseWorkspaceDirectory,
+  saveWorkspaceForm,
+  resetWorkspaceForm,
+  getSavedAssemblyConfigs,
+  canonicalizeAssemblyFeatureSelection,
 };

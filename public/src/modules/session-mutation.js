@@ -1,35 +1,60 @@
 /**
  * session-mutation.js — 会话替换状态机（从 ctx-menu-items.js 提取）
  * 拆出日期：2026-07-13
+ * ESM 化：P2 W2-6（2026-11-17）
  *
  * 当 summary / trim / branch 操作生成新会话并归档原会话时，
  * 这套状态机负责追踪 mutation 的生命周期，驱动侧栏渲染。
  *
  * 包含：
- *   - _sidebarOperations: 统一侧栏操作状态
- *   - getSessionReplacementMutation: 获取当前 mutation
- *   - beginSessionReplacementMutation: 开始 mutation
- *   - clearSessionReplacementMutation: 清除 mutation
- *   - markSessionArchivedForMutation: 乐观归档 + 返回回滚函数
- *   - archiveSessionAfterMutation: 归档原会话 + 停止 runtime
+ *   getSessionReplacementMutation: 获取当前 mutation
+ *   beginSessionReplacementMutation: 开始 mutation
+ *   clearSessionReplacementMutation: 清除 mutation
+ *   markSessionArchivedForMutation: 乐观归档 + 返回回滚函数
+ *   archiveSessionAfterMutation: 归档原会话 + 停止 runtime
  *
- * 依赖全局状态（定义在 app-core.js）:
- *   allAgents, lastRenderedWorkspaceHtml, lastAgentListRenderSignature
- * 依赖 app-ui.js:
- *   getWorkspaceSessions, updateAgentRecord, renderCurrentMainView
- * 依赖 app-main.js:
- *   renderAgentList, loadAgents
- * 依赖 external-runtime.js:
- *   clearAgentRuntimeCache, refreshSidebarRuntimeAfterMutation
- * 依赖 sidebar-operations.js:
- *   markPendingRuntimeStop, releasePendingRuntimeStop,
- *   invalidateSidebarProjection（源 runtime 乐观退场）
- * 依赖 app-core.js:
- *   invoke
+ * 依赖（ESM，装载顺序由 import 图确定）：
+ *   - allAgents（agent-store-state.js，live binding 引用）
+ *   - setLastRenderedWorkspaceHtml（render-entry-state.js）
+ *   - currentRuntimeAgentId / _navigationGuardEpoch（orchestration-state.js）
+ *   - beginChatLoadingSession（chat-loading-host.js）、requestSwitch（runtime-switch-host.js）
+ *   - clearAgentRuntimeCache（runtime-view-cache-host.js）
+ *   - getWorkspaceSessions（session-ui.js）
+ *   - sidebar-operations：beginSidebarOperation / findSidebarOperation /
+ *     finishSidebarOperation / createSidebarOperationId / invalidateSidebarProjection /
+ *     markPendingRuntimeStop / applySessionMutationDelta
+ *   - external-runtime：refreshSidebarRuntimeAfterMutation
+ *
+ *   - project-data：getPathLeaf / updateAgentRecord
+ *
+ * 仍 classic（调用时点显式 window 晚绑定）：getParentAgentId / getActiveSessionId /
+ * getRuntimeId / invoke (app-core.js)、renderCurrentMainView /
+ * setPreferredUnitMode / upsertConnectedAgent (app-ui.js)、renderAgentList /
+ * waitForTargetRuntimeSession (sidebar-render.js)
+ *
+ * 桥接期兼容面（KernelState defineKey/claim，domain: session-mutation）：见文件末尾。
  */
 
+import { allAgents } from './agent-store-state.js';
+import { setLastRenderedWorkspaceHtml } from './render-entry-state.js';
+import { currentRuntimeAgentId, _navigationGuardEpoch } from './orchestration-state.js';
+import { beginChatLoadingSession } from './chat-loading-host.js';
+import { requestSwitch } from './runtime-switch-host.js';
+import { clearAgentRuntimeCache } from './runtime-view-cache-host.js';
+import { getWorkspaceSessions } from './session-ui.js';
+import {
+  beginSidebarOperation,
+  findSidebarOperation,
+  finishSidebarOperation,
+  createSidebarOperationId,
+  invalidateSidebarProjection,
+  markPendingRuntimeStop,
+  applySessionMutationDelta,
+} from './sidebar-operations.js';
+import { refreshSidebarRuntimeAfterMutation } from './external-runtime.js';
+import { getPathLeaf, updateAgentRecord } from './project-data.js';
+
 function getSessionReplacementMutation(agentId, sessionId) {
-  if (typeof findSidebarOperation !== 'function') return null;
   return findSidebarOperation((operation) => (
     operation.type === 'replacement'
     && operation.agentId === String(agentId || '').trim()
@@ -45,10 +70,12 @@ function beginSessionReplacementMutation(agentId, sessionId, kind = 'summary', o
   const session = Array.isArray(agent?.workspace_sessions?.sessions)
     ? agent.workspace_sessions.sessions.find((item) => item.id === sessionId)
     : null;
+  // 桥接期：getParentAgentId / getActiveSessionId / getRuntimeId 定义于 classic app-core
+  // （身份解析域收敛时改 import）
   const sourceRuntime = Array.isArray(allAgents) ? allAgents.find((item) => (
     item?.source !== 'prebuilt'
-    && String(getParentAgentId(item) || '').trim() === String(agentId).trim()
-    && String(getActiveSessionId(item) || '').trim() === String(sessionId).trim()
+    && String(window.getParentAgentId(item) || '').trim() === String(agentId).trim()
+    && String(window.getActiveSessionId(item) || '').trim() === String(sessionId).trim()
   )) : null;
   const projectDir = String(options.projectDir || session?.openDirectory || '').trim();
   return beginSidebarOperation({
@@ -58,10 +85,10 @@ function beginSessionReplacementMutation(agentId, sessionId, kind = 'summary', o
     phase: 'generating',
     agentId,
     sourceSessionId: sessionId,
-    sourceRuntimeId: options.sourceRuntimeId || getRuntimeId(sourceRuntime) || '',
+    sourceRuntimeId: options.sourceRuntimeId || window.getRuntimeId(sourceRuntime) || '',
     projectId: String(options.projectId || session?.projectId || '').trim(),
     projectDir,
-    projectName: options.projectName || (projectDir && typeof getPathLeaf === 'function' ? getPathLeaf(projectDir) : ''),
+    projectName: options.projectName || (projectDir ? getPathLeaf(projectDir) : ''),
     title: session?.title || '',
   });
 }
@@ -77,19 +104,13 @@ function clearSessionReplacementMutation(agentId, sessionId) {
 // second lifecycle command from the browser.
 function reconcileArchivedSourceRuntime(agentId, sessionId, sourceRuntimeId = '') {
   if (!agentId || !sessionId) return;
-  if (sourceRuntimeId && typeof clearAgentRuntimeCache === 'function') {
-    clearAgentRuntimeCache(sourceRuntimeId);
-  }
+  if (sourceRuntimeId) clearAgentRuntimeCache(sourceRuntimeId);
   // The server has confirmed retirement; hide any stale polling projection.
-  if (typeof markPendingRuntimeStop === 'function') {
-    markPendingRuntimeStop(agentId, sessionId, sourceRuntimeId);
-  }
-  if (typeof invalidateSidebarProjection === 'function') invalidateSidebarProjection();
+  markPendingRuntimeStop(agentId, sessionId, sourceRuntimeId);
+  invalidateSidebarProjection();
   void (async () => {
     try {
-      if (typeof refreshSidebarRuntimeAfterMutation === 'function') {
-        await refreshSidebarRuntimeAfterMutation();
-      }
+      await refreshSidebarRuntimeAfterMutation();
     } catch (error) {
       console.warn('Failed to refresh archived session projection:', error);
       // A failed read cannot undo the server's successful retirement receipt.
@@ -105,20 +126,23 @@ async function navigateToSessionMutationTarget(agentId, result, sourceRuntimeId)
   }
 
   const navigationEpoch = _navigationGuardEpoch;
-  const targetAgent = await waitForTargetRuntimeSession(agentId, targetSessionId, 50, {
+  // 桥接期：waitForTargetRuntimeSession 定义于 classic sidebar-render（侧栏渲染域收敛时移除）
+  const targetAgent = await window.waitForTargetRuntimeSession(agentId, targetSessionId, 50, {
     operationId: result?.operationId || '',
   });
   if (!targetAgent || navigationEpoch !== _navigationGuardEpoch || (sourceRuntimeId && currentRuntimeAgentId !== sourceRuntimeId)) {
     return false;
   }
 
-  const connectedTarget = upsertConnectedAgent(targetAgent) || targetAgent;
-  const targetRuntimeId = getRuntimeId(connectedTarget);
+  // 桥接期：upsertConnectedAgent / setPreferredUnitMode / renderCurrentMainView 定义于
+  // classic app-ui（渲染入口域收敛时改 import）
+  const connectedTarget = window.upsertConnectedAgent(targetAgent) || targetAgent;
+  const targetRuntimeId = window.getRuntimeId(connectedTarget);
   if (!targetRuntimeId) {
     return false;
   }
 
-  setPreferredUnitMode('chat', connectedTarget);
+  window.setPreferredUnitMode('chat', connectedTarget);
   beginChatLoadingSession();
   await requestSwitch(targetRuntimeId, 'session-mutation-target');
   return true;
@@ -139,15 +163,16 @@ function markSessionArchivedForMutation(agentId, sessionId, kind = 'summary') {
   const nextSessions = currentSessions.map((s) =>
     s.id === sessionId ? { ...s, archived: true, todo: false } : s,
   );
+  // 桥接期：getActiveSessionId 定义于 classic app-core（编排域收敛时改 import）
   updateAgentRecord(agentId, {
     workspace_sessions: {
       ...(agent?.workspace_sessions || {}),
       sessions: nextSessions,
-      activeSessionId: getActiveSessionId(agent),
+      activeSessionId: window.getActiveSessionId(agent),
     },
   });
-  lastRenderedWorkspaceHtml = '';
-  renderCurrentMainView();
+  setLastRenderedWorkspaceHtml('');
+  window.renderCurrentMainView();
 
   const rollback = () => {
     clearSessionReplacementMutation(agentId, sessionId);
@@ -161,11 +186,11 @@ function markSessionArchivedForMutation(agentId, sessionId, kind = 'summary') {
       workspace_sessions: {
         ...(latestAgent?.workspace_sessions || {}),
         sessions: revertedSessions,
-        activeSessionId: getActiveSessionId(latestAgent),
+        activeSessionId: window.getActiveSessionId(latestAgent),
       },
     });
-    lastRenderedWorkspaceHtml = '';
-    renderCurrentMainView();
+    setLastRenderedWorkspaceHtml('');
+    window.renderCurrentMainView();
   };
   rollback.operationId = mutation?.operationId || '';
   return rollback;
@@ -193,13 +218,13 @@ async function archiveSessionAfterMutation(agentId, sessionId, oldRuntimeId, opt
       workspace_sessions: {
         ...(agent?.workspace_sessions || {}),
         sessions: updatedSessions,
-        activeSessionId: getActiveSessionId(agent),
+        activeSessionId: window.getActiveSessionId(agent),
       },
     });
     // Render immediately so the user sees the archive without waiting for the
     // runtime stop + agent reload chain below.
-    lastRenderedWorkspaceHtml = '';
-    renderCurrentMainView();
+    setLastRenderedWorkspaceHtml('');
+    window.renderCurrentMainView();
   }
   try {
     const mutation = getSessionReplacementMutation(agentId, sessionId);
@@ -216,14 +241,14 @@ async function archiveSessionAfterMutation(agentId, sessionId, oldRuntimeId, opt
     });
     if (!response.ok) throw new Error(await response.text().catch(() => 'archive session failed'));
     const result = await response.json();
-    if (typeof applySessionMutationDelta === 'function') applySessionMutationDelta(agentId, result);
+    applySessionMutationDelta(agentId, result);
     if (result?.sessions) {
       updateAgentRecord(agentId, {
         workspace_sessions: result.sessions,
         active_workspace_session_id: result.activeSessionId || null,
       });
-      lastRenderedWorkspaceHtml = '';
-      renderCurrentMainView();
+      setLastRenderedWorkspaceHtml('');
+      window.renderCurrentMainView();
     }
   } catch (e) {
     console.error('Failed to archive session after mutation:', e);
@@ -236,10 +261,10 @@ async function archiveSessionAfterMutation(agentId, sessionId, oldRuntimeId, opt
         s.id === sessionId ? { ...s, archived: false } : s,
       );
       updateAgentRecord(agentId, {
-        workspace_sessions: { ...(agent?.workspace_sessions || {}), sessions: revertedSessions, activeSessionId: getActiveSessionId(agent) },
+        workspace_sessions: { ...(agent?.workspace_sessions || {}), sessions: revertedSessions, activeSessionId: window.getActiveSessionId(agent) },
       });
-      lastRenderedWorkspaceHtml = '';
-      renderCurrentMainView();
+      setLastRenderedWorkspaceHtml('');
+      window.renderCurrentMainView();
     }
     return false; // Don't proceed to stop if archive failed
   }
@@ -252,10 +277,41 @@ async function archiveSessionAfterMutation(agentId, sessionId, oldRuntimeId, opt
   //    compact/trim/branch operations.
   try {
     if (oldRuntimeId) clearAgentRuntimeCache(oldRuntimeId);
-    await invoke('stop_agent', { agentId, sessionId });
+    // 桥接期：invoke 定义于 classic app-core（会话切换/控制域收敛时改 import）
+    await window.invoke('stop_agent', { agentId, sessionId });
     refreshSidebarRuntimeAfterMutation();
   } catch (e) {
     console.error('Failed to stop runtime after archive:', e);
   }
   return true;
 }
+
+export {
+  getSessionReplacementMutation,
+  beginSessionReplacementMutation,
+  clearSessionReplacementMutation,
+  reconcileArchivedSourceRuntime,
+  navigateToSessionMutationTarget,
+  markSessionArchivedForMutation,
+  archiveSessionAfterMutation,
+};
+
+// —— 桥接期兼容面（kernel-state 访问器桥）——
+// 保留原因：唯一仍有 classic 消费面的入口是 runtime-status（渲染时按 runtime 反查
+// 替换记录，`typeof … === 'function'` 可选调用）：
+//   getSessionReplacementMutation ← classic runtime-status
+// 注销条件：runtime-status 迁移后改 import，删除对应 defineKey 并下调桥债基线。
+// 已注销（消费方全部改具名 import，classic 侧零消费面，只保留命名导出）：
+//   markSessionArchivedForMutation  ← ESM trim-page / session-dialogs / workspace-actions
+//   navigateToSessionMutationTarget ← ESM ctx-menu-items / workspace-actions
+//   reconcileArchivedSourceRuntime  ← ESM trim-page / session-dialogs / workspace-actions
+// beginSessionReplacementMutation / clearSessionReplacementMutation /
+// archiveSessionAfterMutation 消费面为零（本文件内部使用），只作命名导出，不上桥。
+const bridgeApi = {
+  getSessionReplacementMutation,
+};
+window.KernelState.defineKey('session-mutation', 'getSessionReplacementMutation', getSessionReplacementMutation);
+window.KernelState.claim('session-mutation', {
+  get: (key) => bridgeApi[key],
+  set: (key, value) => { bridgeApi[key] = value; },
+});

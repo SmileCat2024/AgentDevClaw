@@ -15,6 +15,11 @@ import fs from 'node:fs';
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createFrontendSandbox } from './helpers/frontend-vm.js';
+import { withP2EsmCase } from './helpers/p2-esm-case.js';
+
+const SLASH_MENU = 'public/src/modules/slash-menu.js';
+const QUEUE_PROJECTION = 'public/src/modules/p2-w2-3a-queue-projection.js';
+const INPUT_QUEUE_STATE = 'public/src/modules/p2-w2-3a-input-queue-state.js';
 
 // ── Mini DOM：支撑 renderInputRequests / composer 流程的最小元素树 ─────────
 
@@ -62,6 +67,7 @@ function findAllDeep(root, predicate, out = []) {
 }
 
 function createMiniElement(tagName, doc) {
+  const elementListeners = new Map();
   const classes = new Set();
   const attributes = new Map();
   // dataset 赋值与 data-* attribute 双向同步（camelCase ↔ kebab-case），
@@ -171,6 +177,22 @@ function createMiniElement(tagName, doc) {
       while (node.parentNode) node = node.parentNode;
       return doc ? node === doc.body : false;
     },
+    getBoundingClientRect() {
+      return { width: 360, height: 48, left: 24, top: 520, right: 384, bottom: 568 };
+    },
+    // 元素级监听（slash 菜单本体注册 Enter/click 与 hover 收起）
+    addEventListener(type, callback) {
+      if (!elementListeners.has(type)) elementListeners.set(type, []);
+      elementListeners.get(type).push(callback);
+    },
+    removeEventListener(type, callback) {
+      const list = elementListeners.get(type);
+      if (list) elementListeners.set(type, list.filter((cb) => cb !== callback));
+    },
+    dispatchEvent(event) {
+      for (const callback of elementListeners.get(event.type) || []) callback(event);
+      return true;
+    },
     focus() { if (doc) doc.activeElement = this; },
     blur() { if (doc && doc.activeElement === this) doc.activeElement = doc.body; },
     setSelectionRange(start, end) {
@@ -188,13 +210,60 @@ function createMiniDocument() {
   doc.getElementById = (id) => findAllDeep(doc.body, (el) => el.id === id)[0] || null;
   doc.querySelector = (selector) => findFirst(doc.body, selectorPredicate(selector));
   doc.querySelectorAll = (selector) => findAllDeep(doc.body, selectorPredicate(selector));
-  doc.addEventListener = () => {};
+  // document 级监听（slash-menu 用 capture 监听 input / keydown）：记录并按
+  // 注册序派发，供用例以真实事件驱动菜单与 pill 行为。
+  const listeners = new Map();
+  doc.addEventListener = (type, callback) => {
+    if (!listeners.has(type)) listeners.set(type, []);
+    listeners.get(type).push(callback);
+  };
+  doc.removeEventListener = (type, callback) => {
+    const list = listeners.get(type);
+    if (!list) return;
+    listeners.set(type, list.filter((cb) => cb !== callback));
+  };
+  doc.dispatch = (type, event) => {
+    for (const callback of listeners.get(type) || []) callback(event);
+  };
   return doc;
 }
 
 // ── 渲染沙箱：注入输入区全局符号，跑真实模块源码 ───────────────────────────
 
-function createInputSandbox({ contextKey = 'session-a', requests = [] } = {}) {
+// ESM 图会经 thread-store-domain → workspace-actions 带入 trim-page /
+// session-dialogs（两批正在 ESM 化）：它们在**装载期**按 id 取自己的控件并注册
+// 监听。生产由 index.html 的静态标记提供；本用例不渲染这两个界面，按同一批 id
+// 建最小节点，避免「元素缺失」在装载期变成 TypeError。
+const BOOTSTRAP_ELEMENT_IDS = [
+  'agent-context-menu', 'agent-list', 'app-chat-input-slot', 'chat-container',
+  'chat-process-toggle', 'compact-branch-action', 'compact-context-menu',
+  'compact-summary-action', 'compact-trim-action', 'ctx-menu', 'current-agent-name',
+  'delete-agent-action', 'delete-feature-action', 'delete-project-action',
+  'external-agent-list', 'external-count', 'external-group', 'feature-panel',
+  'feature-panel-body', 'feature-panel-collapse-hint', 'feature-panel-resizer',
+  'feature-panel-title', 'feature-repo-context-menu', 'follow-latest-btn',
+  'language-toggle', 'notification-metrics', 'notification-phase', 'notification-status',
+  'notification-summary', 'persistent-action-btn', 'prebuilt-agent-list', 'prebuilt-count',
+  'prebuilt-group', 'project-context-menu', 'project-docset-overlay', 'project-docset-sheet',
+  'project-docset-toggle', 'restart-agent-action', 'settings-flyout-auth',
+  'settings-flyout-config', 'settings-flyout-exit', 'settings-flyout-mcp-gateway',
+  'settings-flyout-menu', 'settings-flyout-plugins', 'settings-flyout-proxy',
+  'settings-flyout-remote', 'settings-flyout-remote-servers', 'settings-flyout-usage',
+  'settings-flyout-workspace', 'settings-toggle', 'sidebar', 'sidebar-collapse-hint',
+  'sidebar-resizer', 'sidebar-toggle', 'stop-agent-action', 'theme-toggle',
+  'tool-agent-list', 'tool-count', 'tool-group', 'workspace-tabs-bar',
+];
+
+const LOAD_TIME_DOM_ELEMENT_IDS = [
+  'trim-page', 'trim-page-title', 'trim-page-mode', 'trim-page-list', 'trim-page-readout',
+  'trim-page-submit', 'trim-page-ratio-input', 'trim-page-ratio-slider', 'trim-page-ratio-config',
+  'trim-page-manual-config', 'trim-page-archive-row', 'trim-page-archive-toggle',
+  'trim-page-summary-toggle', 'trim-page-keep-skill-control', 'trim-page-keep-skill-toggle',
+  'trim-page-keep-skill-value', 'trim-page-keep-skill-dec', 'trim-page-keep-skill-inc',
+  'branch-dialog', 'branch-round-list', 'branch-submit', 'branch-footer-info',
+];
+
+function createInputDom(contextKey, requests) {
   const doc = createMiniDocument();
   const container = createMiniElement('div', doc);
   container.id = 'user-input-container';
@@ -205,9 +274,25 @@ function createInputSandbox({ contextKey = 'session-a', requests = [] } = {}) {
   choiceContainer.id = 'choice-input-container';
   doc.body.appendChild(choiceContainer);
 
-  const state = { doc, container, liveKey: contextKey, requests };
+  for (const id of [...BOOTSTRAP_ELEMENT_IDS, ...LOAD_TIME_DOM_ELEMENT_IDS]) {
+    if (doc.getElementById(id)) continue;
+    const el = createMiniElement('div', doc);
+    el.id = id;
+    doc.body.appendChild(el);
+  }
 
-  const ctx = createFrontendSandbox({
+  const state = { doc, container, liveKey: contextKey, requests };
+  return { doc, container, choiceContainer, state };
+}
+
+/**
+ * 输入区全局符号面：classic 沙箱（createInputSandbox）与 ESM 用例
+ * （withInputEsmCase）共用同一份，避免两条装载路线漂移。
+ * `getRuntimeAgentId` 取当前运行时 id（classic 沙箱读 window 变量，ESM 用例
+ * 读内核桥访问器——两者都是同一份权威状态）。
+ */
+function buildInputGlobals(doc, state, getRuntimeAgentId) {
+  return {
     document: doc,
     // 输入区全局状态
     currentLanguage: 'zh',
@@ -219,7 +304,7 @@ function createInputSandbox({ contextKey = 'session-a', requests = [] } = {}) {
     _partialCompactRuntimeId: null,
     _partialCompactContextKey: null,
     _compactTimerInterval: null,
-    currentInputRequests: requests,
+    currentInputRequests: state.requests,
     lastRenderedInputSignature: '',
     lastRenderedInputMode: null,
     // 语音域（默认无录音）
@@ -237,7 +322,7 @@ function createInputSandbox({ contextKey = 'session-a', requests = [] } = {}) {
     isRemoteNamespaceAgentId: () => false,
     readCurrentSessionViewState: () => ({ inputRequests: state.requests }),
     captureSessionViewToken: (runtimeId) => ({ runtimeId, key: state.liveKey }),
-    isSessionViewTokenCurrent: (token) => token.runtimeId === ctx.currentRuntimeAgentId && token.key === state.liveKey,
+    isSessionViewTokenCurrent: (token) => token.runtimeId === getRuntimeAgentId() && token.key === state.liveKey,
     runWithSuppressedChatViewportObservers: (fn) => fn(),
     notifyChatViewportMutation: () => {},
     isChoiceInputRequest: (req) => !!req && req.mode === 'choices'
@@ -264,6 +349,20 @@ function createInputSandbox({ contextKey = 'session-a', requests = [] } = {}) {
     autoResize: () => {},
     updateInputModelSwitcher: () => {},
     updateThinkingEffortSwitcher: () => {},
+    // 已迁 ESM 消费方（input-actions / 排队投影 / sse-client）的静态图在装载期经
+    // `window.createXHost()` 取 classic 相宿主工厂（生产契约由 classic 相与各 host
+    // 用例覆盖）。本用例只要求这些 seam 在装载期可解析；能力不被触达。
+    ...Object.fromEntries([
+      'createAgentCallStatesHost', 'createAgentSnapshotLoaderHost', 'createCallInterruptHost',
+      'createMessageProbeHost', 'createMetadataCommitHost', 'createP2BootstrapCallActivityHost',
+      'createP2BootstrapDomHost', 'createP2BootstrapSessionSwitchHost',
+      'createP2BootstrapSidebarHost', 'createP2BootstrapSidebarRenderHost',
+      'createPollCoordinatorHost', 'createRuntimeNotFoundHost', 'createSessionViewCommitHost',
+    ].map((name) => [name, () => ({})])),
+    // 调用状态容器按引用共享（sse-client 的 choice 提醒经它去重）
+    createP2BootstrapCallActivityHost: () => ({ _seenChoiceAlertIds: new Set() }),
+    // agent-loader-host 装载期读 classic 相交出的详情缓存容器（app-core 持有）
+    AgentLoaderHost: { loadedAgentDetailIds: new Set() },
     _renderAttachmentPreview: () => {},
     _renderLastCallElapsed: () => {},
     _renderRecapHint: () => {},
@@ -284,8 +383,12 @@ function createInputSandbox({ contextKey = 'session-a', requests = [] } = {}) {
     escapeHtml: (text) => String(text == null ? '' : text).replace(/[&<>"']/g, (m) => ({
       '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
     }[m])),
-  });
+  };
+}
 
+function createInputSandbox({ contextKey = 'session-a', requests = [] } = {}) {
+  const { doc, container, choiceContainer, state } = createInputDom(contextKey, requests);
+  const ctx = createFrontendSandbox(buildInputGlobals(doc, state, () => ctx.currentRuntimeAgentId));
   ctx.state = state;
   return ctx;
 }
@@ -305,6 +408,161 @@ function loadInputModules(ctx) {
   ctx.run(persistentSource.slice(start, end));
   ctx.loadSource('public/src/modules/input-render.js');
 }
+
+// input-composer / input-render / persistent-input 仍是 classic（同步首屏边界），
+// 继续走真实 classic 源；已迁 ESM 的消费面（slash-menu、排队投影）走真实 import。
+// 每个用例一份 window + 一张 ESM 图（整图隔离），classic 相按 index.html 加载序
+// 先行，内核桥键（i18n 语言 / orchestration 运行时 id）在 classic 相注册真初值，
+// ESM owner 装载时认领——与生产 app-core 的桥接时序同形。
+function withInputEsmCase(options, fn) {
+  const { contextKey = 'session-a', requests = [], classic, globals = {} } = options || {};
+  const { doc, container, choiceContainer, state } = createInputDom(contextKey, requests);
+  const holder = {};
+  const baseGlobals = buildInputGlobals(doc, state, () => holder.sandbox.currentRuntimeAgentId);
+  delete baseGlobals.currentRuntimeAgentId; // 由内核桥访问器提供（ESM owner 认领后真值）
+
+  return withP2EsmCase({
+    label: 'input-composer',
+    classic: (sandbox) => {
+      holder.sandbox = sandbox;
+      sandbox.KernelState.defineKey('i18n-environment', 'currentLanguage', 'zh');
+      sandbox.KernelState.defineKey('orchestration', 'currentRuntimeAgentId', 'agent-1');
+      sandbox.KernelState.defineKey('orchestration', '_switchEpoch', 0);
+      // ESM 图内的模块装载期注册动作处理器（window.ClawFW.actions）。
+      sandbox.loadSource('public/src/modules/action-dispatcher.js');
+      loadInputModules(sandbox);
+      // 装载期宿主面（本 fixture 的 classic 相只到输入面切片，不含 app-core /
+      // app-main / app-ui）。真实链安装实测被阻断：app-core 会重复注册本用例预置的
+      // 内核桥键（或反过来），app-ui 的 renderCurrentMainView 需要整条页面渲染链
+      // （chat-viewport → input-render → app-chat-input 槽位），本 fixture 的 mini DOM
+      // 无法满足。逐支按生产读取面给形状（宿主接口与生产一致，非统一空壳）：
+      //   createRuntimeViewCacheHost ← app-core.js：runtime-view-cache 读 host.cache(Map)/capacity
+      //   createRuntimeSwitchHost    ← app-main.js：runtime-switch-host 顶层对 host.state 做 defineProperties
+      //   createAgentSnapshotLoaderHost ← sidebar-render.js：读 host.state.suppressRender
+      //   createP2BootstrapSidebarRenderHost ← sidebar-render.js：只提供 lastAgentListRenderSignature 访问器（无 state）
+      //   createP2Bootstrap*Host ↙ app-core.js：成对 get/set 访问器袋，成员只在函数体内读取
+      //   createWorkspaceEntryHost / createCompactResumeHost ← app-main.js：闭包宿主，本图不调用
+      //   createWorkspaceSurfaceHost ← app-ui.js：只 spread 注入，本图不驱动工作区表面
+      sandbox.createRuntimeViewCacheHost = () => ({ cache: new Map(), capacity: 0 });
+      sandbox.createRuntimeSwitchHost = () => ({ state: {} });
+      sandbox.createAgentSnapshotLoaderHost = () => ({ state: {} });
+      sandbox.createP2BootstrapSidebarRenderHost = () => ({ lastAgentListRenderSignature: '' });
+      sandbox.createAgentCallStatesHost = () => ({});
+      sandbox.createP2BootstrapPhSessionHost = () => ({});
+      sandbox.createP2BootstrapAssemblyHost = () => ({});
+      sandbox.createP2BootstrapContextMenuHost = () => ({});
+      sandbox.createP2BootstrapDebugPanelHost = () => ({});
+      sandbox.createWorkspaceEntryHost = () => ({});
+      sandbox.createCompactResumeHost = () => ({});
+      sandbox.createWorkspaceSurfaceHost = () => ({});
+      if (typeof classic === 'function') classic(sandbox);
+    },
+    globals: Object.fromEntries(Object.entries({
+      ...baseGlobals,
+      ...(typeof globals === 'function' ? globals(state) : globals),
+    }).filter(([, value]) => value !== undefined)),
+  }, async (c) => fn({ c, doc, state, container, choiceContainer }));
+}
+
+// ── 排队投影装载面（ESM 用例共用）──────────────────────────────────────────
+// 状态 owner（p2-w2-3a-input-queue-state）与投影/同步实现
+// （p2-w2-3a-queue-projection）已是 ESM → 真实 import；首屏同步边界仍是
+// classic 的两段（内核桥键注册 + rebindQueueProjectionForRuntime）继续跑真实
+// classic 源切片，与 index.html 加载序语义一致。
+const PERSISTENT_INPUT_SOURCE = fs.readFileSync('public/src/modules/persistent-input.js', 'utf8');
+
+function loadQueueClassicBootstrap(sandbox) {
+  // 投影模块已 import 会话提交策略宿主：classic commit host 由 session-view-state
+  // 提供（生产同源）。
+  sandbox.loadSource('public/src/modules/session-view-state.js');
+  // 线程暂存文本经交互域（thread-store-domain）取自 classic 刷新引擎的
+  // createThreadStoreHost：按生产顺序装真实引擎（不复制宿主契约）。
+  sandbox.loadSource('public/src/modules/thread-store.js');
+  const keysStart = PERSISTENT_INPUT_SOURCE.indexOf("window.KernelState.defineKey('input-queue', '_pendingQueuedCount', 0);");
+  const keysEnd = PERSISTENT_INPUT_SOURCE.indexOf('let _submitInFlight', keysStart);
+  sandbox.run(PERSISTENT_INPUT_SOURCE.slice(keysStart, keysEnd));
+  const rebindStart = PERSISTENT_INPUT_SOURCE.indexOf('function rebindQueueProjectionForRuntime(runtimeId) {');
+  const rebindEnd = PERSISTENT_INPUT_SOURCE.indexOf('function handlePersistentInputKey', rebindStart);
+  sandbox.run(PERSISTENT_INPUT_SOURCE.slice(rebindStart, rebindEnd));
+  // 投影渲染的交互面守卫（classic：交互卡占用输入面期间不出排队气泡）
+  const guardStart = PERSISTENT_INPUT_SOURCE.indexOf('function _interactiveSurfaceOccupiesInput() {');
+  const guardEnd = PERSISTENT_INPUT_SOURCE.indexOf('function _renderLastCallElapsed', guardStart);
+  sandbox.run(PERSISTENT_INPUT_SOURCE.slice(guardStart, guardEnd));
+}
+
+function withQueueProjectionCase(extraGlobals, fn) {
+  return withInputEsmCase({
+    classic: loadQueueClassicBootstrap,
+    globals: {
+      // 会话视图 token 用真实 classic 实现（session-view-state）：投影模块已
+      // import 会话提交策略宿主，token 判定走真实代次/身份语义。
+      captureSessionViewToken: undefined,
+      isSessionViewTokenCurrent: undefined,
+      // classic 相调用点（runtime-status 域）：本用例无存活轮次
+      isRuntimeCalling: () => false,
+      ...(extraGlobals || {}),
+    },
+  }, async ({ c, doc, state, container, choiceContainer }) => {
+    const queueState = await c.load(INPUT_QUEUE_STATE);
+    const projection = await c.load(QUEUE_PROJECTION);
+    return fn({ c, doc, state, container, choiceContainer, queueState, projection });
+  });
+}
+
+// ── slash 菜单/面板装载面（ESM 用例共用）────────────────────────────────────
+// 生产里 prompt pill 由「菜单选中 prompt 型命令」挂载、激活经真实
+// capability_invoke 投递；用例按同一条公开链路驱动，不触碰模块私有状态。
+
+const slashFetchStub = (invokeCalls = []) => async (url, options = {}) => {
+  const target = String(url);
+  if (target.startsWith('/protoclaw/commands')) {
+    return { ok: true, status: 200, json: async () => ({ ok: true, commands: [] }) };
+  }
+  if (target === '/protoclaw/capability_invoke') {
+    const body = JSON.parse(options.body || '{}');
+    invokeCalls.push(body.ref);
+    return { ok: true, status: 200, json: async () => ({ ok: true, result: body.ref }) };
+  }
+  return { ok: false, status: 404, json: async () => ({}) };
+};
+
+const slashTargetGlobals = () => ({
+  getRuntimeId: (id) => id,
+  getRuntimeWorkspaceSessionId: () => 'session-a',
+  getLogicalAgentId: () => 'programming-helper',
+  getCurrentRuntimeRecord: () => ({ id: 'agent-1' }),
+});
+
+/** 在文档里挂一个 user-input-textarea（菜单/pill 的触发与挂载锚点）。 */
+function mountSlashTextarea(c, initialValue = '') {
+  const doc = c.document;
+  const area = doc.createElement('div');
+  area.className = 'persistent-input-textarea-area';
+  doc.body.appendChild(area);
+  const ta = doc.createElement('textarea');
+  ta.className = 'user-input-textarea';
+  ta.id = 'input-persistent';
+  ta.value = initialValue;
+  area.appendChild(ta);
+  return ta;
+}
+
+/** 经菜单公开链路选中 prompt 型命令 → 挂 pill（不直接写模块私有桶）。 */
+function mountPromptPill(c, SlashMenu, ta, cmd, typedValue) {
+  SlashMenu.registerCommands([{ ...cmd, destination: 'session', kind: 'prompt' }]);
+  const doc = c.document;
+  ta.value = typedValue ?? ('/' + String(cmd.name).split('.').pop());
+  doc.dispatch('input', { target: ta });
+  doc.dispatch('keydown', {
+    target: ta,
+    key: 'Enter',
+    preventDefault() {},
+    stopPropagation() {},
+  });
+}
+
+// 输入面重渲染（会话切换 / lease 变化都经同一入口）。ADR-0035 后不存在
+// 「模式翻转」：普通文本 lease 只是一条状态，不改变 composer 形态与端点。
 
 // 输入面重渲染（会话切换 / lease 变化都经同一入口）。ADR-0035 后不存在
 // 「模式翻转」：普通文本 lease 只是一条状态，不改变 composer 形态与端点。
@@ -494,35 +752,31 @@ describe('composer session draft isolation (ticket 036)', () => {
   });
 
   it('activates pending prompts before invoking the supplied submit path and hands refs to the payload consumer', async () => {
-    const ctx = createFrontendSandbox({
-      document: createMiniDocument(),
-      currentLanguage: 'zh',
-      currentRuntimeAgentId: 'agent-1',
-      autoResize: () => {},
-      t: (key) => key,
+    const invokeCalls = [];
+    await withInputEsmCase({
+      globals: {
+        fetch: slashFetchStub(invokeCalls),
+        getRuntimeId: (id) => id,
+        getRuntimeWorkspaceSessionId: () => 'session-a',
+        getLogicalAgentId: () => 'programming-helper',
+        getCurrentRuntimeRecord: () => ({ id: 'agent-1' }),
+        SessionReference: { activeKey: () => 'session-a' },
+      },
+    }, async ({ c }) => {
+      const { ClawSlash, SlashMenu } = await c.load(SLASH_MENU);
+      const ta = mountSlashTextarea(c, '/grill-me 请审查方案');
+      mountPromptPill(c, SlashMenu, ta, { name: 'skill.grill-me', ref: 'skill.grill-me' }, '/grill-me 请审查方案');
+      assert.equal(ta.value, '请审查方案', '选中 prompt 命令只消费命令段，正文保留');
+
+      let submittedText = null;
+      await ClawSlash.submitWithPendingPrompts(ta, async () => {
+        submittedText = String(ta.value);
+      });
+      assert.equal(submittedText, '/grill-me 请审查方案');
+      assert.deepEqual([...ClawSlash.consumeActivations()], ['skill.grill-me']);
+      assert.deepEqual(invokeCalls, ['skill.grill-me'], '激活走真实 capability_invoke 投递');
+      assert.equal(c.read("document.getElementById('slash-prompt-bar')"), null, '激活成功后 pill 消费清空');
     });
-    ctx.loadSource('public/src/modules/slash-menu.js');
-    ctx.run(`
-      _postCapabilityInvoke = async (cmd) => ({ ok: true, result: cmd.name });
-      _currentPrompts().push({ name: 'skill.grill-me', ref: 'skill.grill-me' });
-    `);
-    const result = await ctx.run(`
-      (async () => {
-        const textarea = { value: '请审查方案' };
-        let submittedText = null;
-        await window.ClawSlash.submitWithPendingPrompts(textarea, async () => {
-          submittedText = textarea.value;
-        });
-        return {
-          submittedText,
-          activations: window.ClawSlash.consumeActivations(),
-          pendingCount: _currentPrompts().length,
-        };
-      })()
-    `);
-    assert.equal(result.submittedText, '/grill-me 请审查方案');
-    assert.deepEqual([...result.activations], ['skill.grill-me']);
-    assert.equal(result.pendingCount, 0);
   });
 
   it('rebinds the slash prompt pill bar on session switch only', () => {
@@ -570,7 +824,8 @@ describe('composer session draft isolation (ticket 036)', () => {
     // 真实提交路径（persistent-input.js）
     const persistentSource = fs.readFileSync('public/src/modules/persistent-input.js', 'utf8');
     const submitStart = persistentSource.indexOf('async function submitQueuedInput()');
-    const submitEnd = persistentSource.indexOf('function updateQueueIndicator', submitStart);
+    // 提交段止于中断函数（排队投影/气泡函数已迁 ESM，不再作为边界标记）
+    const submitEnd = persistentSource.indexOf('async function interruptAgent', submitStart);
     ctx.run(persistentSource.slice(submitStart, submitEnd));
     ctx.run('renderInputRequests([])');
     ctx.run(`
@@ -613,137 +868,125 @@ describe('composer session draft isolation (ticket 036)', () => {
 // 消费，切回 A 恢复显示；提交锚定提交时刻的会话，await 期间切会话不误投。
 
 describe('slash prompt pill session isolation (attachment buckets per session)', () => {
-  function loadPillSandbox() {
-    const ctx = createInputSandbox();
-    loadInputModules(ctx);
-    // pill 桶 key 与 composer 会话 key 同源（生产中 activeKey 是附件类
-    // 会话态的权威判定，测试里对齐 liveKey 使两条链路同帧驱动）
-    ctx.run('window.SessionReference = { activeKey: () => state.liveKey };');
-    ctx.loadSource('public/src/modules/slash-menu.js');
-    return ctx;
+  const PILL_CMD = { name: 'skill.grill-me', ref: 'skill.grill-me' };
+
+  function mountComposer(c) {
+    c.read('renderInputRequests([])');
+    return c.read("document.getElementById('input-persistent')");
   }
 
-  function mountComposer(ctx) {
-    ctx.run('renderInputRequests([])');
-    return ctx.run("document.getElementById('input-persistent')");
+  function switchSession(c, state, liveKey, runtimeId) {
+    state.liveKey = liveKey;
+    c.window.currentRuntimeAgentId = runtimeId;
+    c.read('currentInputRequests = []; lastRenderedInputSignature = ""; renderInputRequests([])');
   }
 
-  async function mountPill(ctx, cmd) {
-    await ctx.run(`
-      (async () => {
-        await _execute(${JSON.stringify(cmd)}, document.getElementById('input-persistent'));
-      })()
-    `);
-  }
-
-  function switchSession(ctx, liveKey, runtimeId) {
-    ctx.state.liveKey = liveKey;
-    ctx.currentRuntimeAgentId = runtimeId;
-    renderInputSurface(ctx);
-  }
+  // pill 条目的短名清单（`/grill-me` → 'grill-me'）：既证明条数，也证明恢复/
+  // 保留的是哪一条命令（单看条数无法区分命令身份）。
+  const pillLabels = (c) => {
+    const bar = c.document.getElementById('slash-prompt-bar');
+    if (!bar) return null;
+    return [...String(bar.innerHTML).matchAll(/slash-prompt-pill-name">\/([^<]+)</g)].map((m) => m[1]);
+  };
+  const pillNames = (c) => {
+    const labels = pillLabels(c);
+    return labels === null ? null : labels.length;
+  };
 
   it('keeps pills per session: no carry-over on switch, restored on switch back', async () => {
-    const ctx = loadPillSandbox();
-    const ta = mountComposer(ctx);
-    assert.equal(ta.dataset.sessionKey, 'session-a');
+    const invokeCalls = [];
+    await withInputEsmCase({
+      globals: (state) => ({
+        fetch: slashFetchStub(invokeCalls),
+        ...slashTargetGlobals(),
+        getRuntimeWorkspaceSessionId: () => state.liveKey,
+        // pill 桶 key 与 composer 会话 key 同源（生产中 activeKey 是附件类
+        // 会话态的权威判定，测试里对齐 liveKey 使两条链路同帧驱动）
+        SessionReference: { activeKey: () => state.liveKey },
+      }),
+    }, async ({ c, state }) => {
+      const { ClawSlash, SlashMenu } = await c.load(SLASH_MENU);
+      const ta = mountComposer(c);
+      assert.equal(ta.dataset.sessionKey, 'session-a');
 
-    // 会话 A：经菜单执行入口挂 prompt pill
-    await mountPill(ctx, { name: 'skill.grill-me', ref: 'skill.grill-me', destination: 'session', kind: 'prompt' });
-    const barInA = ctx.run("document.getElementById('slash-prompt-bar')");
-    assert.ok(barInA, '会话 A 挂 pill 后 pill bar 渲染');
-    assert.match(String(barInA.innerHTML), /grill-me/);
+      // 会话 A：经菜单公开链路选中 prompt 命令挂 pill
+      mountPromptPill(c, SlashMenu, ta, PILL_CMD);
+      const barInA = c.document.getElementById('slash-prompt-bar');
+      assert.ok(barInA, '会话 A 挂 pill 后 pill bar 渲染');
+      assert.match(String(barInA.innerHTML), /grill-me/);
 
-    // 会话 B：bar 移除（B 无 pill），A 的 pill 不残留、不参与 B 的发送
-    switchSession(ctx, 'session-b', 'agent-2');
-    assert.equal(ctx.run("document.getElementById('slash-prompt-bar')"), null, '会话 B 不得残留 A 的 pill');
-    ctx.run(`
-      window.__invokeCalls = [];
-      _postCapabilityInvoke = async (cmd) => {
-        window.__invokeCalls.push(String(cmd.name));
-        return { ok: true };
-      };
-    `);
-    const sentFromB = await ctx.run(`
-      (async () => {
-        const taB = document.getElementById('input-persistent');
-        taB.value = 'hello from b';
-        let submitted = false;
-        await window.ClawSlash.submitWithPendingPrompts(taB, async () => { submitted = true; });
-        return {
-          submitted,
-          text: String(taB.value),
-          activations: window.ClawSlash.consumeActivations(),
-        };
-      })()
-    `);
-    assert.equal(sentFromB.submitted, true, 'B 无 pill：发送照常');
-    assert.equal(sentFromB.text, 'hello from b', 'B 的消息文本不加命令前缀');
-    assert.equal(ctx.run('window.__invokeCalls.length'), 0, 'B 的发送不得 invoke A 的 pill');
-    assert.equal(sentFromB.activations, null, 'B 的发送不携带激活 refs');
+      // 会话 B：bar 移除（B 无 pill），A 的 pill 不残留、不参与 B 的发送
+      switchSession(c, state, 'session-b', 'agent-2');
+      assert.equal(c.document.getElementById('slash-prompt-bar'), null, '会话 B 不得残留 A 的 pill');
 
-    // 切回会话 A：pill 恢复显示（回归点：切会话即清空的旧行为导致丢失）
-    switchSession(ctx, 'session-a', 'agent-1');
-    const barRestored = ctx.run("document.getElementById('slash-prompt-bar')");
-    assert.ok(barRestored, '切回会话 A 后 pill 必须恢复显示');
-    assert.match(String(barRestored.innerHTML), /grill-me/);
+      const taB = mountComposer(c);
+      taB.value = 'hello from b';
+      let submittedB = false;
+      await ClawSlash.submitWithPendingPrompts(taB, async () => { submittedB = true; });
+      assert.equal(submittedB, true, 'B 无 pill：发送照常');
+      assert.equal(taB.value, 'hello from b', 'B 的消息文本不加命令前缀');
+      assert.deepEqual(invokeCalls, [], 'B 的发送不得 invoke A 的 pill');
+      assert.equal(ClawSlash.consumeActivations(), null, 'B 的发送不携带激活 refs');
 
-    // A 内提交：invoke 只针对 A 的 pill，refs 移交，A 桶消费清空
-    const sentFromA = await ctx.run(`
-      (async () => {
-        const taA = document.getElementById('input-persistent');
-        taA.value = '请审查方案';
-        let submittedText = null;
-        await window.ClawSlash.submitWithPendingPrompts(taA, async () => {
-          submittedText = String(taA.value);
-        });
-        return {
-          submittedText,
-          activations: window.ClawSlash.consumeActivations(),
-          bucketLeft: _currentPrompts().length,
-          barAfter: !!document.getElementById('slash-prompt-bar'),
-        };
-      })()
-    `);
-    assert.equal(sentFromA.submittedText, '/grill-me 请审查方案');
-    assert.deepEqual([...sentFromA.activations], ['skill.grill-me']);
-    assert.deepEqual([...ctx.run('window.__invokeCalls')], ['skill.grill-me'], 'A 的提交只 invoke A 的 pill');
-    assert.equal(sentFromA.bucketLeft, 0, '提交成功后 A 桶清空');
-    assert.equal(sentFromA.barAfter, false, 'pill 消费后 bar 移除');
+      // 切回会话 A：pill 恢复显示（回归点：切会话即清空的旧行为导致丢失）
+      switchSession(c, state, 'session-a', 'agent-1');
+      assert.equal(pillNames(c), 1, '切回会话 A 后 pill 必须恢复显示');
+      assert.deepEqual(pillLabels(c), ['grill-me'], '恢复的是会话 A 原来那条 pill（命令身份不变）');
+
+      // A 内提交：invoke 只针对 A 的 pill，refs 移交，A 桶消费清空
+      const taA = c.read("document.getElementById('input-persistent')");
+      taA.value = '请审查方案';
+      let submittedText = null;
+      await ClawSlash.submitWithPendingPrompts(taA, async () => { submittedText = String(taA.value); });
+      assert.equal(submittedText, '/grill-me 请审查方案');
+      assert.deepEqual([...ClawSlash.consumeActivations()], ['skill.grill-me']);
+      assert.deepEqual(invokeCalls, ['skill.grill-me'], 'A 的提交只 invoke A 的 pill');
+      assert.equal(pillNames(c), null, '提交成功后 A 桶清空、bar 移除');
+    });
   });
 
   it('submit is pinned to its session: mid-flight switch keeps pills in the original bucket and never submits', async () => {
-    const ctx = loadPillSandbox();
-    mountComposer(ctx);
-    await mountPill(ctx, { name: 'skill.grill-me', ref: 'skill.grill-me', destination: 'session', kind: 'prompt' });
-    await mountPill(ctx, { name: 'skill.some-other', ref: 'skill.some-other', destination: 'session', kind: 'prompt' });
+    const invokeCalls = [];
+    const calls = { count: 0 };
+    await withInputEsmCase({
+      globals: (state) => ({
+        // 第一次 invoke 期间切走会话：模拟 await 窗口内的会话切换
+        fetch: async (url, options = {}) => {
+          if (String(url) === '/protoclaw/capability_invoke') {
+            calls.count += 1;
+            invokeCalls.push(JSON.parse(options.body || '{}').ref);
+            if (calls.count === 1) state.liveKey = 'session-b';
+            return { ok: true, status: 200, json: async () => ({ ok: true, result: 'ok' }) };
+          }
+          return { ok: true, status: 200, json: async () => ({ ok: true, commands: [] }) };
+        },
+        ...slashTargetGlobals(),
+        getRuntimeWorkspaceSessionId: () => state.liveKey,
+        SessionReference: { activeKey: () => state.liveKey },
+      }),
+    }, async ({ c, state }) => {
+      const { ClawSlash, SlashMenu } = await c.load(SLASH_MENU);
+      const ta = mountComposer(c);
+      mountPromptPill(c, SlashMenu, ta, PILL_CMD);
+      mountPromptPill(c, SlashMenu, ta, { name: 'skill.some-other', ref: 'skill.some-other' });
+      assert.equal(pillNames(c), 2);
+      assert.deepEqual(pillLabels(c), ['grill-me', 'some-other'], '两条 pill 的身份与挂载顺序');
 
-    ctx.run(`
-      window.__invokeCalls = [];
-      // 第一次 invoke 期间切走会话：模拟 await 窗口内的会话切换
-      _postCapabilityInvoke = async (cmd) => {
-        window.__invokeCalls.push(String(cmd.name));
-        state.liveKey = 'session-b';
-        return { ok: true };
-      };
-    `);
-    const result = await ctx.run(`
-      (async () => {
-        const ta = document.getElementById('input-persistent');
-        ta.value = 'A 的消息';
-        let submitted = false;
-        await window.ClawSlash.submitWithPendingPrompts(ta, async () => { submitted = true; });
-        return {
-          submitted,
-          activations: window.ClawSlash.consumeActivations(),
-          aBucket: (_pendingPromptBuckets.get('session-a') || []).length,
-        };
-      })()
-    `);
-    assert.deepEqual([...ctx.run('window.__invokeCalls')], ['skill.grill-me'],
-      '切走前的第一次 invoke 已发出，后续 invoke 阻断');
-    assert.equal(result.submitted, false, '会话已切走：A 的消息文本不得投进 B');
-    assert.equal(result.activations, null, '激活 refs 不移交发送管线');
-    assert.equal(result.aBucket, 2, 'pill 留在原会话桶，切回后仍可发送');
+      ta.value = 'A 的消息';
+      let submitted = false;
+      await ClawSlash.submitWithPendingPrompts(ta, async () => { submitted = true; });
+      assert.deepEqual(invokeCalls, ['skill.grill-me'],
+        '切走前的第一次 invoke 已发出，后续 invoke 阻断');
+      assert.equal(submitted, false, '会话已切走：A 的消息文本不得投进 B');
+      assert.equal(ClawSlash.consumeActivations(), null, '激活 refs 不移交发送管线');
+
+      // 切回 A：两个 pill 都还在原会话桶（切回后仍可发送）
+      state.liveKey = 'session-a';
+      c.window.currentRuntimeAgentId = 'agent-1';
+      c.read('currentInputRequests = []; lastRenderedInputSignature = ""; renderInputRequests([])');
+      assert.equal(pillNames(c), 2, 'pill 留在原会话桶，切回后仍可发送');
+      assert.deepEqual(pillLabels(c), ['grill-me', 'some-other'], '原会话桶里的 pill 身份未变');
+    });
   });
 });
 
@@ -999,107 +1242,107 @@ function loadQueueSyncSlice(ctx) {
 }
 
 describe('queued-input bubble identity filter (user-turn kind)', () => {
-
   it('polling snapshot filters reminder items out of bubble texts and count', async () => {
-    const ctx = createInputSandbox();
-    loadQueueSyncSlice(ctx);
-    ctx.fetch = async () => ({
-      ok: true,
-      status: 200,
-      json: async () => ([
-        { id: 'q-1', text: '用户消息' },
-        { id: 'q-2', text: '面板动作通报', kind: 'reminder' },
-        { id: 'q-3', text: '下一条用户消息' },
-      ]),
+    await withQueueProjectionCase({
+      fetch: async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ([
+          { id: 'q-1', text: '用户消息' },
+          { id: 'q-2', text: '面板动作通报', kind: 'reminder' },
+          { id: 'q-3', text: '下一条用户消息' },
+        ]),
+      }),
+    }, async ({ projection, queueState }) => {
+      await projection._syncPersistentInputUi('agent-1');
+
+      assert.deepEqual([...queueState.queuedTexts], ['用户消息', '下一条用户消息']);
+      assert.equal(queueState.pendingQueuedCount, 2, 'reminder 不计入待发送计数');
     });
-
-    await ctx.run('_syncPersistentInputUi("agent-1")');
-
-    assert.deepEqual([...ctx.run('_queuedTexts')], ['用户消息', '下一条用户消息']);
-    assert.equal(ctx.run('_pendingQueuedCount'), 2, 'reminder 不计入待发送计数');
   });
 
   it('reminder-only queue keeps bubbles empty and resets local pending state', async () => {
-    const ctx = createInputSandbox();
-    loadQueueSyncSlice(ctx);
-    ctx.run(`
-      _queuedTexts = ["残留乐观文本"];
-      _pendingQueuedCount = 1;
-      _localQueuedInputPending = true;
-    `);
-    ctx.fetch = async () => ({
-      ok: true,
-      status: 200,
-      json: async () => ([{ id: 'q-r', text: '面板动作通报', kind: 'reminder' }]),
+    await withQueueProjectionCase({
+      fetch: async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ([{ id: 'q-r', text: '面板动作通报', kind: 'reminder' }]),
+      }),
+    }, async ({ projection, queueState }) => {
+      queueState.setQueuedTexts(['残留乐观文本']);
+      queueState.setPendingQueuedCount(1);
+      queueState.setLocalQueuedInputPending(true);
+
+      await projection._syncPersistentInputUi('agent-1');
+
+      assert.equal(queueState.queuedTexts.length, 0, '仅 reminder 排队时不显示气泡');
+      assert.equal(queueState.pendingQueuedCount, 0);
+      assert.equal(queueState.localQueuedInputPending, false, 'reminder 不顶起输入面乐观态');
     });
-
-    await ctx.run('_syncPersistentInputUi("agent-1")');
-
-    assert.equal(ctx.run('_queuedTexts.length'), 0, '仅 reminder 排队时不显示气泡');
-    assert.equal(ctx.run('_pendingQueuedCount'), 0);
-    assert.equal(ctx.run('_localQueuedInputPending'), false, 'reminder 不顶起输入面乐观态');
   });
 });
 
-// ── 排队气泡投影的会话隔离（会话态家族：图片桶 / 草稿同款语义）────────────
-
 describe('queue bubble projection session isolation', () => {
-  it('write guard drops stale snapshots from another runtime', () => {
-    const ctx = createInputSandbox();
-    loadQueueSyncSlice(ctx);
-    ctx.run(`
-      _queuedTexts = ["当前会话的排队"];
-      _queuedProjectionRuntimeId = "agent-1";
-      applyQueuedInputsTexts("agent-9", ["过期快照"], 1);
-    `);
+  it('write guard drops stale snapshots from another runtime', async () => {
+    await withQueueProjectionCase({}, async ({ projection, queueState }) => {
+      queueState.setQueuedTexts(['当前会话的排队']);
+      queueState.setQueuedProjectionRuntimeId('agent-1');
+      projection.applyQueuedInputsTexts('agent-9', ['过期快照'], 1);
 
-    assert.deepEqual([...ctx.run('_queuedTexts')], ['当前会话的排队'],
-      '非当前 runtime 的快照写入直接丢弃');
-    assert.equal(ctx.run('String(_queuedProjectionRuntimeId)'), 'agent-1', '归属不被过期写入改写');
+      assert.deepEqual([...queueState.queuedTexts], ['当前会话的排队'],
+        '非当前 runtime 的快照写入直接丢弃');
+      assert.equal(String(queueState.queuedProjectionRuntimeId), 'agent-1', '归属不被过期写入改写');
+    });
   });
 
-  it('runtime switch rebinds the projection instead of leaking old bubbles', () => {
-    const ctx = createInputSandbox();
-    loadQueueSyncSlice(ctx);
-    ctx.run(`
-      _queuedTexts = ["A 会话的排队文本"];
-      _pendingQueuedCount = 1;
-      _localQueuedInputPending = true;
-      _queuedProjectionRuntimeId = "agent-1";
-    `);
+  it('runtime switch rebinds the projection instead of leaking old bubbles', async () => {
+    await withQueueProjectionCase({}, async ({ c, projection, queueState }) => {
+      queueState.setQueuedTexts(['A 会话的排队文本']);
+      queueState.setPendingQueuedCount(1);
+      queueState.setLocalQueuedInputPending(true);
+      queueState.setQueuedProjectionRuntimeId('agent-1');
 
-    // 切到会话 B：渲染入口先重绑投影，旧会话气泡不进入新会话输入面
-    ctx.currentRuntimeAgentId = 'agent-2';
-    ctx.run('updateQueueIndicator()');
+      // 切到会话 B：渲染入口先重绑投影，旧会话气泡不进入新会话输入面
+      c.window.currentRuntimeAgentId = 'agent-2';
+      projection.updateQueueIndicator();
 
-    assert.equal(ctx.run('_queuedTexts.length'), 0, '旧会话排队文本被重绑清空');
-    assert.equal(ctx.run('_pendingQueuedCount'), 0);
-    assert.equal(ctx.run('_localQueuedInputPending'), false);
-    assert.equal(ctx.run('String(_queuedProjectionRuntimeId)'), 'agent-2');
+      assert.equal(queueState.queuedTexts.length, 0, '旧会话排队文本被重绑清空');
+      assert.equal(queueState.pendingQueuedCount, 0);
+      assert.equal(queueState.localQueuedInputPending, false);
+      assert.equal(String(queueState.queuedProjectionRuntimeId), 'agent-2');
+    });
   });
 
-  it('rebind restores the new session queue from the SSE snapshot cache', () => {
-    const ctx = createInputSandbox();
-    loadQueueSyncSlice(ctx);
-    ctx.run(`
-      _queuedTexts = ["A 会话的排队文本"];
-      _queuedProjectionRuntimeId = "agent-1";
-      window.ClawFW = { SseClient: {
-        getLastQueuedSnapshot: (id) => (id === "agent-2"
-          ? { runtimeId: id, items: [{ id: "q-b", text: "B 会话的排队" }] }
-          : null),
-        reconcileQueuedTexts: (items) => items
-          .filter((item) => item?.kind !== "reminder")
-          .map((item) => item.text),
-      } };
-    `);
+  it('rebind restores the new session queue from the SSE snapshot cache', async () => {
+    // 排队投影已 import sse-client：本 case 里的 window.ClawFW.SseClient 就是真实
+    // 传输层命名空间（不再是注入桩）。快照缓存只由 SSE 事件帧填充，这里只把它的
+    // 两个读取面换成记录器（IO 边界打桩，与 toast 的 show 同一做法），
+    // 驱动的仍是 classic rebind → 命名空间读取这条真实链路。
+    await withQueueProjectionCase({}, async ({ c, projection, queueState }) => {
+      const namespace = c.window.ClawFW.SseClient;
+      const realGetLastQueuedSnapshot = namespace.getLastQueuedSnapshot;
+      const realReconcileQueuedTexts = namespace.reconcileQueuedTexts;
+      namespace.getLastQueuedSnapshot = (id) => (id === 'agent-2'
+        ? { runtimeId: id, items: [{ id: 'q-b', text: 'B 会话的排队' }] }
+        : null);
+      namespace.reconcileQueuedTexts = (items) => items
+        .filter((item) => item?.kind !== 'reminder')
+        .map((item) => item.text);
+      try {
+        queueState.setQueuedTexts(['A 会话的排队文本']);
+        queueState.setQueuedProjectionRuntimeId('agent-1');
 
-    ctx.currentRuntimeAgentId = 'agent-2';
-    ctx.run('updateQueueIndicator()');
+        c.window.currentRuntimeAgentId = 'agent-2';
+        projection.updateQueueIndicator();
 
-    assert.deepEqual([...ctx.run('_queuedTexts')], ['B 会话的排队'],
-      '切换后从 SSE 快照缓存恢复新会话队列，无需等轮询');
-    assert.equal(ctx.run('_pendingQueuedCount'), 1);
-    assert.equal(ctx.run('String(_queuedProjectionRuntimeId)'), 'agent-2');
+        assert.deepEqual([...queueState.queuedTexts], ['B 会话的排队'],
+          '切换后从 SSE 快照缓存恢复新会话队列，无需等轮询');
+        assert.equal(queueState.pendingQueuedCount, 1);
+        assert.equal(String(queueState.queuedProjectionRuntimeId), 'agent-2');
+      } finally {
+        namespace.getLastQueuedSnapshot = realGetLastQueuedSnapshot;
+        namespace.reconcileQueuedTexts = realReconcileQueuedTexts;
+      }
+    });
   });
 });

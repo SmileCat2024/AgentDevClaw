@@ -7,7 +7,9 @@ export let pendingSwitchSerial;
 export let _navigationGuardEpoch;
 export let _pendingSessionNavigation;
 export let _chatLoadingSession;
-export let _chatLoadingTimeout;
+// 唯一 owner（桥已注销：无 classic 消费方）。初值 null 与撤桥前 defineKey 初值一致，
+// 计时句柄语义（同引用经 setChatLoadingTimeout 传入、清理后回 null）原样保留。
+export let _chatLoadingTimeout = null;
 export let _restoredScrollTop;
 
 window.KernelState.claim('orchestration', {
@@ -20,7 +22,6 @@ window.KernelState.claim('orchestration', {
       case '_navigationGuardEpoch': return _navigationGuardEpoch;
       case '_pendingSessionNavigation': return _pendingSessionNavigation;
       case '_chatLoadingSession': return _chatLoadingSession;
-      case '_chatLoadingTimeout': return _chatLoadingTimeout;
       case '_restoredScrollTop': return _restoredScrollTop;
     }
   },
@@ -33,7 +34,6 @@ window.KernelState.claim('orchestration', {
       case '_navigationGuardEpoch': _navigationGuardEpoch = value; break;
       case '_pendingSessionNavigation': _pendingSessionNavigation = value; break;
       case '_chatLoadingSession': _chatLoadingSession = value; break;
-      case '_chatLoadingTimeout': _chatLoadingTimeout = value; break;
       case '_restoredScrollTop': _restoredScrollTop = value; break;
     }
   },

@@ -9,16 +9,25 @@
  *   - extractMessagesProbe: 提取 /overview 响应上的消息增量探测字段（ADR-0012）
  *   - normalizeRuntimeSnapshot / normalizeOverviewSnapshot: runtime & overview 快照规范化
  *   - normalizeHookInspector: hook inspector 快照规范化
- *   - setCurrentHookInspector / setCurrentOverviewSnapshot / setCurrentLogs: 全局状态 setter
+ *   - setCurrentHookInspector / setCurrentOverviewSnapshot: 全局状态 setter
  *
- * 依赖（全局变量，声明于 app-core.js）：
- *   - currentHookInspector, currentHookInspectorSignature
- *   - currentOverviewSnapshot, currentOverviewSignature
- *   - currentLogs, currentLogsSignature
- *   - selectedFeatureName
+ * ESM（P2 迁移）：快照状态 owner 已迁 session-view-storage（inspector / overview
+ * 及其签名，直接 import 读写）；日志与 feature 选择仍在 classic 首屏边界
+ * （app-core 顶层 let），经 p2-bootstrap-debug-panel 适配模块成对读写，不持副本。
+ * 仍 classic 的 window 可达函数（normalizeSessionModelState）晚绑定调用。
+ * 仍有 classic 消费方的入口经 KernelState 桥键（overview-data 域）提供，
+ * 文件尾部统一注册。
  */
 
-function shortenSourcePath(value) {
+import {
+  setCurrentHookInspector as setHookInspectorSnapshot,
+  setCurrentHookInspectorSignature,
+  setCurrentOverviewSnapshot as setOverviewSnapshot,
+  setCurrentOverviewSignature,
+} from './session-view-storage.js';
+import { debugPanel } from './p2-bootstrap-debug-panel.js';
+
+export function shortenSourcePath(value) {
   if (!value) return '';
   const normalized = String(value).replace(/\\/g, '/');
   const srcIndex = normalized.lastIndexOf('/src/');
@@ -40,11 +49,11 @@ const FULL_HOOK_LIFECYCLE_ORDER = [
   'ToolResultTransform',
 ];
 
-function getHookInspectorSignature(snapshot) {
+export function getHookInspectorSignature(snapshot) {
   return JSON.stringify(snapshot || { lifecycleOrder: [], features: [], hooks: [] });
 }
 
-function getEmptyOverviewSnapshot() {
+export function getEmptyOverviewSnapshot() {
   return {
     updatedAt: 0,
     context: {
@@ -79,7 +88,8 @@ function getEmptyOverviewSnapshot() {
       lastErrorType: null,
       lastErrorMessage: null,
     },
-    ...normalizeSessionModelState(null),
+    // 桥接期：定义于 session-view-state（会话视图域收敛时移除）
+    ...window.normalizeSessionModelState(null),
   };
 }
 
@@ -117,7 +127,7 @@ const MESSAGE_PROBE_CHANGE_KINDS = new Set(['append', 'tail', 'rewrite']);
  * Returns null when the probe is absent or malformed (poll falls back to a
  * full /messages fetch in that case).
  */
-function extractMessagesProbe(snapshot) {
+export function extractMessagesProbe(snapshot) {
   const raw = snapshot && typeof snapshot === 'object' ? snapshot._messagesProbe : null;
   if (!raw || typeof raw !== 'object') {
     return null;
@@ -145,7 +155,7 @@ function extractMessagesProbe(snapshot) {
 // the probe is extracted separately via extractMessagesProbe() at the poll
 // data-fetch site and never enters the view snapshot — which also keeps
 // getOverviewSignature() identical with and without the probe attached.
-function normalizeOverviewSnapshot(snapshot) {
+export function normalizeOverviewSnapshot(snapshot) {
   const empty = getEmptyOverviewSnapshot();
   if (!snapshot || typeof snapshot !== 'object') {
     return empty;
@@ -178,15 +188,16 @@ function normalizeOverviewSnapshot(snapshot) {
       lastRequestUsage: snapshot.usageStats?.lastRequestUsage || null,
     },
     runtime: normalizeRuntimeSnapshot(snapshot.runtime),
-    ...normalizeSessionModelState(snapshot),
+    // 桥接期：定义于 session-view-state（会话视图域收敛时移除）
+    ...window.normalizeSessionModelState(snapshot),
   };
 }
 
-function getOverviewSignature(snapshot) {
+export function getOverviewSignature(snapshot) {
   return JSON.stringify(normalizeOverviewSnapshot(snapshot));
 }
 
-function normalizeHookInspector(snapshot) {
+export function normalizeHookInspector(snapshot) {
   const raw = snapshot || { lifecycleOrder: [], features: [], hooks: [] };
   const hookMap = new Map((raw.hooks || []).map(group => [group.lifecycle, group]));
   return {
@@ -222,25 +233,62 @@ function normalizeHookInspector(snapshot) {
   };
 }
 
-function setCurrentHookInspector(snapshot) {
+export function setCurrentHookInspector(snapshot) {
   const normalized = normalizeHookInspector(snapshot);
-  currentHookInspector = normalized;
-  currentHookInspectorSignature = getHookInspectorSignature(normalized);
-  if (selectedFeatureName && !normalized.features.some(feature => feature.name === selectedFeatureName)) {
-    selectedFeatureName = null;
+  setHookInspectorSnapshot(normalized);
+  setCurrentHookInspectorSignature(getHookInspectorSignature(normalized));
+  if (debugPanel.selectedFeatureName
+      && !normalized.features.some(feature => feature.name === debugPanel.selectedFeatureName)) {
+    debugPanel.selectedFeatureName = null;
   }
 }
 
-function setCurrentOverviewSnapshot(snapshot) {
+export function setCurrentOverviewSnapshot(snapshot) {
   const normalized = normalizeOverviewSnapshot(snapshot);
-  currentOverviewSnapshot = normalized;
-  currentOverviewSignature = getOverviewSignature(normalized);
+  setOverviewSnapshot(normalized);
+  setCurrentOverviewSignature(getOverviewSignature(normalized));
 }
 
-function setCurrentLogs(logs) {
-  currentLogs = Array.isArray(logs) ? logs : [];
-  currentLogsSignature = JSON.stringify({
-    count: currentLogs.length,
-    last: currentLogs.length > 0 ? currentLogs[currentLogs.length - 1].id : null,
-  });
-}
+// 日志快照写入（setCurrentLogs）不在本模块：它的唯一实现是 classic app-core 的
+// 同名同步函数（currentLogs / currentLogsSignature 的物理 owner）。日志面板的
+// onOpen 入口在首屏 classic 相就可点，写入口必须在 classic 相同步可用，因此
+// 不迁到这里，也不上桥（不保留双实现）。
+
+// ── 兼容桥（KernelState，overview-data 域）─────────────────────────────────────
+// 仍有 classic 消费方的入口逐键上桥：
+//   getHookInspectorSignature  ← app-main.js（metadata commit host.hookSignature）
+//   getEmptyOverviewSnapshot   ← session-view-state.js（applySessionViewPatch 身份变化）
+//                                / app-main.js / app-ui.js（debug-overview 已 import 本模块）
+//   extractMessagesProbe       ← app-main.js（消息 probe host.probe）
+//   normalizeOverviewSnapshot  ← app-main.js（overview 提交）
+//   getOverviewSignature       ← app-main.js（overview 签名）
+//   normalizeHookInspector     ← app-main.js（inspector 提交）
+//   setCurrentHookInspector    ← session-view-state.js（applySessionViewPatch）
+//   setCurrentOverviewSnapshot ← session-view-state.js（applySessionViewPatch）
+//   shortenSourcePath          ← debug-features-hooks.js（feature 卡片/详情/条目来源，3 处裸调用；
+//                                该文件仍是 classic，不能按“已 import”判断为零消费）
+// FULL_HOOK_LIFECYCLE_ORDER / normalizeRuntimeSnapshot 只在本文件内使用，不上桥。
+const compatibility = {
+  shortenSourcePath,
+  getHookInspectorSignature,
+  getEmptyOverviewSnapshot,
+  extractMessagesProbe,
+  normalizeOverviewSnapshot,
+  getOverviewSignature,
+  normalizeHookInspector,
+  setCurrentHookInspector,
+  setCurrentOverviewSnapshot,
+};
+window.KernelState.defineKey('overview-data', 'shortenSourcePath', shortenSourcePath);
+window.KernelState.defineKey('overview-data', 'getHookInspectorSignature', getHookInspectorSignature);
+window.KernelState.defineKey('overview-data', 'getEmptyOverviewSnapshot', getEmptyOverviewSnapshot);
+window.KernelState.defineKey('overview-data', 'extractMessagesProbe', extractMessagesProbe);
+window.KernelState.defineKey('overview-data', 'normalizeOverviewSnapshot', normalizeOverviewSnapshot);
+window.KernelState.defineKey('overview-data', 'getOverviewSignature', getOverviewSignature);
+window.KernelState.defineKey('overview-data', 'normalizeHookInspector', normalizeHookInspector);
+window.KernelState.defineKey('overview-data', 'setCurrentHookInspector', setCurrentHookInspector);
+window.KernelState.defineKey('overview-data', 'setCurrentOverviewSnapshot', setCurrentOverviewSnapshot);
+window.KernelState.claim('overview-data', {
+  get: (key) => compatibility[key],
+  set: (key, value) => { compatibility[key] = value; },
+});

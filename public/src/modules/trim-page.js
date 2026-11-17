@@ -4,30 +4,52 @@
  * 左栏为贯穿时间轴（轮次节点、切点与状态统一落在轴上），
  * 右栏配置（模式切换 / 比例滑动条 + 数值框 / 摘要 / 归档 / 技能保护 / 读数）。
  *
- * 按比例模式：TrimRatioCore（trim-ratio-core.js）本地重算切点，全部纯前端、
- * 不重复请求；提交 policy = { preservedMsgRanges: [[cutIndex, last]] }。
+ * 按比例模式：trim-ratio-core.js 本地重算切点，全部纯前端、不重复请求；
+ * 提交 policy = { preservedMsgRanges: [[cutIndex, last]] }。
  * 单轮体量过大切线落入轮内时，该轮自动展开 assistant 回复锚点与工具段级切点。
  * 按轮次模式（默认）：逐轮勾选（非连续），policy 与旧对话框一致。
  * 提交编排（navGuard / 归档乐观回滚 / sidebar operation / 远程切换）自
  * session-dialogs.js submitTrimCompact 原样迁移。
  *
- * 依赖全局状态 (定义在 app-core.js): currentLanguage, allAgents, currentRuntimeAgentId,
- *   _navigationGuardEpoch, bumpNavigationGuard, lastRenderedWorkspaceHtml
- * 依赖全局函数: renderCurrentMainView, escapeHtml, closeCompactMenu,
- *   getCurrentAgentRecord, createCompactedResumeSession, loadAgents,
- *   setPreferredUnitMode, markSessionLoading, clearSessionLoading,
- *   markSessionArchivedForMutation, beginSidebarOperation, getSidebarOperation,
- *   updateSidebarOperation, finishSidebarOperation,
- *   applySidebarMutationDeltaWithDiagnostics, applySessionMutationDelta,
- *   reconcileArchivedSourceRuntime, upsertConnectedAgent, getRuntimeId,
- *   isRemoteNamespaceAgentId, beginChatLoadingSession, clearChatLoadingSession,
- *   requestSwitch, getWorkspaceSessionById, getPathLeaf,
- *   fmtPct (app-core.js，trim/branch 共用口径),
- *   window.RemoteConnections (远程精简切换)
- * 依赖模块: TrimRatioCore (trim-ratio-core.js, window 挂载)
- * 导出全局函数 (window.*): openTrimPage
+ * ESM 化（P2 W1-4 会话弹窗与精简浏览批次）：切点核心 trim-ratio-core 已迁
+ * ESM，直接 import 命名导出（不再经 window.TrimRatioCore 桥）；语言、转义、
+ * 状态 owner、侧栏 operation 与会话变更（sidebar-operations / session-mutation）
+ * 及已迁宿主能力（agent-snapshot-loader / compact-resume / runtime-switch /
+ * chat-loading）同样显式 import（状态写入走 owner setter）。仍为 classic 的
+ * 渲染与身份查询函数经 window 晚绑定（行内标注定义域）。
+ * 入口函数 openTrimPage 的消费方（workspace-actions 管理菜单 / ctx-menu-items
+ * 右键菜单）均已是 ESM 直接 import，兼容桥已注销。
+ *
  * 分发器动作 (ClawFW.actions): trimPage.close / trimPage.submit（弹窗按钮）
  */
+
+import { allAgents } from './agent-store-state.js';
+import { currentRuntimeAgentId, _navigationGuardEpoch } from './orchestration-state.js';
+import { setLastRenderedWorkspaceHtml } from './render-entry-state.js';
+import { getCurrentLanguage } from './i18n-environment-state.js';
+import { escapeHtml } from './markdown-utils.js';
+import {
+  beginSidebarOperation,
+  getSidebarOperation,
+  updateSidebarOperation,
+  finishSidebarOperation,
+  applySidebarMutationDeltaWithDiagnostics,
+} from './sidebar-operations.js';
+import { markSessionArchivedForMutation, reconcileArchivedSourceRuntime } from './session-mutation.js';
+import { getWorkspaceSessionById } from './session-ui.js';
+import { getPathLeaf } from './project-data.js';
+import { closeCompactMenu } from './context-menu.js';
+import { loadAgents } from './agent-snapshot-loader-host.js';
+import { createCompactedResumeSession } from './compact-resume-host.js';
+import { requestSwitch } from './runtime-switch-host.js';
+import { beginChatLoadingSession, clearChatLoadingSession } from './chat-loading-host.js';
+import {
+  safeCutCandidates,
+  ratioToCut,
+  cutToRatio,
+  computeReadout,
+  keepZoneHasDialogue,
+} from './trim-ratio-core.js';
 
 /* ── Page state ── */
 let trimPageState = {
@@ -65,7 +87,7 @@ const TRIM_PAGE_RATIO_STORAGE_KEY = 'claw.trimPage.ratio';
 const SKILL_INVOKE_STEPS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, Infinity];
 
 function L(zh, en) {
-  return currentLanguage === 'zh' ? zh : en;
+  return getCurrentLanguage() === 'zh' ? zh : en;
 }
 
 /**
@@ -155,15 +177,14 @@ trimPageArchiveToggle.addEventListener('change', updateSubmitLabel);
 /* ── Safe cut set（设切点按钮可见性） ── */
 function computeSafeCutSet() {
   const set = new Set();
-  if (!window.TrimRatioCore) return set;
-  for (const c of window.TrimRatioCore.safeCutCandidates(trimPageState.messages)) {
+  for (const c of safeCutCandidates(trimPageState.messages)) {
     set.add(c.cutIndex);
   }
   return set;
 }
 
 /* ── Open / close ── */
-window.openTrimPage = async (agentId, sessionId, archiveAfter = false) => {
+export async function openTrimPage(agentId, sessionId, archiveAfter = false) {
   const seq = ++trimPageSeq;
   // 线程会话不展示「归档原会话」（见 isThreadCarriedSession 注释）
   const onThread = isThreadCarriedSession(agentId, sessionId);
@@ -222,7 +243,7 @@ window.openTrimPage = async (agentId, sessionId, archiveAfter = false) => {
     trimPageList.innerHTML = `<div class="trim-loading">${L('加载失败：', 'Load failed: ')}${escapeHtml(err.message || err)}</div>`;
     trimPageReadout.textContent = '';
   }
-};
+}
 
 function closeTrimPage() {
   trimPageSeq++;
@@ -235,7 +256,7 @@ function closeTrimPage() {
 
     keepSkillInvokes: 5, loading: false,
   };
-};
+}
 
 /* ── Mode switching ── */
 function applyMode(mode) {
@@ -272,7 +293,7 @@ function applyRatioFromControl() {
   const ratio = clampRatio(trimPageRatioSlider.value);
   trimPageState.ratio = ratio;
   trimPageState.ratioInitialized = true;
-  const result = window.TrimRatioCore.ratioToCut(
+  const result = ratioToCut(
     trimPageState.messages, trimPageState.preambleCharCount, ratio / 100);
   trimPageState.cutIndex = result.cutIndex;
   trimPageState.unmet = result.unmet;
@@ -314,7 +335,7 @@ trimPageRatioInput.addEventListener('wheel', onRatioWheelAdjust, { passive: fals
 // 轴节点：系统上下文（时间轴起点，弱呈现）
 function renderPreambleNode() {
   if (trimPageState.preamblePercent <= 0) return '';
-  return `<div class="trim-tl-node preamble"><div class="trim-tl-sub">${L('系统上下文', 'System context')} · ${fmtPct(trimPageState.preamblePercent)}</div></div>`;
+  return `<div class="trim-tl-node preamble"><div class="trim-tl-sub">${L('系统上下文', 'System context')} · ${window.fmtPct(trimPageState.preamblePercent)}</div></div>`;
 }
 
 // 比例模式时间轴：每轮包含用户输入锚点、assistant 回复锚点与对应工具调用摘要
@@ -409,7 +430,7 @@ function renderRatioRoundNode(rd, opts) {
   const partial = rd.startIndex < st.cutIndex && rd.endIndex >= st.cutIndex;
   const stateClass = folded ? ' folded' : '';
   const clickable = !folded && !partial && opts.safeCutSet.has(rd.startIndex);
-  const pct = opts.totalChars > 0 ? fmtPct(rd.charCount / opts.totalChars) : '';
+  const pct = opts.totalChars > 0 ? window.fmtPct(rd.charCount / opts.totalChars) : '';
   const detail = partial ? buildRoundDetail(st.messages, rd.roundIndex) : [];
   const cutAfterUser = partial && st.messages.some((m) => m.roundIndex === rd.roundIndex && m.role === 'user' && m.index + 1 === st.cutIndex);
   const cutInDetail = partial && detail.some((node) => node.cutIndex === st.cutIndex);
@@ -428,7 +449,7 @@ function renderRatioRoundNode(rd, opts) {
         ? `<div class="trim-tl-dnode text">${escapeHtml(n.preview || L('（文字回复）', '(text reply)'))} · ${fmtChars(n.charCount)}</div>`
         // chip 可点击 = 安全切点且保留区仍有对话消息；尾部注入 system 之后的
         // 切点保留区只剩注入消息，提交会让末轮对话全部被折叠
-        : (opts.safeCutSet.has(n.cutIndex) && window.TrimRatioCore.keepZoneHasDialogue(st.messages, n.cutIndex)
+        : (opts.safeCutSet.has(n.cutIndex) && keepZoneHasDialogue(st.messages, n.cutIndex)
           ? `<button type="button" class="trim-tl-chip" data-set-cut="${n.cutIndex}" title="${L('从此处保留', 'Keep from here')}">${escapeHtml(n.label)} · ${fmtChars(n.charCount)}</button>`
           : `<span class="trim-tl-chip">${escapeHtml(n.label)} · ${fmtChars(n.charCount)}</span>`);
       parts.push(content + (n.cutIndex === st.cutIndex ? renderCutNode(opts.readout) : ''));
@@ -450,7 +471,7 @@ function renderManualRoundNode(r, idx) {
   const checked = r.suggestedTrim ? ' checked' : '';
   const stateClass = r.suggestedTrim ? ' folded' : '';
   const calls = (r.toolCalls || []).filter((tc) => tc && typeof tc.name === 'string' && tc.name !== 'undefined').length;
-  const pct = fmtPct(r.charPercent || 0);
+  const pct = window.fmtPct(r.charPercent || 0);
   return `<div class="trim-tl-node round manual${stateClass}" data-trim-index="${idx}">
     <div class="trim-tl-title"><input type="checkbox" class="trim-checkbox" data-trim-index="${idx}"${checked} /><span class="trim-tl-title-text">${escapeHtml(r.userPreview || L('（无输入）', '(no input)'))}</span></div>
     <div class="trim-tl-sub">${L('第', 'Round')} ${idx + 1} ${L('轮', '')}${calls ? ` · ${calls} ${L('次调用', 'calls')}` : ''} · ${pct}</div>
@@ -460,7 +481,7 @@ function renderManualRoundNode(r, idx) {
 
 // 切点：轴上的橙色标记——上方已精简，下方保留
 function renderCutNode(readout) {
-  return `<div class="trim-tl-cut"><span>${L('保留从这里开始', 'Keep from here')}</span><span class="trim-tl-cut-meta">${L('释放', 'frees')} ${fmtPct(readout.releasedPercent)}</span></div>`;
+  return `<div class="trim-tl-cut"><span>${L('保留从这里开始', 'Keep from here')}</span><span class="trim-tl-cut-meta">${L('释放', 'frees')} ${window.fmtPct(readout.releasedPercent)}</span></div>`;
 }
 
 function renderList(opts = {}) {
@@ -480,7 +501,7 @@ function renderList(opts = {}) {
     html += st.rounds.map((r, idx) => renderManualRoundNode(r, idx)).join('');
   } else {
     // 比例模式：轴上找切点——上方已精简（空心），下方保留（实心）
-    const readout = window.TrimRatioCore.computeReadout(messages, st.preambleCharCount, st.cutIndex);
+    const readout = computeReadout(messages, st.preambleCharCount, st.cutIndex);
     const rounds = aggregateRounds(messages);
     const totalChars = rounds.reduce((sum, r) => sum + r.charCount, 0);
     const opts = { safeCutSet, totalChars, readout };
@@ -543,10 +564,10 @@ trimPageList.addEventListener('click', (event) => {
   const cutBtn = event.target.closest('[data-set-cut]');
   if (cutBtn) {
     const cutIndex = parseInt(cutBtn.dataset.setCut, 10);
-    if (Number.isFinite(cutIndex) && window.TrimRatioCore) {
+    if (Number.isFinite(cutIndex)) {
       trimPageState.cutIndex = cutIndex;
       trimPageState.unmet = false;
-      const ratio = clampRatio(window.TrimRatioCore.cutToRatio(
+      const ratio = clampRatio(cutToRatio(
         trimPageState.messages, trimPageState.preambleCharCount, cutIndex) * 100);
       trimPageState.ratio = ratio;
       trimPageRatioSlider.value = String(ratio);
@@ -587,20 +608,20 @@ function updateReadout() {
     trimPageReadout.textContent = '';
     return;
   }
-  if (st.mode === 'ratio' && st.ratioSupported && window.TrimRatioCore) {
-    const readout = window.TrimRatioCore.computeReadout(st.messages, st.preambleCharCount, st.cutIndex);
+  if (st.mode === 'ratio' && st.ratioSupported) {
+    const readout = computeReadout(st.messages, st.preambleCharCount, st.cutIndex);
     trimPageReadout.innerHTML = st.unmet
       ? `<div class="trim-page-readout-main">${L('无法达到该比例：对话文本精简后仍保留', 'Target unreachable: dialogue text is kept after trimming')}</div>
-         <div class="trim-page-readout-sub">${L('保留', 'Keeps')} ${fmtPct(readout.keptPercent)} · ${readout.keptMessageCount} ${L('条消息', 'msgs')}</div>`
-      : `<div class="trim-page-readout-main">${L('保留', 'Keeps')} <b>${fmtPct(readout.keptPercent)}</b> · ${readout.keptMessageCount} ${L('条消息', 'msgs')}</div>
-         <div class="trim-page-readout-sub">${L('估算', 'Est.')} ${fmtChars(readout.keptCharCount)} / ${fmtChars(readout.totalCharCount)} ${L('字符 · 释放', 'chars · frees')} ${fmtPct(readout.releasedPercent)}</div>`;
+         <div class="trim-page-readout-sub">${L('保留', 'Keeps')} ${window.fmtPct(readout.keptPercent)} · ${readout.keptMessageCount} ${L('条消息', 'msgs')}</div>`
+      : `<div class="trim-page-readout-main">${L('保留', 'Keeps')} <b>${window.fmtPct(readout.keptPercent)}</b> · ${readout.keptMessageCount} ${L('条消息', 'msgs')}</div>
+         <div class="trim-page-readout-sub">${L('估算', 'Est.')} ${fmtChars(readout.keptCharCount)} / ${fmtChars(readout.totalCharCount)} ${L('字符 · 释放', 'chars · frees')} ${window.fmtPct(readout.releasedPercent)}</div>`;
     return;
   }
   // 按轮次模式读数（轮级口径，与旧页脚一致）
   const rounds = st.rounds;
   const trimmed = rounds.filter((r) => r.suggestedTrim);
   const freedPercent = trimmed.reduce((sum, r) => sum + (r.charPercent || 0), 0);
-  trimPageReadout.innerHTML = `${L('共', '')} ${rounds.length} ${L('轮，精简', 'rounds, trim')} ${trimmed.length} ${L('轮 · 释放约', '· frees ~')} <span class="trim-footer-pct">${fmtPct(freedPercent)}</span> ${L('上下文', 'context')}`;
+  trimPageReadout.innerHTML = `${L('共', '')} ${rounds.length} ${L('轮，精简', 'rounds, trim')} ${trimmed.length} ${L('轮 · 释放约', '· frees ~')} <span class="trim-footer-pct">${window.fmtPct(freedPercent)}</span> ${L('上下文', 'context')}`;
 }
 
 /* ── Submit（编排自 session-dialogs.js submitTrimCompact 原样迁移） ── */
@@ -624,7 +645,7 @@ async function submitTrimPage() {
     }
     // 出口守卫：保留区必须含对话消息——末尾只剩 system 注入消息的切点提交后
     // 末轮对话全部被折叠（历史上由尾部任务提醒注入 + 小比例触发）
-    if (window.TrimRatioCore && !window.TrimRatioCore.keepZoneHasDialogue(st.messages, st.cutIndex)) {
+    if (!keepZoneHasDialogue(st.messages, st.cutIndex)) {
       window.alert(L('保留区内没有对话消息，请将切点上移到包含对话内容的位置', 'The keep zone holds no dialogue message; move the cut up to cover dialogue content'));
       return;
     }
@@ -649,15 +670,15 @@ async function submitTrimPage() {
   }
   const appendSummary = trimPageSummaryToggle.checked;
 
-  bumpNavigationGuard();
+  window.bumpNavigationGuard();
   const _navGuard = _navigationGuardEpoch;
 
   closeTrimPage();
-  markSessionLoading(agentId, sessionId);
+  window.markSessionLoading(agentId, sessionId);
   const _oldRuntimeId = currentRuntimeAgentId;
   let archiveRollback = null;
   let trimSessionCommitted = false;
-  if (archiveAfter && typeof markSessionArchivedForMutation === 'function') {
+  if (archiveAfter) {
     archiveRollback = markSessionArchivedForMutation(agentId, sessionId, 'trim');
   }
   const sourceAgent = allAgents.find((item) => item.id === agentId) || null;
@@ -685,17 +706,13 @@ async function submitTrimPage() {
       appendSummary,
       operationId: trimOperation?.operationId || '',
     });
-    if (typeof applySidebarMutationDeltaWithDiagnostics === 'function') {
-      applySidebarMutationDeltaWithDiagnostics(trimOperation?.operationId, agentId, result);
-    } else if (typeof applySessionMutationDelta === 'function') {
-      applySessionMutationDelta(agentId, result);
-    }
+    applySidebarMutationDeltaWithDiagnostics(trimOperation?.operationId, agentId, result);
     const archiveSucceeded = !archiveAfter || result?.archive?.succeeded === true;
     if (!archiveSucceeded && archiveRollback) {
       archiveRollback();
       archiveRollback = null;
     }
-    const isRemoteTrim = typeof isRemoteNamespaceAgentId === 'function' && isRemoteNamespaceAgentId(sessionId);
+    const isRemoteTrim = typeof window.isRemoteNamespaceAgentId === 'function' && window.isRemoteNamespaceAgentId(sessionId);
     // 归档已提交：源 runtime 处置与新会话导航解耦，立即发起（内部含侧栏条目
     // 的乐观退场）。停靠在导航之后会让老条目等新会话页面完全加载完才开始关闭。
     if (archiveAfter && archiveSucceeded && !isRemoteTrim) {
@@ -715,7 +732,7 @@ async function submitTrimPage() {
     // 处理过则幂等），滚动位置与输入草稿由重绑链路保留。
     if (result?.threadSuccession?.applied === true) {
       finishSidebarOperation(trimOperation?.operationId, 'settled');
-      clearSessionLoading(agentId);
+      window.clearSessionLoading(agentId);
       await window.refreshThreads(true).catch(() => {});
     } else {
       // The server has already committed the trimmed session and observed startup.
@@ -724,8 +741,8 @@ async function submitTrimPage() {
       // allAgents——切换走远程目录轮询（见下方 isRemoteTrim 分支）。
       const readyAgent = (isRemoteTrim ? null : result?.agent) || null;
       const targetStopped = false;
-      const connectedTarget = readyAgent ? (upsertConnectedAgent(readyAgent) || readyAgent) : null;
-      const nextRuntimeId = connectedTarget ? (getRuntimeId(connectedTarget) || null) : null;
+      const connectedTarget = readyAgent ? (window.upsertConnectedAgent(readyAgent) || readyAgent) : null;
+      const nextRuntimeId = connectedTarget ? (window.getRuntimeId(connectedTarget) || null) : null;
       if (archiveAfter && archiveSucceeded) {
         // The server has committed both the successor and source archive. This is
         // the replacement operation's terminal success boundary; source runtime
@@ -750,26 +767,26 @@ async function submitTrimPage() {
           ? await window.RemoteConnections.waitForRuntimeForSession(targetSessionId, 50)
           : null;
         if (remoteRuntimeRef && _navGuard === _navigationGuardEpoch) {
-          setPreferredUnitMode('chat', allAgents.find((agent) => agent.id === agentId) || getCurrentAgentRecord());
+          window.setPreferredUnitMode('chat', allAgents.find((agent) => agent.id === agentId) || window.getCurrentAgentRecord());
           beginChatLoadingSession();
           await requestSwitch(remoteRuntimeRef, 'trim');
           if (!archiveAfter) finishSidebarOperation(trimOperation?.operationId, 'settled');
         } else {
-          lastRenderedWorkspaceHtml = '';
-          renderCurrentMainView();
+          setLastRenderedWorkspaceHtml('');
+          window.renderCurrentMainView();
         }
       } else if (nextRuntimeId) {
-        setPreferredUnitMode('chat', allAgents.find((agent) => agent.id === agentId) || getCurrentAgentRecord());
+        window.setPreferredUnitMode('chat', allAgents.find((agent) => agent.id === agentId) || window.getCurrentAgentRecord());
         beginChatLoadingSession();
         await requestSwitch(nextRuntimeId, 'trim');
         if (!archiveAfter) finishSidebarOperation(trimOperation?.operationId, 'settled');
       } else {
-        lastRenderedWorkspaceHtml = '';
-        renderCurrentMainView();
+        setLastRenderedWorkspaceHtml('');
+        window.renderCurrentMainView();
       }
     }
     if (archiveAfter && !archiveSucceeded) {
-      window.alert((currentLanguage === 'zh' ? '新会话已创建，但原会话归档失败：' : 'The new session was created, but the original could not be archived: ') + (result?.archive?.error || 'unknown error'));
+      window.alert((getCurrentLanguage() === 'zh' ? '新会话已创建，但原会话归档失败：' : 'The new session was created, but the original could not be archived: ') + (result?.archive?.error || 'unknown error'));
     }
     loadAgents().catch(e => console.warn(e));
     archiveRollback = null;
@@ -782,12 +799,12 @@ async function submitTrimPage() {
       } else if (trimOperation?.operationId) {
         finishSidebarOperation(trimOperation.operationId, 'failed', { errorCode: 'trim_failed' });
       }
-      window.alert((currentLanguage === 'zh' ? '精简失败：' : 'Trim failed: ') + (error?.message || error));
+      window.alert((getCurrentLanguage() === 'zh' ? '精简失败：' : 'Trim failed: ') + (error?.message || error));
     } else {
       finishSidebarOperation(trimOperation?.operationId, 'settled');
       archiveRollback = null;
     }
-    clearSessionLoading(agentId);
+    window.clearSessionLoading(agentId);
     clearChatLoadingSession();
   }
 }
@@ -796,3 +813,9 @@ window.ClawFW.actions.registerMany({
   'trimPage.close': () => closeTrimPage(),
   'trimPage.submit': () => submitTrimPage(),
 });
+
+// —— 桥接期兼容面：无 ——
+// 本域已零桥键，且不再注册该域的 kernel-state 认领（空 owner 不为假想需求保留）：
+// openTrimPage 的两个消费方（workspace-actions 管理菜单「精简」、ctx-menu-items
+// 右键「精简」）都已验收为 ESM 并在文件头具名 import，classic 消费面归零 →
+// 原 defineKey 已注销。未来若再出现 classic 消费方，按配方重新 defineKey + claim。

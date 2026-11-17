@@ -12,6 +12,9 @@ import { setupSessionRoutes } from '../server/routes/session.js';
 import { createConnectionHealth } from '../server/remote-connections/connection-health.js';
 import { createCatalogAggregator } from '../server/remote-connections/catalog-aggregator.js';
 import { createFrontendSandbox } from './helpers/frontend-vm.js';
+import { withP2EsmCase } from './helpers/p2-esm-case.js';
+
+const MODEL_PRESET_CACHE = 'public/src/modules/model-preset-cache.js';
 
 // ADR-0011 Phase 2：远程写端点切片。覆盖工单最低测试集：
 //   1. 远程写无幂等键 → 本地闸 400，请求不过隧道
@@ -584,74 +587,141 @@ describe('connection manager toggle upsert payload', () => {
 // ── 6. thinking effort switcher refetches by session namespace ──────────
 
 describe('thinking effort switcher preset refetch', () => {
-  // 生产前提：app-core.js 先于本模块加载，window.ClawFW 恒存在。
-  function switcherSandbox(currentRuntimeAgentId, fetchImpl) {
-    const nameEl = { textContent: '', style: {} };
-    const ctx = createFrontendSandbox({
-      currentRuntimeAgentId,
-      document: {
-        getElementById: () => ({ classList: { add() {}, remove() {} }, title: '' }),
-        querySelector: () => nameEl,
+  // 生产前提：action-dispatcher / i18n / app-core 先于本模块求值（window.ClawFW、
+  // 语言初值与 P2 宿主工厂），session-view-state 提供会话视图提交与身份。
+  // 装载路线（ESM 配方）：input-model-switcher 已整域迁 ESM → 真实 import
+  // （case 级整图隔离）；其依赖的 model-preset-cache（缓存 owner）沿 import 链
+  // 真实求值，只在 `fetch` 这一层换成契约桩——命名空间语义与生产一致。
+  const SWITCHER = 'public/src/modules/input-model-switcher.js';
+  const ORCHESTRATION = 'public/src/modules/orchestration-state.js';
+
+  function createElement() {
+    const classes = new Set();
+    return {
+      textContent: '',
+      title: '',
+      style: {},
+      dataset: {},
+      isConnected: false,
+      classList: {
+        add(value) { classes.add(value); },
+        remove(value) { classes.delete(value); },
+        contains(value) { return classes.has(value); },
       },
-      fetch: fetchImpl,
+      addEventListener() {},
+      remove() {},
+      contains() { return false; },
+      querySelector() { return null; },
+      querySelectorAll() { return []; },
+      getBoundingClientRect() { return { left: 0, top: 0, bottom: 0 }; },
+    };
+  }
+
+  function withSwitcherSandbox(currentRuntimeAgentId, fetchImpl, fn) {
+    const nameEl = createElement();
+    const button = createElement();
+    const body = createElement();
+    body.appendChild = (node) => node;
+    const doc = {
+      getElementById: (id) => (id === 'input-thinking-btn' ? button : null),
+      querySelector: (selector) => (selector === '.input-thinking-name' ? nameEl : null),
+      querySelectorAll: () => [],
+      createElement: () => createElement(),
+      createTextNode: (text) => ({ textContent: text }),
+      addEventListener() {},
+      removeEventListener() {},
+      body,
+      documentElement: createElement(),
+      head: createElement(),
+      activeElement: null,
+      hidden: false,
+      readyState: 'complete',
+    };
+    return withP2EsmCase({
+      classic: (sandbox) => {
+        sandbox.loadSource('public/src/modules/action-dispatcher.js');
+        sandbox.loadSource('public/src/i18n.js');
+        sandbox.loadSource('public/src/app-core.js');
+        sandbox.loadSource('public/src/modules/session-view-state.js');
+      },
+      globals: {
+        document: doc,
+        // markdown-utils（escapeHtml / renderer 的 ESM owner）求值期读取的经典库面
+        renderer: { options: {} },
+        escapeHtml: (text) => String(text ?? '').replace(/[&<>"']/g, (m) => ({
+          '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+        })[m]),
+        marked: { Renderer: class { constructor() {} }, setOptions() {}, parse: () => '' },
+        hljs: { getLanguage: () => null, highlight: () => ({ value: '' }) },
+        fetch: fetchImpl,
+      },
+      label: 'thinking-effort-switcher',
+    }, async (c) => {
+      const mod = await c.load(SWITCHER);
+      const presetCache = await c.load(MODEL_PRESET_CACHE);
+      const orchestration = await c.load(ORCHESTRATION);
+      orchestration.setCurrentRuntimeAgentId(currentRuntimeAgentId);
+      return fn(c, nameEl, { mod, presetCache });
     });
-    ctx.run('window.ClawFW = {}');
-    // 生产顺序：owner 模块（model-preset-cache.js）先于使用方加载
-    ctx.loadSource('public/src/modules/session-view-state.js');
-    ctx.loadSource('public/src/modules/model-preset-cache.js');
-    ctx.loadSource('public/src/modules/input-model-switcher.js');
-    return { ctx, nameEl };
   }
 
   it('refetches presets with the current session namespace and tags the cache', async () => {
     const fetchCalls = [];
-    const { ctx } = switcherSandbox('remote:server-a:rt-1', async (url) => {
+    await withSwitcherSandbox('remote:server-a:rt-1', async (url) => {
       fetchCalls.push(String(url));
       return { ok: true, json: async () => ({ config: {}, presets: [{ name: 'remote-preset' }] }) };
+    }, async (c, nameEl, { mod, presetCache }) => {
+      mod.updateThinkingEffortSwitcher();
+      // fire-and-forget refetch chain needs one tick to settle
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      assert.deepEqual(
+        fetchCalls,
+        ['/protoclaw/model_config?agentId=remote%3Aserver-a%3Art-1'],
+        'refetch must carry the current session namespace',
+      );
+      assert.deepEqual(
+        presetCache.getClawModelPresets(),
+        [{ name: 'remote-preset' }],
+        'refetched presets land in the cache owner',
+      );
+      assert.equal(presetCache.clawModelPresetsMatchSession('remote:server-a:rt-1'), true,
+        'cache is tagged with the current session namespace');
     });
-    ctx.run('updateThinkingEffortSwitcher()');
-    // fire-and-forget refetch chain needs one tick to settle
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    assert.deepEqual(
-      fetchCalls,
-      ['/protoclaw/model_config?agentId=remote%3Aserver-a%3Art-1'],
-      'refetch must carry the current session namespace',
-    );
-    assert.equal(
-      ctx.run('JSON.stringify(window.ClawFW._modelPresets)'),
-      JSON.stringify([{ name: 'remote-preset' }]),
-    );
-    assert.equal(ctx.run('window.ClawFW._modelPresetsRuntimeId'), 'remote:server-a:rt-1');
   });
 
   it('keeps a cache written without a session tag from masking the current session', async () => {
     const fetchCalls = [];
-    const { ctx, nameEl } = switcherSandbox('remote:server-a:rt-1', async (url) => {
+    await withSwitcherSandbox('remote:server-a:rt-1', async (url) => {
       fetchCalls.push(String(url));
       return { ok: true, json: async () => ({ config: {}, presets: [{ name: 'remote-preset' }] }) };
+    }, async (c, nameEl, { mod, presetCache }) => {
+      // Stale local-shaped cache without a session tag must not be trusted
+      // （写入走缓存 owner 的 setter：不带会话身份即清除会话标记）。
+      presetCache.setClawModelPresets([{ name: 'stale-local' }]);
+      mod.updateThinkingEffortSwitcher();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      // After the session-scoped refetch the stale local shape is gone from the
+      // cache; with no runtime snapshot the switcher renders its no-thinking state.
+      assert.equal(nameEl.textContent, '不支持思考', 'stale local preset data must not render for a remote session');
+      assert.equal(presetCache.clawModelPresetsMatchSession('remote:server-a:rt-1'), true,
+        'session-scoped refetch re-tags the cache');
     });
-    // Stale local-shaped cache without a session tag must not be trusted.
-    ctx.run('setClawModelPresets([{ name: "stale-local" }])');
-    ctx.run('updateThinkingEffortSwitcher()');
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    // After the session-scoped refetch the stale local shape is gone from the
-    // cache; with no runtime snapshot the switcher renders its no-thinking state.
-    assert.equal(nameEl.textContent, '不支持思考', 'stale local preset data must not render for a remote session');
-    assert.equal(ctx.run('window.ClawFW._modelPresetsRuntimeId'), 'remote:server-a:rt-1');
   });
 
   it('stops refetching when the preset list stays empty instead of looping forever', async () => {
     const fetchCalls = [];
-    const { ctx } = switcherSandbox('remote:server-a:rt-1', async (url) => {
+    await withSwitcherSandbox('remote:server-a:rt-1', async (url) => {
       fetchCalls.push(String(url));
       return { ok: true, json: async () => ({ config: {}, presets: [] }) };
+    }, async (c, nameEl, { mod }) => {
+      mod.updateThinkingEffortSwitcher();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      assert.equal(fetchCalls.length, 1, 'empty preset list must not trigger an infinite refetch loop');
     });
-    ctx.run('updateThinkingEffortSwitcher()');
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    assert.equal(fetchCalls.length, 1, 'empty preset list must not trigger an infinite refetch loop');
   });
 });
+
 
 // ── 5. model-config namespace branches (real HTTP) ──────────────────────
 

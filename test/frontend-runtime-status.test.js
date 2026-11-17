@@ -17,31 +17,121 @@
  *   - isRuntimeCalling (call-active lookup)
  */
 
-import { describe, it } from 'node:test';
+import { describe, it as nodeIt } from 'node:test';
 import assert from 'node:assert/strict';
 import { deepEqual as deepLoose } from 'node:assert';
-import { createFrontendSandbox } from './helpers/frontend-vm.js';
+import { withP2EsmCase } from './helpers/p2-esm-case.js';
+import { prepareClassicSandbox } from './p2-classic-hosts.js';
+
+const OPS = 'public/src/modules/sidebar-operations.js';
+const RUNTIME_STATUS = 'public/src/modules/runtime-status.js';
 
 /**
- * Create a sandbox with runtime-status.js loaded.
+ * classic 首屏 bootstrap：action-dispatcher / i18n / app-core / sidebar-render 按
+ * 真实加载序执行。app-core 注册 kernel 访问器桥（currentLanguage /
+ * currentRuntimeAgentId / allAgents …）并交出自己的宿主工厂（重启中 runtime 集合、
+ * 调用状态 Map、渲染缓存），sidebar-render 交出渲染去重状态——两者都是本文件
+ * 被测链路（侧栏投影 / 渲染去重 / 桥键调用）的真实持有方，不能由测试自造。
+ * runtime-status.js 自身仍是 classic（同步首屏边界），在 bootstrap 之后 loadSource。
  *
  * The module calls ensureNotificationClockTimer() at load time, which invokes
  * window.setInterval. We stub it to a no-op to avoid leaking real timers.
  */
-function loadRuntimeStatus(overrides = {}) {
-  const defaults = {
-    t: (key) => key,
-    currentLanguage: 'zh',
-    currentMessages: [],
-    normalizeAgentIdentity: (x) => String(x || '').trim(),
-    getPathLeaf: (value) => String(value || '').replace(/\\/g, '/').split('/').filter(Boolean).pop() || '',
-    toEpochMs: (value) => Date.parse(value || '') || 0,
-    _agentCallActive: new Map(),
+function bootstrapClassic(sandbox) {
+  // 真实先行脚本序（test/p2-classic-hosts.js）：app-core / sidebar-render / app-main /
+  // app-ui 的宿主工厂都是生产实现，首屏 boot 与周期排程（含通知时钟）由基座关掉。
+  sandbox.setInterval = () => 0;
+  prepareClassicSandbox(sandbox);
+  // 窄行为观察面（真源之后覆盖，语义与迁移前一致）：本文件断言的是「标签取自 t /
+  // 语言取自 currentLanguage」这条契约本身，故 t 保持恒等映射、身份与时间工具保持
+  // 最小实现；侧栏列表与主视图渲染的 DOM 落地不在验收面（真实渲染需要整条页面 DOM）。
+  sandbox.t = (key) => key;
+  sandbox.currentMessages = [];
+  sandbox.normalizeAgentIdentity = (x) => String(x || '').trim();
+  sandbox.getPathLeaf = (value) => String(value || '').replace(/\\/g, '/').split('/').filter(Boolean).pop() || '';
+  sandbox.toEpochMs = (value) => Date.parse(value || '') || 0;
+  sandbox.renderAgentList = () => {};
+  sandbox.renderCurrentMainView = () => {};
+}
+
+
+/** 当前用例的沙箱；由下面的 it 包装器建立（每个用例一份 window + 一张 ESM 图）。 */
+
+/**
+ * 成功路径的缺键异常守卫：用例期间的 console 交给记录器（直通宿主，不静音），
+ * 用例结束（成功路径）时只对 TypeError / ReferenceError / is not a function
+ * 断言——装配缺键会以这类错误出现在真实调用链里，不能静默通过。
+ */
+function createConsoleGuard() {
+  const host = globalThis.console; // 词法捕获：用例期间 globalThis.console 已是记录器
+  const lines = [];
+  const format = (args) => args
+    .map((arg) => (arg instanceof Error ? `${arg.name}: ${arg.message}` : String(arg)))
+    .join(' ');
+  const recorder = {
+    ...host,
+    error: (...args) => { lines.push(format(args)); host.error(...args); },
+    warn: (...args) => { lines.push(format(args)); host.warn(...args); },
   };
-  const ctx = createFrontendSandbox({ ...defaults, ...overrides });
-  ctx.window.setInterval = () => 0;
-  ctx.loadSource('public/src/modules/sidebar-operations.js');
-  ctx.loadSource('public/src/modules/runtime-status.js');
+  return {
+    recorder,
+    lines,
+    assertClean: () => {
+      const offenders = lines.filter((line) => /TypeError|ReferenceError|is not a function/.test(line));
+      assert.deepEqual(offenders, [], '成功路径不应出现缺键 / 引用异常');
+    },
+  };
+}
+let activeCase = null;
+
+/**
+ * 用例包装：真实 import 已 ESM 化的 sidebar-operations（每 case 整图隔离），
+ * 用例体保持原样（`loadRuntimeStatus()` 取同一份沙箱）。
+ */
+function it(name, fn) {
+  nodeIt(name, async () => {
+    const guard = createConsoleGuard();
+    await withP2EsmCase({
+      classic: bootstrapClassic,
+      globals: { navigator: undefined, console: guard.recorder },
+    }, async (c) => {
+      const ops = await c.load(OPS);
+      // sidebar-operations 已把入口从 KernelState 桥注销（消费方一律具名 import）：
+      // classic 侧脚本按**模块命名空间**调用同一批 ESM 导出（不为每个函数恢复顶层名字）。
+      c.expose('SidebarOps', ops);
+      activeCase = c;
+      try {
+        const result = await fn();
+        guard.assertClean();
+        return result;
+      } finally {
+        activeCase = null;
+      }
+    });
+  });
+}
+
+/**
+ * 取当前用例的沙箱（runtime-status 已装载）。
+ *
+ * overrides 按原语义在装载后生效：状态键写经 kernel 访问器桥（与 classic 裸读
+ * 同一份值）。`_agentCallActive` 是 app-core 的 `const Map`（词法引用，不可
+ * 整体替换），因此按「清空 + 写入给定条目」落到真实 Map 上——被测实现读到的
+ * 就是这份 Map，不存在状态副本。
+ */
+function loadRuntimeStatus(overrides = {}) {
+  if (!activeCase) throw new Error('loadRuntimeStatus 必须在用例体内调用');
+  const ctx = activeCase.sandbox;
+  for (const [key, value] of Object.entries(overrides)) {
+    if (key === '_agentCallActive') {
+      ctx.run('_agentCallActive.clear()');
+      for (const [runtimeId, active] of value) {
+        ctx.run(`_agentCallActive.set(${JSON.stringify(runtimeId)}, ${JSON.stringify(active)})`);
+      }
+      continue;
+    }
+    ctx[key] = value;
+  }
   return ctx;
 }
 
@@ -289,7 +379,7 @@ describe('runtime-status: deleted thread runtime retirement', () => {
       };
       // The thread is already absent from the authoritative snapshot, while the
       // Viewer still briefly reports its retired child runtime.
-      markPendingRuntimeStop('programming-helper', 'deleted-session', 'runtime-deleting');
+      SidebarOps.markPendingRuntimeStop('programming-helper', 'deleted-session', 'runtime-deleting');
       const staleChild = {
         id: 'runtime-deleting', source: 'child', parent_id: 'programming-helper',
         sidebar_entry_id: 'programming-helper', runtime_session_id: 'runtime-deleting',
@@ -342,7 +432,7 @@ describe('runtime-status: sidebar operation projection', () => {
     const ctx = loadRuntimeStatus();
     const name = ctx.run(`(() => {
       const host = { id: 'programming-helper', source: 'prebuilt', workspace_sessions: { sessions: [] } };
-      beginSidebarOperation({
+      SidebarOps.beginSidebarOperation({
         operationId: 'summary:projection', type: 'create', kind: 'summary', phase: 'generating',
         agentId: host.id, sourceSessionId: 'session-1',
         projectDir: 'D:\\\\code\\\\project-a', projectName: 'project-a'
@@ -361,7 +451,7 @@ describe('runtime-status: sidebar operation projection', () => {
           sessions: [{ id: 'session-1', openDirectory: 'D:\\\\code\\\\project-a' }]
         }
       };
-      beginSidebarOperation({
+      SidebarOps.beginSidebarOperation({
         operationId: 'summary:missing-directory', type: 'create', kind: 'summary', phase: 'generating',
         agentId: host.id, sourceSessionId: 'session-1'
       });
@@ -379,7 +469,7 @@ describe('runtime-status: sidebar operation projection', () => {
           sessions: [{ id: 'session-1', openDirectory: 'D:\\\\code\\\\wrong-project' }]
         }
       };
-      beginSidebarOperation({
+      SidebarOps.beginSidebarOperation({
         operationId: 'summary:explicit-directory', type: 'create', kind: 'summary', phase: 'generating',
         agentId: host.id, sourceSessionId: 'session-1',
         projectDir: 'D:\\\\code\\\\right-project', projectName: 'right-project'
@@ -399,11 +489,11 @@ describe('runtime-status: sidebar operation projection', () => {
           sessions: [{ id: 'history-1', openDirectory: 'D:\\\\code\\\\project-a' }]
         }
       };
-      beginSidebarOperation({
+      SidebarOps.beginSidebarOperation({
         operationId: 'archive:history-only', type: 'archive', kind: 'archive', phase: 'committing',
         agentId: host.id, sourceSessionId: 'history-1'
       });
-      beginSidebarOperation({
+      SidebarOps.beginSidebarOperation({
         operationId: 'delete:history-only', type: 'delete', kind: 'delete', phase: 'committing',
         agentId: host.id, sourceSessionId: 'history-1'
       });
@@ -416,7 +506,7 @@ describe('runtime-status: sidebar operation projection', () => {
     const ctx = loadRuntimeStatus();
     const entry = ctx.run(`(() => {
       const host = { id: 'programming-helper', source: 'prebuilt', workspace_sessions: { sessions: [] } };
-      beginSidebarOperation({
+      SidebarOps.beginSidebarOperation({
         operationId: 'summary:degraded', type: 'replacement', kind: 'summary', phase: 'degraded',
         agentId: host.id, sourceSessionId: 'source-1', targetSessionId: 'target-1',
         projectDir: 'D:\\\\\\\\\\\\\\\\code\\\\\\\\\\\\\\\\project-a', projectName: 'project-a',
@@ -449,7 +539,7 @@ describe('runtime-status: sidebar operation identity routing', () => {
     const ctx = loadRuntimeStatus();
     const result = ctx.run(`(() => {
       ${PH_HOST}
-      beginSidebarOperation({
+      SidebarOps.beginSidebarOperation({
         operationId: 'summary:main-1', type: 'create', kind: 'summary', phase: 'generating',
         agentId: 'programming-helper', sourceSessionId: 'main-session-1',
         projectDir: 'D:\\\\code\\\\project-a', projectName: 'project-a'
@@ -468,7 +558,7 @@ describe('runtime-status: sidebar operation identity routing', () => {
     const ctx = loadRuntimeStatus();
     const result = ctx.run(`(() => {
       ${PH_HOST}
-      beginSidebarOperation({
+      SidebarOps.beginSidebarOperation({
         operationId: 'summary:coder-1', type: 'create', kind: 'summary', phase: 'generating',
         agentId: 'coder', sourceSessionId: 'coder-session-1',
         projectDir: 'D:\\\\code\\\\project-a', projectName: 'project-a'
@@ -493,7 +583,7 @@ describe('runtime-status: sidebar operation identity routing', () => {
         runtime_session_id: 'coder-runtime', active_workspace_session_id: 'coder-session-1',
         connected: true
       };
-      beginSidebarOperation({
+      SidebarOps.beginSidebarOperation({
         operationId: 'delete:coder-1', type: 'delete', kind: 'delete', phase: 'committing',
         agentId: 'coder', sourceSessionId: 'coder-session-1',
         sourceRuntimeId: 'coder-runtime'
@@ -515,7 +605,7 @@ describe('runtime-status: sidebar operation identity routing', () => {
     const result = ctx.run(`(() => {
       ${PH_HOST}
       // 乐观移除后源条目已不在（无 runtime、无列表条目），删除仍在进行。
-      beginSidebarOperation({
+      SidebarOps.beginSidebarOperation({
         operationId: 'delete:ph-1', type: 'delete', kind: 'delete', phase: 'committing',
         agentId: 'programming-helper', sourceSessionId: 'session-1',
         sourceRuntimeId: 'runtime-1'
@@ -531,7 +621,7 @@ describe('runtime-status: sidebar operation identity routing', () => {
       ${PH_HOST}
       // 删除失败：operation 已 failed，轮询回填的会话条目必须正常显示，
       // 否则用户丢失会话入口且无恢复路径。
-      beginSidebarOperation({
+      SidebarOps.beginSidebarOperation({
         operationId: 'delete:ph-fail', type: 'delete', kind: 'delete', phase: 'failed',
         agentId: 'programming-helper', sourceSessionId: 'session-1',
         sourceRuntimeId: 'runtime-1'
@@ -552,11 +642,11 @@ describe('runtime-status: sidebar operation identity routing', () => {
     const ctx = loadRuntimeStatus();
     const result = ctx.run(`(() => {
       ${PH_HOST}
-      beginSidebarOperation({
+      SidebarOps.beginSidebarOperation({
         operationId: 'summary:coder-no-dir', type: 'create', kind: 'summary', phase: 'generating',
         agentId: 'coder', sourceSessionId: 'coder-session-1'
       });
-      beginSidebarOperation({
+      SidebarOps.beginSidebarOperation({
         operationId: 'summary:ph-no-dir', type: 'create', kind: 'summary', phase: 'generating',
         agentId: 'programming-helper', sourceSessionId: 'main-session-1'
       });
@@ -574,7 +664,7 @@ describe('runtime-status: sidebar operation identity routing', () => {
     const ctx = loadRuntimeStatus();
     const entries = ctx.run(`(() => {
       ${PH_HOST}
-      beginSidebarOperation({
+      SidebarOps.beginSidebarOperation({
         operationId: 'create:handover-none', type: 'create', kind: 'create', phase: 'target-starting',
         agentId: 'programming-helper', targetSessionId: 'session-new',
         projectDir: 'D:\\\\\\\\code\\\\\\\\project-a', projectName: 'project-a'
@@ -596,7 +686,7 @@ describe('runtime-status: sidebar operation identity routing', () => {
         runtime_session_id: 'agent-new', active_workspace_session_id: 'session-new',
         active_workspace_display_name: '新对话', connected: true
       };
-      beginSidebarOperation({
+      SidebarOps.beginSidebarOperation({
         operationId: 'create:handover-cover', type: 'create', kind: 'create', phase: 'target-starting',
         agentId: 'programming-helper', targetSessionId: 'session-new',
         projectDir: 'D:\\\\\\\\code\\\\\\\\project-a', projectName: 'project-a'
@@ -619,7 +709,7 @@ describe('runtime-status: sidebar operation identity routing', () => {
         runtime_session_id: 'agent-sibling', active_workspace_session_id: 'session-old',
         active_workspace_display_name: '旧会话', connected: true
       };
-      beginSidebarOperation({
+      SidebarOps.beginSidebarOperation({
         operationId: 'create:handover-sibling', type: 'create', kind: 'create', phase: 'target-starting',
         agentId: 'programming-helper', targetSessionId: 'session-new',
         projectDir: 'D:\\\\\\\\code\\\\\\\\project-a', projectName: 'project-a'

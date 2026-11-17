@@ -3,32 +3,38 @@
  * 从 app-main.js 拆出（S+A3）
  * 拆出日期：2026-07-13
  *
- * 依赖全局状态（定义在 app-core.js）:
- *   currentLanguage
- *   phSearchQuery, _phSearchTimer, savedPhTabState, phSessionSortMode
- * 依赖全局函数:
- *   getCurrentAgentRecord (app-main.js)
- *   renderCurrentMainView (app-ui.js)
- *   escapeHtml, t (app-core.js)
- *   getAgentWorkspaceState (app-ui.js)
- *   getCtxMenuItems (modules/ctx-menu-items.js)
- *   closeCtxMenu, showCtxMenu (modules/context-menu.js)
- *   closeAgentContextMenu,
- *   closeCompactMenu, closeProjectContextMenu (app-ui.js)
- *   renderPhSessionItemHtml (modules/session-list-render.js — 正常列表与搜索共用骨架)
- * window 函数:
- *   switchPhSessionTab, phToggleSessionSort,
- *   _buildPhSearchPanelHtml, _updatePhSearchPanelDom,
- *   phOnSearchInput, phClearSearch, phShowSessionCtxMenu,
- *   phToggleSearchSort, phSearchLoadMore,
- *   phSearchRetry, phSearchToggleExpand, phSearchResetState
- * 模板交互: 搜索面板控件声明 data-action="phSessions.*"，处理器在文件
- * 尾部集中注册（action-dispatcher.js）；列表主模板的会话行动作由
- * session-list-render.js 的 sessions.* 注册块承接（经 window 转调本模块）。
+ * ESM 化：P2 W2-8（2026-11-17）。原位转换，渲染模板、搜索状态机与请求隔离语义零变化。
+ *
+ * 依赖（ESM，装载顺序由 import 图确定）:
+ *   - session-list-render：renderPhSessionItemHtml（正常列表与搜索共用骨架）
+ *   - ctx-menu-items：getCtxMenuItems；time-format-host：formatWorkspaceDate
+ *   - context-menu：closeAgentContextMenu / closeCompactMenu / closeProjectContextMenu
+ *   - i18n-environment-state：实时语言；markdown-utils：escapeHtml / splitMarkdownFrontmatter
+ *   - p2-bootstrap-ph-session：phSessionUi.phSearchQuery / phSessionUi._phSearchTimer / phSessionUi.phSessionSortMode /
+ *     savedPhTabState（owner 仍是 app-core 的词法状态，经 classic 工厂适配）
+ *
+ * 仍 classic（调用时点显式 window 晚绑定，各域收敛时改 import）:
+ *   - app-main：getCurrentAgentRecord；app-ui：renderCurrentMainView 与
+ *     closeCtxMenu / showCtxMenu（app-ui 定义的统一 ctx 菜单几何入口）
+ *   - vendor：window.marked
+ *
+ * 模块状态：话题分组缓存与搜索状态从 `window.ClawFW` 收回模块作用域
+ * （`phTopicGroups` 私有、`_phSearch` 命名导出供 ph-search-locate 读写），
+ * 全仓无其它消费方（grep 证据见批次报告）。
+ *
+ * 时序（R1/R2/R4）：首屏同步链零触达（实测探针）；顶层只注册动作与初始化
+ * 两份模块状态，动作处理器在用户交互时执行。
  */
 
-window.ClawFW = window.ClawFW || {};
-window.ClawFW.phTopicGroups = window.ClawFW.phTopicGroups || new Map();
+import { escapeHtml, splitMarkdownFrontmatter } from './markdown-utils.js';
+import { getCurrentLanguage } from './i18n-environment-state.js';
+import { formatWorkspaceDate } from './time-format-host.js';
+import { getCtxMenuItems } from './ctx-menu-items.js';
+import { renderPhSessionItemHtml } from './session-list-render.js';
+import { phSessionUi } from './p2-bootstrap-ph-session.js';
+import { closeAgentContextMenu, closeCompactMenu, closeProjectContextMenu } from './context-menu.js';
+
+const phTopicGroups = new Map();
 
 function _phTopicKeyFromAttrs(agentId, projectId, directory) {
   return [agentId || '', projectId || '', directory || ''].join('|');
@@ -41,10 +47,10 @@ function _phTopicKey(panel) {
 /** 状态按「agent|project|directory」身份键共享（跨面板元素）：面板元素随工作区
  *  innerHTML 重建会被整体替换，状态若挂在元素上则每次重建都清零、缓存失效。 */
 function _phTopicStateByKey(key) {
-  let state = window.ClawFW.phTopicGroups.get(key);
+  let state = phTopicGroups.get(key);
   if (!state) {
     state = { key, loading: false, loaded: false, error: false, groups: [] };
-    window.ClawFW.phTopicGroups.set(key, state);
+    phTopicGroups.set(key, state);
   }
   return state;
 }
@@ -55,7 +61,7 @@ function _phTopicState(panel) {
 
 function _phTopicHtmlByKey(key) {
   const state = _phTopicStateByKey(key);
-  const isZh = currentLanguage === 'zh';
+  const isZh = getCurrentLanguage() === 'zh';
   if (state.loading && !state.loaded) return '<div class="ph-topic-status">' + escapeHtml(isZh ? '正在加载 Topic…' : 'Loading topics…') + '</div>';
   if (state.error) return '<div class="ph-topic-status ph-topic-error">' + escapeHtml(isZh ? 'Topic 加载失败，请稍后重试' : 'Failed to load topics. Try again later.') + '</div>';
   // 未触发过加载（模板首渲染、懒加载尚未挂上）才是「切换后加载」；
@@ -98,7 +104,7 @@ function _phTopicRenderKey(key) {
 
 /** 模板首渲染取面板初始内容（session-list-render.js）：未加载占位 / 在途加载中 /
  * 已加载直接呈现缓存卡片（工作区轮询重渲染不再闪占位）。 */
-window.phTopicPanelInnerHtml = (agentId, projectId, directory) =>
+export const phTopicPanelInnerHtml = (agentId, projectId, directory) =>
   _phTopicHtmlByKey(_phTopicKeyFromAttrs(agentId, projectId, directory));
 
 async function _loadPhTopicGroups(panel) {
@@ -125,7 +131,7 @@ async function _loadPhTopicGroups(panel) {
   }
 }
 
-window.ensurePhTopicGroups = (panel) => _loadPhTopicGroups(panel);
+export const ensurePhTopicGroups = (panel) => _loadPhTopicGroups(panel);
 
 /** 将 tab group 呈现为指定 tab（active class + tab 专属副作用）。
  * 点击切换（switchPhSessionTab）与工作区重建后的记忆恢复（app-ui.js
@@ -139,30 +145,45 @@ function _applyPhSessionTabDom(tabGroup, targetTab) {
   }
 }
 
-window.applyPhSessionTabDom = _applyPhSessionTabDom;
+export const applyPhSessionTabDom = _applyPhSessionTabDom;
 
-window.switchPhSessionTab = (btn) => {
+export const switchPhSessionTab = (btn) => {
   const tabGroup = btn.closest('.ph-session-tabs');
   if (!tabGroup) return;
   const targetTab = btn.dataset.phTab;
   // Update active tab indicator (visible when search is cleared later)
   _applyPhSessionTabDom(tabGroup, targetTab);
   if (tabGroup.dataset.tabGroup) {
-    savedPhTabState[tabGroup.dataset.tabGroup] = targetTab;
+    phSessionUi.savedPhTabState[tabGroup.dataset.tabGroup] = targetTab;
   }
 };
 
-window.phToggleSessionSort = () => {
-  phSessionSortMode = phSessionSortMode === 'createdAt' ? 'updatedAt' : 'createdAt';
-  renderCurrentMainView();
+export const phToggleSessionSort = () => {
+  phSessionUi.phSessionSortMode = phSessionUi.phSessionSortMode === 'createdAt' ? 'updatedAt' : 'createdAt';
+  window.renderCurrentMainView();
+};
+
+// ── surface 远程视图覆盖（模块局部；ADR-0012 决策 1）────────────────
+// 远程独有项目在 surface 选择器上的视图覆盖：纯视图状态，不写本地工作区目录
+// （本地 ph_project/switch 会把工作区切到远程路径，属错误语义）。owner 收在
+// 本模块（与搜索状态同址），三个消费方（ph-project-actions / ph-search-locate /
+// session-list-render）直接 import，不再经 `window.ClawFW.phSurfaceViewProjectId`。
+let _phSurfaceViewProjectId = null;
+
+/** 当前远程视图覆盖的项目 id（无覆盖返回 null）。 */
+export const getPhSurfaceViewProjectId = () => _phSurfaceViewProjectId;
+
+/** 设置 / 清除远程视图覆盖（projectId 为空即清除）。 */
+export const setPhSurfaceViewProjectId = (projectId) => {
+  _phSurfaceViewProjectId = String(projectId || '').trim() || null;
 };
 
 // ── 搜索状态（模块局部；app-core 全局状态不增）──────────────────────
-// 结果/范围/排序/分页/展开全部收敛在 ClawFW.phSearch。异步结果按
+// 结果/范围/排序/分页/展开全部收敛在本模块的 `_phSearch`（命名导出，供
+// ph-search-locate 共享 homeScrollTop）。异步结果按
 // （查询, agentId+openDirectory 身份, 请求代次）三重隔离：响应只在该请求
 // 仍是最新代次、且身份未变时落地，连续输入不覆盖新结果。
-window.ClawFW = window.ClawFW || {};
-const _phSearch = window.ClawFW.phSearch = window.ClawFW.phSearch || {
+export const _phSearch = {
   epoch: 0,
   agentId: '',
   openDirectory: '',
@@ -220,11 +241,9 @@ function _phReadableExcerpt(source) {
   }).join('');
   // 片段的开头若是 YAML frontmatter（消息里常整段贴 SKILL.md），元数据
   // 不该进检索摘要：只保留正文。判定复用同一套 frontmatter 规则。
-  const frontmatter = typeof splitMarkdownFrontmatter === 'function'
-    ? splitMarkdownFrontmatter(source)
-    : null;
+  const frontmatter = splitMarkdownFrontmatter(source);
   const body = frontmatter ? frontmatter.body : source;
-  return marked.lexer(String(body || '')).map((token) => {
+  return window.marked.lexer(String(body || '')).map((token) => {
     if (token.type === 'space') return '\n';
     if (token.type === 'list') return token.items.map((item) => inline(item.tokens)).join('\n');
     if (token.type === 'table') return [token.header, ...token.rows].map((row) => row.map((cell) => inline(cell.tokens)).join(' | ')).join('\n');
@@ -233,7 +252,7 @@ function _phReadableExcerpt(source) {
 }
 
 function _phRoleLabel(role) {
-  const isZh = currentLanguage === 'zh';
+  const isZh = getCurrentLanguage() === 'zh';
   if (role === 'user') return isZh ? '你' : 'You';
   if (role === 'assistant') return isZh ? '助手' : 'Assistant';
   return '';
@@ -262,7 +281,7 @@ function _phMatchHtml(match, queryTrimmed, expanded) {
 
 /** 搜索上下文片段区（替代普通条目的 preview + token bar）。 */
 function _phSearchSnippetHtml(result, queryTrimmed) {
-  const isZh = currentLanguage === 'zh';
+  const isZh = getCurrentLanguage() === 'zh';
   if (!result.matches || result.matches.length === 0) {
     return '<div class="ph-search-snippet ph-search-snippet-title-only">'
       + escapeHtml(isZh ? '标题匹配' : 'Title match') + '</div>';
@@ -294,7 +313,7 @@ function _phSearchSnippetHtml(result, queryTrimmed) {
 }
 
 function _phScopeLabel(scope) {
-  const isZh = currentLanguage === 'zh';
+  const isZh = getCurrentLanguage() === 'zh';
   if (scope === 'main') return isZh ? '我的对话' : 'My Chats';
   if (scope === 'archived') return isZh ? '已归档' : 'Archived';
   return isZh ? '全部' : 'All';
@@ -309,7 +328,7 @@ function _phScopeTabsHtml() {
 }
 
 function _phSortToggleHtml() {
-  const isZh = currentLanguage === 'zh';
+  const isZh = getCurrentLanguage() === 'zh';
   const label = _phSearch.sort === 'relevance' ? (isZh ? '相关度' : 'Relevance') : (isZh ? '最近更新' : 'Recently updated');
   return '<button class="ph-search-sort-btn" type="button" data-action="phSessions.searchToggleSort" title="' + escapeHtml(isZh ? '切换排序方式' : 'Toggle sort order') + '">'
     + '<svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M3 2v8M3 10L1.5 8.5M3 10l1.5-1.5M9 10V2M9 2L7.5 3.5M9 2l1.5 1.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>'
@@ -317,7 +336,7 @@ function _phSortToggleHtml() {
 }
 
 function _phResultRowHtml(result, identity, agent) {
-  const queryTrimmed = phSearchQuery.trim();
+  const queryTrimmed = phSessionUi.phSearchQuery.trim();
   const sessionLike = {
     id: result.sessionId,
     title: result.title,
@@ -329,7 +348,7 @@ function _phResultRowHtml(result, identity, agent) {
   };
   const variant = result.archived === true ? 'archived' : (result.sessionType || 'main');
   const primaryIndex = (result.matches && result.matches.length > 0) ? result.matches[0].index : null;
-  return window.renderPhSessionItemHtml(agent, sessionLike, {
+  return renderPhSessionItemHtml(agent, sessionLike, {
     type: variant,
     nsId: identity.identity,
     titleHtml: _phHighlightText(result.title || result.sessionId, queryTrimmed),
@@ -346,9 +365,9 @@ function _phResultRowHtml(result, identity, agent) {
   });
 }
 
-window._buildPhSearchPanelHtml = (viewIdentity) => {
-  const isZh = currentLanguage === 'zh';
-  if (!phSearchQuery.trim()) return '';
+export const _buildPhSearchPanelHtml = (viewIdentity) => {
+  const isZh = getCurrentLanguage() === 'zh';
+  if (!phSessionUi.phSearchQuery.trim()) return '';
 
   const identity = viewIdentity || _phSearchIdentity();
 
@@ -367,7 +386,7 @@ window._buildPhSearchPanelHtml = (viewIdentity) => {
     ].join('');
   }
 
-  const agent = getCurrentAgentRecord();
+  const agent = window.getCurrentAgentRecord();
   const shown = _phSearch.results.length;
   const headerHtml = [
     '<div class="ph-search-toolbar">',
@@ -402,13 +421,13 @@ window._buildPhSearchPanelHtml = (viewIdentity) => {
 
 function _updatePhSearchPanelDom() {
   const panel = document.querySelector('.ph-search-panel');
-  if (panel) panel.innerHTML = window._buildPhSearchPanelHtml();
+  if (panel) panel.innerHTML = _buildPhSearchPanelHtml();
 }
 
 function _phSearchRequestIsCurrent(token) {
   const current = _phSearchIdentity();
   return token.epoch === _phSearch.epoch
-    && phSearchQuery.trim() === token.query
+    && phSessionUi.phSearchQuery.trim() === token.query
     && current.identity === token.agentId
     && current.openDirectory === token.openDirectory
     && current.projectId === token.projectId
@@ -417,7 +436,7 @@ function _phSearchRequestIsCurrent(token) {
 
 async function _phSearchFetch({ replace }) {
   const identity = _phSearchIdentity();
-  const queryTrimmed = phSearchQuery.trim();
+  const queryTrimmed = phSessionUi.phSearchQuery.trim();
 
   if (!queryTrimmed) return;
   if (!identity.identity) {
@@ -481,16 +500,16 @@ async function _phSearchFetch({ replace }) {
   }
 }
 
-window.phOnSearchInput = (value) => {
-  const changed = phSearchQuery !== (value || '');
-  phSearchQuery = value || '';
+export const phOnSearchInput = (value) => {
+  const changed = phSessionUi.phSearchQuery !== (value || '');
+  phSessionUi.phSearchQuery = value || '';
   _phSearch.epoch += 1;
   if (changed) _phSearch.expanded.clear();
-  if (_phSearchTimer) {
-    clearTimeout(_phSearchTimer);
-    _phSearchTimer = null;
+  if (phSessionUi._phSearchTimer) {
+    clearTimeout(phSessionUi._phSearchTimer);
+    phSessionUi._phSearchTimer = null;
   }
-  const trimmed = phSearchQuery.trim();
+  const trimmed = phSessionUi.phSearchQuery.trim();
 
   // Update clear button visibility
   const clearBtn = document.querySelector('.ph-search-clear-btn');
@@ -513,17 +532,17 @@ window.phOnSearchInput = (value) => {
   _updatePhSearchPanelDom();
 
   // Debounce the API call
-  _phSearchTimer = setTimeout(() => {
-    _phSearchTimer = null;
+  phSessionUi._phSearchTimer = setTimeout(() => {
+    phSessionUi._phSearchTimer = null;
     _phSearchFetch({ replace: true });
   }, 300);
 };
 
-window.phSetSearchScopeByValue = (scope) => {
+export const phSetSearchScopeByValue = (scope) => {
   const next = scope === 'main' || scope === 'archived' ? scope : 'all';
   if (_phSearch.scope === next) return;
   _phSearch.scope = next;
-  if (phSearchQuery.trim()) {
+  if (phSessionUi.phSearchQuery.trim()) {
     _phSearchFetch({ replace: true });
   } else {
     _updatePhSearchPanelDom();
@@ -532,28 +551,28 @@ window.phSetSearchScopeByValue = (scope) => {
 
 /** 范围 tab 的 btn 适配器（模板 data-action 专用；ByValue 版保留 window 供测试直调）。 */
 function phSetSearchScope(btn) {
-  if (btn?.dataset?.scope) window.phSetSearchScopeByValue(btn.dataset.scope);
+  if (btn?.dataset?.scope) phSetSearchScopeByValue(btn.dataset.scope);
 }
 
-window.phToggleSearchSort = () => {
+export const phToggleSearchSort = () => {
   _phSearch.sort = _phSearch.sort === 'relevance' ? 'recency' : 'relevance';
-  if (phSearchQuery.trim()) {
+  if (phSessionUi.phSearchQuery.trim()) {
     _phSearchFetch({ replace: true });
   } else {
     _updatePhSearchPanelDom();
   }
 };
 
-window.phSearchLoadMore = () => {
+export const phSearchLoadMore = () => {
   if (_phSearch.loading) return;
-  if (phSearchQuery.trim()) _phSearchFetch({ replace: false });
+  if (phSessionUi.phSearchQuery.trim()) _phSearchFetch({ replace: false });
 };
 
-window.phSearchRetry = () => {
-  if (phSearchQuery.trim()) _phSearchFetch({ replace: true });
+export const phSearchRetry = () => {
+  if (phSessionUi.phSearchQuery.trim()) _phSearchFetch({ replace: true });
 };
 
-window.phSearchToggleExpand = (sessionId) => {
+export const phSearchToggleExpand = (sessionId) => {
   if (_phSearch.expanded.has(sessionId)) {
     _phSearch.expanded.delete(sessionId);
   } else {
@@ -572,22 +591,22 @@ function _phSearchResetResults() {
 }
 
 /** 项目/宿主切换入口（ph-project-actions 调用）：搜索状态整体作废。 */
-window.phSearchResetState = () => {
+export const phSearchResetState = () => {
   _phSearchResetResults();
   _phSearch.agentId = '';
   _phSearch.openDirectory = '';
   _phSearch.projectId = '';
   _phSearch.scope = 'all';
   _phSearch.sort = 'relevance';
-  if (_phSearchTimer) { clearTimeout(_phSearchTimer); _phSearchTimer = null; }
+  if (phSessionUi._phSearchTimer) { clearTimeout(phSessionUi._phSearchTimer); phSessionUi._phSearchTimer = null; }
   const panel = document.querySelector('.ph-search-panel');
   if (panel) panel.innerHTML = '';
 };
 
-window.phClearSearch = () => {
-  phSearchQuery = '';
+export const phClearSearch = () => {
+  phSessionUi.phSearchQuery = '';
   _phSearchResetResults();
-  if (_phSearchTimer) { clearTimeout(_phSearchTimer); _phSearchTimer = null; }
+  if (phSessionUi._phSearchTimer) { clearTimeout(phSessionUi._phSearchTimer); phSessionUi._phSearchTimer = null; }
   const input = document.querySelector('.ph-search-input');
   if (input) input.value = '';
   const clearBtn = document.querySelector('.ph-search-clear-btn');
@@ -602,7 +621,7 @@ window.phClearSearch = () => {
  * Open the unified ctx-menu for a session list item (triggered by ⋯ button).
  * Equivalent to right-clicking the session item — both use getCtxMenuItems('session', ...).
  */
-window.phShowSessionCtxMenu = (event, button, agentId, sessionId, variant) => {
+export const phShowSessionCtxMenu = (event, button, agentId, sessionId, variant) => {
   if (event) { event.stopPropagation(); }
   const items = getCtxMenuItems('session', agentId, variant, sessionId);
   if (items.length === 0) return;
@@ -615,13 +634,33 @@ window.phShowSessionCtxMenu = (event, button, agentId, sessionId, variant) => {
 };
 
 // ── 搜索面板动作（data-action="phSessions.*"）───────────────
-// 搜索结果片段按钮的内联事件收编。目标函数均有跨模块 / 测试消费面
-// （session-list-render 注册块与 ph-session-move 转调、frontend-ph-search
-// 直调），保留 window 导出，handler 经 window 转调。
+// 搜索结果片段按钮的内联事件收编。handler 直接调用本模块导出（同批消费方
+// 已改 import；仍被本批之外模块引用的入口由文件末尾兼容桥兜住）。
 window.ClawFW.actions.registerMany({
-  'phSessions.searchToggleExpand': (el) => window.phSearchToggleExpand(el.dataset.sessionId),
+  'phSessions.searchToggleExpand': (el) => phSearchToggleExpand(el.dataset.sessionId),
   'phSessions.searchSetScope': (el) => phSetSearchScope(el),
-  'phSessions.searchToggleSort': () => window.phToggleSearchSort(),
-  'phSessions.searchRetry': () => window.phSearchRetry(),
-  'phSessions.searchLoadMore': () => window.phSearchLoadMore(),
+  'phSessions.searchToggleSort': () => phToggleSearchSort(),
+  'phSessions.searchRetry': () => phSearchRetry(),
+  'phSessions.searchLoadMore': () => phSearchLoadMore(),
+});
+
+// —— 桥接期兼容面（kernel-state 访问器桥，domain: ph-session-list）——
+// 保留原因：本批之外的 classic / 已 ESM 模块在调用时点取用这些 UI 入口。
+// 逐键消费面：
+//   applyPhSessionTabDom   ← classic app-ui（savedPhTabState 回放）
+//   （phTopicPanelInnerHtml / switchPhSessionTab / phToggleSessionSort /
+//    _buildPhSearchPanelHtml / phOnSearchInput / phClearSearch / phShowSessionCtxMenu
+//    已由 session-list-render 直接 import，对应 defineKey 已注销）
+// 无桥（唯一消费在本批内或仅动作注册块自用）：ensurePhTopicGroups /
+//   phSearchResetState（ph-project-actions 已 import）/ phSearchRetry /
+//   phSearchLoadMore / phSearchToggleExpand / phToggleSearchSort /
+//   phSetSearchScopeByValue / phSearchLocate* 系列的搜索面板入口。
+// 注销条件：上述 ESM 消费方改 import、classic app-ui 迁移后删除对应 defineKey。
+const bridgeApi = {
+  applyPhSessionTabDom,
+};
+window.KernelState.defineKey('ph-session-list', 'applyPhSessionTabDom', applyPhSessionTabDom);
+window.KernelState.claim('ph-session-list', {
+  get: (key) => bridgeApi[key],
+  set: (key, value) => { bridgeApi[key] = value; },
 });

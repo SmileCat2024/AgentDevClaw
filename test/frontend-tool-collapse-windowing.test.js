@@ -19,18 +19,23 @@
  *    delta of rows fully above the viewport (follow mode skips compensation;
  *    the bottom-lock settlement absorbs height changes there).
  *
- * Loads the real chat-viewport.js / lazy-tool-content.js / chat-renderer.js /
- * input-helpers.js into a vm sandbox with a layout-model DOM stub
- * (classList trees + computed offsetTop/offsetHeight, mirroring
- * frontend-follow-smooth-append.test.js).
+ * 装载路线（P2）：chat-viewport / chat-renderer / input-helpers 仍 classic
+ * （沙箱内按 index.html 真实加载序执行：action-dispatcher → i18n → app-core →
+ * chat-viewport → input-helpers → chat-renderer，顶层函数即生产入口）；
+ * lazy-tool-content 已迁 ESM，经 withP2EsmCase 的 `c.load` 真实 import——七个
+ * 窗口函数既是命名导出，也经生产兼容桥 p2-w2-1-chat-windowing-host 暴露给
+ * classic 消费方。滚动链走真实的 container 'scroll' 监听 + rAF/scroll-stop
+ * 计时器（不再直接调用私有 _onScrollForWindowing / _applyWindow）；冻结状态的
+ * 写入一律走公开 freezeProcessWindowing / unfreezeProcessWindowing，仅用
+ * processWindowingMode.frozen 读回释放后的状态（该字段无公开 getter）。
  */
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import vm from 'node:vm';
+import { withP2EsmCase } from './helpers/p2-esm-case.js';
 
-const src = (p) => fs.readFileSync(new URL('../public/src/' + p, import.meta.url), 'utf8');
+const LAZY_TOOL_CONTENT = 'public/src/modules/lazy-tool-content.js';
+const WINDOWING_MODE = 'public/src/modules/p2-w2-1-process-windowing-mode.js';
 
 const VIEW_H = 800;
 const TOGGLE_BAR_H = 34; // .expand-toggle-bar added under collapsible rows
@@ -107,7 +112,7 @@ function makeRow({ role, realH, toolName = '', msgId = '' }) {
     if (child && child._isToggleBar) btnBar = child;
     return child;
   };
-  return { row, content, getBtnBar: () => btnBar };
+  return { row, content };
 }
 
 // Layout model: sequential offsetTop over container rows.
@@ -152,9 +157,6 @@ function installLayout(container) {
     get() { return Math.max(layout().total, VIEW_H); },
   });
   container._entries = [];
-  container._rows = new Proxy({}, {
-    // Not used directly; querySelectorAll returns rows via selector below.
-  });
   container.querySelectorAll = (sel) => {
     if (sel === '.message-row') {
       // No layout() here: in a real browser querySelectorAll does not force
@@ -171,19 +173,19 @@ function installLayout(container) {
     ? (container.querySelectorAll('.message-row')[0] || null)
     : null);
   container.getBoundingClientRect = () => ({ top: 0, left: 0, width: 1000, height: VIEW_H });
-  container.addEventListener = () => {};
-  container.removeEventListener = () => {};
   Object.defineProperty(container, 'offsetTop', { get: () => 0 });
   Object.defineProperty(container, 'offsetHeight', { get: () => layout().total });
   container._layout = layout;
   return layout;
 }
 
-function createHarness({ messages } = {}) {
+function createRig() {
   const container = {
     clientHeight: VIEW_H,
+    clientWidth: 1000,
     _scrollTop: 0,
     _scrollWrites: [],
+    _listeners: new Map(),
   };
   const layout = installLayout(container);
   Object.defineProperty(container, 'scrollTop', {
@@ -203,63 +205,143 @@ function createHarness({ messages } = {}) {
       }
     },
   });
+  container.addEventListener = (type, listener) => {
+    if (!container._listeners.has(type)) container._listeners.set(type, []);
+    container._listeners.get(type).push(listener);
+  };
+  container.removeEventListener = (type, listener) => {
+    const list = container._listeners.get(type);
+    if (!list) return;
+    const i = list.indexOf(listener);
+    if (i >= 0) list.splice(i, 1);
+  };
 
   const timers = new Map();
   const rafCallbacks = new Map();
   const rafOrder = [];
   let seq = 1;
 
-  const sandbox = {
-    console,
-    Date, JSON, Math, Promise, Map, Set, Number, Object, Array, Boolean, String, isNaN, parseInt,
-    window: {},
+  const elements = new Map();
+  const elementStub = (id) => ({
+    id, innerHTML: '', textContent: '', style: {},
+    classList: makeClassList(), dataset: {},
+    clientHeight: 0, clientWidth: 0, scrollHeight: 0, scrollTop: 0, parentElement: null,
+    addEventListener() {}, removeEventListener() {},
+    querySelector() { return null; }, querySelectorAll() { return []; },
+    getBoundingClientRect() { return { top: 0, left: 0, width: 0, height: 0 }; },
+  });
+  // app-core 的 container 引用 = document.getElementById('chat-container')。
+  const document = {
+    activeElement: null,
+    readyState: 'complete',
+    getElementById(id) {
+      if (id === 'chat-container') return container;
+      if (!elements.has(id)) elements.set(id, elementStub(id));
+      return elements.get(id);
+    },
+    querySelector() { return null; },
+    querySelectorAll() { return []; },
+    createElement: () => elementStub('created'),
+    createTextNode: (text) => ({ textContent: text }),
+    addEventListener() {}, removeEventListener() {},
+    body: elementStub('body'), head: elementStub('head'), documentElement: elementStub('html'),
+  };
+
+  const fakeTimers = {
     setTimeout(callback) { const id = seq++; timers.set(id, callback); return id; },
     clearTimeout(id) { timers.delete(id); },
+    setInterval(callback) { const id = seq++; timers.set(id, callback); return id; },
+    clearInterval(id) { timers.delete(id); },
     requestAnimationFrame(callback) { const id = seq++; rafCallbacks.set(id, callback); rafOrder.push(id); return id; },
     cancelAnimationFrame(id) { rafCallbacks.delete(id); const i = rafOrder.indexOf(id); if (i >= 0) rafOrder.splice(i, 1); },
-    MutationObserver: class { observe() {} disconnect() {} },
-    ResizeObserver: class { observe() {} disconnect() {} },
-    document: {
-      getElementById: () => null,
-      querySelector: () => null,
-      querySelectorAll: () => [],
-      createElement: () => ({
-        style: {},
-        classList: makeClassList(),
-        dataset: {},
-        setAttribute() {},
-        // The collapse sync diff-guards its innerHTML write by reading the
-        // rendered label back; mirror it off the written innerHTML string.
-        querySelector(sel) {
-          if (sel !== '.expand-toggle-btn' || this.innerHTML === undefined) return null;
-          const m = /<button[^>]*>([^<]*)<\/button>/.exec(this.innerHTML || '');
-          return m ? { textContent: m[1] } : null;
+  };
+
+  return {
+    container, document, layout, fakeTimers,
+    addRow(entry) {
+      container._entries.push(entry);
+      container._markDirty();
+      // Row-level layout accessors: the windowing/fold code reads offsetTop /
+      // offsetHeight on rows (reveal compensation, binary-search scans). Back
+      // them with the layout cache — without them every read yields undefined
+      // and the compensation silently no-ops.
+      Object.defineProperty(entry.row, 'offsetTop', {
+        get: () => {
+          const rec = container._layout().tops.get(entry.row);
+          return rec ? rec.top : 0;
         },
-      }),
-      body: { contains: () => true },
-      addEventListener() {}, // action-dispatcher 装载时绑定委托监听
+      });
+      Object.defineProperty(entry.row, 'offsetHeight', {
+        get: () => {
+          const rec = container._layout().tops.get(entry.row);
+          return rec ? rec.h : 0;
+        },
+      });
+      // Route classList mutations through layout invalidation.
+      for (const target of [entry.row, entry.content, ...(entry.row._processChildren || [])]) {
+        const list = target.classList;
+        if (!list.__wired) {
+          list.__wired = true;
+          const add = list.add.bind(list);
+          const remove = list.remove.bind(list);
+          const toggle = list.toggle.bind(list);
+          list.add = (...n) => { add(...n); container._markDirty(); };
+          list.remove = (...n) => { remove(...n); container._markDirty(); };
+          list.toggle = (name, force) => { const r = toggle(name, force); container._markDirty(); return r; };
+        }
+      }
+      return entry;
     },
-    localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
+    fireScroll() {
+      for (const listener of (container._listeners.get('scroll') || []).slice()) {
+        listener({ target: container });
+      }
+    },
+    flushTimers() {
+      const pending = [...timers.values()];
+      timers.clear();
+      pending.forEach((cb) => cb());
+    },
+    pumpFrame() {
+      const ids = rafOrder.splice(0);
+      ids.forEach((id) => {
+        const cb = rafCallbacks.get(id);
+        rafCallbacks.delete(id);
+        if (cb) cb();
+      });
+    },
+    makeToolEntries({ toolName, realH, from, to }) {
+      const out = [];
+      for (let i = from; i < to; i++) {
+        const e = makeRow({ role: 'tool', realH, toolName, msgId: `msg-${container._entries.length}` });
+        out.push(this.addRow(e));
+      }
+      return out;
+    },
+    viewportTopEntry() {
+      layout();
+      const st = container.scrollTop;
+      return container._entries.find((e) => {
+        const rec = container._layout().tops.get(e.row);
+        return rec && rec.top + rec.h > st && !e.row.classList.contains('process-hidden');
+      }) || null;
+    },
+    totalHeight() { return container.scrollHeight; },
+  };
+}
 
-    container,
-    followLatestButton: { classList: { toggle() {}, add() {}, remove() {} }, innerHTML: '', classList2: null },
-    workspaceTabsBar: null,
-    currentMessages: messages || [],
-    allAgents: [],
-    toolRenderConfigs: {},
-    _lastRenderedChatSig: '',
-    _userExpandedReasoning: new Set(),
-    _userExpandedMsgs: new Set(),
-    _userCollapsedMsgs: new Set(),
-    currentInputRequests: [],
-    currentRuntimeAgentId: 'rt-1',
-    _agentCallActive: new Map(),
-    lastRenderedInputSignature: '',
-    chatProcessToggle: null,
-    CHAT_PROCESS_VISIBILITY_KEY: 'k',
-    readCurrentSessionViewState: () => ({ messages: sandbox.currentMessages, inputRequests: [] }),
-    saveChatProcessVisibility() {},
-
+async function withHarness(fn) {
+  const rig = createRig();
+  const globals = {
+    document: rig.document,
+    // input-actions 已 import 真实 poll 模块（poll-coordinator-host）：按生产
+    // 宿主 seam 提供最小面，本文件不驱动轮询、不再保留 window.poll 桩。
+    createPollCoordinatorHost: () => ({
+      run: () => Promise.resolve(),
+      fastInterval: () => 2000,
+      setTimeout: (callback, delay) => setTimeout(callback, delay),
+      clearTimeout: (id) => clearTimeout(id),
+    }),
     isChatSurfaceActive: () => true,
     shouldRenderWorkspaceSurface: () => false,
     escapeHtml: (v) => String(v ?? ''),
@@ -269,372 +351,325 @@ function createHarness({ messages } = {}) {
     renderJsonHighlight: (d) => '<pre>' + String(d).slice(0, 20) + '</pre>',
     applyTemplate: () => '<div>args</div>',
     enhanceMathInElement() {},
+    enhanceMarkdownTables() {},
     clearTruncatedHighlightData() {},
     getToolDisplayName: (n) => n || 'Tool',
     getToolRenderTemplate: () => ({}),
     resolveToolProgressForCall: () => null,
-    canRollbackMessage: () => false,
     requestRollbackEdit() {},
     switchAgent() {},
     ensureChatRuntimeIndicator() {},
     getEmptyStateHtml: () => '<div class="empty-state">empty</div>',
     renderCurrentMainView() {},
     getCurrentHostAgentRecord: () => null,
-
-    // chat-viewport.js module state (app-core.js declarations)
-    followLatestEnabled: false,
-    suppressFollowScrollEvent: false,
-    lastManualScrollIntentAt: 0,
-    _progScrollCooldownUntil: 0,
-    followLatestEntryUntil: 0,
-    chatViewportObserversReady: true,
-    chatViewportObserverSuppressDepth: 0,
-    chatViewportObserverQuietUntil: 0,
-    chatViewportMutationObserver: null,
-    chatViewportResizeObserver: null,
-    chatViewportSettlementToken: 0,
-    chatViewportSettlementRaf: 0,
-    chatViewportSettlementTimer: null,
-    chatViewportSettlementContext: null,
-    chatViewportFollowRaf: 0,
-    chatViewportFollowToken: 0,
-    chatViewportFollowTransition: 'locked',
-    assemblySideRailRevealTimer: null,
+    prependTimeSeparatorHtml: (_messages, _index, rowHtml) => rowHtml,
   };
-  sandbox.window = sandbox;
-
-  vm.createContext(sandbox);
-  // 真实生产加载顺序第一位：分发器先于一切声明 data-action 的模块装载
-  vm.runInContext(src('modules/action-dispatcher.js'), sandbox, { filename: 'action-dispatcher.js' });
-  vm.runInContext(src('modules/chat-viewport.js'), sandbox, { filename: 'chat-viewport.js' });
-  vm.runInContext(src('modules/input-helpers.js'), sandbox, { filename: 'input-helpers.js' });
-  vm.runInContext(src('modules/lazy-tool-content.js'), sandbox, { filename: 'lazy-tool-content.js' });
-  vm.runInContext(src('modules/chat-renderer.js'), sandbox, { filename: 'chat-renderer.js' });
-  sandbox.__markDirty = () => container._markDirty();
-
-  // Wire classList mutations to layout invalidation for every entry added later.
-  container._onStructureChange = () => container._markDirty();
-
-  function flushTimers() {
-    const pending = [...timers.values()];
-    timers.clear();
-    pending.forEach((cb) => cb());
-  }
-  function pumpFrame() {
-    const ids = rafOrder.splice(0);
-    ids.forEach((id) => {
-      const cb = rafCallbacks.get(id);
-      rafCallbacks.delete(id);
-      if (cb) cb();
-    });
-  }
-
-  function addRow(entry) {
-    container._entries.push(entry);
-    container._markDirty();
-    // Row-level layout accessors: the windowing/fold code reads offsetTop /
-    // offsetHeight on rows (reveal compensation, binary-search scans). Back
-    // them with the layout cache — without them every read yields undefined
-    // and the compensation silently no-ops.
-    Object.defineProperty(entry.row, 'offsetTop', {
-      get: () => {
-        const rec = container._layout().tops.get(entry.row);
-        return rec ? rec.top : 0;
+  return withP2EsmCase({
+    classic: (sandbox) => {
+      Object.assign(sandbox, rig.fakeTimers);
+      // index.html 真实加载序：分发器先于一切声明 data-action 的模块装载，
+      // 随后 i18n、app-core，最后是各业务 classic 模块。
+      sandbox.loadSource('public/src/modules/action-dispatcher.js');
+      sandbox.loadSource('public/src/i18n.js');
+      sandbox.loadSource('public/src/app-core.js');
+      sandbox.loadSource('public/src/modules/chat-viewport.js');
+      sandbox.loadSource('public/src/modules/input-helpers.js');
+      // 会话视图同步实现：input-actions 的 token/提交策略经宿主要求它（生产加载序）
+      sandbox.loadSource('public/src/modules/session-view-state.js');
+      sandbox.loadSource('public/src/modules/chat-renderer.js');
+    },
+    globals,
+  }, async (c) => {
+    const surface = c.window.createP2BootstrapChatSurfaceHost();
+    surface.showChatProcess = true;
+    surface.followLatestEnabled = false;
+    c.window.currentMessages = [];
+    c.window.allAgents = [];
+    c.window.toolRenderConfigs = {};
+    c.window.currentInputRequests = [];
+    c.window._lastRenderedChatSig = '';
+    await c.load('public/src/modules/p2-w2-1-chat-windowing-host.js');
+    // 输入面域（本批迁 ESM）：回退按钮可见性与过程显隐的真实实现
+    await c.load('public/src/modules/input-actions.js');
+    await c.load('public/src/modules/chat-process-visibility.js');
+    const mod = await c.load(LAZY_TOOL_CONTENT);
+    const mode = (await c.load(WINDOWING_MODE)).processWindowingMode;
+    return fn(Object.assign(rig, {
+      c, surface, mode,
+      read: (expression) => c.read(expression),
+      showChatProcess: (value) => { surface.showChatProcess = value; },
+      followLatest: (value) => { surface.followLatestEnabled = value; },
+      setWindowingDisabled: (value) => mod.setProcessWindowingDisabled(value),
+      apply: (fromIndex) => mod.applyProcessDistance(rig.container, fromIndex),
+      freeze: () => mod.freezeProcessWindowing(),
+      unfreeze: () => mod.unfreezeProcessWindowing(),
+      sendScroll(target) {
+        if (target !== undefined) rig.container.scrollTop = target;
+        rig.fireScroll();
       },
-    });
-    Object.defineProperty(entry.row, 'offsetHeight', {
-      get: () => {
-        const rec = container._layout().tops.get(entry.row);
-        return rec ? rec.h : 0;
-      },
-    });
-    // Route classList mutations through layout invalidation.
-    for (const target of [entry.row, entry.content, ...(entry.row._processChildren || [])]) {
-      const list = target.classList;
-      if (!list.__wired) {
-        list.__wired = true;
-        const add = list.add.bind(list);
-        const remove = list.remove.bind(list);
-        const toggle = list.toggle.bind(list);
-        list.add = (...n) => { add(...n); container._markDirty(); };
-        list.remove = (...n) => { remove(...n); container._markDirty(); };
-        list.toggle = (name, force) => { const r = toggle(name, force); container._markDirty(); return r; };
-      }
-    }
-    return entry;
-  }
-
-  function makeToolEntries({ toolName, realH, from, to }) {
-    const out = [];
-    for (let i = from; i < to; i++) {
-      const e = makeRow({ role: 'tool', realH, toolName, msgId: `msg-${container._entries.length}` });
-      out.push(addRow(e));
-    }
-    return out;
-  }
-
-  function viewportTopEntry() {
-    layout();
-    const st = container.scrollTop;
-    return container._entries.find((e) => {
-      const rec = container._layout().tops.get(e.row);
-      return rec && rec.top + rec.h > st && !e.row.classList.contains('process-hidden');
-    }) || null;
-  }
-
-  function totalHeight() { return container.scrollHeight; }
-
-  return {
-    sandbox, container, layout, flushTimers, pumpFrame, addRow, makeToolEntries,
-    viewportTopEntry, totalHeight,
-  };
+    }));
+  });
 }
 
-test('landing: the show-mode landing sequence folds visible tool rows before the first paint', () => {
-  const h = createHarness();
-  h.sandbox.showChatProcess = true;
-  h.sandbox.followLatestEnabled = true;
+test('landing: the show-mode landing sequence folds visible tool rows before the first paint', async () => {
+  await withHarness((h) => {
+    h.showChatProcess(true);
+    h.followLatest(true);
 
-  for (let i = 0; i < 40; i++) {
-    h.addRow(makeRow({ role: 'tool', realH: 600, toolName: 'Read', msgId: `msg-${i}` }));
-  }
-
-  // This is the exact sequence render() runs for a fresh show-mode render
-  // (innerHTML rebuild → clearProcessDistance → applyConversationProcessState
-  // → follow lock → landing scan). All of it is synchronous — no timer or
-  // rAF may fire before the first paint.
-  vm.runInContext(`
-    clearProcessDistance(container);
-    applyConversationProcessState(container);
-    if (typeof lockChatViewportToBottomNow === 'function') lockChatViewportToBottomNow();
-    if (typeof runLandingCollapseScan === 'function') runLandingCollapseScan();
-  `, h.sandbox);
-
-  assert.equal(h.container.scrollTop > 0, true, 'landing must lock to the bottom synchronously');
-  const visibleEntries = h.container._entries.filter((e) => {
-    const rec = h.layout().tops.get(e.row);
-    return rec && !e.row.classList.contains('process-hidden')
-      && rec.top < h.container.scrollTop + VIEW_H && rec.top + rec.h > h.container.scrollTop;
-  });
-  assert.ok(visibleEntries.length > 0, 'viewport should have visible rows');
-  const expandedTools = visibleEntries.filter((e) =>
-    e.row.role === 'tool' && !e.content.classList.contains('collapsed'));
-  assert.equal(expandedTools.length, 0, 'no expanded tool row may be visible at first paint');
-});
-
-test('process-toggle: first paint after toggling show-process in follow mode shows collapsed tool rows', () => {
-  const h = createHarness();
-  h.sandbox.showChatProcess = false;
-  h.sandbox.followLatestEnabled = true;
-
-  // Mixed transcript: hide mode shows only the user rows (tool rows are
-  // display:none), so the pre-toggle reading position sits at the bottom.
-  for (let i = 0; i < 30; i++) {
-    h.addRow(makeRow({ role: 'user', realH: 80, msgId: `msg-u${i}` }));
-    h.addRow(makeRow({ role: 'tool', realH: 600, toolName: 'Read', msgId: `msg-${i}` }));
-  }
-  vm.runInContext('applyConversationProcessState(container)', h.sandbox);
-  h.container.scrollTop = h.container.scrollHeight;
-  assert.ok(h.container.scrollTop > 0, 'hide-mode viewport parked at the bottom');
-
-  // The user clicks "显示过程" — toggleChatProcessVisibility must reveal AND
-  // fold the incoming viewport in the same task. The landing scan must scan
-  // the post-lock bottom position, not the stale pre-toggle scrollTop:
-  // with the stale position it folds the wrong rows and the viewport rows
-  // stay expanded until the scroll-stop settle (~150ms later) folds them
-  // with a visible jump.
-  vm.runInContext('toggleChatProcessVisibility()', h.sandbox);
-
-  assert.ok(h.container.scrollTop > 0, 'follow toggle must lock to the bottom');
-  const visibleEntries = h.container._entries.filter((e) => {
-    const rec = h.layout().tops.get(e.row);
-    return rec && !e.row.classList.contains('process-hidden')
-      && rec.top < h.container.scrollTop + VIEW_H && rec.top + rec.h > h.container.scrollTop;
-  });
-  assert.ok(visibleEntries.length > 0, 'viewport should have visible rows');
-  const expandedTools = visibleEntries.filter((e) =>
-    e.row.role === 'tool' && !e.content.classList.contains('collapsed'));
-  assert.equal(expandedTools.length, 0, 'no expanded tool row may be visible at first paint');
-});
-
-test('windowing: revealing above-viewport rows compensates scrollTop so the content anchor stays put', () => {
-  const h = createHarness();
-  h.sandbox.showChatProcess = true;
-  h.sandbox.followLatestEnabled = false;
-
-  // 600 tool rows of 600px each; landing reveals only the bottom window.
-  for (let i = 0; i < 600; i++) {
-    h.addRow(makeRow({ role: 'tool', realH: 600, toolName: 'Bash', msgId: `msg-${i}` }));
-  }
-  // 工具结果默认折叠后 Bash 行也会折叠。本用例隔离验证 reveal 占位→实测的
-  // scrollTop 补偿，将行固定为用户展开（不参与折叠）；折叠+补偿的组合语义由
-  // clamp-safe 用例（Read 行）与 scrollbar-drag 用例覆盖。
-  for (let i = 0; i < 600; i++) h.sandbox._userExpandedMsgs.add(i);
-  vm.runInContext('applyProcessDistance(container)', h.sandbox);
-  h.flushTimers();
-
-  // Scroll up into a position where the next window slide reveals a batch of
-  // never-realized rows (placeholder 150px vs real 600px).
-  const jumpTo = Math.max(0, h.totalHeight() * 0.5);
-  h.container.scrollTop = jumpTo;
-  vm.runInContext('applyProcessDistance(container)', h.sandbox);
-  h.flushTimers();
-
-  const anchor = h.viewportTopEntry();
-  assert.ok(anchor, 'need a visible anchor row');
-  const viewOffsetOf = (entry) => {
-    h.layout();
-    const rec = h.layout().tops.get(entry.row);
-    return rec ? rec.top - h.container.scrollTop : null;
-  };
-
-  // Wheel up in small steps. Measure the anchor's viewport offset per frame:
-  // after each step it must have moved exactly -STEP (no jitter). When the
-  // anchor is hidden by a window slide or scrolls out of the measurable
-  // band, re-pick and skip that frame (anchor-switch, not drift).
-  let current = anchor;
-  let pendingIn = viewOffsetOf(current);
-  let measured = 0, joltFrames = 0, maxJolt = 0;
-  for (let i = 0; i < 400; i++) {
-    h.container.scrollTop -= 150;
-    vm.runInContext('_onScrollForWindowing()', h.sandbox);
-    h.flushTimers();
-    h.pumpFrame();
-    h.flushTimers();
-    if (h.container.scrollTop <= 0) break;
-
-    const hidden = current.row.classList.contains('process-hidden')
-      || current.row.classList.contains('process-hidden-empty')
-      || current.row.classList.contains('process-cv-hidden')
-      || (current.row._processChildren || []).some((c) => c.classList.contains('process-cv-hidden'));
-    h.layout();
-    const rec = h.layout().tops.get(current.row);
-    const gone = !rec || rec.top >= h.container.scrollTop + VIEW_H + 2000;
-    if (hidden || gone) {
-      const next = h.viewportTopEntry();
-      if (!next) break;
-      current = next;
-      pendingIn = viewOffsetOf(current);
-      continue;
+    for (let i = 0; i < 40; i++) {
+      h.addRow(makeRow({ role: 'tool', realH: 600, toolName: 'Read', msgId: `msg-${i}` }));
     }
-    const in1 = rec.top - h.container.scrollTop;
-    // Scrolling UP by STEP moves the anchor DOWN in viewport coords: in1 ≈ pendingIn + STEP.
-    const jolt = (in1 - pendingIn) - 150;
-    measured++;
-    if (Math.abs(jolt) > 2) {
-      joltFrames++;
-      maxJolt = Math.max(maxJolt, Math.abs(jolt));
-    }
-    pendingIn = in1;
-  }
 
-  assert.ok(h.container.scrollTop < jumpTo, 'should have scrolled upward');
-  assert.ok(measured > 20, `should have measured enough frames (got ${measured})`);
-  assert.equal(joltFrames, 0, `anchor must stay pixel-stable per frame (jolts=${joltFrames}, max=${maxJolt}px)`);
-  assert.ok(h.container._scrollWrites.some((w) => w.to > w.from), 'reveal snap must be compensated by a scrollTop write');
-});
+    // This is the exact sequence render() runs for a fresh show-mode render
+    // (innerHTML rebuild → clearProcessDistance → applyConversationProcessState
+    // → follow lock → landing scan). All of it is synchronous — no timer or
+    // rAF may fire before the first paint.
+    h.read(`
+      clearProcessDistance(container);
+      applyConversationProcessState(container);
+      if (typeof lockChatViewportToBottomNow === 'function') lockChatViewportToBottomNow();
+      if (typeof runLandingCollapseScan === 'function') runLandingCollapseScan();
+    `);
 
-test('windowing: follow mode skips the reveal compensation (bottom-lock settlement owns the scroll)', () => {
-  const h = createHarness();
-  h.sandbox.showChatProcess = true;
-  h.sandbox.followLatestEnabled = true;
-
-  for (let i = 0; i < 40; i++) {
-    h.addRow(makeRow({ role: 'tool', realH: 600, toolName: 'Bash', msgId: `msg-${i}` }));
-  }
-  vm.runInContext('applyProcessDistance(container)', h.sandbox);
-  h.flushTimers();
-
-  const writesBefore = h.container._scrollWrites.length;
-  // Force a window slide by pointing the viewport far above the window.
-  h.container.scrollTop = Math.max(0, h.container.scrollTop - 30000);
-  vm.runInContext('_lastWindowStart = -1', h.sandbox);
-  vm.runInContext('_applyWindow()', h.sandbox);
-  h.flushTimers();
-
-  const writes = h.container._scrollWrites.slice(writesBefore);
-  const positiveWrites = writes.filter((w) => w.to > w.from);
-  assert.equal(positiveWrites.length, 0, 'no upward compensation writes may happen in follow mode');
-});
-
-test('scrollbar drag release: settle pins the release anchor so the reading frame does not jump', () => {
-  const h = createHarness();
-  h.sandbox.showChatProcess = true;
-  h.sandbox.followLatestEnabled = false;
-
-  // Interleaved transcript: user rows are always real (never cv-hidden), tool
-  // rows above the landing window are 150px stubs vs 600px real. Any release
-  // viewport then contains the bug geometry: stub(s) above a real row.
-  // applyProcessDistance MUST run before any layout read: rows hidden before
-  // their first layout keep the 150px placeholder (contain-intrinsic-size has
-  // nothing remembered) — reading scrollHeight first would lay every row out
-  // at 600px and the remembered height would erase the reveal snap.
-  for (let i = 0; i < 300; i++) {
-    h.addRow(makeRow({ role: 'user', realH: 80, msgId: `msg-u${i}` }));
-    h.addRow(makeRow({ role: 'tool', realH: 600, toolName: 'Bash', msgId: `msg-${i}` }));
-  }
-  vm.runInContext('applyProcessDistance(container)', h.sandbox);
-  h.container.scrollTop = h.container.scrollHeight;
-  vm.runInContext('_onScrollForWindowing()', h.sandbox);
-  h.flushTimers();
-
-  // Scrollbar drag: two events with deltas far above the large-delta
-  // threshold, landing ~20% into the document (deep in stub territory,
-  // well above the landing window) → windowing must stay fully silent
-  // until release.
-  const dragTarget = Math.max(0, Math.round(h.container.scrollTop * 0.2));
-  const heightDuringDrag = [];
-  for (let e = 0; e < 2; e++) {
-    const step = Math.round((h.container.scrollTop - dragTarget) / (2 - e));
-    h.container.scrollTop = h.container.scrollTop - step;
-    vm.runInContext('_onScrollForWindowing()', h.sandbox);
-    h.pumpFrame();
-    heightDuringDrag.push(h.container.scrollHeight);
-  }
-  assert.ok(heightDuringDrag.every((x) => x === heightDuringDrag[0]),
-    'windowing must not reflow while the drag is in motion');
-
-  // Park the viewport inside stub territory such that the release anchor —
-  // the first REAL row at or below the viewport top (the capture rule in
-  // _onScrollStop) — has at least one cv-hidden stub above it within the
-  // view. Revealing that stub is the displacement the pin must absorb.
-  const rowsNow = () => h.container.querySelectorAll('.message-row');
-  const findRelease = (st) => {
-    const rows = rowsNow();
-    const real = rows.find((r) => !r.classList.contains('process-cv-hidden') && r.offsetTop >= st);
-    if (!real || real.offsetTop >= st + VIEW_H) return null;
-    const hasStubAbove = rows.some((r) => {
-      const rec = h.layout().tops.get(r);
-      return r.classList.contains('process-cv-hidden') && rec
-        && rec.top >= st && rec.top < real.offsetTop;
+    assert.equal(h.container.scrollTop > 0, true, 'landing must lock to the bottom synchronously');
+    const visibleEntries = h.container._entries.filter((e) => {
+      const rec = h.layout().tops.get(e.row);
+      return rec && !e.row.classList.contains('process-hidden')
+        && rec.top < h.container.scrollTop + VIEW_H && rec.top + rec.h > h.container.scrollTop;
     });
-    return hasStubAbove ? { st, real } : null;
-  };
-  let release = null;
-  for (let st = h.container.scrollTop; st > 0 && !release; st -= 40) {
-    h.container.scrollTop = st;
-    release = findRelease(st);
-  }
-  assert.ok(release, 'must find a release point with a stub above the release anchor in view');
-  h.container.scrollTop = release.st;
-  vm.runInContext('_onScrollForWindowing()', h.sandbox); // large delta → silent until release
-  h.pumpFrame();
+    assert.ok(visibleEntries.length > 0, 'viewport should have visible rows');
+    const expandedTools = visibleEntries.filter((e) =>
+      e.row.role === 'tool' && !e.content.classList.contains('collapsed'));
+    assert.equal(expandedTools.length, 0, 'no expanded tool row may be visible at first paint');
+  });
+});
 
-  const anchor = release.real;
-  const offsetBefore = anchor.offsetTop - h.container.scrollTop;
-  const scrollTopAtRelease = h.container.scrollTop;
+test('process-toggle: first paint after toggling show-process in follow mode shows collapsed tool rows', async () => {
+  await withHarness((h) => {
+    h.showChatProcess(false);
+    h.followLatest(true);
 
-  // Release: the 150ms scroll-stop settle runs reveal + collapse + pin in
-  // one task. The anchor must stay at its release-time viewport offset —
-  // the stub zone above it resolves into content around a fixed frame.
-  h.flushTimers();
+    // Mixed transcript: hide mode shows only the user rows (tool rows are
+    // display:none), so the pre-toggle reading position sits at the bottom.
+    for (let i = 0; i < 30; i++) {
+      h.addRow(makeRow({ role: 'user', realH: 80, msgId: `msg-u${i}` }));
+      h.addRow(makeRow({ role: 'tool', realH: 600, toolName: 'Read', msgId: `msg-${i}` }));
+    }
+    h.read('applyConversationProcessState(container)');
+    h.container.scrollTop = h.container.scrollHeight;
+    assert.ok(h.container.scrollTop > 0, 'hide-mode viewport parked at the bottom');
 
-  assert.ok(!anchor.classList.contains('process-cv-hidden'), 'anchor row must be revealed after settle');
-  assert.ok(h.container._scrollWrites.some((w) => w.to > w.from && w.from >= scrollTopAtRelease),
-    'settle must have re-anchored scrollTop (reveal growth above the viewport top)');
-  const offsetAfter = anchor.offsetTop - h.container.scrollTop;
-  assert.ok(Math.abs(offsetAfter - offsetBefore) <= 1,
-    `release anchor must keep its viewport offset (before=${Math.round(offsetBefore)}, after=${Math.round(offsetAfter)})`);
+    // The user clicks "显示过程" — toggleChatProcessVisibility must reveal AND
+    // fold the incoming viewport in the same task. The landing scan must scan
+    // the post-lock bottom position, not the stale pre-toggle scrollTop:
+    // with the stale position it folds the wrong rows and the viewport rows
+    // stay expanded until the scroll-stop settle (~150ms later) folds them
+    // with a visible jump.
+    h.read('toggleChatProcessVisibility()');
+
+    assert.ok(h.container.scrollTop > 0, 'follow toggle must lock to the bottom');
+    const visibleEntries = h.container._entries.filter((e) => {
+      const rec = h.layout().tops.get(e.row);
+      return rec && !e.row.classList.contains('process-hidden')
+        && rec.top < h.container.scrollTop + VIEW_H && rec.top + rec.h > h.container.scrollTop;
+    });
+    assert.ok(visibleEntries.length > 0, 'viewport should have visible rows');
+    const expandedTools = visibleEntries.filter((e) =>
+      e.row.role === 'tool' && !e.content.classList.contains('collapsed'));
+    assert.equal(expandedTools.length, 0, 'no expanded tool row may be visible at first paint');
+  });
+});
+
+test('windowing: revealing above-viewport rows compensates scrollTop so the content anchor stays put', async () => {
+  await withHarness((h) => {
+    h.showChatProcess(true);
+    h.followLatest(false);
+
+    // 600 tool rows of 600px each; landing reveals only the bottom window.
+    for (let i = 0; i < 600; i++) {
+      h.addRow(makeRow({ role: 'tool', realH: 600, toolName: 'Bash', msgId: `msg-${i}` }));
+    }
+    // 工具结果默认折叠后 Bash 行也会折叠。本用例隔离验证 reveal 占位→实测的
+    // scrollTop 补偿，将行固定为用户展开（不参与折叠）；折叠+补偿的组合语义由
+    // clamp-safe 用例（Read 行）与 scrollbar-drag 用例覆盖。
+    h.read('for (var __i = 0; __i < 600; __i++) _userExpandedMsgs.add(__i)');
+    h.apply();
+    h.flushTimers();
+
+    // Scroll up into a position where the next window slide reveals a batch of
+    // never-realized rows (placeholder 150px vs real 600px).
+    const jumpTo = Math.max(0, h.totalHeight() * 0.5);
+    h.sendScroll(jumpTo);
+    h.apply();
+    h.flushTimers();
+
+    const anchor = h.viewportTopEntry();
+    assert.ok(anchor, 'need a visible anchor row');
+    const viewOffsetOf = (entry) => {
+      h.layout();
+      const rec = h.layout().tops.get(entry.row);
+      return rec ? rec.top - h.container.scrollTop : null;
+    };
+
+    // Wheel up in small steps. Measure the anchor's viewport offset per frame:
+    // after each step it must have moved exactly -STEP (no jitter). When the
+    // anchor is hidden by a window slide or scrolls out of the measurable
+    // band, re-pick and skip that frame (anchor-switch, not drift).
+    let current = anchor;
+    let pendingIn = viewOffsetOf(current);
+    let measured = 0, joltFrames = 0, maxJolt = 0;
+    for (let i = 0; i < 400; i++) {
+      h.container.scrollTop -= 150;
+      h.sendScroll();
+      h.flushTimers();
+      h.pumpFrame();
+      h.flushTimers();
+      if (h.container.scrollTop <= 0) break;
+
+      const hidden = current.row.classList.contains('process-hidden')
+        || current.row.classList.contains('process-hidden-empty')
+        || current.row.classList.contains('process-cv-hidden')
+        || (current.row._processChildren || []).some((c) => c.classList.contains('process-cv-hidden'));
+      h.layout();
+      const rec = h.layout().tops.get(current.row);
+      const gone = !rec || rec.top >= h.container.scrollTop + VIEW_H + 2000;
+      if (hidden || gone) {
+        const next = h.viewportTopEntry();
+        if (!next) break;
+        current = next;
+        pendingIn = viewOffsetOf(current);
+        continue;
+      }
+      const in1 = rec.top - h.container.scrollTop;
+      // Scrolling UP by STEP moves the anchor DOWN in viewport coords: in1 ≈ pendingIn + STEP.
+      const jolt = (in1 - pendingIn) - 150;
+      measured++;
+      if (Math.abs(jolt) > 2) {
+        joltFrames++;
+        maxJolt = Math.max(maxJolt, Math.abs(jolt));
+      }
+      pendingIn = in1;
+    }
+
+    assert.ok(h.container.scrollTop < jumpTo, 'should have scrolled upward');
+    assert.ok(measured > 20, `should have measured enough frames (got ${measured})`);
+    assert.equal(joltFrames, 0, `anchor must stay pixel-stable per frame (jolts=${joltFrames}, max=${maxJolt}px)`);
+    assert.ok(h.container._scrollWrites.some((w) => w.to > w.from), 'reveal snap must be compensated by a scrollTop write');
+  });
+});
+
+test('windowing: follow mode skips the reveal compensation (bottom-lock settlement owns the scroll)', async () => {
+  await withHarness((h) => {
+    h.showChatProcess(true);
+    h.followLatest(true);
+
+    for (let i = 0; i < 320; i++) {
+      h.addRow(makeRow({ role: 'tool', realH: 600, toolName: 'Bash', msgId: `msg-${i}` }));
+    }
+    h.apply();
+    h.flushTimers();
+    const hiddenAtLanding = h.container._entries.filter((e) =>
+      e.row.classList.contains('process-cv-hidden')).length;
+    assert.ok(hiddenAtLanding > 0, 'landing window is a strict subset of the transcript');
+
+    const writesBefore = h.container._scrollWrites.length;
+    // Force a fresh window by a large upward jump: the scroll-stop settle
+    // reruns windowing against the arrival viewport (large-delta release).
+    h.sendScroll(0);
+    h.pumpFrame(); // rAF stays silent (large-delta deferral)
+    h.flushTimers(); // scroll-stop settle: fresh window + reveal + collapse
+
+    // The reveal really happened (otherwise "no compensation" would be vacuous)…
+    const hiddenAtArrival = h.container._entries.filter((e) =>
+      e.row.classList.contains('process-cv-hidden')).length;
+    assert.ok(hiddenAtArrival < hiddenAtLanding, 'the settle must slide the window to the arrival viewport');
+    // …and follow mode still left every compensation write to the bottom-lock
+    // settlement: reveal growth above the viewport produces no upward writes.
+    const writes = h.container._scrollWrites.slice(writesBefore);
+    const positiveWrites = writes.filter((w) => w.to > w.from);
+    assert.equal(positiveWrites.length, 0, 'no upward compensation writes may happen in follow mode');
+  });
+});
+
+test('scrollbar drag release: settle pins the release anchor so the reading frame does not jump', async () => {
+  await withHarness((h) => {
+    h.showChatProcess(true);
+    h.followLatest(false);
+
+    // Interleaved transcript: user rows are always real (never cv-hidden), tool
+    // rows above the landing window are 150px stubs vs 600px real. Any release
+    // viewport then contains the bug geometry: stub(s) above a real row.
+    // applyProcessDistance MUST run before any layout read: rows hidden before
+    // their first layout keep the 150px placeholder (contain-intrinsic-size has
+    // nothing remembered) — reading scrollHeight first would lay every row out
+    // at 600px and the remembered height would erase the reveal snap.
+    for (let i = 0; i < 300; i++) {
+      h.addRow(makeRow({ role: 'user', realH: 80, msgId: `msg-u${i}` }));
+      h.addRow(makeRow({ role: 'tool', realH: 600, toolName: 'Bash', msgId: `msg-${i}` }));
+    }
+    h.apply();
+    h.container.scrollTop = h.container.scrollHeight;
+    h.sendScroll();
+    h.flushTimers();
+
+    // Scrollbar drag: two events with deltas far above the large-delta
+    // threshold, landing ~20% into the document (deep in stub territory,
+    // well above the landing window) → windowing must stay fully silent
+    // until release.
+    const dragTarget = Math.max(0, Math.round(h.container.scrollTop * 0.2));
+    const heightDuringDrag = [];
+    for (let e = 0; e < 2; e++) {
+      const step = Math.round((h.container.scrollTop - dragTarget) / (2 - e));
+      h.container.scrollTop = h.container.scrollTop - step;
+      h.sendScroll();
+      h.pumpFrame();
+      heightDuringDrag.push(h.container.scrollHeight);
+    }
+    assert.ok(heightDuringDrag.every((x) => x === heightDuringDrag[0]),
+      'windowing must not reflow while the drag is in motion');
+
+    // Park the viewport inside stub territory such that the release anchor —
+    // the first REAL row at or below the viewport top (the capture rule in
+    // _onScrollStop) — has at least one cv-hidden stub above it within the
+    // view. Revealing that stub is the displacement the pin must absorb.
+    const rowsNow = () => h.container.querySelectorAll('.message-row');
+    const findRelease = (st) => {
+      const rows = rowsNow();
+      const real = rows.find((r) => !r.classList.contains('process-cv-hidden') && r.offsetTop >= st);
+      if (!real || real.offsetTop >= st + VIEW_H) return null;
+      const hasStubAbove = rows.some((r) => {
+        const rec = h.layout().tops.get(r);
+        return r.classList.contains('process-cv-hidden') && rec
+          && rec.top >= st && rec.top < real.offsetTop;
+      });
+      return hasStubAbove ? { st, real } : null;
+    };
+    let release = null;
+    for (let st = h.container.scrollTop; st > 0 && !release; st -= 40) {
+      h.container.scrollTop = st;
+      release = findRelease(st);
+    }
+    assert.ok(release, 'must find a release point with a stub above the release anchor in view');
+    h.container.scrollTop = release.st;
+    h.sendScroll(); // large delta → silent until release
+    h.pumpFrame();
+
+    const anchor = release.real;
+    const offsetBefore = anchor.offsetTop - h.container.scrollTop;
+    const scrollTopAtRelease = h.container.scrollTop;
+
+    // Release: the 150ms scroll-stop settle runs reveal + collapse + pin in
+    // one task. The anchor must stay at its release-time viewport offset —
+    // the stub zone above it resolves into content around a fixed frame.
+    h.flushTimers();
+
+    assert.ok(!anchor.classList.contains('process-cv-hidden'), 'anchor row must be revealed after settle');
+    assert.ok(h.container._scrollWrites.some((w) => w.to > w.from && w.from >= scrollTopAtRelease),
+      'settle must have re-anchored scrollTop (reveal growth above the viewport top)');
+    const offsetAfter = anchor.offsetTop - h.container.scrollTop;
+    assert.ok(Math.abs(offsetAfter - offsetBefore) <= 1,
+      `release anchor must keep its viewport offset (before=${Math.round(offsetBefore)}, after=${Math.round(offsetAfter)})`);
+  });
 });
 
 // Fold compensation near the bottom of the document: when a fold shrinks
@@ -643,214 +678,213 @@ test('scrollbar drag release: settle pins the release anchor so the reading fram
 // PRE-fold scrollTop, otherwise the clamp poisons the baseline and the
 // visible content jumps — the "sticky wheel" jolt felt while scrolling up
 // from the bottom of a long show-process transcript.
-test('windowing: fold compensation is clamp-safe when the collapse crosses maxScroll', () => {
-  const h = createHarness();
-  h.sandbox.showChatProcess = true;
-  h.sandbox.followLatestEnabled = false;
+test('windowing: fold compensation is clamp-safe when the collapse crosses maxScroll', async () => {
+  await withHarness((h) => {
+    h.showChatProcess(true);
+    h.followLatest(false);
 
-  // Tool rows above, a short real tail below: the viewport parked at the
-  // bottom sits just above the fold candidates, so the first fold's
-  // shrinkage crosses maxScroll (the clamp boundary scenario).
-  for (let i = 0; i < 200; i++) {
-    h.addRow(makeRow({ role: 'tool', realH: 600, toolName: 'Read', msgId: `msg-t${i}` }));
-  }
-  for (let i = 0; i < 10; i++) {
-    h.addRow(makeRow({ role: 'user', realH: 80, msgId: `msg-u${i}` }));
-  }
-  vm.runInContext('applyProcessDistance(container)', h.sandbox);
-  h.flushTimers();
-  h.container.scrollTop = h.container.scrollHeight;
-  vm.runInContext('_onScrollForWindowing()', h.sandbox);
-  h.flushTimers();
-
-  // Wheel up from the bottom: the first motion frame collapses the first
-  // fully-above row. Compensation must move scrollTop by exactly the fold
-  // delta minus the wheel step — never short (clamp-poisoned baseline) and
-  // never skipped (self-defeating guard).
-  let anchor = h.viewportTopEntry();
-  assert.ok(anchor, 'need anchor');
-  const viewOffsetOf = (entry) => {
-    h.layout();
-    const rec = h.layout().tops.get(entry.row);
-    return rec ? rec.top - h.container.scrollTop : null;
-  };
-  let pendingIn = viewOffsetOf(anchor);
-  let measured = 0, joltFrames = 0, maxJolt = 0, folds = 0;
-  for (let frame = 0; frame < 300; frame++) {
-    if (h.container.scrollTop <= 0) break;
-    h.container.scrollTop -= 53; // compositor wheel step
-    vm.runInContext('_onScrollForWindowing()', h.sandbox);
-    h.flushTimers();
-    h.pumpFrame();
-    h.flushTimers();
-    if (h.container.scrollTop <= 0) break;
-
-    const hidden = anchor.row.classList.contains('process-hidden')
-      || anchor.row.classList.contains('process-cv-hidden')
-      || (anchor.row._processChildren || []).some((c) => c.classList.contains('process-cv-hidden'));
-    h.layout();
-    const rec = h.layout().tops.get(anchor.row);
-    if (hidden || !rec || rec.top + rec.h <= h.container.scrollTop) {
-      const next = h.viewportTopEntry();
-      if (!next) break;
-      anchor = next;
-      pendingIn = viewOffsetOf(anchor);
-      continue;
+    // Tool rows above, a short real tail below: the viewport parked at the
+    // bottom sits just above the fold candidates, so the first fold's
+    // shrinkage crosses maxScroll (the clamp boundary scenario).
+    for (let i = 0; i < 200; i++) {
+      h.addRow(makeRow({ role: 'tool', realH: 600, toolName: 'Read', msgId: `msg-t${i}` }));
     }
-    const inNow = rec.top - h.container.scrollTop;
-    const jolt = (inNow - pendingIn) - 53;
-    if (Math.abs(jolt) > 2) {
-      joltFrames++;
-      maxJolt = Math.max(maxJolt, Math.abs(jolt));
+    for (let i = 0; i < 10; i++) {
+      h.addRow(makeRow({ role: 'user', realH: 80, msgId: `msg-u${i}` }));
     }
-    pendingIn = inNow;
-  }
-  folds = vm.runInContext(
-    '(function(){var n=0;var rows=container.querySelectorAll(".message-row");' +
-    'for(var i=0;i<rows.length;i++){if(rows[i].querySelector(".message-content")' +
-    '&&rows[i].querySelector(".message-content").classList.contains("collapsed"))n++;}return n;})()',
-    h.sandbox);
+    h.apply();
+    h.flushTimers();
+    h.container.scrollTop = h.container.scrollHeight;
+    h.sendScroll();
+    h.flushTimers();
 
-  assert.ok(folds > 5, `compensation scenario requires folds to happen (got ${folds})`);
-  assert.ok(h.container.scrollTop < h.totalHeight() * 0.95, 'should have scrolled upward');
-  assert.equal(joltFrames, 0, 'fold compensation must keep the content anchor pixel-stable near the clamp boundary');
-});
+    // Wheel up from the bottom: the first motion frame collapses the first
+    // fully-above row. Compensation must move scrollTop by exactly the fold
+    // delta minus the wheel step — never short (clamp-poisoned baseline) and
+    // never skipped (self-defeating guard).
+    let anchor = h.viewportTopEntry();
+    assert.ok(anchor, 'need anchor');
+    const viewOffsetOf = (entry) => {
+      h.layout();
+      const rec = h.layout().tops.get(entry.row);
+      return rec ? rec.top - h.container.scrollTop : null;
+    };
+    let pendingIn = viewOffsetOf(anchor);
+    let measured = 0, joltFrames = 0, maxJolt = 0;
+    for (let frame = 0; frame < 300; frame++) {
+      if (h.container.scrollTop <= 0) break;
+      h.container.scrollTop -= 53; // compositor wheel step
+      h.sendScroll();
+      h.flushTimers();
+      h.pumpFrame();
+      h.flushTimers();
+      if (h.container.scrollTop <= 0) break;
 
-test('panel drag: freezeProcessWindowing silences the scroll chain during the drag; unfreeze settles once', () => {
-  const h = createHarness();
-  h.sandbox.showChatProcess = true;
-  h.sandbox.followLatestEnabled = false;
+      const hidden = anchor.row.classList.contains('process-hidden')
+        || anchor.row.classList.contains('process-cv-hidden')
+        || (anchor.row._processChildren || []).some((c) => c.classList.contains('process-cv-hidden'));
+      h.layout();
+      const rec = h.layout().tops.get(anchor.row);
+      if (hidden || !rec || rec.top + rec.h <= h.container.scrollTop) {
+        const next = h.viewportTopEntry();
+        if (!next) break;
+        anchor = next;
+        pendingIn = viewOffsetOf(anchor);
+        continue;
+      }
+      const inNow = rec.top - h.container.scrollTop;
+      const jolt = (inNow - pendingIn) - 53;
+      if (Math.abs(jolt) > 2) {
+        joltFrames++;
+        maxJolt = Math.max(maxJolt, Math.abs(jolt));
+      }
+      pendingIn = inNow;
+      measured++;
+    }
+    const folds = Number(h.read(
+      '(function(){var n=0;var rows=container.querySelectorAll(".message-row");'
+      + 'for(var i=0;i<rows.length;i++){if(rows[i].querySelector(".message-content")'
+      + '&&rows[i].querySelector(".message-content").classList.contains("collapsed"))n++;}return n;})()'));
 
-  for (let i = 0; i < 300; i++) {
-    h.addRow(makeRow({ role: 'user', realH: 80, msgId: `msg-u${i}` }));
-    h.addRow(makeRow({ role: 'tool', realH: 600, toolName: 'Bash', msgId: `msg-${i}` }));
-  }
-  vm.runInContext('applyProcessDistance(container)', h.sandbox);
-
-  // Park mid-document: the windowing window settles around this position so
-  // the drag below has stub territory ahead (rows to reveal) — the geometry
-  // where a live scroll chain would fight the drag anchor.
-  h.container.scrollTop = Math.round(h.container.scrollHeight * 0.5);
-  vm.runInContext('_onScrollForWindowing()', h.sandbox);
-  h.pumpFrame();
-  h.flushTimers();
-
-  // Drag starts: windowing frozen.
-  vm.runInContext('freezeProcessWindowing()', h.sandbox);
-
-  // Drag frames: the panel-drag anchor writes scrollTop in small steps every
-  // frame (well below the large-delta threshold — these would normally run
-  // the rAF window update + reveal compensation mid-drag).
-  const heightAtFreeze = h.container.scrollHeight;
-  const cvStatesAtFreeze = h.container.querySelectorAll('.message-row')
-    .map((r) => r.classList.contains('process-cv-hidden'));
-  for (let e = 0; e < 6; e++) {
-    h.container.scrollTop += 30;
-    vm.runInContext('_onScrollForWindowing()', h.sandbox);
-    h.pumpFrame();
-  }
-  assert.equal(h.container.scrollHeight, heightAtFreeze,
-    'frozen windowing must not reveal/reflow during the drag');
-  assert.deepEqual(
-    h.container.querySelectorAll('.message-row').map((r) => r.classList.contains('process-cv-hidden')),
-    cvStatesAtFreeze,
-    'frozen windowing must not touch row visibility during the drag');
-
-  // Release: unfreeze runs ONE comprehensive settle (fresh window + collapse,
-  // same semantics as a scrollbar-drag release). Rows near the final viewport
-  // must be revealed.
-  vm.runInContext('unfreezeProcessWindowing()', h.sandbox);
-  const rows = h.container.querySelectorAll('.message-row');
-  const topIdx = rows.findIndex((r) => r.offsetTop + r.offsetHeight > h.container.scrollTop);
-  const nearTool = rows.slice(topIdx, topIdx + 6).find((r) => r.classList.contains('tool'));
-  assert.ok(nearTool && !nearTool.classList.contains('process-cv-hidden'),
-    'unfreeze settle must reveal rows near the final viewport');
-
-  // After unfreeze the normal chain serves scrolls again: a scrollbar-style
-  // jump lands silently (large-delta deferral) and the 150ms settle reveals
-  // the arrival viewport — the same semantics as a drag release.
-  assert.equal(vm.runInContext('_windowingFrozen', h.sandbox), false,
-    'unfreeze must clear the frozen flag');
-  const farRow = rows.find((r) => r.classList.contains('tool')
-    && r.classList.contains('process-cv-hidden')
-    && r.offsetTop > h.container.scrollTop + 5000);
-  assert.ok(farRow, 'need a far hidden tool row for the recovery check');
-  h.container.scrollTop = farRow.offsetTop - 10; // single large jump
-  vm.runInContext('_onScrollForWindowing()', h.sandbox);
-  h.pumpFrame(); // rAF stays silent (large-delta deferral)
-  h.flushTimers(); // scroll-stop settle: fresh window + reveal + collapse
-  assert.ok(!farRow.classList.contains('process-cv-hidden'),
-    'post-unfreeze jump settle must reveal the arrival viewport (chain recovered)');
-});
-
-test('tiering: full-render mode (setProcessWindowingDisabled) lays out every row and folds visible tools without reveal writes', () => {
-  const h = createHarness();
-  h.sandbox.showChatProcess = true;
-  h.sandbox.followLatestEnabled = true;
-
-  // 600 tall Read rows: far beyond the window, well within a node budget.
-  for (let i = 0; i < 600; i++) {
-    h.addRow(makeRow({ role: 'tool', realH: 600, toolName: 'Read', msgId: `msg-${i}` }));
-  }
-
-  // render()'s landing sequence with the full-render tier active: the budget
-  // check in render() calls setProcessWindowingDisabled BEFORE
-  // clearProcessDistance, so the pre-hide must be skipped entirely.
-  vm.runInContext(`
-    setProcessWindowingDisabled(true);
-    clearProcessDistance(container);
-    applyConversationProcessState(container);
-    if (typeof lockChatViewportToBottomNow === 'function') lockChatViewportToBottomNow();
-    if (typeof runLandingCollapseScan === 'function') runLandingCollapseScan();
-  `, h.sandbox);
-
-  // Full-render contract: every row stays laid out — no cv-hidden, no
-  // process-hidden, anywhere.
-  for (const e of h.container._entries) {
-    assert.equal(e.row.classList.contains('process-cv-hidden'), false,
-      'full-render tier must not cv-hide rows');
-    assert.equal(e.row.classList.contains('process-hidden'), false,
-      'full-render tier must not pre-hide rows');
-  }
-
-  // Landing fold still collapses the visible tool rows before first paint.
-  const visibleEntries = h.container._entries.filter((e) => {
-    const rec = h.layout().tops.get(e.row);
-    return rec && !e.row.classList.contains('process-hidden')
-      && rec.top < h.container.scrollTop + VIEW_H && rec.top + rec.h > h.container.scrollTop;
+    assert.ok(measured > 0, 'should have measured frames');
+    assert.ok(folds > 5, `compensation scenario requires folds to happen (got ${folds})`);
+    assert.ok(h.container.scrollTop < h.totalHeight() * 0.95, 'should have scrolled upward');
+    assert.equal(joltFrames, 0, 'fold compensation must keep the content anchor pixel-stable near the clamp boundary');
   });
-  assert.ok(visibleEntries.length > 0, 'viewport should have visible rows');
-  const expandedTools = visibleEntries.filter((e) =>
-    e.row.role === 'tool' && !e.content.classList.contains('collapsed'));
-  assert.equal(expandedTools.length, 0, 'no expanded tool row may be visible at first paint');
+});
 
-  // Far-jump upward (large delta). Nothing may reveal and nothing may
-  // compensate scrollTop: with every row already laid out there is no
-  // placeholder-to-real snap, so the wheel position must survive the settle.
-  h.container.scrollTop = 0;
-  vm.runInContext('_onScrollForWindowing()', h.sandbox);
-  h.pumpFrame(); // rAF stays silent (large-delta deferral)
-  h.flushTimers(); // scroll-stop settle
-  assert.equal(h.container.scrollTop, 0,
-    'full-render settle must not move scrollTop (nothing to reveal or compensate)');
-  let hiddenCount = 0;
-  for (const e of h.container._entries) {
-    if (e.row.classList.contains('process-cv-hidden')) hiddenCount++;
-  }
-  assert.equal(hiddenCount, 0, 'no row may become cv-hidden while the tier is active');
+test('panel drag: freezeProcessWindowing silences the scroll chain during the drag; unfreeze settles once', async () => {
+  await withHarness((h) => {
+    h.showChatProcess(true);
+    h.followLatest(false);
 
-  // Re-enabling the virtualization tier (next render above budget) must
-  // re-grade: far rows go back to cv-hidden.
-  vm.runInContext(`
-    setProcessWindowingDisabled(false);
-    _lastWindowStart = -1;
-    applyProcessDistance(container);
-  `, h.sandbox);
-  let rehidden = 0;
-  for (const e of h.container._entries) {
-    if (e.row.classList.contains('process-cv-hidden')) rehidden++;
-  }
-  assert.ok(rehidden > 0, 're-enabling windowing must cv-hide far rows again');
+    for (let i = 0; i < 300; i++) {
+      h.addRow(makeRow({ role: 'user', realH: 80, msgId: `msg-u${i}` }));
+      h.addRow(makeRow({ role: 'tool', realH: 600, toolName: 'Bash', msgId: `msg-${i}` }));
+    }
+    h.apply();
+
+    // Park mid-document: the windowing window settles around this position so
+    // the drag below has stub territory ahead (rows to reveal) — the geometry
+    // where a live scroll chain would fight the drag anchor.
+    h.container.scrollTop = Math.round(h.container.scrollHeight * 0.5);
+    h.sendScroll();
+    h.pumpFrame();
+    h.flushTimers();
+
+    // Drag starts: windowing frozen.
+    h.freeze();
+
+    // Drag frames: the panel-drag anchor writes scrollTop in small steps every
+    // frame (well below the large-delta threshold — these would normally run
+    // the rAF window update + reveal compensation mid-drag).
+    const heightAtFreeze = h.container.scrollHeight;
+    const cvStatesAtFreeze = h.container.querySelectorAll('.message-row')
+      .map((r) => r.classList.contains('process-cv-hidden'));
+    for (let e = 0; e < 6; e++) {
+      h.container.scrollTop += 30;
+      h.sendScroll();
+      h.pumpFrame();
+    }
+    assert.equal(h.container.scrollHeight, heightAtFreeze,
+      'frozen windowing must not reveal/reflow during the drag');
+    assert.deepEqual(
+      h.container.querySelectorAll('.message-row').map((r) => r.classList.contains('process-cv-hidden')),
+      cvStatesAtFreeze,
+      'frozen windowing must not touch row visibility during the drag');
+
+    // Release: unfreeze runs ONE comprehensive settle (fresh window + collapse,
+    // same semantics as a scrollbar-drag release). Rows near the final viewport
+    // must be revealed.
+    h.unfreeze();
+    const rows = h.container.querySelectorAll('.message-row');
+    const topIdx = rows.findIndex((r) => r.offsetTop + r.offsetHeight > h.container.scrollTop);
+    const nearTool = rows.slice(topIdx, topIdx + 6).find((r) => r.classList.contains('tool'));
+    assert.ok(nearTool && !nearTool.classList.contains('process-cv-hidden'),
+      'unfreeze settle must reveal rows near the final viewport');
+
+    // After unfreeze the normal chain serves scrolls again: a scrollbar-style
+    // jump lands silently (large-delta deferral) and the 150ms settle reveals
+    // the arrival viewport — the same semantics as a drag release.
+    assert.equal(h.mode.frozen, false, 'unfreeze must clear the frozen flag');
+    const farRow = rows.find((r) => r.classList.contains('tool')
+      && r.classList.contains('process-cv-hidden')
+      && r.offsetTop > h.container.scrollTop + 5000);
+    assert.ok(farRow, 'need a far hidden tool row for the recovery check');
+    h.sendScroll(farRow.offsetTop - 10); // single large jump
+    h.pumpFrame(); // rAF stays silent (large-delta deferral)
+    h.flushTimers(); // scroll-stop settle: fresh window + reveal + collapse
+    assert.ok(!farRow.classList.contains('process-cv-hidden'),
+      'post-unfreeze jump settle must reveal the arrival viewport (chain recovered)');
+  });
+});
+
+test('tiering: full-render mode (setProcessWindowingDisabled) lays out every row and folds visible tools without reveal writes', async () => {
+  await withHarness((h) => {
+    h.showChatProcess(true);
+    h.followLatest(true);
+
+    // 600 tall Read rows: far beyond the window, well within a node budget.
+    for (let i = 0; i < 600; i++) {
+      h.addRow(makeRow({ role: 'tool', realH: 600, toolName: 'Read', msgId: `msg-${i}` }));
+    }
+
+    // render()'s landing sequence with the full-render tier active: the budget
+    // check in render() calls setProcessWindowingDisabled BEFORE
+    // clearProcessDistance, so the pre-hide must be skipped entirely.
+    h.read(`
+      setProcessWindowingDisabled(true);
+      clearProcessDistance(container);
+      applyConversationProcessState(container);
+      if (typeof lockChatViewportToBottomNow === 'function') lockChatViewportToBottomNow();
+      if (typeof runLandingCollapseScan === 'function') runLandingCollapseScan();
+    `);
+
+    // Full-render contract: every row stays laid out — no cv-hidden, no
+    // process-hidden, anywhere.
+    for (const e of h.container._entries) {
+      assert.equal(e.row.classList.contains('process-cv-hidden'), false,
+        'full-render tier must not cv-hide rows');
+      assert.equal(e.row.classList.contains('process-hidden'), false,
+        'full-render tier must not pre-hide rows');
+    }
+
+    // Landing fold still collapses the visible tool rows before first paint.
+    const visibleEntries = h.container._entries.filter((e) => {
+      const rec = h.layout().tops.get(e.row);
+      return rec && !e.row.classList.contains('process-hidden')
+        && rec.top < h.container.scrollTop + VIEW_H && rec.top + rec.h > h.container.scrollTop;
+    });
+    assert.ok(visibleEntries.length > 0, 'viewport should have visible rows');
+    const expandedTools = visibleEntries.filter((e) =>
+      e.row.role === 'tool' && !e.content.classList.contains('collapsed'));
+    assert.equal(expandedTools.length, 0, 'no expanded tool row may be visible at first paint');
+
+    // Far-jump upward (large delta). Nothing may reveal and nothing may
+    // compensate scrollTop: with every row already laid out there is no
+    // placeholder-to-real snap, so the wheel position must survive the settle.
+    h.sendScroll(0);
+    h.pumpFrame(); // rAF stays silent (large-delta deferral)
+    h.flushTimers(); // scroll-stop settle
+    assert.equal(h.container.scrollTop, 0,
+      'full-render settle must not move scrollTop (nothing to reveal or compensate)');
+    let hiddenCount = 0;
+    for (const e of h.container._entries) {
+      if (e.row.classList.contains('process-cv-hidden')) hiddenCount++;
+    }
+    assert.equal(hiddenCount, 0, 'no row may become cv-hidden while the tier is active');
+
+    // Re-enabling the virtualization tier (next render above budget) must
+    // re-grade: the next render's applyProcessDistance puts far rows back to
+    // cv-hidden.
+    h.setWindowingDisabled(false);
+    h.apply();
+    let rehidden = 0;
+    for (const e of h.container._entries) {
+      if (e.row.classList.contains('process-cv-hidden')) rehidden++;
+    }
+    assert.ok(rehidden > 0, 're-enabling windowing must cv-hide far rows again');
+  });
 });
 
 // Streaming append contract: new tail rows arrive pre-hid (process-hidden,
@@ -876,138 +910,137 @@ function makeCallCard({ contentH, id }) {
   return { card, content };
 }
 
-test('streaming append: new tool rows and card-bearing assistant rows fold at birth in the full-render tier', () => {
-  const h = createHarness();
-  h.sandbox.showChatProcess = true;
-  h.sandbox.followLatestEnabled = true;
+test('streaming append: new tool rows and card-bearing assistant rows fold at birth in the full-render tier', async () => {
+  await withHarness((h) => {
+    h.showChatProcess(true);
+    h.followLatest(true);
 
-  // Landing on a settled transcript in the full-render tier (windowing
-  // disabled — the tier regular sessions run in).
-  for (let i = 0; i < 10; i++) {
-    h.addRow(makeRow({ role: 'user', realH: 80, msgId: `msg-u${i}` }));
-    h.addRow(makeRow({ role: 'tool', realH: 600, toolName: 'Read', msgId: `msg-t${i}` }));
-  }
-  vm.runInContext(`
-    setProcessWindowingDisabled(true);
-    clearProcessDistance(container);
-    applyConversationProcessState(container);
-    if (typeof lockChatViewportToBottomNow === 'function') lockChatViewportToBottomNow();
-    if (typeof runLandingCollapseScan === 'function') runLandingCollapseScan();
-  `, h.sandbox);
-  assert.ok(
-    h.container._entries.some((e) => e.content.classList.contains('collapsed')),
-    'landing must fold the long tool rows');
-
-  // A tool call arrives mid-stream: an assistant row carrying a long call
-  // card, then a long tool result row. appendNewMessages pre-hides both
-  // process elements before any layout. The row height includes the card —
-  // folding is row-level (toggle outside the block), cards never fold alone.
-  const startIndex = h.container._entries.length;
-  const callCard = makeCallCard({ contentH: 600, id: `tcallc-msg-${startIndex}-0` });
-  const assistantEntry = h.addRow(makeRow({ role: 'assistant', realH: 660, msgId: `msg-${startIndex}` }));
-  assistantEntry.row._processChildren = [callCard.card];
-  const origRowQsa = assistantEntry.row.querySelectorAll;
-  assistantEntry.row.querySelectorAll = (sel) =>
-    sel === '.tool-call-container'
-      ? assistantEntry.row._processChildren
-      : origRowQsa(sel);
-  const origRowQs = assistantEntry.row.querySelector;
-  assistantEntry.row.querySelector = (sel) =>
-    sel === '.tool-call-container'
-      ? assistantEntry.row._processChildren[0] || null
-      : origRowQs(sel);
-  const toolEntry = h.addRow(makeRow({ role: 'tool', realH: 600, toolName: 'Grep', msgId: `msg-${startIndex + 1}` }));
-
-  // The exact pre-hide appendNewMessages applies to freshly inserted rows.
-  assistantEntry.row._processChildren.forEach((c) => c.classList.add('process-hidden'));
-  toolEntry.row.classList.add('process-hidden');
-
-  // applyProcessDistance reveals assistant process children through this
-  // combined selector; route it to the real children so the reveal behaves
-  // like the browser DOM.
-  const origContainerQsa = h.container.querySelectorAll;
-  h.container.querySelectorAll = (sel) => {
-    if (sel === '.reasoning-block.process-hidden, .tool-call-container.process-hidden') {
-      const out = [];
-      for (const e of h.container._entries) {
-        for (const c of (e.row._processChildren || [])) {
-          if (c.classList.contains('process-hidden')) out.push(c);
-        }
-      }
-      return out;
+    // Landing on a settled transcript in the full-render tier (windowing
+    // disabled — the tier regular sessions run in).
+    for (let i = 0; i < 10; i++) {
+      h.addRow(makeRow({ role: 'user', realH: 80, msgId: `msg-u${i}` }));
+      h.addRow(makeRow({ role: 'tool', realH: 600, toolName: 'Read', msgId: `msg-t${i}` }));
     }
-    return origContainerQsa(sel);
-  };
+    h.read(`
+      setProcessWindowingDisabled(true);
+      clearProcessDistance(container);
+      applyConversationProcessState(container);
+      if (typeof lockChatViewportToBottomNow === 'function') lockChatViewportToBottomNow();
+      if (typeof runLandingCollapseScan === 'function') runLandingCollapseScan();
+    `);
+    assert.ok(
+      h.container._entries.some((e) => e.content.classList.contains('collapsed')),
+      'landing must fold the long tool rows');
 
-  // appendNewMessages' post-fix sequence: reveal first, fold at birth second.
-  // The harness createElement stub does not flag toggle bars, so record the
-  // row-level bar via appendChild to assert the single outside control.
-  const appendedBars = [];
-  const origRowAppend = assistantEntry.row.appendChild;
-  assistantEntry.row.appendChild = (child) => {
-    if (child && String(child.className || '').includes('expand-toggle-bar')) appendedBars.push(child);
-    return origRowAppend(child);
-  };
-  vm.runInContext(`
-    applyConversationProcessState(container);
-    applyCollapseLogic(container, ${startIndex});
-  `, h.sandbox);
+    // A tool call arrives mid-stream: an assistant row carrying a long call
+    // card, then a long tool result row. appendNewMessages pre-hides both
+    // process elements before any layout. The row height includes the card —
+    // folding is row-level (toggle outside the block), cards never fold alone.
+    const startIndex = h.container._entries.length;
+    const callCard = makeCallCard({ contentH: 600, id: `tcallc-msg-${startIndex}-0` });
+    const assistantEntry = h.addRow(makeRow({ role: 'assistant', realH: 660, msgId: `msg-${startIndex}` }));
+    assistantEntry.row._processChildren = [callCard.card];
+    const origRowQsa = assistantEntry.row.querySelectorAll;
+    assistantEntry.row.querySelectorAll = (sel) =>
+      sel === '.tool-call-container'
+        ? assistantEntry.row._processChildren
+        : origRowQsa(sel);
+    const origRowQs = assistantEntry.row.querySelector;
+    assistantEntry.row.querySelector = (sel) =>
+      sel === '.tool-call-container'
+        ? assistantEntry.row._processChildren[0] || null
+        : origRowQs(sel);
+    const toolEntry = h.addRow(makeRow({ role: 'tool', realH: 600, toolName: 'Grep', msgId: `msg-${startIndex + 1}` }));
 
-  assert.equal(toolEntry.content.classList.contains('collapsed'), true,
-    'new long tool result row must fold at birth');
-  assert.equal(assistantEntry.content.classList.contains('collapsed'), true,
-    'tall card-bearing assistant row must fold at birth (row-level control)');
-  assert.equal(callCard.content.classList.contains('collapsed'), false,
-    'call cards no longer carry their own collapsed state');
-  assert.ok(appendedBars.length > 0,
-    'the single toggle is the row-level bar outside the block');
-  assert.equal(toolEntry.row.classList.contains('process-hidden'), false,
-    'the fold must have happened on revealed (measurable) rows');
+    // The exact pre-hide appendNewMessages applies to freshly inserted rows.
+    assistantEntry.row._processChildren.forEach((c) => c.classList.add('process-hidden'));
+    toolEntry.row.classList.add('process-hidden');
+
+    // applyProcessDistance reveals assistant process children through this
+    // combined selector; route it to the real children so the reveal behaves
+    // like the browser DOM.
+    const origContainerQsa = h.container.querySelectorAll;
+    h.container.querySelectorAll = (sel) => {
+      if (sel === '.reasoning-block.process-hidden, .tool-call-container.process-hidden') {
+        const out = [];
+        for (const e of h.container._entries) {
+          for (const c of (e.row._processChildren || [])) {
+            if (c.classList.contains('process-hidden')) out.push(c);
+          }
+        }
+        return out;
+      }
+      return origContainerQsa(sel);
+    };
+
+    // appendNewMessages' post-fix sequence: reveal first, fold at birth second.
+    // The harness createElement stub does not flag toggle bars, so record the
+    // row-level bar via appendChild to assert the single outside control.
+    const appendedBars = [];
+    const origRowAppend = assistantEntry.row.appendChild;
+    assistantEntry.row.appendChild = (child) => {
+      if (child && String(child.className || '').includes('expand-toggle-bar')) appendedBars.push(child);
+      return origRowAppend(child);
+    };
+    h.read(`
+      applyConversationProcessState(container);
+      applyCollapseLogic(container, ${startIndex});
+    `);
+
+    assert.equal(toolEntry.content.classList.contains('collapsed'), true,
+      'new long tool result row must fold at birth');
+    assert.equal(assistantEntry.content.classList.contains('collapsed'), true,
+      'tall card-bearing assistant row must fold at birth (row-level control)');
+    assert.equal(callCard.content.classList.contains('collapsed'), false,
+      'call cards no longer carry their own collapsed state');
+    assert.ok(appendedBars.length > 0,
+      'the single toggle is the row-level bar outside the block');
+    assert.equal(toolEntry.row.classList.contains('process-hidden'), false,
+      'the fold must have happened on revealed (measurable) rows');
+  });
 });
 
-test('appendNewMessages runs the process-state reveal before the fold-at-birth scan', () => {
-  const h = createHarness();
-  h.sandbox.showChatProcess = true;
-  h.sandbox.followLatestEnabled = false;
-  h.addRow(makeRow({ role: 'user', realH: 80, msgId: 'msg-0' }));
+test('appendNewMessages runs the process-state reveal before the fold-at-birth scan', async () => {
+  await withHarness((h) => {
+    h.showChatProcess(true);
+    h.followLatest(false);
+    h.addRow(makeRow({ role: 'user', realH: 80, msgId: 'msg-0' }));
 
-  // Minimal append bridge: appendNewMessages inserts HTML via
-  // insertAdjacentHTML and pre-hides via lastElementChild. Back both with a
-  // pre-made row stub (order recording only — semantics live in the test above).
-  const stubQueue = [];
-  const inserted = [];
-  h.container.insertAdjacentHTML = () => { inserted.push(stubQueue.shift() || null); };
-  Object.defineProperty(h.container, 'lastElementChild', {
-    configurable: true,
-    get: () => inserted[inserted.length - 1] || null,
+    // Minimal append bridge: appendNewMessages inserts HTML via
+    // insertAdjacentHTML and pre-hides via lastElementChild. Back both with a
+    // pre-made row stub (order recording only — semantics live in the test above).
+    const stubQueue = [];
+    const inserted = [];
+    h.container.insertAdjacentHTML = () => { inserted.push(stubQueue.shift() || null); };
+    Object.defineProperty(h.container, 'lastElementChild', {
+      configurable: true,
+      get: () => inserted[inserted.length - 1] || null,
+    });
+    const toolStub = makeRow({ role: 'tool', realH: 600, toolName: 'Grep', msgId: 'msg-2' });
+    toolStub.row.matches = () => true; // '.message-row.tool, .message-row.system'
+    stubQueue.push(toolStub.row);
+
+    h.c.window.currentMessages = [
+      { role: 'user', content: 'hi' },
+      { role: 'assistant', content: '', toolCalls: [{ id: 'c1', name: 'Grep', arguments: { q: 'x' } }] },
+      { role: 'tool', toolCallId: 'c1', content: '{"ok":true}' },
+    ];
+
+    // 生产装配点：appendNewMessages 对这两个 classic 全局函数的调用顺序即契约。
+    const order = [];
+    h.c.window.applyConversationProcessState = () => { order.push('process-state'); };
+    h.c.window.applyCollapseLogic = (root, start) => { order.push('collapse:' + start); };
+    h.c.window.updateRollbackActionVisibility = () => {};
+    h.c.window.updateFollowLatestButton = () => {};
+    h.c.window.enhanceMarkdownTables = () => {};
+
+    h.read('appendNewMessages([currentMessages[2]], 2)');
+
+    assert.deepEqual(
+      order,
+      ['process-state', 'collapse:1'],
+      'fold-at-birth must run after the reveal (hidden rows cannot be measured)');
+    assert.equal(toolStub.row.classList.contains('process-hidden'), true,
+      'the append pre-hide itself must stay (display:none before any layout)');
   });
-  const toolStub = makeRow({ role: 'tool', realH: 600, toolName: 'Grep', msgId: 'msg-2' });
-  toolStub.row.matches = () => true; // '.message-row.tool, .message-row.system'
-  stubQueue.push(toolStub.row);
-
-  h.sandbox.currentMessages = [
-    { role: 'user', content: 'hi' },
-    { role: 'assistant', content: '', toolCalls: [{ id: 'c1', name: 'Grep', arguments: { q: 'x' } }] },
-    { role: 'tool', toolCallId: 'c1', content: '{"ok":true}' },
-  ];
-
-  vm.runInContext(`
-    var __order = [];
-    applyConversationProcessState = function () { __order.push('process-state'); };
-    applyCollapseLogic = function (root, start) { __order.push('collapse:' + start); };
-    updateRollbackActionVisibility = function () {};
-    updateFollowLatestButton = function () {};
-    enhanceMarkdownTables = function () {};
-  `, h.sandbox);
-  vm.runInContext('appendNewMessages([currentMessages[2]], 2)', h.sandbox);
-
-  // Copy out of the vm realm: cross-realm arrays fail deepStrictEqual on
-  // prototype identity even with identical contents.
-  const order = [...vm.runInContext('__order', h.sandbox)];
-  assert.deepEqual(
-    order,
-    ['process-state', 'collapse:1'],
-    'fold-at-birth must run after the reveal (hidden rows cannot be measured)');
-  assert.equal(toolStub.row.classList.contains('process-hidden'), true,
-    'the append pre-hide itself must stay (display:none before any layout)');
 });

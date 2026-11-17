@@ -2,14 +2,38 @@
  * oauth-flow.js — OAuth 登录流程模块（从 model-settings.js 拆分）
  *
  * 包含：OAuth 登录区渲染、设备码轮询、provider 解析、登录状态刷新、OpenCode 模型列表辅助。
- * 依赖（全局）：escapeHtml, currentLanguage
- * 依赖（跨文件）：renderSettingsOverlay（model-settings.js）、saveSettingsPreset（model-settings.js）、
- *   OPENCODE_ZEN_BASE_URL / OPENCODE_GO_BASE_URL（model-settings.js）
+ *
+ * ESM 化（P2 消费方批次 7）：命名导出 + 显式 import（转义、语言）。
+ * 与 model-settings 互为 UI 依赖（本模块取设置面板的保存 / 目录刷新 / 表单同步
+ * 入口与 OpenCode 基址常量，设置面板取本模块的登录状态、登录区渲染与协议归类）：
+ * 静态依赖方向固定为 model-settings → 本模块，反向经 configureOAuthFlowHost
+ * 注入的宿主面（依赖方向是职责约定，不是「互 import 必然出错」的断言，见该处注释）。
  *
  * 事件接线：本模块模板经 data-action="oauthFlow.*" 声明，处理器集中在文件尾部注册。
- * window 导出：startOAuthLogin / onProtocolChange / onOpenCodeTierChange /
- *   fetchOpenCodeModels / onOpenCodeModelSelect（model-settings.js 的注册块经 window 转调）。
  */
+import { escapeHtml } from './markdown-utils.js';
+import { getCurrentLanguage } from './i18n-environment-state.js';
+
+// —— 设置覆盖层宿主面（由 model-settings.js 求值末尾装配）——
+// 本模块是设置覆盖层的 OAuth 子面板：需要面板 owner 的保存 / 目录刷新 / 表单同步
+// 入口、设置态读取（getSettingsEditing / getSettingsData / isCodexConnectionView）
+// 与 OpenCode 基址常量。两者同属一个覆盖层、互相调用，依赖方向仍固定为单向：
+// 覆盖层由面板 owner（model-settings）装配，子面板不反向 import 面板，需要的面板
+// 能力只经本宿主面注入——这样依赖方向可读，也不靠模块环内的延迟求值维持可用性。
+// 注意：真实 ESM 图里同一文件只有一个 URL，环不会复制模块实例；早期「环会产生两份
+// 实例」的说法来自旧 unique-query 装载器（环内换 URL 求值），不是模块语义。
+let overlayHost = null;
+
+export function configureOAuthFlowHost(host) {
+  overlayHost = host;
+}
+
+function oauthFlowHost() {
+  if (!overlayHost) {
+    throw new Error('[oauth-flow] 设置覆盖层宿主未装配（应由 model-settings 装载时注入）');
+  }
+  return overlayHost;
+}
 
 function checkOAuthProxy(isZh) {
   fetch('/protoclaw/oauth/codex/defaults')
@@ -46,7 +70,7 @@ function renderOAuthLoginArea(preset, isZh) {
   ].join('');
 }
 
-window.onProtocolChange = function() {
+export function onProtocolChange() {
   let select = document.getElementById('settings-preset-provider');
   if (!select) return;
   let val = select.value;
@@ -54,9 +78,9 @@ window.onProtocolChange = function() {
   let oauthSection = document.getElementById('oauth-section');
   let openCodeSection = document.getElementById('opencode-section');
   let baseUrlInput = document.getElementById('settings-preset-baseurl');
-  let isZh = currentLanguage === 'zh';
+  let isZh = getCurrentLanguage() === 'zh';
 
-  if (typeof window.onProviderChangeUpdateThinking === 'function') window.onProviderChangeUpdateThinking();
+  oauthFlowHost().onProviderChangeUpdateThinking();
 
   if (val === 'openai-oauth') {
     if (apiKeySection) apiKeySection.style.display = 'none';
@@ -82,7 +106,7 @@ window.onProtocolChange = function() {
     if (openCodeSection) openCodeSection.style.display = '';
     if (baseUrlInput) {
       const tier = document.getElementById('settings-preset-opencode-tier')?.value;
-      baseUrlInput.value = tier === 'go' ? OPENCODE_GO_BASE_URL : OPENCODE_ZEN_BASE_URL;
+      baseUrlInput.value = tier === 'go' ? oauthFlowHost().openCodeGoBaseUrl : oauthFlowHost().openCodeZenBaseUrl;
     }
   } else {
     if (apiKeySection) apiKeySection.style.display = '';
@@ -93,16 +117,16 @@ window.onProtocolChange = function() {
       baseUrlInput.value = '';
     }
     // Clear an OpenCode gateway URL if it was auto-filled.
-    if (baseUrlInput && (baseUrlInput.value === OPENCODE_ZEN_BASE_URL || baseUrlInput.value === OPENCODE_GO_BASE_URL)) {
+    if (baseUrlInput && (baseUrlInput.value === oauthFlowHost().openCodeZenBaseUrl || baseUrlInput.value === oauthFlowHost().openCodeGoBaseUrl)) {
       baseUrlInput.value = '';
     }
   }
-  if (typeof window.syncBaseEndpointBadge === 'function') window.syncBaseEndpointBadge();
+  oauthFlowHost().syncBaseEndpointBadge();
 };
 
 function getEditingProviderName() {
-  let editing = window.ClawFW.settingsEditing;
-  let presets = window.ClawFW.settingsData?.presets || [];
+  let editing = oauthFlowHost().getSettingsEditing();
+  let presets = oauthFlowHost().getSettingsData()?.presets || [];
   if (editing === null) {
     return presets.find((preset) => preset.authType === 'oauth-codex' && preset.providerName)?.providerName || 'OpenAI Auth';
   }
@@ -123,22 +147,23 @@ function resolveOpenCodeProtocolClient(modelId) {
   return { protocol: 'openai', apiSurface: 'chat' };
 }
 
-window._openCodeModelsCache = null;
+// OpenCode 模型列表的最近一次拉取结果（本模块自用，无外部读方）
+let openCodeModelsCache = null;
 
-window.onOpenCodeTierChange = function() {
+export function onOpenCodeTierChange() {
   var tier = document.getElementById('settings-preset-opencode-tier')?.value;
   var baseUrlInput = document.getElementById('settings-preset-baseurl');
-  if (baseUrlInput) baseUrlInput.value = tier === 'go' ? OPENCODE_GO_BASE_URL : OPENCODE_ZEN_BASE_URL;
-  if (typeof window.syncBaseEndpointBadge === 'function') window.syncBaseEndpointBadge();
+  if (baseUrlInput) baseUrlInput.value = tier === 'go' ? oauthFlowHost().openCodeGoBaseUrl : oauthFlowHost().openCodeZenBaseUrl;
+  oauthFlowHost().syncBaseEndpointBadge();
   var select = document.getElementById('settings-preset-opencode-model');
-  if (select) select.innerHTML = '<option value="">' + (currentLanguage === 'zh' ? '— 点击加载模型列表 —' : '— Click Load Models —') + '</option>';
+  if (select) select.innerHTML = '<option value="">' + (getCurrentLanguage() === 'zh' ? '— 点击加载模型列表 —' : '— Click Load Models —') + '</option>';
 };
 
-window.fetchOpenCodeModels = function() {
+export function fetchOpenCodeModels() {
   var apiKeyInput = document.getElementById('settings-preset-apikey');
   var apiKey = apiKeyInput ? apiKeyInput.value.trim() : '';
   var tier = document.getElementById('settings-preset-opencode-tier')?.value === 'go' ? 'go' : 'zen';
-  var isZh = currentLanguage === 'zh';
+  var isZh = getCurrentLanguage() === 'zh';
   var select = document.getElementById('settings-preset-opencode-model');
   if (!select) return;
   if (!apiKey) {
@@ -176,7 +201,7 @@ window.fetchOpenCodeModels = function() {
           + '</option>';
       }
       select.innerHTML = html;
-      window._openCodeModelsCache = models;
+      openCodeModelsCache = models;
     })
     .catch(function() {
       select.disabled = false;
@@ -184,14 +209,14 @@ window.fetchOpenCodeModels = function() {
     });
 };
 
-window.onOpenCodeModelSelect = function() {
+export function onOpenCodeModelSelect() {
   var select = document.getElementById('settings-preset-opencode-model');
   if (!select) return;
   var modelId = select.value;
   if (!modelId) return;
   var modelInput = document.getElementById('settings-preset-model');
   if (modelInput) modelInput.value = modelId;
-  if (typeof window.syncBaseEndpointBadge === 'function') window.syncBaseEndpointBadge();
+  oauthFlowHost().syncBaseEndpointBadge();
   var nameInput = document.getElementById('settings-preset-name');
   if (nameInput && !nameInput.value.trim()) {
     var tier = document.getElementById('settings-preset-opencode-tier')?.value === 'go' ? 'Go' : 'Zen';
@@ -203,9 +228,9 @@ window.onOpenCodeModelSelect = function() {
 // the preset is saved. Login is only consistent if the saved provider matches
 // the current form (auth mode, baseUrl, clientId), so detect mismatches.
 function oauthProviderNeedsSave() {
-  let idx = window.ClawFW.settingsEditing;
+  let idx = oauthFlowHost().getSettingsEditing();
   if (idx === null) return false;
-  let saved = (window.ClawFW.settingsData?.presets || [])[idx];
+  let saved = (oauthFlowHost().getSettingsData()?.presets || [])[idx];
   if (!saved) return false;
   if (!saved.providerName || saved.authType !== 'oauth-codex') return true;
   let baseUrlInput = document.getElementById('settings-preset-baseurl');
@@ -215,10 +240,10 @@ function oauthProviderNeedsSave() {
   return false;
 }
 
-window.startOAuthLogin = async function(mode) {
-  let isZh = currentLanguage === 'zh';
+export async function startOAuthLogin(mode) {
+  let isZh = getCurrentLanguage() === 'zh';
   let loginMode = mode === 'device' ? 'device' : 'browser';
-  let idx = window.ClawFW.settingsEditing;
+  let idx = oauthFlowHost().getSettingsEditing();
 
   if (idx === null) {
     // 连接视图（账号列表页）：每次添加账号都让服务端生成新槽位（'__new__'），
@@ -251,7 +276,7 @@ window.startOAuthLogin = async function(mode) {
     if (display) display.innerHTML = '<span class="oauth-status-text" style="color:var(--text-secondary);">' + (isZh ? '正在保存预设...' : 'Saving preset...') + '</span>';
     // Auto-save (keeping the edit form open) so the server assigns the
     // providerName the login token will be stored under.
-    providerName = await saveSettingsPreset(idx, { keepEditing: true });
+    providerName = await oauthFlowHost().saveSettingsPreset(idx, { keepEditing: true });
     if (!providerName) return;
   }
 
@@ -288,11 +313,20 @@ window.startOAuthLogin = async function(mode) {
     });
 };
 
-var _oauthPollTimer = null;
+let _oauthPollTimer = null;
+
+/**
+ * 停止进行中的登录轮询。model-settings 在关闭面板 / 取消编辑 / 保存预设 /
+ * 退出账号配置页时调用：只清本地定时器，服务端流程继续，状态以再次进入时
+ * 的刷新为准（原 `_oauthPollTimer` 跨模块直写收敛为本模块唯一 owner + 该入口）。
+ */
+export function stopOAuthPolling() {
+  if (_oauthPollTimer) { clearInterval(_oauthPollTimer); _oauthPollTimer = null; }
+}
 
 function pollOAuthLogin(sessionId) {
   if (_oauthPollTimer) clearInterval(_oauthPollTimer);
-  let isZh = currentLanguage === 'zh';
+  let isZh = getCurrentLanguage() === 'zh';
   // 状态区每次渲染时重新查找：期间的整体重渲染（目录刷新等）不会让轮询写入失联节点
   let display = function() { return document.getElementById('oauth-status-display'); };
 
@@ -334,7 +368,7 @@ function pollOAuthLogin(sessionId) {
           if (_oauthPollTimer) { clearInterval(_oauthPollTimer); _oauthPollTimer = null; }
           let el = display();
           if (el) el.innerHTML = '<span class="oauth-status-text" style="color:#81c784;">✓ ' + (isZh ? '登录成功！令牌已保存' : 'Login successful! Token saved.') + '</span>';
-          refreshModelCatalog('codex');
+          oauthFlowHost().refreshModelCatalog('codex');
           renderCodexAccountsList();
         } else if (sess.status === 'expired') {
           if (_oauthPollTimer) { clearInterval(_oauthPollTimer); _oauthPollTimer = null; }
@@ -365,7 +399,7 @@ function pollOAuthLogin(sessionId) {
 async function copyOAuthUserCode(btn) {
   let code = btn?.dataset?.copyCode || '';
   if (!code) return;
-  let isZh = currentLanguage === 'zh';
+  let isZh = getCurrentLanguage() === 'zh';
   let ok = false;
   if (navigator.clipboard && window.isSecureContext) {
     try { await navigator.clipboard.writeText(code); ok = true; } catch (e) { ok = false; }
@@ -402,13 +436,13 @@ function refreshOAuthStatus() {
   if (_oauthPollTimer) return;
   // Codex 连接视图（账号列表页）：状态呈现完全由账号列表承载；编辑表单路径
   // （settingsEditing 非 null）保持单 preset 的状态查询语义
-  if (window.ClawFW.codexConnectionView) {
+  if (oauthFlowHost().isCodexConnectionView()) {
     renderCodexAccountsList();
     return;
   }
   let providerName = getEditingProviderName();
   if (!providerName) return;
-  let isZh = currentLanguage === 'zh';
+  let isZh = getCurrentLanguage() === 'zh';
 
   fetch('/protoclaw/oauth/codex/tokens/' + encodeURIComponent(providerName))
     .then(function(r) { return r.json(); })
@@ -441,7 +475,7 @@ function refreshOAuthStatus() {
 function renderCodexAccountsList() {
   let container = document.getElementById('codex-accounts-list');
   if (!container) return;
-  let isZh = currentLanguage === 'zh';
+  let isZh = getCurrentLanguage() === 'zh';
   container.innerHTML = '<div class="oauth-status-text" style="color:var(--text-secondary);">' + (isZh ? '正在加载账号…' : 'Loading accounts…') + '</div>';
   fetch('/protoclaw/oauth/codex/accounts')
     .then(function(r) { return r.json(); })
@@ -495,7 +529,7 @@ function codexAccountRowHtml(a, isZh) {
 function activateCodexAccountBtn(btn) {
   let providerName = btn?.dataset?.provider;
   if (!providerName) return;
-  let isZh = currentLanguage === 'zh';
+  let isZh = getCurrentLanguage() === 'zh';
   fetch('/protoclaw/oauth/codex/accounts/' + encodeURIComponent(providerName) + '/activate', { method: 'POST' })
     .then(async function(r) {
       let data = await r.json().catch(function() { return {}; });
@@ -505,7 +539,7 @@ function activateCodexAccountBtn(btn) {
     .then(function() {
       // 全局切换：目录按新账号重拉；运行中会话由服务端广播 refresh-credentials 自然重 resolve
       renderCodexAccountsList();
-      refreshModelCatalog('codex');
+      oauthFlowHost().refreshModelCatalog('codex');
     })
     .catch(function(err) {
       alert((isZh ? '切换失败: ' : 'Switch failed: ') + (err?.message || err));
@@ -515,7 +549,7 @@ function activateCodexAccountBtn(btn) {
 function renameCodexAccountBtn(btn) {
   let providerName = btn?.dataset?.provider;
   if (!providerName) return;
-  let isZh = currentLanguage === 'zh';
+  let isZh = getCurrentLanguage() === 'zh';
   let next = prompt(isZh ? '账号显示名' : 'Account display name', btn?.dataset?.name || '');
   if (next === null) return;
   let trimmed = next.trim();
@@ -541,22 +575,31 @@ function renameCodexAccountBtn(btn) {
 function logoutCodexAccountBtn(btn) {
   let providerName = btn?.dataset?.provider;
   if (!providerName) return;
-  let isZh = currentLanguage === 'zh';
+  let isZh = getCurrentLanguage() === 'zh';
   fetch('/protoclaw/oauth/codex/accounts/' + encodeURIComponent(providerName), { method: 'DELETE' })
     .then(function() {
       // 登出后 active 自动回退到下一个有 token 的账号（服务端），目录随之重拉
       renderCodexAccountsList();
-      refreshModelCatalog('codex');
+      oauthFlowHost().refreshModelCatalog('codex');
     })
     .catch(function(err) {
       alert((isZh ? '登出失败: ' : 'Logout failed: ') + (err?.message || err));
     });
 }
 
+// ── 导出面（model-settings 消费）─────────────────────────────────
+export {
+  checkOAuthProxy,
+  renderOAuthLoginArea,
+  resolveOpenCodeProtocolClient,
+  refreshOAuthStatus,
+  renderCodexAccountsList,
+};
+
 // ── 事件接线（data-action="oauthFlow.*"）─────────────────────────
 
 window.ClawFW.actions.registerMany({
-  'oauthFlow.startLogin': (el) => window.startOAuthLogin(el.dataset.mode),
+  'oauthFlow.startLogin': (el) => startOAuthLogin(el.dataset.mode),
   'oauthFlow.logout': () => logoutOAuth(),
   'oauthFlow.copyUserCode': (el) => copyOAuthUserCode(el),
   'oauthFlow.activateAccount': (el) => activateCodexAccountBtn(el),

@@ -1,11 +1,11 @@
-import { test, after } from 'node:test';
+import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { normalizeWorkspaceAgents, resolveWorkspaceAgent, resolveNewSessionAgent, resolveWorkspaceAgentClass } from '../server/shared/workspace-agents.js';
+import { installBrowserStubs, loadModuleOnce } from './helpers/esm-module-loader.js';
 import { createFrontendSandbox } from './helpers/frontend-vm.js';
-import { createAgentLoader } from '../public/src/modules/agent-loader.js';
 
 const metadata = { id: 'programming-helper', name: '工作空间', defaultAgentId: 'main', agents: [
   { id: 'main', displayName: '编程小助手' }, { id: 'reviewer', displayName: { zh: '审查助手', en: 'Reviewer' } },
@@ -43,67 +43,225 @@ test('each session selects its own assembly, missing exports fail explicitly', (
   assert.throws(() => resolveWorkspaceAgentClass({ Main, Reviewer }, 'main'));
 });
 
-function welcomeSandbox() {
-  const ctx = createFrontendSandbox();
-  ctx.loadSource('public/src/app-core.js');
-  ctx.loadSource('public/src/modules/session-view-state.js');
-  ctx.loadSource('public/src/modules/workspace-agents.js');
-  ctx.run(`allAgents = [${JSON.stringify({ ...metadata, source: 'prebuilt', workspace_sessions: { activeSessionId: 'other', sessions: [{ id: 's1', workspaceAgentId: 'main' }, { id: 's2', workspaceAgentId: 'reviewer' }] } })}]; focusedAgentId = 'programming-helper'; currentRuntimeAgentId = 'r1';`);
-  return ctx;
+// ── 前端欢迎名解析：真实 import 路线（ESM 迁移配方·测试改造）──────────
+// workspace-agents.js 已迁 ESM（P2 W1-4）：宿主状态经 ESM owner 的 setter 写入
+// （与生产 claim 后同一份状态），仍为 classic 的解析函数以 window 桩提供，转义
+// 与语言走真实 ESM 依赖（markdown-utils / i18n-environment-state）。
+let cleanupStubs = null;
+let agentStore = null;
+let orchestration = null;
+let i18n = null;
+let agentLoader = null;
+let workspaceAgents = null;
+
+const sessionCatalog = {
+  ...metadata,
+  source: 'prebuilt',
+  workspace_sessions: { activeSessionId: 'other', sessions: [{ id: 's1', workspaceAgentId: 'main' }, { id: 's2', workspaceAgentId: 'reviewer' }] },
+};
+
+before(async () => {
+  cleanupStubs = installBrowserStubs({
+    window: {
+      escapeHtml: (text) => String(text).replace(/[&<>"']/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m])),
+      ClawFW: { actions: { registerMany() {} } },
+    },
+  });
+  await loadModuleOnce('public/src/modules/kernel-state.js', { installGlobals: false });
+  // agent-loader 宿主在装载期读取 classic 适配面（P1 已迁宿主，直接 import）
+  window.AgentLoaderHost = { loadedAgentDetailIds: new Set() };
+  // agent-loader-host → template-engine → p2-bootstrap-session-switch 会取
+  // app-core 的 P2 bootstrap 宿主工厂：在真实 classic 加载序下求值 app-core，
+  // 把工厂原样接到当前 window（宿主状态仍由该 classic 实例持有，不造替身）。
+  const classicBoot = createFrontendSandbox();
+  classicBoot.setInterval = () => 0;
+  classicBoot.loadSource('public/src/modules/action-dispatcher.js');
+  classicBoot.loadSource('public/src/i18n.js');
+  classicBoot.loadSource('public/src/app-core.js');
+  // agent-loader-host 的静态依赖含 sidebar-operations（B2b）：其 classic 宿主工厂
+  // 由 sidebar-render 提供，sidebar-render 的调用状态宿主又读 runtime-status 的
+  // 容器。按 index.html 的真实顺序补这两个文件（不复制宿主契约）。
+  classicBoot.loadSource('public/src/modules/runtime-status.js');
+  classicBoot.loadSource('public/src/modules/session-view-state.js');
+  classicBoot.loadSource('public/src/modules/sidebar-render.js');
+  // project-data 具名边带进来的宿主工厂全部按真源接出（createCallInterruptHost /
+  // createRuntimeViewCacheHost / 各 P2 引导宿主）；app-ui / app-main 的最小 seam
+  // 由下面的 assign 补齐。
+  for (const name of Object.keys(classicBoot)) {
+    if (/^create[A-Za-z0-9]*Host$/.test(name)) window[name] = classicBoot[name];
+  }
+  for (const [name, factory] of Object.entries({
+    createWorkspaceSurfaceHost: () => ({}),
+    createPollCoordinatorHost: () => ({}),
+    createRuntimeSwitchHost: () => ({ state: {} }),
+    createCompactResumeHost: () => ({}),
+  })) {
+    if (typeof window[name] !== 'function') window[name] = factory;
+  }
+  window.createSessionViewCommitHost = () => ({
+    identity: () => null, read: () => ({}), apply() {}, normalizeModel: (value) => value || {},
+  });
+  // 无唯一 query → 与域模块内部 import 同址，共用同一模块实例（状态唯一 owner）
+  agentStore = await import('../public/src/modules/agent-store-state.js');
+  orchestration = await import('../public/src/modules/orchestration-state.js');
+  i18n = await import('../public/src/modules/i18n-environment-state.js');
+  agentLoader = await import('../public/src/modules/agent-loader-host.js');
+  workspaceAgents = (await loadModuleOnce('public/src/modules/workspace-agents.js', { installGlobals: false })).module;
+});
+
+after(() => { cleanupStubs(); });
+
+/** 每例复位：状态经 owner setter 写入，classic 解析函数按例换桩。 */
+function resetWelcome(overrides = {}) {
+  agentStore.setAllAgents([sessionCatalog]);
+  agentStore.setFocusedAgentId('programming-helper');
+  orchestration.setCurrentRuntimeAgentId('r1');
+  i18n.setCurrentLanguage('zh');
+  window.getCurrentSessionViewIdentity = () => null;
+  window.readCurrentSessionViewState = () => ({ sessionMeta: null });
+  window.getRuntimeWorkspaceSessionId = () => '';
+  window.getLogicalAgentId = (record) => record?.id || '';
+  window.splitRemoteNamespaceId = () => null;
+  window.localizeWorkspaceValue = (value, fallback = '') => {
+    if (typeof value === 'string') return value;
+    if (value && typeof value === 'object') return value[i18n.getCurrentLanguage()] || value.en || value.zh || fallback;
+    return fallback;
+  };
+  for (const [key, value] of Object.entries(overrides)) window[key] = value;
 }
 
 test('welcome follows the selected Session, not workspace active/title/default; handles language and unknown identity', () => {
-  const ctx = welcomeSandbox();
-  ctx.run(`applySessionViewPatch({identity: {agentId: 'programming-helper', sessionId: 's2'}})`);
-  assert.match(ctx.run('getEmptyStateHtml()'), /欢迎使用 审查助手/);
-  ctx.run(`currentLanguage = 'en'`);
-  assert.match(ctx.run('getEmptyStateHtml()'), /Welcome to Reviewer/);
-  ctx.run(`applySessionViewPatch({identity: {agentId: 'programming-helper', sessionId: 's1'}})`);
-  assert.match(ctx.run('getEmptyStateHtml()'), /编程小助手/);
-  ctx.run(`applySessionViewPatch({identity: {agentId: 'programming-helper', sessionId: 'unknown'}})`);
-  assert.match(ctx.run('getEmptyStateHtml()'), /New Conversation/);
-  assert.doesNotMatch(ctx.run('getEmptyStateHtml()'), /编程小助手|审查助手|工作空间/);
+  resetWelcome({
+    getCurrentSessionViewIdentity: () => ({ agentId: 'programming-helper', sessionId: 's2' }),
+  });
+  assert.equal(workspaceAgents.getWelcomeName(), '审查助手');
+  i18n.setCurrentLanguage('en');
+  assert.equal(workspaceAgents.getWelcomeName(), 'Reviewer');
+  i18n.setCurrentLanguage('zh');
+  window.getCurrentSessionViewIdentity = () => ({ agentId: 'programming-helper', sessionId: 's1' });
+  assert.equal(workspaceAgents.getWelcomeName(), '编程小助手');
+  window.getCurrentSessionViewIdentity = () => ({ agentId: 'programming-helper', sessionId: 'unknown' });
+  assert.equal(workspaceAgents.getWelcomeName(), '', 'unknown Session falls back to the generic welcome title');
 });
 
-test('bound metadata survives view normalization and overrides stale catalog; stale view commits cannot change it', () => {
-  const ctx = welcomeSandbox();
-  ctx.run(`applySessionViewPatch({identity: {agentId: 'programming-helper', sessionId: 's1'}});
-    applySessionViewPatch({sessionMeta: {sessionId: 's1', workspaceAgentId: 'reviewer'}});
-    var oldToken = captureSessionViewToken();`);
-  assert.match(ctx.run('getEmptyStateHtml()'), /审查助手/);
-  ctx.run(`applySessionViewPatch({identity: {agentId: 'programming-helper', sessionId: 's2'}})`);
-  assert.equal(ctx.run(`commitSessionViewPatch(oldToken, {sessionMeta: {sessionId: 's1', workspaceAgentId: 'main'}})`), false);
-  assert.match(ctx.run('getEmptyStateHtml()'), /审查助手/);
+test('the classic-phase initial state produces no welcome name', () => {
+  // 首屏同步渲染（app-main 顶层 applyLanguage → getEmptyStateHtml）时的真实初始
+  // 状态：catalog 为空、无焦点、无身份、agent 详情桥尚未装载。
+  resetWelcome();
+  agentStore.setAllAgents([]);
+  agentStore.setFocusedAgentId(null);
+  orchestration.setCurrentRuntimeAgentId(null);
+  assert.equal(workspaceAgents.getWelcomeName(), '');
+});
+
+test('bound metadata survives view normalization and overrides stale catalog', () => {
+  resetWelcome({
+    getCurrentSessionViewIdentity: () => ({ agentId: 'programming-helper', sessionId: 's1' }),
+  });
+  window.readCurrentSessionViewState = () => ({ sessionMeta: { sessionId: 's1', workspaceAgentId: 'reviewer' } });
+  assert.equal(workspaceAgents.getWelcomeName(), '审查助手');
 });
 
 test('remote welcome resolves a namespaced Session against the remote detail payload', async () => {
-  const ctx = welcomeSandbox();
-  const loader = createAgentLoader({
-    loadedAgentDetailIds: new Set(),
-    captureSidebarSnapshotToken: () => null,
-    captureSessionViewToken: () => null,
-    getPhSessionOwnershipParams: () => ({}),
-    allAgents: () => [],
-    fetch: async () => ({ ok: true, json: async () => ({
-      agents: [{ id: 'reviewer', displayName: '远程审查助手' }],
-      workspace_sessions: { sessions: [{ id: 'remote-session', workspaceAgentId: 'reviewer' }] },
-    }) }),
-    warn: (...args) => { throw new Error(args.join(' ')); },
+  resetWelcome({
+    getCurrentSessionViewIdentity: () => ({ agentId: 'remote:host:workspace', sessionId: 'remote:host:remote-session' }),
+    splitRemoteNamespaceId: (value) => {
+      const match = /^remote:([^:]+):(.*)$/.exec(value);
+      return match ? { connectionId: match[1], innerId: match[2] } : null;
+    },
   });
-  await loader.loadAgentDetail('remote:host:workspace');
-  ctx.window.getAgentDetailPayload = loader.getAgentDetailPayload;
-  ctx.run(`function splitRemoteNamespaceId(value) { const match = /^remote:([^:]+):(.*)$/.exec(value); return match ? {connectionId: match[1], innerId: match[2]} : null; }
-    applySessionViewPatch({identity: {agentId: 'remote:host:workspace', sessionId: 'remote:host:remote-session'}});`);
-  assert.match(ctx.run('getEmptyStateHtml()'), /远程审查助手/);
+  agentStore.setAllAgents([]);
+  // 远程宿主的详情载荷来自真实 agent-loader（宿主依赖由 window 桩提供）
+  const detail = {
+    id: 'remote:host:workspace',
+    agents: [{ id: 'reviewer', displayName: '远程审查助手' }],
+    workspace_sessions: { sessions: [{ id: 'remote-session', workspaceAgentId: 'reviewer' }] },
+  };
+  window.fetch = async (url) => {
+    assert.match(String(url), /\/protoclaw\/agent_detail\?agentId=remote%3Ahost%3Aworkspace/);
+    return { ok: true, json: async () => detail };
+  };
+  await agentLoader.loadAgentDetail('remote:host:workspace');
+  assert.equal(workspaceAgents.getWelcomeName(), '远程审查助手');
 });
 
 test('single Agent and derived sessions need no selection dialog', async () => {
-  const ctx = welcomeSandbox();
+  resetWelcome();
   const action = { type: 'create_session' };
-  assert.equal(await ctx.window.ClawFW.workspaceAgents.selectForNewSession({ agents: [metadata.agents[0]] }, action), action);
+  assert.equal(await workspaceAgents.selectForNewSession({ agents: [metadata.agents[0]] }, action), action);
   const derived = { type: 'create_session', sessionId: 'source' };
-  assert.equal(await ctx.window.ClawFW.workspaceAgents.selectForNewSession(metadata, derived), derived);
+  assert.equal(await workspaceAgents.selectForNewSession(metadata, derived), derived);
 });
+
+test('multi-Agent hosts ask for the Agent and pin it on the action', async () => {
+  resetWelcome();
+  const fake = pickerDocument();
+  const prevDocument = globalThis.document;
+  globalThis.document = fake.document;
+  try {
+    const pending = workspaceAgents.selectForNewSession(metadata, { type: 'create_session' });
+    assert.match(fake.overlay.innerHTML, /value="reviewer"/);
+    assert.match(fake.overlay.innerHTML, /value="main" selected/);
+    fake.listeners.get('submit')({ preventDefault() {} });
+    const result = await pending;
+    assert.equal(result.workspaceAgentId, 'reviewer', 'the selected Agent is pinned on the create_session action');
+  } finally {
+    globalThis.document = prevDocument;
+  }
+});
+
+test('cancelling the picker aborts the create_session action', async () => {
+  resetWelcome();
+  const fake = pickerDocument();
+  const prevDocument = globalThis.document;
+  globalThis.document = fake.document;
+  try {
+    const pending = workspaceAgents.selectForNewSession(metadata, { type: 'create_session' });
+    fake.listeners.get('click')({ target: fake.overlay });
+    assert.equal(await pending, null);
+  } finally {
+    globalThis.document = prevDocument;
+  }
+});
+
+test('the ClawFW namespace keeps exposing the same entries to classic consumers', () => {
+  assert.equal(window.ClawFW.workspaceAgents.getWelcomeName, workspaceAgents.getWelcomeName);
+  assert.equal(window.ClawFW.workspaceAgents.selectForNewSession, workspaceAgents.selectForNewSession);
+});
+
+/** 选择弹窗的最小 DOM：form submit 与遮罩点击两条出口。 */
+function pickerDocument() {
+  const listeners = new Map();
+  const select = { value: 'reviewer', focus() {} };
+  const form = { addEventListener(_type, callback) { listeners.set('submit', callback); } };
+  const cancelButton = { addEventListener() {} };
+  const overlay = {
+    className: '',
+    innerHTML: '',
+    isConnected: true,
+    addEventListener(type, callback) { listeners.set(type, callback); },
+    querySelector(selector) {
+      if (selector === 'form') return form;
+      if (selector === 'select') return select;
+      if (selector === 'button[type="button"]') return cancelButton;
+      return null;
+    },
+    querySelectorAll() { return [select]; },
+    remove() { overlay.isConnected = false; },
+  };
+  return {
+    listeners,
+    overlay,
+    select,
+    document: {
+      activeElement: null,
+      createElement: () => overlay,
+      addEventListener() {},
+      removeEventListener() {},
+      body: { appendChild() {} },
+    },
+  };
+}
 
 const root = await mkdtemp(join(tmpdir(), 'claw-workspace-agents-'));
 process.env.AGENTDEV_DATA_DIR = root;

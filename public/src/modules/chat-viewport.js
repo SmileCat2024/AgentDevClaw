@@ -1,6 +1,49 @@
 /**
  * chat-viewport.js — Chat Viewport / Scroll 管理模块（从 app-ui.js 域 N 提取）
  *
+ * ESM 迁移状态（P2 第二波批次 11）：**保留唯一 classic 实现，本文件不转 ESM**。
+ * R1/R4 触线证据（首屏同步链，不是监听回调）：
+ *   app-main.js 顶层 `applyTheme(currentTheme); applyLanguage();`
+ *     → theme-lang.js `applyLanguage()` 末行 `renderCurrentMainView()`
+ *     → app-ui.js `renderCurrentMainView()` 无条件 `ensureChatViewportObservers()`；
+ *       空会话分支 `renderChatEmptyState()`（chat-renderer.js）同步
+ *       `cancelChatScrollSettlement()` + `runWithSuppressedChatViewportObservers()`，
+ *       再到 `updateFollowLatestButton()`；`updateChatContextBar()`
+ *       （chat-context-bar.js）首次上屏同步 `notifyChatViewportMutation(...)`，
+ *       首屏 `followLatestEnabled=true` 因而同步 `lockChatViewportToBottomNow()`。
+ *   语言按钮（app-ui.js classic 顶层注册）在 DOMContentLoaded 前已可点，点击即
+ *   同步 `applyLanguage()` → 上述渲染链，可在 deferred ESM 执行前重复发生；主题
+ *   按钮只重绘主题开关，不进 `renderCurrentMainView`，不构成该链入口。
+ *   首屏 rAF 真实可达（不是纯事件期）：`updateFollowLatestButton()` 的避让
+ *   ResizeObserver 在首屏就调度定位 rAF；同一同步入口 `renderCurrentMainView`
+ *   在 workspace 与有消息分支还 `requestAnimationFrame(updateAssemblySideRailPosition)`
+ *   （首屏空会话分支不调度该 rAF）。rAF 回调属解析期帧窗口；
+ *   observer 微任务/帧回调（settlement、静默窗）与 150ms 锚点保存定时器也可能先于
+ *   模块执行到达。
+ *   结算 / 跟随动画 / 观察者 / 锚点 / 阅读位置恢复共享同一批状态，
+ *   `cancelChatScrollSettlement`、`ensureChatViewportObservers` 等同步入口直接读写
+ *   这些状态与 rAF/定时器句柄，拆到延迟模块会让任一环在首屏或解析期交互时
+ *   不可用。复制实现、ready 等待、转发队列、延后补画与空操作均为迁移禁止项。
+ * 迁移边界（可迁时点）：跟随/锚点/结算策略与状态都是事件期语义，可整体迁 ESM，
+ * 但必须与同步首屏调用方联合迁移——即 app-main 顶层 `applyTheme/applyLanguage`
+ *   同步 bootstrap、app-ui 的 `renderCurrentMainView`（P1 域 8 render-entry）、
+ *   chat-renderer 渲染入口、chat-context-bar 与 input-helpers 的
+ *   `updateChatProcessToggle` 同批完成，或按 P3 方案收敛同步 bootstrap 后整文件
+ *   转 ESM。在此之前本域不拆分：拆出仍有消费方的子集只会新增跨模块晚绑定并
+ *   破坏原时序；零生产消费的纯 helper（`scrollToLatest` / `scheduleScrollToLatest`
+ *   / `scheduleScrollToLatestWithVersion` 仅有实验脚本与注释引用）迁出零收益，
+ *   也不能反过来当作「classic 调用」证据。
+ * 兼容面（两类，不要混写）：本文件顶层函数与 app-core.js 顶层视口状态是已迁 ESM
+ *   消费方的晚绑定面——
+ *   1) 直接 import bootstrap 适配模块的 ESM（如 chat-row-visibility /
+ *      lazy-tool-content）：`p2-bootstrap-dom` 交出 const DOM 引用、
+ *      `p2-bootstrap-chat-surface` 转发状态 owner；
+ *   2) 经既有 classic host seam 取用的 ESM：runtime-view-cache 走 app-core 的
+ *      `createRuntimeViewCacheHost`，runtime-switch / workspace-surface 走
+ *      app-main / app-ui 各自的 `host.*` 回调（如 `setFollowLatest` /
+ *      `saveScroll` / `captureAnchor`）。
+ *   两类都是同一 classic owner 的转发，本批不新增桥键、不改任何函数与文案。
+ *
  * 包含：
  *   - updateAssemblySideRailPosition: assembly side rail 定位
  *   - getToggleButtonLabel: 消息折叠/展开按钮 label（纯 UI 工具）

@@ -3,32 +3,73 @@
  * 从 app-main.js 拆出（Phase A-4）
  * 拆出日期：2026-07-03
  *
- * 依赖全局状态（定义在 app-core.js）:
- *   currentLanguage
- * 依赖全局函数:
- *   getCurrentAgentRecord (app-main.js)
- *   renderCurrentMainView (app-ui.js)
- *   renderPhSettingsOverlay (modules/ph-settings.js)
- *   updateAgentRecord (app-ui.js)
- *   updateAgentWorkspaceState (app-ui.js)
- *   invoke (app-core.js)
- *   ClawToast (modules/toast-notify.js)
- * 依赖全局变量:
- *   lastRenderedWorkspaceHtml (app-ui.js)
- *   phSearchQuery, _phSearchTimer (app-core.js)
- * window 函数:
- *   phOpenSettings, phCloseSettings, phAutoSaveModelConfig,
- *   phOpenProject, phOpenProjectDirectory, phSwitchProject, phToggleProjectDropdown,
- *   phOpenInExplorer, phToggleModelSlot
- * 模板交互: 上述函数的入口控件已由 session-list-render.js 等批次的
- * data-action 注册块承接（经 window 转调本模块），本文件不再有内联事件。
+ * ESM 化：P2 W2-8（2026-11-17）。原位转换，动作语义与 DOM/请求顺序零变化。
+ *
+ * 依赖（ESM，装载顺序由 import 图确定）:
+ *   - project-data：项目 / 目录视图查询、浏览目标读写、workspace state 与记录写入口
+ *   - ph-settings：renderPhSettingsOverlay / _closePhFeatureEditor / phSettingsAgentId 写入口
+ *   - ph-session-list：phSearchResetState / setPhSurfaceViewProjectId（surface 远程视图覆盖）
+ *   - ph-session-move：phSessionMoveReset（互需对方入口，静态环已存在；两侧只在
+ *     函数体内引用对方绑定，顶层无环内读取）
+ *   - claw-select：enhance（模型槽 effort 下拉的增强）；input-model-switcher：getThinkingEffortOptions
+ *   - model-preset-cache：getClawModelPresets / setClawModelPresets
+ *   - sidebar-operations：mergeWorkspaceSessionSnapshots
+ *   - render-entry-state：setLastRenderedWorkspaceHtml（渲染缓存失效）
+ *   - toast-notify：ClawToast；dir-config-dialog：phOpenProjectConfig / phOpenDirConfig
+ *   - i18n-environment-state：实时语言；markdown-utils：escapeHtml
+ *   - p2-bootstrap-ph-session：phSessionUi.phSearchQuery / phSessionUi._phSearchTimer（owner 仍是 app-core）
+ *
+ * 仍 classic（调用时点显式 window 晚绑定，各域收敛时改 import）:
+ *   - app-main / app-ui：getCurrentAgentRecord / renderCurrentMainView / renderWorkspaceSurface
+ *   - app-core：invoke / getLogicalAgentId / isPhStyleWorkspaceAgent
+ *   - ph-settings 域状态：ClawFW._coderModelPresets（owner 返修中，收敛后改 import）
+ *
+ * 时序（R1/R2/R4，逐条审计见批次报告）：首屏同步链 applyTheme/applyLanguage →
+ * renderCurrentMainView 在 allAgents 为空时早退，classic 相零触达本模块
+ * （实测探针）；顶层语句只有 window 键赋值与 document/window 监听注册，
+ * 监听到达时点由用户交互决定（模块执行相之后），无加载期语义。
  */
 
-window.phOpenSettings = async ({ initialTab } = {}) => {
-  const agent = getCurrentAgentRecord();
+import { escapeHtml } from './markdown-utils.js';
+import { getCurrentLanguage } from './i18n-environment-state.js';
+import { getClawModelPresets, setClawModelPresets } from './model-preset-cache.js';
+import { mergeWorkspaceSessionSnapshots } from './sidebar-operations.js';
+import { setLastRenderedWorkspaceHtml } from './render-entry-state.js';
+import { ClawToast } from './toast-notify.js';
+import { phSessionUi } from './p2-bootstrap-ph-session.js';
+import { phOpenDirConfig, phOpenProjectConfig } from './dir-config-dialog.js';
+import {
+  ensurePhProjectEntitiesLoaded,
+  phProjectEntities,
+  getPhBrowsingTarget,
+  setPhBrowsingTarget,
+  clearPhBrowsingTarget,
+  getProgrammingHelperProjects,
+  getProjectLocalHostAgentId,
+  getAgentWorkspaceState,
+  getPhCurrentDirectoryContext,
+  getPhSessionOwnershipParams,
+  phFetchSessionsWithOwnership,
+  updateAgentWorkspaceState,
+  updateAgentRecord,
+} from './project-data.js';
+import { phSearchResetState, setPhSurfaceViewProjectId } from './ph-session-list.js';
+import { enhance as enhanceClawSelect } from './claw-select.js';
+import { getThinkingEffortOptions } from './input-model-switcher.js';
+import { phSessionMoveReset } from './ph-session-move.js';
+import {
+  renderPhSettingsOverlay,
+  _closePhFeatureEditor,
+  _phResetFeaturePageState,
+  getPhSettingsAgentId,
+  setPhSettingsAgentId,
+} from './ph-settings.js';
+
+export const phOpenSettings = async ({ initialTab } = {}) => {
+  const agent = window.getCurrentAgentRecord();
   if (!agent) return;
   let presets = getClawModelPresets();
-  window.phSettingsAgentId = typeof getLogicalAgentId === 'function' ? getLogicalAgentId(agent) : agent.id;
+  setPhSettingsAgentId(typeof window.getLogicalAgentId === 'function' ? window.getLogicalAgentId(agent) : agent.id);
   // 先渲染（已有缓存或空态），模型预置属补数据——点击到弹窗出现不等网络
   renderPhSettingsOverlay(agent, presets, { initialTab });
   const stillOpen = () => Boolean(document.getElementById('ph-settings-host')?.querySelector('.feature-detail-overlay'));
@@ -44,7 +85,7 @@ window.phOpenSettings = async ({ initialTab } = {}) => {
   }
   // coder APP 的模型配置存 agent-configs/coder.json（agentId=coder 寻址），
   // 与主 APP 分开拉取；面板渲染与保存共用这份缓存。
-  if (window.phSettingsAgentId === 'programming-helper'
+  if (getPhSettingsAgentId() === 'programming-helper'
     && !(window.ClawFW && window.ClawFW._coderModelPresets)) {
     try {
       const resp = await fetch('/protoclaw/agent_model_presets?agentId=coder');
@@ -59,35 +100,35 @@ window.phOpenSettings = async ({ initialTab } = {}) => {
   }
 };
 
-window.phCloseSettings = () => {
+export const phCloseSettings = () => {
   // Feature 设置二级页持有共享配置编辑器实例，关闭弹窗时一并释放；
   // 身份落点与页内细节态全部重置——只记忆一级分页（模型配置/运行环境/Feature 设置等）
-  if (typeof _closePhFeatureEditor === 'function') _closePhFeatureEditor();
-  if (typeof window._phResetFeaturePageState === 'function') window._phResetFeaturePageState();
+  _closePhFeatureEditor();
+  _phResetFeaturePageState();
   const host = document.getElementById('ph-settings-host');
   if (host) host.innerHTML = '';
 };
 
-window.phModelSlotChanged = (select) => {
+export const phModelSlotChanged = (select) => {
   if (!select) return;
   const effortSelect = document.querySelector('#ph-settings-host .ph-mc-effort[data-preset-role="' + select.dataset.presetRole + '"][data-slot="' + select.dataset.slot + '"]');
   if (effortSelect) {
     const preset = getClawModelPresets().find(function(item) { return item.name === select.value; });
-    const options = preset && window.ClawFW?.getThinkingEffortOptions?.(preset.provider || preset.protocol) || [];
+    const options = preset && getThinkingEffortOptions(preset.provider || preset.protocol) || [];
     const selectedEffort = preset?.thinkingEffort || '';
-    effortSelect.innerHTML = '<option value="">' + (currentLanguage === 'zh' ? '默认' : 'Default') + '</option>'
+    effortSelect.innerHTML = '<option value="">' + (getCurrentLanguage() === 'zh' ? '默认' : 'Default') + '</option>'
       + options.map(function(effort) {
         return '<option value="' + escapeHtml(effort) + '"' + (effort === selectedEffort ? ' selected' : '') + '>' + escapeHtml(effort) + '</option>';
       }).join('');
     effortSelect.value = selectedEffort;
     effortSelect.disabled = !preset || options.length === 0;
-    if (window.ClawSelect) window.ClawSelect.enhance(effortSelect);
+    enhanceClawSelect(effortSelect);
   }
-  window.phAutoSaveModelConfig();
+  phAutoSaveModelConfig();
 };
 
-window.phAutoSaveModelConfig = async () => {
-  const agentId = window.phSettingsAgentId;
+export const phAutoSaveModelConfig = async () => {
+  const agentId = getPhSettingsAgentId();
   if (!agentId) return;
   const selects = document.querySelectorAll('#ph-settings-host .ph-mc-select');
   const effortSelects = document.querySelectorAll('#ph-settings-host .ph-mc-effort');
@@ -140,7 +181,7 @@ window.phAutoSaveModelConfig = async () => {
     });
     const result = await resp.json();
     if (result.ok) {
-      const agent = getCurrentAgentRecord();
+      const agent = window.getCurrentAgentRecord();
       if (agent) agent.modelPresets = modelPresets;
       try {
         // 元数据刷新不能改写列表归属：按当前浏览目标取切片，并走合并语义
@@ -149,11 +190,9 @@ window.phAutoSaveModelConfig = async () => {
         const fresh = await phFetchSessionsWithOwnership(agent || { id: agentId });
         if (fresh && fresh.unchanged !== true) {
           updateAgentRecord(agentId, {
-            workspace_sessions: typeof mergeWorkspaceSessionSnapshots === 'function'
-              ? mergeWorkspaceSessionSnapshots(
-                (agent || {}).workspace_sessions || {}, fresh, agentId,
-              )
-              : fresh,
+            workspace_sessions: mergeWorkspaceSessionSnapshots(
+              (agent || {}).workspace_sessions || {}, fresh, agentId,
+            ),
             active_workspace_session_id: fresh?.activeSessionId || null,
           });
         }
@@ -176,33 +215,33 @@ window.phAutoSaveModelConfig = async () => {
     }
     // 刷新覆层以更新 info 文本
     const presets = getClawModelPresets();
-    const agent = getCurrentAgentRecord();
+    const agent = window.getCurrentAgentRecord();
     if (agent) renderPhSettingsOverlay(agent, presets);
-    renderCurrentMainView();
+    window.renderCurrentMainView();
   } catch (e) {
     console.error('Failed to save model preset:', e);
   }
 };
 
-window.phOpenProject = async () => {
-  const currentAgent = getCurrentAgentRecord();
-  if (!currentAgent || !isPhStyleWorkspaceAgent(currentAgent)) {
+export const phOpenProject = async () => {
+  const currentAgent = window.getCurrentAgentRecord();
+  if (!currentAgent || !window.isPhStyleWorkspaceAgent(currentAgent)) {
     console.error('Not in a PH-style workspace');
     return;
   }
 
   try {
-    const result = await invoke('select_directory');
+    const result = await window.invoke('select_directory');
     const chosenPath = Array.isArray(result?.paths) ? String(result.paths[0] || '').trim() : (typeof result?.path === 'string' ? result.path.trim() : '');
     if (!chosenPath) {
       return;
     }
-    await window.phOpenProjectDirectory(chosenPath);
+    await phOpenProjectDirectory(chosenPath);
   } catch (error) {
     console.error('Failed to open project:', error);
-    window.alert((currentLanguage === 'zh' ? '打开目录失败：' : 'Failed to open directory: ') + (error?.message || error));
-    lastRenderedWorkspaceHtml = '';
-    renderCurrentMainView();
+    window.alert((getCurrentLanguage() === 'zh' ? '打开目录失败：' : 'Failed to open directory: ') + (error?.message || error));
+    setLastRenderedWorkspaceHtml('');
+    window.renderCurrentMainView();
   }
 };
 
@@ -210,9 +249,9 @@ window.phOpenProject = async () => {
 // 随后按目录切片拉取会话首屏。目录来源由调用方决定：工具栏「打开目录」按钮
 // 先弹目录选择器；桌面右键「在编程小助手中打开」由壳直接给定
 // （modules/desktop-open.js）。
-window.phOpenProjectDirectory = async (chosenPath) => {
-  const currentAgent = getCurrentAgentRecord();
-  if (!currentAgent || !isPhStyleWorkspaceAgent(currentAgent) || !chosenPath) {
+export const phOpenProjectDirectory = async (chosenPath) => {
+  const currentAgent = window.getCurrentAgentRecord();
+  if (!currentAgent || !window.isPhStyleWorkspaceAgent(currentAgent) || !chosenPath) {
     return;
   }
 
@@ -237,25 +276,25 @@ window.phOpenProjectDirectory = async (chosenPath) => {
       id: 'dir:' + String(chosenPath).replace(/\\/g, '/').toLowerCase(),
     });
     // 多选状态随导航作废（状态不跨目录/归属泄漏）
-    if (typeof window.phSessionMoveReset === 'function') window.phSessionMoveReset();
+    phSessionMoveReset();
 
     // 目录会话列表首屏（按目录切片拉取）
     const loaded = await phLoadProjectSessions(chosenPath);
     if (!loaded) {
-      lastRenderedWorkspaceHtml = '';
-      renderCurrentMainView();
+      setLastRenderedWorkspaceHtml('');
+      window.renderCurrentMainView();
     }
   } catch (error) {
     console.error('Failed to open project:', error);
-    window.alert((currentLanguage === 'zh' ? '打开目录失败：' : 'Failed to open directory: ') + (error?.message || error));
-    lastRenderedWorkspaceHtml = '';
-    renderCurrentMainView();
+    window.alert((getCurrentLanguage() === 'zh' ? '打开目录失败：' : 'Failed to open directory: ') + (error?.message || error));
+    setLastRenderedWorkspaceHtml('');
+    window.renderCurrentMainView();
   }
 };
 
-window.phSwitchProject = async (projectId) => {
-  const currentAgent = getCurrentAgentRecord();
-  if (!currentAgent || !isPhStyleWorkspaceAgent(currentAgent)) {
+export const phSwitchProject = async (projectId) => {
+  const currentAgent = window.getCurrentAgentRecord();
+  if (!currentAgent || !window.isPhStyleWorkspaceAgent(currentAgent)) {
     return;
   }
 
@@ -270,23 +309,22 @@ window.phSwitchProject = async (projectId) => {
   // 目录切换），也不改变 workspace_state.openDirectory——项目选择不被
   // 目录轮询覆盖，靠 typed target 持久化保证。
   if (String(projectId || '').startsWith('prj_')) {
-    const entity = (window.ClawFW.phProjectEntities?.projects || [])
+    const entity = (phProjectEntities.projects || [])
       .find((p) => p.id === projectId) || null;
     // 元数据未加载完：不退回另一个目标（契约），先补拉实体再继续
     if (!entity) {
       await ensurePhProjectEntitiesLoaded();
     }
-    const resolved = (window.ClawFW.phProjectEntities?.projects || [])
+    const resolved = (phProjectEntities.projects || [])
       .find((p) => p.id === projectId) || null;
     if (!resolved) {
-      window.alert((currentLanguage === 'zh' ? '项目不存在：' : 'Project not found: ') + projectId);
+      window.alert((getCurrentLanguage() === 'zh' ? '项目不存在：' : 'Project not found: ') + projectId);
       return;
     }
     // 目录决定位置：跨目录项目（左侧目录树二级进入）先把工作区目录切到
     // 项目绑定目录——仅当该目录已在目录注册表（workspace phProjects）里；
     // 项目绑定目录（含托管）不写目录注册表，位置随项目目标视图寻址。
-    const wsStateNow = (typeof getAgentWorkspaceState === 'function')
-      ? (getAgentWorkspaceState(currentAgent) || {}) : {};
+    const wsStateNow = getAgentWorkspaceState(currentAgent) || {};
     const normDir = (dir) => String(dir || '').replace(/\\/g, '/').toLowerCase();
     const entityDirNorm = normDir(resolved.openDirectory);
     const wsDirNorm = normDir(wsStateNow.openDirectory);
@@ -308,21 +346,21 @@ window.phSwitchProject = async (projectId) => {
         updateAgentWorkspaceState(currentAgent.id, freshDirState);
       } catch (error) {
         console.error('Failed to switch directory for project:', error);
-        window.alert((currentLanguage === 'zh' ? '切换目录失败：' : 'Failed to switch directory: ') + (error?.message || error));
+        window.alert((getCurrentLanguage() === 'zh' ? '切换目录失败：' : 'Failed to switch directory: ') + (error?.message || error));
         return;
       }
     }
     setPhBrowsingTarget(currentAgent.id, { type: 'project', id: projectId });
-    if (window.ClawFW) window.ClawFW.phSurfaceViewProjectId = null;
+    setPhSurfaceViewProjectId(null);
     // 多选状态随归属切换作废（状态不跨目录/归属泄漏）
-    if (typeof window.phSessionMoveReset === 'function') window.phSessionMoveReset();
-    phSearchQuery = '';
-    if (_phSearchTimer) { clearTimeout(_phSearchTimer); _phSearchTimer = null; }
-    if (typeof window.phSearchResetState === 'function') window.phSearchResetState();
+    phSessionMoveReset();
+    phSessionUi.phSearchQuery = '';
+    if (phSessionUi._phSearchTimer) { clearTimeout(phSessionUi._phSearchTimer); phSessionUi._phSearchTimer = null; }
+    if (typeof phSearchResetState === 'function') phSearchResetState();
     const loaded = await phLoadProjectSessions({ projectId });
     if (!loaded) {
-      lastRenderedWorkspaceHtml = '';
-      renderCurrentMainView();
+      setLastRenderedWorkspaceHtml('');
+      window.renderCurrentMainView();
     }
     return;
   }
@@ -336,25 +374,22 @@ window.phSwitchProject = async (projectId) => {
   // 位），桶标记仅作数据描述保留，经数据层 getProjectLocalHostAgentId
   // 解析（见 project-data.js），与能力不可用同样走视图切换。
   // 视图覆盖标记（phSurfaceViewProjectId）属纯视图逻辑，不属能力语义，照旧设置。
-  const projects = (typeof getProgrammingHelperProjects === 'function'
-    ? getProgrammingHelperProjects(currentAgent)
-    : []);
+  const projects = getProgrammingHelperProjects(currentAgent);
   const targetProject = projects.find((p) => p.id === projectId) || null;
   const localHostAgentId = getProjectLocalHostAgentId(targetProject, currentAgent.id);
   const canSwitchLocalWorkspace = localHostAgentId !== ''
     && window.RemoteConnections?.capabilityFor?.(localHostAgentId, 'write') !== false;
   if (targetProject && !canSwitchLocalWorkspace) {
-    window.ClawFW = window.ClawFW || {};
-    window.ClawFW.phSurfaceViewProjectId = projectId;
-    phSearchQuery = '';
-    if (_phSearchTimer) { clearTimeout(_phSearchTimer); _phSearchTimer = null; }
+    setPhSurfaceViewProjectId(projectId);
+    phSessionUi.phSearchQuery = '';
+    if (phSessionUi._phSearchTimer) { clearTimeout(phSessionUi._phSearchTimer); phSessionUi._phSearchTimer = null; }
     // 搜索结果/范围/分页等模块状态一并作废（身份已随项目切换漂移）
-    if (typeof window.phSearchResetState === 'function') window.phSearchResetState();
-    lastRenderedWorkspaceHtml = '';
-    renderCurrentMainView();
+    if (typeof phSearchResetState === 'function') phSearchResetState();
+    setLastRenderedWorkspaceHtml('');
+    window.renderCurrentMainView();
     return;
   }
-  if (window.ClawFW) window.ClawFW.phSurfaceViewProjectId = null;
+  setPhSurfaceViewProjectId(null);
 
   // 项目绑定目录（含托管，不在目录注册表）：纯视图导航——目录清单收录项目
   // 绑定目录，但选择它不写 workspace_state、不进目录注册表、不触发
@@ -362,18 +397,18 @@ window.phSwitchProject = async (projectId) => {
   // 目录会话仍按 projectDir 切片正常呈现。
   if (!targetProject) {
     const normDirId = (dir) => 'dir:' + String(dir || '').replace(/\\/g, '/').toLowerCase();
-    const boundEntity = (window.ClawFW.phProjectEntities?.projects || [])
+    const boundEntity = (phProjectEntities.projects || [])
       .find((p) => !p.archived && p.openDirectory && normDirId(p.openDirectory) === projectId);
     if (boundEntity) {
       setPhBrowsingTarget(currentAgent.id, { type: 'dir', id: projectId });
-      phSearchQuery = '';
-      if (_phSearchTimer) { clearTimeout(_phSearchTimer); _phSearchTimer = null; }
-      if (typeof window.phSearchResetState === 'function') window.phSearchResetState();
-      if (typeof window.phSessionMoveReset === 'function') window.phSessionMoveReset();
+      phSessionUi.phSearchQuery = '';
+      if (phSessionUi._phSearchTimer) { clearTimeout(phSessionUi._phSearchTimer); phSessionUi._phSearchTimer = null; }
+      if (typeof phSearchResetState === 'function') phSearchResetState();
+      phSessionMoveReset();
       const loaded = await phLoadProjectSessions({ projectDir: boundEntity.openDirectory });
       if (!loaded) {
-        lastRenderedWorkspaceHtml = '';
-        renderCurrentMainView();
+        setLastRenderedWorkspaceHtml('');
+        window.renderCurrentMainView();
       }
       return;
     }
@@ -404,31 +439,31 @@ window.phSwitchProject = async (projectId) => {
       _phCloseDirectorySubmenus();
 
       // Clear search state on project switch
-    phSearchQuery = '';
-    if (_phSearchTimer) { clearTimeout(_phSearchTimer); _phSearchTimer = null; }
+    phSessionUi.phSearchQuery = '';
+    if (phSessionUi._phSearchTimer) { clearTimeout(phSessionUi._phSearchTimer); phSessionUi._phSearchTimer = null; }
     // 搜索结果/范围/分页等模块状态一并作废（身份已随项目切换漂移）
-    if (typeof window.phSearchResetState === 'function') window.phSearchResetState();
+    if (typeof phSearchResetState === 'function') phSearchResetState();
     // 多选状态随目录切换作废（状态不跨目录/归属泄漏）
-    if (typeof window.phSessionMoveReset === 'function') window.phSessionMoveReset();
+    phSessionMoveReset();
 
     // 会话列表按项目分页：切换后拉取新项目首屏（替换旧项目切片）
     const switched = await phLoadProjectSessions(targetProject?.openDirectory || freshState?.openDirectory || '');
     if (!switched) {
-      lastRenderedWorkspaceHtml = '';
-      renderCurrentMainView();
+      setLastRenderedWorkspaceHtml('');
+      window.renderCurrentMainView();
     }
   } catch (error) {
     console.error('Failed to switch project:', error);
-    window.alert((currentLanguage === 'zh' ? '切换项目失败：' : 'Failed to switch project: ') + (error?.message || error));
+    window.alert((getCurrentLanguage() === 'zh' ? '切换项目失败：' : 'Failed to switch project: ') + (error?.message || error));
   }
 };
 
 // ── 会话列表分页加载（项目切片）────────────────────────────────────
 // 服务端按 projectDir 过滤返回切片（B 方案：列表传输按需分页）。此处
 // 负责两个动作：phLoadProjectSessions —— 项目切换/打开后替换首屏；
-// window.phLoadMoreSessions —— 列表尾部“加载更多”，追加下一段（merge
+// phLoadMoreSessions —— 列表尾部“加载更多”，追加下一段（merge
 // 按 sessionOffset>0 走追加语义，不做 membership 清理）。
-// 滚动自动加载：window.phSetupLoadMoreAutoScroll 用 IntersectionObserver
+// 滚动自动加载：phSetupLoadMoreAutoScroll 用 IntersectionObserver
 // 观察加载哨兵（load-more wrapper），进入视口即触发下一段；workspace
 // surface 每次 innerHTML 全量替换后由 app-ui.js 重挂。按钮保留为显式
 // fallback（IntersectionObserver 不可用时仍可点击）。
@@ -453,14 +488,12 @@ function _phBrowsingOwnershipParams(agent) {
   // 归属参数只有一个出处（project-data 的 getPhSessionOwnershipParams）：
   // 分页加载、轮询、详情刷新必须用同一口径，否则同一批请求会落在不同归属
   // 的切片上，列表在两次刷新之间来回被替换。
-  return typeof getPhSessionOwnershipParams === 'function'
-    ? getPhSessionOwnershipParams(agent)
-    : {};
+  return getPhSessionOwnershipParams(agent);
 }
 
-async function phLoadProjectSessions(target) {
-  const agent = getCurrentAgentRecord();
-  if (!agent || typeof isPhStyleWorkspaceAgent !== 'function' || !isPhStyleWorkspaceAgent(agent)) return false;
+export async function phLoadProjectSessions(target) {
+  const agent = window.getCurrentAgentRecord();
+  if (!agent || typeof window.isPhStyleWorkspaceAgent !== 'function' || !window.isPhStyleWorkspaceAgent(agent)) return false;
   // 兼容旧签名（目录字符串）；对象形态携带 projectId 或 projectDir
   const ownership = typeof target === 'string'
     ? { projectDir: target }
@@ -475,8 +508,8 @@ async function phLoadProjectSessions(target) {
         active_workspace_session_id: fresh?.activeSessionId || null,
       });
     }
-    lastRenderedWorkspaceHtml = '';
-    renderCurrentMainView();
+    setLastRenderedWorkspaceHtml('');
+    window.renderCurrentMainView();
     return true;
   } catch (error) {
     console.error('Failed to load project sessions:', error);
@@ -498,10 +531,10 @@ let _phLoadingMoreSessions = false;
 function _phSyncSessionPanelsInPlace() {
   const liveTabsList = document.querySelectorAll('.ph-session-tabs[data-tab-group]');
   if (liveTabsList.length === 0) return false;
-  if (typeof renderWorkspaceSurface !== 'function') return false;
+  if (typeof window.renderWorkspaceSurface !== 'function') return false;
   let newHtml;
   try {
-    newHtml = renderWorkspaceSurface(getCurrentAgentRecord());
+    newHtml = window.renderWorkspaceSurface(window.getCurrentAgentRecord());
   } catch {
     return false;
   }
@@ -528,25 +561,23 @@ function _phSyncSessionPanelsInPlace() {
     }
   }
   if (synced === 0) return false;
-  lastRenderedWorkspaceHtml = newHtml;
+  setLastRenderedWorkspaceHtml(newHtml);
   // 哨兵节点随面板替换重建：重挂滚动自动加载观察器（与全量渲染路径一致）
-  if (typeof window.phSetupLoadMoreAutoScroll === 'function') {
-    window.phSetupLoadMoreAutoScroll();
-  }
+  phSetupLoadMoreAutoScroll();
   return true;
 }
 
-window.phLoadMoreSessions = async () => {
+export const phLoadMoreSessions = async () => {
   if (_phLoadingMoreSessions) return;
-  const agent = getCurrentAgentRecord();
-  if (!agent || typeof isPhStyleWorkspaceAgent !== 'function' || !isPhStyleWorkspaceAgent(agent)) return;
+  const agent = window.getCurrentAgentRecord();
+  if (!agent || typeof window.isPhStyleWorkspaceAgent !== 'function' || !window.isPhStyleWorkspaceAgent(agent)) return;
   const ws = agent.workspace_sessions;
   const loadedCount = Array.isArray(ws?.sessions) ? ws.sessions.length : 0;
   const total = Number(ws?.sessionTotal);
   if (Number.isFinite(total) && loadedCount >= total) return;
   _phLoadingMoreSessions = true;
   const loadBtns = document.querySelectorAll('.ph-load-more-btn');
-  const isZh = currentLanguage === 'zh';
+  const isZh = getCurrentLanguage() === 'zh';
   loadBtns.forEach((btn) => {
     btn.disabled = true;
     btn.textContent = isZh ? '加载中…' : 'Loading…';
@@ -559,15 +590,13 @@ window.phLoadMoreSessions = async () => {
       limit: 60,
     });
     if (fresh && fresh.unchanged !== true) {
-      const merged = typeof mergeWorkspaceSessionSnapshots === 'function'
-        ? mergeWorkspaceSessionSnapshots(ws, fresh, agent.id)
-        : { ...ws, ...fresh, sessions: [...(ws?.sessions || []), ...(fresh.sessions || [])] };
+      const merged = mergeWorkspaceSessionSnapshots(ws, fresh, agent.id);
       updateAgentRecord(agent.id, { workspace_sessions: merged });
       // 原地同步列表区：surface 骨架（目录切换下拉 / 子菜单浮窗 / 搜索
       // 输入态）不重建；同步失败回退既有全量渲染路径。
       if (!_phSyncSessionPanelsInPlace()) {
-        lastRenderedWorkspaceHtml = '';
-        renderCurrentMainView();
+        setLastRenderedWorkspaceHtml('');
+        window.renderCurrentMainView();
       }
     }
   } catch (error) {
@@ -579,7 +608,7 @@ window.phLoadMoreSessions = async () => {
 
 let _phLoadMoreObserver = null;
 
-window.phSetupLoadMoreAutoScroll = () => {
+export const phSetupLoadMoreAutoScroll = () => {
   if (typeof IntersectionObserver === 'undefined') return;
   if (_phLoadMoreObserver) {
     _phLoadMoreObserver.disconnect();
@@ -590,7 +619,7 @@ window.phSetupLoadMoreAutoScroll = () => {
   _phLoadMoreObserver = new IntersectionObserver((entries) => {
     for (const entry of entries) {
       if (!entry.isIntersecting) continue;
-      window.phLoadMoreSessions();
+      phLoadMoreSessions();
       break;
     }
   }, { rootMargin: '160px 0px' });
@@ -611,7 +640,7 @@ function _phSyncDropdownAria() {
 
 // 双选择器并存（左目录 / 右归属）：点一个 trigger 收起另一个下拉，避免两个
 // 菜单同开。旧单下拉行为按 closest 兼容。触发器为 button（键盘可达）。
-window.phToggleProjectDropdown = (event) => {
+export const phToggleProjectDropdown = (event) => {
   event.stopPropagation();
   event.preventDefault();
   const target = event.target || event.currentTarget;
@@ -681,7 +710,7 @@ function _phCloseDirectorySubmenus() {
 }
 
 let _phSubmenuCloseTimer = null;
-window.phOpenDirectorySubmenu = (group) => {
+const phOpenDirectorySubmenu = (group) => {
   if (!group) return;
   // 不变量：子菜单只依附在「打开状态」的宿主菜单上。重渲染后浏览器会向
   // 光标下的新元素重放 mouseenter/focusin，此时宿主可能已关闭（矩形全零，
@@ -720,7 +749,7 @@ window.phOpenDirectorySubmenu = (group) => {
   dirItem?.setAttribute('aria-expanded', 'true');
 }
 
-window.phScheduleDirectorySubmenuClose = () => {
+const phScheduleDirectorySubmenuClose = () => {
   if (_phSubmenuCloseTimer) clearTimeout(_phSubmenuCloseTimer);
   _phSubmenuCloseTimer = setTimeout(() => {
     const hovered = document.querySelector('.ph-dir-nav-group:hover, .ph-dir-subprojects:hover');
@@ -736,13 +765,13 @@ document.addEventListener('pointerover', (e) => {
   }
   const group = e.target?.closest?.('.ph-dir-nav-group');
   if (group) {
-    window.phOpenDirectorySubmenu(group);
+    phOpenDirectorySubmenu(group);
     return;
   }
   // 悬停进入目录菜单的非目录行区域（如「打开目录…」入口、留白）：
   // 当前面板失去指向，按既有关闭节奏收起。
   if (e.target?.closest?.('.ph-dir-selector .ph-project-dropdown-menu')) {
-    window.phScheduleDirectorySubmenuClose();
+    phScheduleDirectorySubmenuClose();
   }
 });
 document.addEventListener('focusin', (e) => {
@@ -750,9 +779,9 @@ document.addEventListener('focusin', (e) => {
   // 不能用 group.querySelector 探测，phOpenDirectorySubmenu 自会按
   // data-subprojects-for 解析，找不到时安全返回。
   const group = e.target?.closest?.('.ph-dir-nav-group');
-  if (group) window.phOpenDirectorySubmenu(group);
+  if (group) phOpenDirectorySubmenu(group);
 });document.addEventListener('pointerout', (e) => {
-  if (e.target?.closest?.('.ph-dir-nav-group, .ph-dir-subprojects')) window.phScheduleDirectorySubmenuClose();
+  if (e.target?.closest?.('.ph-dir-nav-group, .ph-dir-subprojects')) phScheduleDirectorySubmenuClose();
 });
 
 document.addEventListener('click', (e) => {
@@ -778,7 +807,7 @@ document.addEventListener('click', (e) => {
   const btn = e.target.closest('.ph-dropdown-open-folder');
   if (!btn) return;
   e.stopPropagation();
-  window.phOpenInExplorer(btn.getAttribute('data-open-dir') || '');
+  phOpenInExplorer(btn.getAttribute('data-open-dir') || '');
 }, true);
 
 // 归属菜单行内「设置」齿轮（data 属性路由：project-config → 该项目的项目
@@ -793,14 +822,14 @@ document.addEventListener('click', (e) => {
   _phCloseDirectorySubmenus();
   const projectId = btn.getAttribute('data-project-config');
   if (projectId) {
-    window.phOpenProjectConfig(projectId);
+    phOpenProjectConfig(projectId);
     return;
   }
   const dir = btn.getAttribute('data-dir-config');
-  if (dir) window.phOpenDirConfig(dir);
+  if (dir) phOpenDirConfig(dir);
 }, true);
 
-window.phOpenInExplorer = async (dirPath) => {
+export const phOpenInExplorer = async (dirPath) => {
   if (!dirPath) return;
   try {
     const res = await fetch('/protoclaw/ph_project/open_in_explorer', {
@@ -824,15 +853,14 @@ window.phOpenInExplorer = async (dirPath) => {
 // ── 新建项目（ticket 045）──────────────────────────────────────────
 // 名称必填 + 可选目录（缺省由服务端分配托管目录）。创建项目本身不创建
 // 会话；成功后进入该项目视图（空项目可见）。取消/关闭无副作用。
-window.phOpenNewProjectDialog = () => {
-  const currentAgent = getCurrentAgentRecord();
-  if (!currentAgent || !isPhStyleWorkspaceAgent(currentAgent)) return;
-  const isZh = currentLanguage === 'zh';
+export const phOpenNewProjectDialog = () => {
+  const currentAgent = window.getCurrentAgentRecord();
+  if (!currentAgent || !window.isPhStyleWorkspaceAgent(currentAgent)) return;
+  const isZh = getCurrentLanguage() === 'zh';
 
   // 当前目录（目录决定位置）：新建项目默认落在当前目录；无当前目录时不
   // 预选任何路径——托管或浏览必须显式选择，不无声指定其他路径。
-  const currentDirContext = (typeof getPhCurrentDirectoryContext === 'function')
-    ? getPhCurrentDirectoryContext(currentAgent) : null;
+  const currentDirContext = getPhCurrentDirectoryContext(currentAgent);
 
   let host = document.getElementById('ph-new-project-host');
   if (!host) {
@@ -912,7 +940,7 @@ window.phOpenNewProjectDialog = () => {
   overlay.querySelectorAll('.ph-new-project-cancel').forEach((btn) => btn.addEventListener('click', close));
   overlay.querySelector('.ph-new-project-browse').addEventListener('click', async () => {
     try {
-      const result = await invoke('select_directory');
+      const result = await window.invoke('select_directory');
       const chosen = Array.isArray(result?.paths) ? String(result.paths[0] || '').trim() : (typeof result?.path === 'string' ? result.path.trim() : '');
       if (chosen) {
         browseDir = chosen;
@@ -972,12 +1000,12 @@ window.phOpenNewProjectDialog = () => {
       // 目标项目隐含其绑定目录，两个选择器随之同步。
       await ensurePhProjectEntitiesLoaded(true);
       setPhBrowsingTarget(currentAgent.id, { type: 'project', id: payload.project.id });
-      if (typeof window.phSessionMoveReset === 'function') window.phSessionMoveReset();
+      phSessionMoveReset();
       close();
       const loaded = await phLoadProjectSessions({ projectId: payload.project.id });
       if (!loaded) {
-        lastRenderedWorkspaceHtml = '';
-        renderCurrentMainView();
+        setLastRenderedWorkspaceHtml('');
+        window.renderCurrentMainView();
       }
     } catch (error) {
       submitBtn.disabled = false;
@@ -987,9 +1015,9 @@ window.phOpenNewProjectDialog = () => {
   });
 };
 
-window.phToggleModelSlot = async () => {
-  const currentAgent = getCurrentAgentRecord();
-  if (!currentAgent || !isPhStyleWorkspaceAgent(currentAgent)) {
+export const phToggleModelSlot = async () => {
+  const currentAgent = window.getCurrentAgentRecord();
+  if (!currentAgent || !window.isPhStyleWorkspaceAgent(currentAgent)) {
     return;
   }
   
@@ -1000,11 +1028,11 @@ window.phToggleModelSlot = async () => {
   
   // 如果没有备选模型，打开配置面板
   if (!secondaryModel) {
-    window.phOpenSettings({ initialTab: 'model' });
+    phOpenSettings({ initialTab: 'model' });
     return;
   }
   
-  const isZh = currentLanguage === 'zh';
+  const isZh = getCurrentLanguage() === 'zh';
   const toastId = 'model-switch';
   
   // 显示切换中提示
@@ -1045,7 +1073,7 @@ window.phToggleModelSlot = async () => {
     if (result.ok) {
       currentAgent.modelPresets = newModelPresets;
       // 刷新UI
-      renderCurrentMainView();
+      window.renderCurrentMainView();
       
       // 显示切换成功提示
       ClawToast.update(toastId, {
@@ -1071,14 +1099,14 @@ window.phToggleModelSlot = async () => {
  * 设置进程模式（共享 / 独立）
  * 从设置窗运行环境页的本地运行设置分页调用
  */
-window.phSetProcessMode = async (processMode) => {
-  const agent = getCurrentAgentRecord();
-  if (!agent || !isPhStyleWorkspaceAgent(agent)) return;
+export const phSetProcessMode = async (processMode) => {
+  const agent = window.getCurrentAgentRecord();
+  if (!agent || !window.isPhStyleWorkspaceAgent(agent)) return;
   try {
     const response = await fetch('/protoclaw/agent_process_mode', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ agentId: getLogicalAgentId(agent), processMode }),
+      body: JSON.stringify({ agentId: window.getLogicalAgentId(agent), processMode }),
     });
     const result = await response.json();
     if (!response.ok || !result.ok) {
@@ -1087,10 +1115,10 @@ window.phSetProcessMode = async (processMode) => {
     agent.processMode = result.processMode;
     const presets = getClawModelPresets();
     renderPhSettingsOverlay(agent, presets);
-    renderCurrentMainView();
+    window.renderCurrentMainView();
   } catch (error) {
     console.error('Failed to save process mode:', error);
-    window.alert((currentLanguage === 'zh' ? '保存进程模式失败：' : 'Failed to save process mode: ') + (error?.message || error));
+    window.alert((getCurrentLanguage() === 'zh' ? '保存进程模式失败：' : 'Failed to save process mode: ') + (error?.message || error));
   }
 };
 
@@ -1104,50 +1132,50 @@ window.phSetProcessMode = async (processMode) => {
 
 async function _phManageRefreshViews(affectedProjectId, { browsingInvalidated = false } = {}) {
   await ensurePhProjectEntitiesLoaded(true);
-  const agent = getCurrentAgentRecord();
+  const agent = window.getCurrentAgentRecord();
   if (!agent) {
-    lastRenderedWorkspaceHtml = '';
-    renderCurrentMainView();
+    setLastRenderedWorkspaceHtml('');
+    window.renderCurrentMainView();
     return;
   }
   if (browsingInvalidated) {
     clearPhBrowsingTarget(agent.id);
-    const target = typeof getPhBrowsingTarget === 'function' ? getPhBrowsingTarget(agent) : null;
+    const target = getPhBrowsingTarget(agent);
     const loaded = await phLoadProjectSessions(target?.type === 'project'
       ? { projectId: target.id }
       : { projectDir: target?.openDirectory || '' });
     if (!loaded) {
-      lastRenderedWorkspaceHtml = '';
-      renderCurrentMainView();
+      setLastRenderedWorkspaceHtml('');
+      window.renderCurrentMainView();
     }
     return;
   }
   if (affectedProjectId) {
-    const target = typeof getPhBrowsingTarget === 'function' ? getPhBrowsingTarget(agent) : null;
+    const target = getPhBrowsingTarget(agent);
     if (target?.type === 'project' && target.id === affectedProjectId) {
       // 当前正浏览该项目：会话切片刷新（改绑后实例已安全失效，列表按新目录事实重拉）
       const loaded = await phLoadProjectSessions({ projectId: affectedProjectId });
       if (!loaded) {
-        lastRenderedWorkspaceHtml = '';
-        renderCurrentMainView();
+        setLastRenderedWorkspaceHtml('');
+        window.renderCurrentMainView();
       }
       return;
     }
   }
-  lastRenderedWorkspaceHtml = '';
-  renderCurrentMainView();
+  setLastRenderedWorkspaceHtml('');
+  window.renderCurrentMainView();
 }
 
 function _phCurrentBrowsingProjectId() {
-  const agent = getCurrentAgentRecord();
-  const target = agent && typeof getPhBrowsingTarget === 'function' ? getPhBrowsingTarget(agent) : null;
+  const agent = window.getCurrentAgentRecord();
+  const target = agent ? getPhBrowsingTarget(agent) : null;
   return target?.type === 'project' ? target.id : '';
 }
 
-window.phOpenManageProjectsDialog = async () => {
-  const currentAgent = getCurrentAgentRecord();
-  if (!currentAgent || !isPhStyleWorkspaceAgent(currentAgent)) return;
-  const isZh = currentLanguage === 'zh';
+export const phOpenManageProjectsDialog = async () => {
+  const currentAgent = window.getCurrentAgentRecord();
+  if (!currentAgent || !window.isPhStyleWorkspaceAgent(currentAgent)) return;
+  const isZh = getCurrentLanguage() === 'zh';
 
   let host = document.getElementById('ph-manage-projects-host');
   if (!host) {
@@ -1189,7 +1217,7 @@ window.phOpenManageProjectsDialog = async () => {
   // 归档确认：行内二段式（第一次点击变成「确认归档？」，再次点击执行；
   // 3s 不点第二次自动复位），不使用原生 confirm。
   const renderRows = () => {
-    const projects = (window.ClawFW.phProjectEntities?.projects || []);
+    const projects = (phProjectEntities.projects || []);
     const active = projects.filter((p) => !p.archived);
     const archived = projects.filter((p) => p.archived);
     const rowHtml = (p) => {
@@ -1232,11 +1260,11 @@ window.phOpenManageProjectsDialog = async () => {
     const projectId = btn.getAttribute('data-id');
     const action = btn.getAttribute('data-action');
     if (action === 'rebind') {
-      window.phRebindProject(projectId, close);
+      phRebindProject(projectId, close);
       return;
     }
     if (action === 'delete') {
-      window.phDeleteProject(projectId, close);
+      phDeleteProject(projectId, close);
       return;
     }
     if (action === 'archive') {
@@ -1264,7 +1292,7 @@ window.phOpenManageProjectsDialog = async () => {
         const browsingInvalidated = _phCurrentBrowsingProjectId() === projectId;
         await _phManageRefreshViews(projectId, { browsingInvalidated });
         renderRows();
-        if (typeof ClawToast !== 'undefined') {
+        if (ClawToast?.show) {
           ClawToast.show({ title: isZh ? '项目已归档（可恢复）' : 'Project archived (restorable)', status: 'success', autoDismiss: 3000 });
         }
       } catch (error) {
@@ -1285,7 +1313,7 @@ window.phOpenManageProjectsDialog = async () => {
         if (!response.ok || !payload?.ok) throw new Error(payload?.error || ('HTTP ' + response.status));
         await _phManageRefreshViews(projectId);
         renderRows();
-        if (typeof ClawToast !== 'undefined') {
+        if (ClawToast?.show) {
           ClawToast.show({ title: isZh ? '项目已恢复' : 'Project restored', status: 'success', autoDismiss: 3000 });
         }
       } catch (error) {
@@ -1302,11 +1330,11 @@ window.phOpenManageProjectsDialog = async () => {
 // 改绑子弹窗（ticket 046）：显式新目录（存在性由服务端校验）或留空重新
 // 分配托管目录。提交前明示影响：空闲实例安全失效并在下次使用时按新目录
 // 启动；执行中的项目会话会被拒绝（409），此时不发生任何状态变化。
-window.phRebindProject = (projectId, onCloseManage) => {
-  const currentAgent = getCurrentAgentRecord();
-  const entity = (window.ClawFW.phProjectEntities?.projects || []).find((p) => p.id === projectId) || null;
+export const phRebindProject = (projectId, onCloseManage) => {
+  const currentAgent = window.getCurrentAgentRecord();
+  const entity = (phProjectEntities.projects || []).find((p) => p.id === projectId) || null;
   if (!currentAgent || !entity) return;
-  const isZh = currentLanguage === 'zh';
+  const isZh = getCurrentLanguage() === 'zh';
 
   let host = document.getElementById('ph-rebind-host');
   if (!host) {
@@ -1362,7 +1390,7 @@ window.phRebindProject = (projectId, onCloseManage) => {
   overlay.querySelectorAll('.ph-rebind-cancel').forEach((btn) => btn.addEventListener('click', close));
   overlay.querySelector('.ph-rebind-browse').addEventListener('click', async () => {
     try {
-      const result = await invoke('select_directory');
+      const result = await window.invoke('select_directory');
       const chosen = Array.isArray(result?.paths) ? String(result.paths[0] || '').trim() : (typeof result?.path === 'string' ? result.path.trim() : '');
       if (chosen) dirInput.value = chosen;
     } catch { /* 用户取消选择器：无副作用 */ }
@@ -1391,7 +1419,7 @@ window.phRebindProject = (projectId, onCloseManage) => {
       close();
       if (typeof onCloseManage === 'function') onCloseManage();
       await _phManageRefreshViews(projectId);
-      if (typeof ClawToast !== 'undefined') {
+      if (ClawToast?.show) {
         ClawToast.show({
           title: isZh ? '已改绑到新目录' : 'Rebound to new directory',
           description: payload.project?.workDirectory || '',
@@ -1414,11 +1442,11 @@ window.phRebindProject = (projectId, onCloseManage) => {
 // 删除子弹窗（ticket 046）：第一步影响预览（会话 / 配置 / 托管目录可删性
 // 与保留原因；托管目录删除必须是用户显式选择，默认不删）；第二步输入
 // 项目名二次确认后才提交。
-window.phDeleteProject = (projectId, onCloseManage) => {
-  const currentAgent = getCurrentAgentRecord();
-  const entity = (window.ClawFW.phProjectEntities?.projects || []).find((p) => p.id === projectId) || null;
+export const phDeleteProject = (projectId, onCloseManage) => {
+  const currentAgent = window.getCurrentAgentRecord();
+  const entity = (phProjectEntities.projects || []).find((p) => p.id === projectId) || null;
   if (!currentAgent || !entity) return;
-  const isZh = currentLanguage === 'zh';
+  const isZh = getCurrentLanguage() === 'zh';
 
   let host = document.getElementById('ph-delete-host');
   if (!host) {
@@ -1555,7 +1583,7 @@ window.phDeleteProject = (projectId, onCloseManage) => {
         if (typeof onCloseManage === 'function') onCloseManage();
         const browsingInvalidated = _phCurrentBrowsingProjectId() === projectId;
         await _phManageRefreshViews(projectId, { browsingInvalidated });
-        if (typeof ClawToast !== 'undefined') {
+        if (ClawToast?.show) {
           ClawToast.show({
             title: isZh ? '项目已删除' : 'Project deleted',
             description: (payload.managedDirectory?.deleted
@@ -1573,3 +1601,33 @@ window.phDeleteProject = (projectId, onCloseManage) => {
     });
   })();
 };
+
+// —— 桥接期兼容面（kernel-state 访问器桥，domain: ph-project-actions）——
+// 保留原因：动作入口仍由 classic 消费方在调用时点取用。逐键消费面：
+//   phOpenProjectDirectory    ← classic desktop-open
+//   phSwitchProject           ← classic sidebar-render
+//   phLoadProjectSessions     ← classic sidebar-render（重进工作空间按浏览切片拉取）
+//   phSetupLoadMoreAutoScroll ← classic app-ui（workspace surface 全量替换后重挂哨兵）
+// 无桥（唯一消费在本批内或仅模板注册块自用）：phOpenDirectorySubmenu / phScheduleDirectorySubmenuClose /
+//   phOpenInExplorer / phRebindProject / phDeleteProject / phFetchSessionsPage（模块私有）。
+// 已改 direct import（不再经 window）：session-list-render 的会话列表动作块
+//   （phOpenSettings / phOpenProject / phLoadMoreSessions / phToggleProjectDropdown /
+//   phOpenNewProjectDialog / phToggleModelSlot / phOpenManageProjectsDialog）、
+//   ph-settings 的四个动作处理器，对应 defineKey 已注销。
+// 说明：ph-project-actions ⇄ ph-settings 的静态环已存在（本模块 import ph-settings，
+//   ph-settings import 本模块的四个动作入口），两侧只在函数体/动作回调内引用对方，
+//   顶层无环内绑定读取。
+const bridgeApi = {
+  phOpenProjectDirectory,
+  phSwitchProject,
+  phLoadProjectSessions,
+  phSetupLoadMoreAutoScroll,
+};
+window.KernelState.defineKey('ph-project-actions', 'phOpenProjectDirectory', phOpenProjectDirectory);
+window.KernelState.defineKey('ph-project-actions', 'phSwitchProject', phSwitchProject);
+window.KernelState.defineKey('ph-project-actions', 'phLoadProjectSessions', phLoadProjectSessions);
+window.KernelState.defineKey('ph-project-actions', 'phSetupLoadMoreAutoScroll', phSetupLoadMoreAutoScroll);
+window.KernelState.claim('ph-project-actions', {
+  get: (key) => bridgeApi[key],
+  set: (key, value) => { bridgeApi[key] = value; },
+});

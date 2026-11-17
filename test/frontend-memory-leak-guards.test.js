@@ -18,14 +18,17 @@
  *    saveCurrentRuntimeToCache drops the same key from both maps, except for
  *    the currently active context.
  *
- * Loads the real sources into vm sandboxes (script-global sharing model, no
- * imports), following frontend-core-helpers.test.js (app-core) and
- * frontend-tool-collapse-windowing.test.js (chat-viewport) patterns.
+ * Load routes (ESM 迁移配方第三节):
+ *   - Part A: generative-ui-renderer.js 已迁 ESM —— 真实 `import`（withP2EsmCase
+ *     的 c.load，每 case 整图隔离），渲染入口用命名导出直接调用；
+ *   - Part B: app-core.js / chat-viewport.js 仍是 classic（首屏同步边界）——
+ *     继续按真实加载序 `sandbox.loadSource`，共享同一沙箱全局。
  */
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createFrontendSandbox } from './helpers/frontend-vm.js';
+import { withP2EsmCase } from './helpers/p2-esm-case.js';
 import { installRuntimeViewCache } from './helpers/runtime-view-cache.js';
 
 // ═══════════════════════════════════════════════════════════════
@@ -96,23 +99,33 @@ class FakeResizeObserver {
   }
 }
 
-function createChartSandbox() {
+function createChartDocument() {
+  return {
+    createElement: (tag) => makeChartElement(tag),
+    createElementNS: (_ns, tag) => makeChartElement(tag),
+    createTextNode: (text) => ({ text: String(text) }),
+    getElementById: () => null,
+    querySelector: () => null,
+    querySelectorAll: () => [],
+    addEventListener() {},
+    body: { contains: () => true },
+  };
+}
+
+/**
+ * 渲染器已迁 ESM：真实 import 拿到命名导出 `renderGenUISpec`，渲染期读到的
+ * `document` / `ResizeObserver` 由本 case 的沙箱与注入面提供（浏览器里它们是
+ * window/globalThis 上的平台能力，每个 case 独立一份）。
+ */
+async function withChartCase(fn) {
   roInstances.length = 0;
-  const ctx = createFrontendSandbox({
-    ResizeObserver: FakeResizeObserver,
-    document: {
-      createElement: (tag) => makeChartElement(tag),
-      createElementNS: (_ns, tag) => makeChartElement(tag),
-      createTextNode: (text) => ({ text: String(text) }),
-      getElementById: () => null,
-      querySelector: () => null,
-      querySelectorAll: () => [],
-      addEventListener() {},
-      body: { contains: () => true },
-    },
+  return withP2EsmCase({
+    classic: (sandbox) => { sandbox.document = createChartDocument(); },
+    globals: { ResizeObserver: FakeResizeObserver },
+  }, async (c) => {
+    const { renderGenUISpec } = await c.load('public/src/modules/generative-ui-renderer.js');
+    return fn(renderGenUISpec);
   });
-  ctx.loadSource('public/src/modules/generative-ui-renderer.js');
-  return ctx;
 }
 
 const CHART_SPEC = {
@@ -134,77 +147,81 @@ function firstSvg(el) {
 }
 
 describe('generative-ui chart ResizeObserver lifecycle', () => {
-  it('observes its own element; connected resizes still redraw; detach self-disconnects', () => {
-    const ctx = createChartSandbox();
-    const chartEl = ctx.renderGenUISpec(CHART_SPEC, {}, {});
+  it('observes its own element; connected resizes still redraw; detach self-disconnects', async () => {
+    await withChartCase((renderGenUISpec) => {
+      const chartEl = renderGenUISpec(CHART_SPEC, {}, {});
 
-    assert.equal(roInstances.length, 1, 'one observer per chart render');
-    const observer = roInstances[0];
-    assert.equal(observer.observed.size, 1);
-    assert.strictEqual([...observer.observed][0], chartEl, 'observed target is the chart element');
-    assert.equal(observer.disconnectCalls, 0);
+      assert.equal(roInstances.length, 1, 'one observer per chart render');
+      const observer = roInstances[0];
+      assert.equal(observer.observed.size, 1);
+      assert.strictEqual([...observer.observed][0], chartEl, 'observed target is the chart element');
+      assert.equal(observer.disconnectCalls, 0);
 
-    // While connected, a real-width delivery redraws (behavior unchanged).
-    const svgBefore = firstSvg(chartEl);
-    assert.ok(svgBefore, 'initial fallback draw produced an svg');
-    observer.deliver(chartEl, 600);
-    assert.notStrictEqual(firstSvg(chartEl), svgBefore, 'width delivery redraws the chart');
-    assert.equal(observer.disconnectCalls, 0, 'connected charts must not disconnect');
+      // While connected, a real-width delivery redraws (behavior unchanged).
+      const svgBefore = firstSvg(chartEl);
+      assert.ok(svgBefore, 'initial fallback draw produced an svg');
+      observer.deliver(chartEl, 600);
+      assert.notStrictEqual(firstSvg(chartEl), svgBefore, 'width delivery redraws the chart');
+      assert.equal(observer.disconnectCalls, 0, 'connected charts must not disconnect');
 
-    // Panel rebuild detaches the element; the next delivery must self-disconnect.
-    chartEl.isConnected = false;
-    observer.deliver(chartEl, 0);
-    assert.equal(observer.disconnectCalls, 1, 'detached element releases its observer');
-    assert.equal(observer.observed.size, 0);
+      // Panel rebuild detaches the element; the next delivery must self-disconnect.
+      chartEl.isConnected = false;
+      observer.deliver(chartEl, 0);
+      assert.equal(observer.disconnectCalls, 1, 'detached element releases its observer');
+      assert.equal(observer.observed.size, 0);
+    });
   });
 
-  it('repeated panel rebuilds do not accumulate observed targets (leak regression)', () => {
-    const ctx = createChartSandbox();
-    let previous = null;
-    for (let i = 0; i < 5; i++) {
-      if (previous) {
-        // generative-ui-panel _populateMount does `mount.innerHTML = ''` — the old
-        // chart element leaves the document and the observer is delivered a 0x0
-        // entry on the next rendering frame.
-        previous.isConnected = false;
-        const previousObserver = roInstances[i - 1];
-        previousObserver.deliver(previous, 0);
-        assert.equal(previousObserver.disconnectCalls, 1,
-          `observer #${i - 1} must disconnect after its element was detached`);
+  it('repeated panel rebuilds do not accumulate observed targets (leak regression)', async () => {
+    await withChartCase((renderGenUISpec) => {
+      let previous = null;
+      for (let i = 0; i < 5; i++) {
+        if (previous) {
+          // generative-ui-panel _populateMount does `mount.innerHTML = ''` — the old
+          // chart element leaves the document and the observer is delivered a 0x0
+          // entry on the next rendering frame.
+          previous.isConnected = false;
+          const previousObserver = roInstances[i - 1];
+          previousObserver.deliver(previous, 0);
+          assert.equal(previousObserver.disconnectCalls, 1,
+            `observer #${i - 1} must disconnect after its element was detached`);
+        }
+        previous = renderGenUISpec(CHART_SPEC, {}, {});
+        previous.isConnected = true; // appended into the freshly rebuilt mount
+        roInstances[i].deliver(previous, 400); // initial observe delivery
+        assert.equal(roInstances[i].disconnectCalls, 0);
       }
-      previous = ctx.renderGenUISpec(CHART_SPEC, {}, {});
-      previous.isConnected = true; // appended into the freshly rebuilt mount
-      roInstances[i].deliver(previous, 400); // initial observe delivery
-      assert.equal(roInstances[i].disconnectCalls, 0);
-    }
-    const liveObserved = roInstances.reduce((sum, obs) => sum + obs.observed.size, 0);
-    assert.equal(liveObserved, 1, 'only the current chart stays observed');
+      const liveObserved = roInstances.reduce((sum, obs) => sum + obs.observed.size, 0);
+      assert.equal(liveObserved, 1, 'only the current chart stays observed');
+    });
   });
 
-  it('undefined isConnected (legacy stub harnesses) keeps the legacy redraw path', () => {
-    // Older vm harnesses (e.g. frontend-generative-ui-renderer.test.js) stub
+  it('undefined isConnected (legacy stub harnesses) keeps the legacy redraw path', async () => {
+    // Older stub harnesses (e.g. frontend-generative-ui-renderer.test.js) build
     // elements without an isConnected property. The self-disconnect must only
     // trigger on a definitive false, never on undefined.
-    const ctx = createChartSandbox();
-    const chartEl = ctx.renderGenUISpec(CHART_SPEC, {}, {});
-    const observer = roInstances[0];
-    delete chartEl.isConnected;
-    observer.deliver(chartEl, 640);
-    assert.equal(observer.disconnectCalls, 0, 'undefined must not be treated as detached');
-    const svg = firstSvg(chartEl);
-    assert.ok(svg, 'chart redraws');
-    assert.equal(svg.attrs.viewBox, '0 0 640 220', 'real-width redraw still happens');
+    await withChartCase((renderGenUISpec) => {
+      const chartEl = renderGenUISpec(CHART_SPEC, {}, {});
+      const observer = roInstances[0];
+      delete chartEl.isConnected;
+      observer.deliver(chartEl, 640);
+      assert.equal(observer.disconnectCalls, 0, 'undefined must not be treated as detached');
+      const svg = firstSvg(chartEl);
+      assert.ok(svg, 'chart redraws');
+      assert.equal(svg.attrs.viewBox, '0 0 640 220', 'real-width redraw still happens');
+    });
   });
 
-  it('sparkline renders without any ResizeObserver (out of fix scope, stays untouched)', () => {
-    const ctx = createChartSandbox();
-    const spec = {
-      root: 's1',
-      elements: { s1: { type: 'Sparkline', props: { values: [1, 2, 3, 4] } } },
-    };
-    const el = ctx.renderGenUISpec(spec, {}, {});
-    assert.ok(el, 'sparkline renders');
-    assert.equal(roInstances.length, 0, 'sparkline path never creates observers');
+  it('sparkline renders without any ResizeObserver (out of fix scope, stays untouched)', async () => {
+    await withChartCase((renderGenUISpec) => {
+      const spec = {
+        root: 's1',
+        elements: { s1: { type: 'Sparkline', props: { values: [1, 2, 3, 4] } } },
+      };
+      const el = renderGenUISpec(spec, {}, {});
+      assert.ok(el, 'sparkline renders');
+      assert.equal(roInstances.length, 0, 'sparkline path never creates observers');
+    });
   });
 });
 

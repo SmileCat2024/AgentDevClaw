@@ -1,22 +1,35 @@
 /**
  * navigation-core.js 单测（ADR-0014 Phase 1）
  *
- * 沙箱加载 public/src/modules/navigation-core.js，mock fetch 驱动
- * waitForRuntimeReady 的轮询状态机。intervalMs=0 避免真实等待。
+ * ESM 迁移后走真实 import 路线（test/helpers/esm-module-loader.js）：模块
+ * 无内部状态，`fetch` 由各用例 mock，intervalMs=0 避免真实等待。
+ * 兼容面断言钉住 window.NavigationCore 命名空间（三个 classic 消费方仍经它调用）。
  */
 
-import { describe, it } from 'node:test';
+import { test, describe, it, before, after, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { createFrontendSandbox } from './helpers/frontend-vm.js';
+import { installBrowserStubs, loadModuleOnce } from './helpers/esm-module-loader.js';
 
-function createNavigationSandbox() {
-  const ctx = createFrontendSandbox();
-  // 沙箱 context 未注入浏览器全局（生产环境天然存在）；URLSearchParams 取
-  // node 同构实现，fetch 由各用例 mock。
-  ctx.URLSearchParams = URLSearchParams;
-  ctx.loadSource('public/src/modules/navigation-core.js');
-  return ctx;
-}
+let navigationCore;
+let cleanupGlobals;
+const originalFetch = globalThis.fetch;
+
+before(async () => {
+  cleanupGlobals = installBrowserStubs();
+  const loaded = await loadModuleOnce('public/src/modules/navigation-core.js', { installGlobals: false });
+  navigationCore = loaded.module;
+});
+
+after(() => {
+  globalThis.fetch = originalFetch;
+  cleanupGlobals();
+});
+
+afterEach(() => {
+  globalThis.fetch = originalFetch;
+  delete window.RemoteConnections;
+  delete window.getRuntimeId;
+});
 
 /** 构造 runtime_status 响应序列的 fetch mock；每项为一个响应或 Error。 */
 function mockFetchWith(responses) {
@@ -42,11 +55,22 @@ const readyBody = (runtimeId) => ({
   agent: { id: runtimeId, runtime_session_id: runtimeId, source: 'child', connected: true },
 });
 
+test('navigation-core: 命名导出面完整（import 侧契约）', () => {
+  for (const name of [
+    'waitForRuntimeReady',
+    'waitForRemoteRuntimeRef',
+    'resolveHostAgentId',
+    'extractRuntimeId',
+    'resolveStoppedRuntimeFallback',
+  ]) {
+    assert.equal(typeof navigationCore[name], 'function', `缺少命名导出 ${name}`);
+  }
+});
+
 describe('navigation-core: waitForRuntimeReady', () => {
   it('returns the agent once runtime_status reports ready', async () => {
-    const ctx = createNavigationSandbox();
-    ctx.fetch = mockFetchWith([readyBody('agent-new-1')]);
-    const agent = await ctx.window.NavigationCore.waitForRuntimeReady({
+    globalThis.fetch = mockFetchWith([readyBody('agent-new-1')]);
+    const agent = await navigationCore.waitForRuntimeReady({
       agentId: 'programming-helper',
       sessionId: 'session-1',
       attempts: 3,
@@ -56,9 +80,8 @@ describe('navigation-core: waitForRuntimeReady', () => {
   });
 
   it('keeps polling while the bound runtime is still the excluded old one', async () => {
-    const ctx = createNavigationSandbox();
-    ctx.fetch = mockFetchWith([readyBody('agent-old'), readyBody('agent-old'), readyBody('agent-new')]);
-    const agent = await ctx.window.NavigationCore.waitForRuntimeReady({
+    globalThis.fetch = mockFetchWith([readyBody('agent-old'), readyBody('agent-old'), readyBody('agent-new')]);
+    const agent = await navigationCore.waitForRuntimeReady({
       agentId: 'programming-helper',
       sessionId: 'session-1',
       excludeRuntimeId: 'agent-old',
@@ -69,9 +92,8 @@ describe('navigation-core: waitForRuntimeReady', () => {
   });
 
   it('keeps polling until the bound runtime matches expectRuntimeId', async () => {
-    const ctx = createNavigationSandbox();
-    ctx.fetch = mockFetchWith([readyBody('agent-other'), readyBody('agent-wanted')]);
-    const agent = await ctx.window.NavigationCore.waitForRuntimeReady({
+    globalThis.fetch = mockFetchWith([readyBody('agent-other'), readyBody('agent-wanted')]);
+    const agent = await navigationCore.waitForRuntimeReady({
       agentId: 'programming-helper',
       sessionId: 'session-1',
       expectRuntimeId: 'agent-wanted',
@@ -82,10 +104,9 @@ describe('navigation-core: waitForRuntimeReady', () => {
   });
 
   it('throws target_runtime_stopped when the runtime stops before ready', async () => {
-    const ctx = createNavigationSandbox();
-    ctx.fetch = mockFetchWith([{ ready: false, lifecycle: 'stopped', agent: null }]);
+    globalThis.fetch = mockFetchWith([{ ready: false, lifecycle: 'stopped', agent: null }]);
     await assert.rejects(
-      ctx.window.NavigationCore.waitForRuntimeReady({
+      navigationCore.waitForRuntimeReady({
         agentId: 'programming-helper',
         sessionId: 'session-1',
         attempts: 3,
@@ -96,9 +117,8 @@ describe('navigation-core: waitForRuntimeReady', () => {
   });
 
   it('survives transient transport errors and resolves on a later poll', async () => {
-    const ctx = createNavigationSandbox();
-    ctx.fetch = mockFetchWith([new Error('network down'), readyBody('agent-late')]);
-    const agent = await ctx.window.NavigationCore.waitForRuntimeReady({
+    globalThis.fetch = mockFetchWith([new Error('network down'), readyBody('agent-late')]);
+    const agent = await navigationCore.waitForRuntimeReady({
       agentId: 'programming-helper',
       sessionId: 'session-1',
       attempts: 4,
@@ -108,9 +128,8 @@ describe('navigation-core: waitForRuntimeReady', () => {
   });
 
   it('returns null after exhausting attempts without readiness (slow-start budget disabled)', async () => {
-    const ctx = createNavigationSandbox();
-    ctx.fetch = mockFetchWith([{ ready: false, lifecycle: 'starting', agent: null }]);
-    const result = await ctx.window.NavigationCore.waitForRuntimeReady({
+    globalThis.fetch = mockFetchWith([{ ready: false, lifecycle: 'starting', agent: null }]);
+    const result = await navigationCore.waitForRuntimeReady({
       agentId: 'programming-helper',
       sessionId: 'session-1',
       attempts: 2,
@@ -124,15 +143,14 @@ describe('navigation-core: waitForRuntimeReady', () => {
     // 2026-11-13 桌面版冷启动事故：首次 open 基础预算（10s）耗尽放弃导航，
     // runtime 随后 ready、第二次点击 1.3s 进入。观察到 lifecycle=starting
     // （服务端确证进程存活仍在启动）时必须追加等待而不是按失败回退。
-    const ctx = createNavigationSandbox();
     // 基础预算 2 次耗尽时仍 starting，追加段第 2 次探测转 ready。
-    ctx.fetch = mockFetchWith([
+    globalThis.fetch = mockFetchWith([
       { ready: false, lifecycle: 'starting', agent: null },
       { ready: false, lifecycle: 'starting', agent: null },
       { ready: false, lifecycle: 'starting', agent: null },
       readyBody('agent-slow-start'),
     ]);
-    const agent = await ctx.window.NavigationCore.waitForRuntimeReady({
+    const agent = await navigationCore.waitForRuntimeReady({
       agentId: 'programming-helper',
       sessionId: 'session-1',
       attempts: 2,
@@ -146,10 +164,9 @@ describe('navigation-core: waitForRuntimeReady', () => {
   it('does not grant the slow-start budget without evidence of a starting runtime', async () => {
     // 持续传输错误（无 lifecycle 证据）不触发追加段：轮询次数仍由基础
     // 预算限定，慢启动资格只在服务端确证 starting 时授予。
-    const ctx = createNavigationSandbox();
     const fetchImpl = mockFetchWith([new Error('network down')]);
-    ctx.fetch = fetchImpl;
-    const result = await ctx.window.NavigationCore.waitForRuntimeReady({
+    globalThis.fetch = fetchImpl;
+    const result = await navigationCore.waitForRuntimeReady({
       agentId: 'programming-helper',
       sessionId: 'session-1',
       attempts: 2,
@@ -162,13 +179,12 @@ describe('navigation-core: waitForRuntimeReady', () => {
   });
 
   it('throws target_runtime_stopped when a starting runtime later stops (incl. slow-start phase)', async () => {
-    const ctx = createNavigationSandbox();
-    ctx.fetch = mockFetchWith([
+    globalThis.fetch = mockFetchWith([
       { ready: false, lifecycle: 'starting', agent: null },
       { ready: false, lifecycle: 'stopped', agent: null },
     ]);
     await assert.rejects(
-      ctx.window.NavigationCore.waitForRuntimeReady({
+      navigationCore.waitForRuntimeReady({
         agentId: 'programming-helper',
         sessionId: 'session-1',
         attempts: 1,
@@ -181,10 +197,9 @@ describe('navigation-core: waitForRuntimeReady', () => {
   });
 
   it('returns null when the slow-start budget is also exhausted', async () => {
-    const ctx = createNavigationSandbox();
     const fetchImpl = mockFetchWith([{ ready: false, lifecycle: 'starting', agent: null }]);
-    ctx.fetch = fetchImpl;
-    const result = await ctx.window.NavigationCore.waitForRuntimeReady({
+    globalThis.fetch = fetchImpl;
+    const result = await navigationCore.waitForRuntimeReady({
       agentId: 'programming-helper',
       sessionId: 'session-1',
       attempts: 1,
@@ -197,21 +212,19 @@ describe('navigation-core: waitForRuntimeReady', () => {
   });
 
   it('rejects immediately when agentId or sessionId is missing', async () => {
-    const ctx = createNavigationSandbox();
-    ctx.fetch = mockFetchWith([readyBody('agent-1')]);
+    globalThis.fetch = mockFetchWith([readyBody('agent-1')]);
     await assert.rejects(
-      ctx.window.NavigationCore.waitForRuntimeReady({ agentId: '', sessionId: 's' }),
+      navigationCore.waitForRuntimeReady({ agentId: '', sessionId: 's' }),
     );
     await assert.rejects(
-      ctx.window.NavigationCore.waitForRuntimeReady({ agentId: 'a', sessionId: '' }),
+      navigationCore.waitForRuntimeReady({ agentId: 'a', sessionId: '' }),
     );
   });
 
   it('carries operationId through to the runtime_status request', async () => {
-    const ctx = createNavigationSandbox();
     const fetchImpl = mockFetchWith([readyBody('agent-1')]);
-    ctx.fetch = fetchImpl;
-    await ctx.window.NavigationCore.waitForRuntimeReady({
+    globalThis.fetch = fetchImpl;
+    await navigationCore.waitForRuntimeReady({
       agentId: 'programming-helper',
       sessionId: 'session-1',
       operationId: 'op-42',
@@ -226,25 +239,22 @@ describe('navigation-core: waitForRuntimeReady', () => {
 
 describe('navigation-core: waitForRemoteRuntimeRef', () => {
   it('delegates to RemoteConnections.waitForRuntimeForSession', async () => {
-    const ctx = createNavigationSandbox();
-    ctx.window.RemoteConnections = {
+    window.RemoteConnections = {
       waitForRuntimeForSession: async (sessionId, attempts) => ({ sessionId, attempts }),
     };
-    const ref = await ctx.window.NavigationCore.waitForRemoteRuntimeRef('remote:srv:s-1', 7);
+    const ref = await navigationCore.waitForRemoteRuntimeRef('remote:srv:s-1', 7);
     assert.deepEqual(ref, { sessionId: 'remote:srv:s-1', attempts: 7 });
   });
 
   it('returns null when RemoteConnections has no waiter (degraded catalog)', async () => {
-    const ctx = createNavigationSandbox();
-    const ref = await ctx.window.NavigationCore.waitForRemoteRuntimeRef('remote:srv:s-1');
+    const ref = await navigationCore.waitForRemoteRuntimeRef('remote:srv:s-1');
     assert.equal(ref, null);
   });
 });
 
 describe('navigation-core: identity helpers (ADR-0014 Phase 2)', () => {
   it('resolveHostAgentId maps child entries to their host via parent_id', () => {
-    const ctx = createNavigationSandbox();
-    const { resolveHostAgentId } = ctx.window.NavigationCore;
+    const { resolveHostAgentId } = navigationCore;
     // child 条目：parent_id 是宿主；解析失败回退 fallbackId（2026-09-06
     // stop 事故契约：直接把 runtime id 发给服务端会被静默 no-op）。
     assert.equal(resolveHostAgentId({ parent_id: 'programming-helper', id: 'agent-1' }, 'agent-1'), 'programming-helper');
@@ -254,8 +264,7 @@ describe('navigation-core: identity helpers (ADR-0014 Phase 2)', () => {
   });
 
   it('extractRuntimeId unwraps restart responses (runtime wrapper first)', () => {
-    const ctx = createNavigationSandbox();
-    const { extractRuntimeId } = ctx.window.NavigationCore;
+    const { extractRuntimeId } = navigationCore;
     assert.equal(
       extractRuntimeId({ runtime: { id: 'rt-new' }, agent: { runtime_session_id: 'rt-other' } }),
       'rt-new',
@@ -267,8 +276,7 @@ describe('navigation-core: identity helpers (ADR-0014 Phase 2)', () => {
   });
 
   it('extractRuntimeId falls through to the agent entry alias chain', () => {
-    const ctx = createNavigationSandbox();
-    const { extractRuntimeId } = ctx.window.NavigationCore;
+    const { extractRuntimeId } = navigationCore;
     assert.equal(
       extractRuntimeId({ agent: { runtime_session_id: 'rt-a', id: 'rt-a' } }),
       'rt-a',
@@ -277,31 +285,29 @@ describe('navigation-core: identity helpers (ADR-0014 Phase 2)', () => {
       extractRuntimeId({ agent: { runtimeSessionId: 'rt-b', id: 'rt-b' } }),
       'rt-b',
     );
-    // 裸条目（沙箱无 getRuntimeId 时的 fallback 链）：id 兜底。
+    // 裸条目（无 window.getRuntimeId 时的 fallback 链）：id 兜底。
     assert.equal(extractRuntimeId({ runtime_session_id: '', id: 'rt-bare' }), 'rt-bare');
     assert.equal(extractRuntimeId(null), '');
     assert.equal(extractRuntimeId({}), '');
   });
 
   it('extractRuntimeId delegates to getRuntimeId when available (host records yield no runtime)', () => {
-    const ctx = createNavigationSandbox();
-    // 注入严格版 getRuntimeId（函数体内裸标识符在每次调用时解析，晚注入生效）：
+    // 注入严格版 getRuntimeId（module 内每次调用时经 window 解析，晚注入生效）：
     // 宿主条目（无 child 标记）不误取自身 id 当 runtime——这是委托权威实现
     // 相比旧手写链的语义收紧。
-    ctx.getRuntimeId = (record) => (record?.source === 'child' ? String(record.id) : null);
+    window.getRuntimeId = (record) => (record?.source === 'child' ? String(record.id) : null);
     assert.equal(
-      ctx.window.NavigationCore.extractRuntimeId({ agent: { source: 'prebuilt', id: 'host-1' } }),
+      navigationCore.extractRuntimeId({ agent: { source: 'prebuilt', id: 'host-1' } }),
       '',
     );
     assert.equal(
-      ctx.window.NavigationCore.extractRuntimeId({ agent: { source: 'child', id: 'rt-child' } }),
+      navigationCore.extractRuntimeId({ agent: { source: 'child', id: 'rt-child' } }),
       'rt-child',
     );
   });
 
   it('resolveStoppedRuntimeFallback prefers the host entry, then the workspace fallback resolver', () => {
-    const ctx = createNavigationSandbox();
-    const { resolveStoppedRuntimeFallback } = ctx.window.NavigationCore;
+    const { resolveStoppedRuntimeFallback } = navigationCore;
     const resolver = (entry) => `ws-fallback:${entry?.id || 'none'}`;
     assert.equal(
       resolveStoppedRuntimeFallback({ parent_id: 'programming-helper', id: 'agent-1' }, resolver),
@@ -313,5 +319,17 @@ describe('navigation-core: identity helpers (ADR-0014 Phase 2)', () => {
     );
     assert.equal(resolveStoppedRuntimeFallback(null, resolver), 'ws-fallback:none');
     assert.equal(resolveStoppedRuntimeFallback({ parent_id: 'host' }, null), 'host');
+  });
+});
+
+describe('navigation-core: 兼容面', () => {
+  it('window.NavigationCore 是同一组实现的既有命名空间协议', () => {
+    assert.equal(typeof window.NavigationCore, 'object');
+    assert.equal(typeof window.NavigationCore.waitForRuntimeReady, 'function');
+    assert.equal(window.NavigationCore.waitForRuntimeReady, navigationCore.waitForRuntimeReady);
+    assert.equal(window.NavigationCore.waitForRemoteRuntimeRef, navigationCore.waitForRemoteRuntimeRef);
+    assert.equal(window.NavigationCore.resolveHostAgentId, navigationCore.resolveHostAgentId);
+    assert.equal(window.NavigationCore.extractRuntimeId, navigationCore.extractRuntimeId);
+    assert.equal(window.NavigationCore.resolveStoppedRuntimeFallback, navigationCore.resolveStoppedRuntimeFallback);
   });
 });

@@ -1,5 +1,6 @@
+/* global window */
 /**
- * Tests for public/src/modules/usage-info-overlay.js
+ * Tests for public/src/modules/usage-info-overlay.js（ESM 真实 import 路线）
  *
  * Covers pure utility functions:
  *   - Date helpers (usageInfoLocalDateString, usageInfoParseLocalDate,
@@ -12,43 +13,74 @@
  *   - Range dates (usageInfoRangeDates)
  *   - Metric rendering (renderUsageMetric)
  *   - SVG path smoothing (usageInfoSmoothPath)
+ *
+ * 装载路线：test/helpers/esm-module-loader.js 的真实 import（迁移配方第三节）。
+ * 断言从 sandbox 全局直调改为 import 后调用；window 桩面只覆盖模块导入链的真实
+ * 依赖：markdown-utils 模块顶层读取的 markdown-bootstrap 桥键值（escapeHtml 等），
+ * 以及 action-dispatcher 的 registerMany 注册表。
  */
 
-import { describe, it } from 'node:test';
+import { describe, it, after } from 'node:test';
 import assert from 'node:assert';
-import { createFrontendSandbox } from './helpers/frontend-vm.js';
+import { installBrowserStubs, loadModuleOnce } from './helpers/esm-module-loader.js';
 
-function loadUsageInfo() {
-  const ctx = createFrontendSandbox({});
-  // 分发器必须先于模块装载（生产加载顺序第一位）：模块尾部注册
-  // data-action="usageInfo.*" 处理器，ClawFW.actions 缺席会抛错。
-  ctx.loadSource('public/src/modules/action-dispatcher.js');
-  ctx.loadSource('public/src/modules/usage-info-overlay.js');
-  return ctx;
+const registeredActions = new Map();
+
+function escapeHtmlStub(text) {
+  const map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+  return String(text ?? '').replace(/[&<>"']/g, (c) => map[c]);
 }
+
+const cleanupGlobals = installBrowserStubs({
+  window: {
+    // markdown-bootstrap 的桥键值（ESM markdown-utils 模块顶层读取，escapeHtml 经它导入）
+    escapeHtml: escapeHtmlStub,
+    // action-dispatcher 注册表：模块尾部 registerMany
+    ClawFW: {
+      actions: {
+        registerMany(map) {
+          for (const [name, handler] of Object.entries(map)) registeredActions.set(name, handler);
+        },
+      },
+    },
+  },
+});
+after(() => {
+  cleanupGlobals();
+});
+
+await loadModuleOnce('public/src/modules/kernel-state.js', { installGlobals: false });
+// 语言状态由 i18n 域模块持有（usage-info 的 import 解析到同一份实例）
+const i18n = await import('../public/src/modules/i18n-environment-state.js');
+i18n.setCurrentLanguage('zh');
+const usage = (await loadModuleOnce('public/src/modules/usage-info-overlay.js', { installGlobals: false })).module;
+
+const {
+  usageInfoLocalDateString, usageInfoParseLocalDate, usageInfoToday, usageInfoDateDaysAgo,
+  usageInfoDefaults, usageInfoRangeDates, usageInfoNumber, usageInfoFullNumber, usageInfoPct,
+  usageInfoLabel, renderUsageMetric, usageInfoDateRange, usageInfoEventDate, usageInfoEventHour,
+  usageInfoEmptyBreakdown, usageInfoAddBreakdown, usageInfoSmoothPath,
+} = usage;
 
 // ── usageInfoLocalDateString ───────────────────────────────────────
 
 describe('usage-info: usageInfoLocalDateString', () => {
-  const ctx = loadUsageInfo();
-  const fn = ctx.run;
-
   it('formats a Date correctly', () => {
-    const result = fn('usageInfoLocalDateString(new Date(2026, 0, 5))'); // Jan 5, 2026
+    const result = usageInfoLocalDateString(new Date(2026, 0, 5)); // Jan 5, 2026
     assert.equal(result, '2026-01-05');
   });
 
   it('pads month and day', () => {
-    const result = fn('usageInfoLocalDateString(new Date(2026, 10, 15))'); // Nov 15
+    const result = usageInfoLocalDateString(new Date(2026, 10, 15)); // Nov 15
     assert.equal(result, '2026-11-15');
   });
 
   it('returns empty for invalid date', () => {
-    assert.equal(fn('usageInfoLocalDateString(new Date("invalid"))'), '');
+    assert.equal(usageInfoLocalDateString(new Date("invalid")), '');
   });
 
   it('accepts timestamp number', () => {
-    const result = fn('usageInfoLocalDateString(new Date(2026, 5, 1).getTime())');
+    const result = usageInfoLocalDateString(new Date(2026, 5, 1).getTime());
     assert.equal(result, '2026-06-01');
   });
 });
@@ -56,23 +88,20 @@ describe('usage-info: usageInfoLocalDateString', () => {
 // ── usageInfoParseLocalDate ────────────────────────────────────────
 
 describe('usage-info: usageInfoParseLocalDate', () => {
-  const ctx = loadUsageInfo();
-  const fn = ctx.run;
-
   it('parses YYYY-MM-DD format', () => {
-    const result = fn('usageInfoParseLocalDate("2026-06-15")');
+    const result = usageInfoParseLocalDate("2026-06-15");
     assert.equal(result.getFullYear(), 2026);
     assert.equal(result.getMonth(), 5); // June (0-indexed)
     assert.equal(result.getDate(), 15);
   });
 
   it('falls back to Date constructor for non-matching format', () => {
-    const result = fn('usageInfoParseLocalDate("2026/06/15")');
+    const result = usageInfoParseLocalDate("2026/06/15");
     assert.ok(result instanceof Date);
   });
 
   it('returns epoch for null', () => {
-    const result = fn('usageInfoParseLocalDate(null)');
+    const result = usageInfoParseLocalDate(null);
     assert.equal(result.getTime(), 0);
   });
 });
@@ -80,18 +109,15 @@ describe('usage-info: usageInfoParseLocalDate', () => {
 // ── usageInfoDateDaysAgo ───────────────────────────────────────────
 
 describe('usage-info: usageInfoDateDaysAgo', () => {
-  const ctx = loadUsageInfo();
-  const fn = ctx.run;
-
   it('returns today for 0 days ago', () => {
-    const today = fn('usageInfoToday()');
-    const zeroDays = fn('usageInfoDateDaysAgo(0)');
+    const today = usageInfoToday();
+    const zeroDays = usageInfoDateDaysAgo(0);
     assert.equal(zeroDays, today);
   });
 
   it('returns yesterday for 1 day ago', () => {
-    const today = fn('usageInfoToday()');
-    const yesterday = fn('usageInfoDateDaysAgo(1)');
+    const today = usageInfoToday();
+    const yesterday = usageInfoDateDaysAgo(1);
     // Parse both and check they differ by 1 day
     const todayDate = new Date(today);
     const yesterdayDate = new Date(yesterday);
@@ -100,7 +126,7 @@ describe('usage-info: usageInfoDateDaysAgo', () => {
   });
 
   it('produces valid date string', () => {
-    const result = fn('usageInfoDateDaysAgo(7)');
+    const result = usageInfoDateDaysAgo(7);
     assert.match(result, /^\d{4}-\d{2}-\d{2}$/);
   });
 });
@@ -108,82 +134,73 @@ describe('usage-info: usageInfoDateDaysAgo', () => {
 // ── usageInfoNumber ────────────────────────────────────────────────
 
 describe('usage-info: usageInfoNumber', () => {
-  const ctx = loadUsageInfo();
-  const fn = ctx.run;
-
   it('returns raw number for small values', () => {
-    assert.equal(fn('usageInfoNumber(42)'), '42');
-    assert.equal(fn('usageInfoNumber(999)'), '999');
+    assert.equal(usageInfoNumber(42), '42');
+    assert.equal(usageInfoNumber(999), '999');
   });
 
   it('formats thousands with K suffix', () => {
-    assert.equal(fn('usageInfoNumber(1000)'), '1.00K');
-    assert.equal(fn('usageInfoNumber(5500)'), '5.50K');
+    assert.equal(usageInfoNumber(1000), '1.00K');
+    assert.equal(usageInfoNumber(5500), '5.50K');
   });
 
   it('formats millions with M suffix', () => {
-    assert.equal(fn('usageInfoNumber(1000000)'), '1.00M');
-    assert.equal(fn('usageInfoNumber(2500000)'), '2.50M');
+    assert.equal(usageInfoNumber(1000000), '1.00M');
+    assert.equal(usageInfoNumber(2500000), '2.50M');
   });
 
   it('formats billions with B suffix', () => {
-    assert.equal(fn('usageInfoNumber(1000000000)'), '1.00B');
+    assert.equal(usageInfoNumber(1000000000), '1.00B');
   });
 
   it('handles 0', () => {
-    assert.equal(fn('usageInfoNumber(0)'), '0');
+    assert.equal(usageInfoNumber(0), '0');
   });
 
   it('handles non-finite values as 0', () => {
-    assert.equal(fn('usageInfoNumber(NaN)'), '0');
-    assert.equal(fn('usageInfoNumber(null)'), '0');
-    assert.equal(fn('usageInfoNumber("abc")'), '0');
+    assert.equal(usageInfoNumber(NaN), '0');
+    assert.equal(usageInfoNumber(null), '0');
+    assert.equal(usageInfoNumber("abc"), '0');
   });
 });
 
 // ── usageInfoFullNumber ────────────────────────────────────────────
 
 describe('usage-info: usageInfoFullNumber', () => {
-  const ctx = loadUsageInfo();
-  const fn = ctx.run;
-
   it('formats with locale separators', () => {
-    const result = fn('usageInfoFullNumber(1234567)');
+    const result = usageInfoFullNumber(1234567);
     // toLocaleString produces locale-dependent output, but should contain digit groups
     assert.ok(result.includes('1') && result.includes('7'));
   });
 
   it('handles 0', () => {
-    assert.equal(fn('usageInfoFullNumber(0)'), '0');
+    assert.equal(usageInfoFullNumber(0), '0');
   });
 
   it('handles non-finite as 0', () => {
-    assert.equal(fn('usageInfoFullNumber(NaN)'), '0');
+    assert.equal(usageInfoFullNumber(NaN), '0');
   });
 });
 
 // ── usageInfoPct ───────────────────────────────────────────────────
 
 describe('usage-info: usageInfoPct', () => {
-  const ctx = loadUsageInfo();
-  const fn = ctx.run;
-
   it('calculates percentage', () => {
-    assert.equal(fn('usageInfoPct(25, 100)'), 25);
-    assert.equal(fn('usageInfoPct(1, 4)'), 25);
+    assert.equal(usageInfoPct(25, 100), 25);
+    assert.equal(usageInfoPct(1, 4), 25);
   });
 
   it('rounds to integer', () => {
-    assert.equal(fn('usageInfoPct(1, 3)'), 33);
-    assert.equal(fn('usageInfoPct(2, 3)'), 67);
+    assert.equal(usageInfoPct(1, 3), 33);
+    assert.equal(usageInfoPct(2, 3), 67);
   });
 
   it('returns 0 when total is 0', () => {
-    assert.equal(fn('usageInfoPct(5, 0)'), 0);
+    assert.equal(usageInfoPct(5, 0), 0);
   });
 
   it('handles part > total (caps at 100 via rounding)', () => {
-    const result = fn('usageInfoPct(150, 100)');
+    const result = usageInfoPct(150, 100);
     assert.equal(result, 150); // No cap — just Math.round
   });
 });
@@ -191,18 +208,15 @@ describe('usage-info: usageInfoPct', () => {
 // ── usageInfoEmptyBreakdown / usageInfoAddBreakdown ────────────────
 
 describe('usage-info: breakdown aggregation', () => {
-  const ctx = loadUsageInfo();
-  const fn = ctx.run;
-
   it('creates empty breakdown with all zeros', () => {
-    const result = fn('usageInfoEmptyBreakdown()');
+    const result = usageInfoEmptyBreakdown();
     assert.deepEqual(result, { total: 0, input: 0, output: 0, cache: 0, requests: 0 });
   });
 
   it('adds usage to breakdown', () => {
-    fn('var bd = usageInfoEmptyBreakdown()');
-    fn('usageInfoAddBreakdown(bd, { totalTokens: 100, inputTokens: 60, outputTokens: 40, cacheReadTokens: 20, requests: 3 })');
-    const result = fn('bd');
+    const bd = usageInfoEmptyBreakdown();
+    usageInfoAddBreakdown(bd, { totalTokens: 100, inputTokens: 60, outputTokens: 40, cacheReadTokens: 20, requests: 3 });
+    const result = bd;
     assert.equal(result.total, 100);
     assert.equal(result.input, 60);
     assert.equal(result.output, 40);
@@ -211,10 +225,10 @@ describe('usage-info: breakdown aggregation', () => {
   });
 
   it('accumulates across multiple calls', () => {
-    fn('var bd2 = usageInfoEmptyBreakdown()');
-    fn('usageInfoAddBreakdown(bd2, { totalTokens: 50, inputTokens: 30, outputTokens: 20 })');
-    fn('usageInfoAddBreakdown(bd2, { totalTokens: 50, inputTokens: 10, outputTokens: 40 })');
-    const result = fn('bd2');
+    const bd2 = usageInfoEmptyBreakdown();
+    usageInfoAddBreakdown(bd2, { totalTokens: 50, inputTokens: 30, outputTokens: 20 });
+    usageInfoAddBreakdown(bd2, { totalTokens: 50, inputTokens: 10, outputTokens: 40 });
+    const result = bd2;
     assert.equal(result.total, 100);
     assert.equal(result.input, 40);
     assert.equal(result.output, 60);
@@ -222,10 +236,10 @@ describe('usage-info: breakdown aggregation', () => {
   });
 
   it('handles missing usage fields', () => {
-    fn('var bd3 = usageInfoEmptyBreakdown()');
-    fn('usageInfoAddBreakdown(bd3, null)');
-    fn('usageInfoAddBreakdown(bd3, {})');
-    const result = fn('bd3');
+    const bd3 = usageInfoEmptyBreakdown();
+    usageInfoAddBreakdown(bd3, null);
+    usageInfoAddBreakdown(bd3, {});
+    const result = bd3;
     assert.equal(result.total, 0);
     assert.equal(result.requests, 2); // default 1 per call
   });
@@ -234,74 +248,62 @@ describe('usage-info: breakdown aggregation', () => {
 // ── usageInfoEventDate ─────────────────────────────────────────────
 
 describe('usage-info: usageInfoEventDate', () => {
-  const ctx = loadUsageInfo();
-  const fn = ctx.run;
-
   it('uses event.date when available', () => {
-    assert.equal(fn('usageInfoEventDate({ date: "2026-06-15" })'), '2026-06-15');
+    assert.equal(usageInfoEventDate({ date: "2026-06-15" }), '2026-06-15');
   });
 
   it('extracts date from timestamp', () => {
     const ts = new Date(2026, 5, 15).getTime();
-    const result = fn(`usageInfoEventDate({ timestamp: ${ts} })`);
+    const result = usageInfoEventDate({ timestamp: ts });
     assert.equal(result, '2026-06-15');
   });
 
   it('extracts date from createdAt', () => {
     const ts = new Date(2026, 0, 1).getTime();
-    const result = fn(`usageInfoEventDate({ createdAt: ${ts} })`);
+    const result = usageInfoEventDate({ createdAt: ts });
     assert.equal(result, '2026-01-01');
   });
 
   it('returns empty for invalid event', () => {
-    assert.equal(fn('usageInfoEventDate(null)'), '');
-    assert.equal(fn('usageInfoEventDate({})'), '');
+    assert.equal(usageInfoEventDate(null), '');
+    assert.equal(usageInfoEventDate({}), '');
   });
 });
 
 // ── usageInfoEventHour ─────────────────────────────────────────────
 
 describe('usage-info: usageInfoEventHour', () => {
-  const ctx = loadUsageInfo();
-  const fn = ctx.run;
-
   it('extracts hour from timestamp', () => {
     const ts = new Date(2026, 0, 1, 14, 30).getTime();
-    const result = fn(`usageInfoEventHour({ timestamp: ${ts} })`);
+    const result = usageInfoEventHour({ timestamp: ts });
     assert.equal(result, 14);
   });
 
   it('returns NaN for invalid event', () => {
-    assert.ok(Number.isNaN(fn('usageInfoEventHour(null)')));
-    assert.ok(Number.isNaN(fn('usageInfoEventHour({})')));
+    assert.ok(Number.isNaN(usageInfoEventHour(null)));
+    assert.ok(Number.isNaN(usageInfoEventHour({})));
   });
 });
 
 // ── usageInfoLabel ─────────────────────────────────────────────────
 
 describe('usage-info: usageInfoLabel', () => {
-  const ctx = loadUsageInfo();
-  const fn = ctx.run;
-
   it('returns zh label for known key', () => {
-    assert.equal(fn('usageInfoLabel("model")'), '模型');
-    assert.equal(fn('usageInfoLabel("agent")'), 'Agent');
-    assert.equal(fn('usageInfoLabel("source")'), '来源');
+    assert.equal(usageInfoLabel("model"), '模型');
+    assert.equal(usageInfoLabel("agent"), 'Agent');
+    assert.equal(usageInfoLabel("source"), '来源');
   });
 
   it('returns the key itself for unknown keys', () => {
-    assert.equal(fn('usageInfoLabel("unknown")'), 'unknown');
+    assert.equal(usageInfoLabel("unknown"), 'unknown');
   });
 });
 
 // ── usageInfoDefaults ──────────────────────────────────────────────
 
 describe('usage-info: usageInfoDefaults', () => {
-  const ctx = loadUsageInfo();
-  const fn = ctx.run;
-
   it('returns object with expected default values', () => {
-    const result = fn('usageInfoDefaults()');
+    const result = usageInfoDefaults();
     assert.equal(result.open, false);
     assert.equal(result.loading, false);
     assert.equal(result.error, '');
@@ -315,8 +317,8 @@ describe('usage-info: usageInfoDefaults', () => {
   });
 
   it('from and to are today', () => {
-    const result = fn('usageInfoDefaults()');
-    const today = fn('usageInfoToday()');
+    const result = usageInfoDefaults();
+    const today = usageInfoToday();
     assert.equal(result.from, today);
     assert.equal(result.to, today);
   });
@@ -325,35 +327,32 @@ describe('usage-info: usageInfoDefaults', () => {
 // ── usageInfoRangeDates ────────────────────────────────────────────
 
 describe('usage-info: usageInfoRangeDates', () => {
-  const ctx = loadUsageInfo();
-  const fn = ctx.run;
-
   it('returns today for both from/to when range is "today"', () => {
-    const today = fn('usageInfoToday()');
-    const result = fn('usageInfoRangeDates("today")');
+    const today = usageInfoToday();
+    const result = usageInfoRangeDates("today");
     assert.equal(result.from, today);
     assert.equal(result.to, today);
   });
 
   it('returns 7-day range for "7d"', () => {
-    const today = fn('usageInfoToday()');
-    const sevenDaysAgo = fn('usageInfoDateDaysAgo(6)');
-    const result = fn('usageInfoRangeDates("7d")');
+    const today = usageInfoToday();
+    const sevenDaysAgo = usageInfoDateDaysAgo(6);
+    const result = usageInfoRangeDates("7d");
     assert.equal(result.from, sevenDaysAgo);
     assert.equal(result.to, today);
   });
 
   it('returns 30-day range for "30d"', () => {
-    const today = fn('usageInfoToday()');
-    const thirtyDaysAgo = fn('usageInfoDateDaysAgo(29)');
-    const result = fn('usageInfoRangeDates("30d")');
+    const today = usageInfoToday();
+    const thirtyDaysAgo = usageInfoDateDaysAgo(29);
+    const result = usageInfoRangeDates("30d");
     assert.equal(result.from, thirtyDaysAgo);
     assert.equal(result.to, today);
   });
 
   it('defaults to today for unknown range', () => {
-    const today = fn('usageInfoToday()');
-    const result = fn('usageInfoRangeDates("unknown")');
+    const today = usageInfoToday();
+    const result = usageInfoRangeDates("unknown");
     assert.equal(result.from, today);
     assert.equal(result.to, today);
   });
@@ -362,30 +361,27 @@ describe('usage-info: usageInfoRangeDates', () => {
 // ── usageInfoDateRange ─────────────────────────────────────────────
 
 describe('usage-info: usageInfoDateRange', () => {
-  const ctx = loadUsageInfo();
-  const fn = ctx.run;
-
   it('generates array of date strings', () => {
-    const result = fn('usageInfoDateRange("2026-06-01", "2026-06-03")');
+    const result = usageInfoDateRange("2026-06-01", "2026-06-03");
     assert.deepEqual(result, ['2026-06-01', '2026-06-02', '2026-06-03']);
   });
 
   it('returns single element for same from/to', () => {
-    const result = fn('usageInfoDateRange("2026-06-15", "2026-06-15")');
+    const result = usageInfoDateRange("2026-06-15", "2026-06-15");
     assert.deepEqual(result, ['2026-06-15']);
   });
 
   it('returns empty for invalid dates', () => {
-    assert.deepEqual(fn('usageInfoDateRange("invalid", "2026-06-03")'), []);
+    assert.deepEqual(usageInfoDateRange("invalid", "2026-06-03"), []);
   });
 
   it('returns empty when start > end', () => {
-    assert.deepEqual(fn('usageInfoDateRange("2026-06-05", "2026-06-01")'), []);
+    assert.deepEqual(usageInfoDateRange("2026-06-05", "2026-06-01"), []);
   });
 
   it('falls back to today for null params', () => {
-    const today = fn('usageInfoToday()');
-    const result = fn('usageInfoDateRange(null, null)');
+    const today = usageInfoToday();
+    const result = usageInfoDateRange(null, null);
     assert.deepEqual(result, [today]);
   });
 });
@@ -393,24 +389,21 @@ describe('usage-info: usageInfoDateRange', () => {
 // ── renderUsageMetric ──────────────────────────────────────────────
 
 describe('usage-info: renderUsageMetric', () => {
-  const ctx = loadUsageInfo();
-  const fn = ctx.run;
-
   it('renders metric HTML with label and value', () => {
-    const html = fn('renderUsageMetric("Total", "1.5K", null)');
+    const html = renderUsageMetric("Total", "1.5K", null);
     assert.ok(html.includes('usage-info-metric'));
     assert.ok(html.includes('Total'));
     assert.ok(html.includes('1.5K'));
   });
 
   it('includes detail when provided', () => {
-    const html = fn('renderUsageMetric("Cost", "$5", "$0.05/1K")');
+    const html = renderUsageMetric("Cost", "$5", "$0.05/1K");
     assert.ok(html.includes('usage-info-metric-detail'));
     assert.ok(html.includes('$0.05/1K'));
   });
 
   it('escapes HTML in label and value', () => {
-    const html = fn('renderUsageMetric("<script>", "x", null)');
+    const html = renderUsageMetric("<script>", "x", null);
     assert.ok(!html.includes('<script>'));
     assert.ok(html.includes('&lt;script&gt;'));
   });
@@ -419,28 +412,51 @@ describe('usage-info: renderUsageMetric', () => {
 // ── usageInfoSmoothPath ────────────────────────────────────────────
 
 describe('usage-info: usageInfoSmoothPath', () => {
-  const ctx = loadUsageInfo();
-  const fn = ctx.run;
-
   it('returns empty string for empty array', () => {
-    assert.equal(fn('usageInfoSmoothPath([])'), '');
-    assert.equal(fn('usageInfoSmoothPath(null)'), '');
+    assert.equal(usageInfoSmoothPath([]), '');
+    assert.equal(usageInfoSmoothPath(null), '');
   });
 
   it('returns simple path for 1-2 points', () => {
-    const result = fn('usageInfoSmoothPath([[0, 0], [1, 1]])');
+    const result = usageInfoSmoothPath([[0, 0], [1, 1]]);
     assert.ok(result.startsWith('M '));
     assert.ok(result.includes(' L '));
   });
 
   it('returns smooth path with curves for 3+ points', () => {
-    const result = fn('usageInfoSmoothPath([[0, 0], [50, 100], [100, 50]])');
+    const result = usageInfoSmoothPath([[0, 0], [50, 100], [100, 50]]);
     assert.ok(result.startsWith('M '));
     assert.ok(result.includes(' C ')); // cubic bezier
   });
 
   it('handles flat line (all same y)', () => {
-    const result = fn('usageInfoSmoothPath([[0, 0], [50, 0], [100, 0]])');
+    const result = usageInfoSmoothPath([[0, 0], [50, 0], [100, 0]]);
     assert.ok(result.startsWith('M '));
+  });
+});
+
+// ── 兼容面与状态归属（ESM 化后必须保持的协议）─────────────────────
+
+describe('usage-info: 兼容面', () => {
+  it('window.openUsageInfo 指向命名导出（classic app-ui / home-dashboard 协议）', () => {
+    assert.equal(typeof usage.openUsageInfo, 'function');
+    assert.equal(window.openUsageInfo, usage.openUsageInfo);
+  });
+
+  it('data-action 处理器仍按 usageInfo.* 全量注册', () => {
+    // 本模块 import 的 markdown-utils 也会注册自己的 markdown.* 动作，按命名空间过滤
+    const usageActions = [...registeredActions.keys()].filter((name) => name.startsWith('usageInfo.'));
+    assert.deepEqual(usageActions.sort(), [
+      'usageInfo.close',
+      'usageInfo.search',
+      'usageInfo.setChartView',
+      'usageInfo.setRange',
+      'usageInfo.toggleChartModelMenu',
+      'usageInfo.toggleGroupMenu',
+    ]);
+  });
+
+  it('覆盖层状态收敛为模块私有，不再写 window.ClawFW.usageInfo', () => {
+    assert.equal(window.ClawFW.usageInfo, undefined);
   });
 });

@@ -23,18 +23,29 @@
  * ref（feature.command）展示与调用；过滤同时匹配全名与末段短名，
  * 前缀命中排前、局部（子串）命中排后。
  *
- * 暴露：
+ * 暴露（ESM 命名导出 + 既有 window 命名空间面）：
  * - SlashMenu.isActive() — 菜单激活（可见且有可选项）
  * - SlashMenu.registerCommands(list) — 注册宿主域命令条目
+ * - ClawSlash — 发送管线取用面（激活 refs 交接 / pill 重绑）
  *
- * 依赖（全局，由 app-core.js / 既有模块提供）：
- * - t, escapeHtml, currentLanguage (app-core.js / i18n.js)
- * - autoResize (input-helpers.js)、_cacheSessionInput (voice-input.js)
- * - currentRuntimeAgentId、getRuntimeId、getLogicalAgentId、
- *   getRuntimeWorkspaceSessionId (app-core.js)
- * - getCurrentRuntimeRecord、getCurrentAgentRecord (app-main.js)
- * - window.ClawToast (toast 组件)
+ * 依赖：
+ * - 已 ESM（直接 import）：escapeHtml (markdown-utils.js)、currentRuntimeAgentId
+ *   (orchestration-state.js)、实时语言 (i18n-environment-state.js)、
+ *   ClawToast (toast-notify.js)、autoResize (input-actions.js)、
+ *   activeKey (session-reference-picker.js) —— 原 `window.SessionReference.activeKey`
+ *   与本 import 指向同一函数
+ * - 仍是 classic（调用时点显式 window 晚绑定）：t (i18n.js)、
+ *   _cacheSessionInput (input-composer.js)、getRuntimeId / getLogicalAgentId /
+ *   getRuntimeWorkspaceSessionId (app-core.js)、getCurrentRuntimeRecord /
+ *   getCurrentAgentRecord (app-main.js)、_scheduleInspectorRefresh (app-main.js)
  */
+
+import { escapeHtml } from './markdown-utils.js';
+import { currentRuntimeAgentId } from './orchestration-state.js';
+import { getCurrentLanguage } from './i18n-environment-state.js';
+import { ClawToast } from './toast-notify.js';
+import { autoResize } from './input-actions.js';
+import { activeKey } from './session-reference-picker.js';
 
 // ── 模块局部状态（app-core 全局状态纪律：状态放所属模块局部）──
 let _hostCommands = [];
@@ -62,7 +73,7 @@ let _lastPromptKey = null;
 // 当前会话的 pill 桶 key：挂载 / 切换 / 提交三时刻读同一值（key 短暂读空的
 // 加载窗口期回退最近已知 key，不误落 default 桶）
 function _activePromptKey() {
-  const key = window.SessionReference?.activeKey?.();
+  const key = activeKey();
   if (typeof key === 'string' && key) {
     _lastPromptKey = key;
     return key;
@@ -104,13 +115,17 @@ function _currentTarget() {
   //   不从页面焦点（focusedAgentId）猜测
   // - sessionId 从 runtime 的 viewer 绑定派生（代表用户正在查看的会话），
   //   allAgents 缓存派生值只在无绑定时兜底
-  const runtimeId = getRuntimeId(currentRuntimeAgentId)
+  // 桥接期晚绑定（首次使用处）：getRuntimeId / getLogicalAgentId /
+  // getRuntimeWorkspaceSessionId 定义于 app-core（身份解析域），
+  // getCurrentRuntimeRecord / getCurrentAgentRecord 定义于 app-main（编排域）。
+  // 两者迁为 import 后删除各自的 window. 前缀。
+  const runtimeId = window.getRuntimeId(currentRuntimeAgentId)
     || (typeof currentRuntimeAgentId === 'string' ? currentRuntimeAgentId : '');
   if (!runtimeId) return { agentId: '', runtimeId: '', sessionId: '' };
-  const record = (typeof getCurrentRuntimeRecord === 'function' && getCurrentRuntimeRecord())
-    || (typeof getCurrentAgentRecord === 'function' ? getCurrentAgentRecord() : null);
-  const agentId = (record ? getLogicalAgentId(record) : '') || '';
-  const sessionId = getRuntimeWorkspaceSessionId(runtimeId) || '';
+  const record = (typeof window.getCurrentRuntimeRecord === 'function' && window.getCurrentRuntimeRecord())
+    || (typeof window.getCurrentAgentRecord === 'function' ? window.getCurrentAgentRecord() : null);
+  const agentId = (record ? window.getLogicalAgentId(record) : '') || '';
+  const sessionId = window.getRuntimeWorkspaceSessionId(runtimeId) || '';
   return { agentId, runtimeId, sessionId };
 }
 
@@ -207,7 +222,8 @@ function _render() {
   if (_formCmd) {
     _renderForm(menu);
   } else if (_filtered.length === 0) {
-    menu.innerHTML = '<div class="slash-menu-empty">' + escapeHtml(t('slash_menu_empty')) + '</div>';
+    // 桥接期晚绑定（首次使用处）：t 定义于 i18n.js（i18n 域），迁为 import 后删除 window. 前缀
+    menu.innerHTML = '<div class="slash-menu-empty">' + escapeHtml(window.t('slash_menu_empty')) + '</div>';
   } else {
     menu.innerHTML = _filtered.map(function (cmd, i) {
       const active = i === _highlightIdx ? ' is-active' : '';
@@ -316,8 +332,10 @@ async function _execute(cmd, ta) {
   if (cmd.kind === 'prompt' && cmd.destination === 'session') {
     if (ta) {
       ta.value = _remainingText(ta.value);
+      // 桥接期晚绑定（首次使用处）：_cacheSessionInput 定义于 input-composer
+      // （输入域，仍是 classic）；迁为 import 后删除 window. 前缀
       autoResize(ta);
-      _cacheSessionInput(ta);
+      window._cacheSessionInput(ta);
     }
     if (!_currentPrompts().some(function (p) { return p.name === cmd.name; })) {
       _currentPrompts().push(cmd);
@@ -332,7 +350,7 @@ async function _execute(cmd, ta) {
   if (ta) {
     ta.value = _remainingText(ta.value);
     autoResize(ta);
-    _cacheSessionInput(ta);
+    window._cacheSessionInput(ta);
   }
   if (cmd.destination === 'session') {
     if (cmd.parameters && Object.keys(cmd.parameters).length > 0) {
@@ -350,10 +368,10 @@ async function _execute(cmd, ta) {
     if (typeof cmd.handler === 'function') await cmd.handler();
   } catch (e) {
     console.error('[SlashMenu] command failed:', cmd.name, e);
-    window.ClawToast?.show?.({
+    ClawToast.show({
       id: 'slash-command-failed',
       status: 'error',
-      title: currentLanguage === 'zh' ? '命令执行失败' : 'Command failed',
+      title: getCurrentLanguage() === 'zh' ? '命令执行失败' : 'Command failed',
       description: e instanceof Error ? e.message : String(e),
       autoDismiss: 6000,
     });
@@ -375,7 +393,7 @@ function _completeCommand(ta) {
 async function _postCapabilityInvoke(cmd, args) {
   const { agentId, runtimeId, sessionId } = _currentTarget();
   if (!runtimeId || !sessionId) {
-    return { ok: false, error: currentLanguage === 'zh' ? '无可用会话' : 'No active session' };
+    return { ok: false, error: getCurrentLanguage() === 'zh' ? '无可用会话' : 'No active session' };
   }
   try {
     const res = await fetch('/protoclaw/capability_invoke', {
@@ -397,19 +415,19 @@ async function _invokeSessionCommand(cmd, args) {
   const r = await _postCapabilityInvoke(cmd, args);
   if (!r.ok) {
     console.error('[SlashMenu] capability invoke failed:', cmd.name, r.error);
-    window.ClawToast?.show?.({
+    ClawToast.show({
       id: 'slash-capability-failed',
       status: 'error',
-      title: currentLanguage === 'zh' ? '命令执行失败' : 'Command failed',
+      title: getCurrentLanguage() === 'zh' ? '命令执行失败' : 'Command failed',
       description: r.error + ' — ' + cmd.name,
       autoDismiss: 6000,
     });
     return;
   }
-  window.ClawToast?.show?.({
+  ClawToast.show({
     id: 'slash-capability-ok',
     status: 'success',
-    title: currentLanguage === 'zh' ? '命令已执行' : 'Command executed',
+    title: getCurrentLanguage() === 'zh' ? '命令已执行' : 'Command executed',
     description: cmd.name,
     autoDismiss: 3500,
   });
@@ -463,7 +481,7 @@ function _renderPillBar() {
     return '<span class="slash-prompt-pill"' + desc + '>'
       + '<span class="slash-prompt-pill-name">/' + nm + '</span>'
       + '<button type="button" class="slash-prompt-pill-x" data-idx="' + i + '"'
-      + ' title="' + escapeHtml(t('slash_pill_remove')) + '">×</button>'
+      + ' title="' + escapeHtml(window.t('slash_pill_remove')) + '">×</button>'
       + '</span>';
   }).join('');
 }
@@ -474,7 +492,7 @@ function _renderPillBar() {
 let _handoffActivations = null;
 let _promptSubmitInFlight = false;
 
-window.ClawSlash = {
+export const ClawSlash = {
   /** 发送管线取走并清空本次发送携带的激活 refs（无则返回 null） */
   consumeActivations() {
     const refs = _handoffActivations;
@@ -511,10 +529,10 @@ window.ClawSlash = {
         if (_activePromptKey() !== submitKey) return false; // 桶未动，切回后仍可发送
         const r = await _postCapabilityInvoke(cmd, {});
         if (!r.ok) {
-          window.ClawToast?.show?.({
+          ClawToast.show({
             id: 'slash-prompt-failed',
             status: 'error',
-            title: currentLanguage === 'zh' ? '技能激活失败，消息未发送' : 'Skill activation failed, message not sent',
+            title: getCurrentLanguage() === 'zh' ? '技能激活失败，消息未发送' : 'Skill activation failed, message not sent',
             description: r.error + ' — ' + cmd.name,
             autoDismiss: 6000,
           });
@@ -542,7 +560,7 @@ window.ClawSlash = {
 };
 
 async function _dispatchPrompts(ta) {
-  await window.ClawSlash.submitWithPendingPrompts(ta, function () {
+  await ClawSlash.submitWithPendingPrompts(ta, function () {
     // 原生 Enter 保持输入框原有的提交端点与键盘行为。
     ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
   });
@@ -637,9 +655,9 @@ function _renderForm(menu) {
     + '<div class="slash-form-body">' + fieldsHtml + '</div>'
     + '<div class="slash-form-actions">'
     + '<button type="button" class="slash-form-btn" data-action="cancel">'
-    + escapeHtml(t('slash_form_cancel')) + '</button>'
+    + escapeHtml(window.t('slash_form_cancel')) + '</button>'
     + '<button type="button" class="slash-form-btn is-primary" data-action="submit">'
-    + escapeHtml(t('slash_form_submit')) + '</button>'
+    + escapeHtml(window.t('slash_form_submit')) + '</button>'
     + '</div></div>';
   _menuEl.querySelectorAll('.slash-form-range').forEach(_paintRange);
   _applyShowWhen();
@@ -808,9 +826,9 @@ window.addEventListener('resize', function () {
   if (_visible) _position();
 });
 
-// ── window 导出 ────────────────────────────────────────────────
+// ── 导出（命名导出 + 既有 window 命名空间面）────────────────────
 
-window.SlashMenu = {
+export const SlashMenu = {
   isActive: function () {
     return _visible && (_formCmd !== null || _filtered.length > 0);
   },
@@ -825,3 +843,9 @@ window.SlashMenu = {
     }
   },
 };
+
+// 桥接期：既有公开命名空间协议。ClawSlash 仍有 classic 消费方——发送管线
+// persistent-input（consumeActivations / restoreActivations）与 input-composer
+// （submitWithPendingPrompts / rebindSession）；这两个文件迁为 import 后删除本行。
+// SlashMenu 的唯一消费方（slash-commands.js）已改为直接 import，不再挂 window 面。
+window.ClawSlash = ClawSlash;

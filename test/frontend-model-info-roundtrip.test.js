@@ -10,88 +10,106 @@
  *   3. Agent switch — no cross-agent cache leakage
  * Live model swaps are covered by input-model-swap-optimistic.test.js;
  * this cache is only for historical session-list token bars.
+ *
+ * 装载路线（P2 测试改造）：
+ *   - session-ui 已迁 ESM → withP2EsmCase + 真实 import（每 case 整图隔离，
+ *     模块私有 _modelInfoCache 不跨用例）。
+ *   - getRuntimeAwareAgentRecord 仍定义在 classic app-ui.js → 按真实加载序
+ *     （claw-host / right-panel-registry / app-core / app-ui）真实 bootstrap，
+ *     直接调它的全局入口，不再切源码片段执行。
+ *   - normalizeOverviewSnapshot 已迁 ESM（overview-data.js）→ 真实命名导出，
+ *     替掉原先内联复刻的策略副本。
  */
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import vm from 'node:vm';
-import fs from 'node:fs';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { createFrontendSandbox } from './helpers/frontend-vm.js';
+import { withP2EsmCase } from './helpers/p2-esm-case.js';
+import { prepareClassicSandbox } from './p2-classic-hosts.js';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const PROJECT_ROOT = join(__dirname, '..');
+const SESSION_UI = 'public/src/modules/session-ui.js';
+const OVERVIEW_DATA = 'public/src/modules/overview-data.js';
 
-// ── Source extractors ──────────────────────────────────────
-
-const uiSource = fs.readFileSync(join(PROJECT_ROOT, 'public/src/app-ui.js'), 'utf8');
-
-function extractRuntimeAwareAgentSource() {
-  const start = uiSource.indexOf('function _mergeWorkspaceSessions');
-  const end = uiSource.indexOf('\nfunction getRuntimeAwareAgentName', start);
-  assert.notEqual(start, -1, 'runtime-aware merge start marker should exist');
-  assert.notEqual(end, -1, 'runtime-aware merge end marker should exist');
-  return uiSource.slice(start, end);
+/** session-ui / app-ui 共用的真实先行脚本序（test/p2-classic-hosts.js）。 */
+/** app-ui 布局监听依赖的浏览器全局（沙箱无此能力）。 */
+class ResizeObserverStub {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
 }
 
-// ── Helpers ────────────────────────────────────────────────
-
-function loadSessionUi(overrides = {}) {
-  const defaults = {
-    currentLanguage: 'zh',
-    getCurrentAgentRecord: () => null,
-    phSessionSortMode: 'updatedAt',
-  };
-  const ctx = createFrontendSandbox({ ...defaults, ...overrides });
-  ctx.loadSource('public/src/modules/action-dispatcher.js');
-  ctx.loadSource('public/src/modules/session-ui.js');
-  return ctx;
+function withSessionUi(probe) {
+  return withP2EsmCase({
+    classic: (sandbox) => {
+      // 真实先行脚本序：宿主工厂（含 app-main / app-ui 提供的 runtime-switch /
+      // poll / workspace-surface）都是生产实现，首屏 boot 与周期排程由基座关掉。
+      prepareClassicSandbox(sandbox);
+    },
+  }, async (c) => {
+    // agent-data-loader 已迁 ESM（P2 W2-4 二段）：host 工厂经 KernelState 桥
+    // 供下游 loader host 模块求值期取用，必须先装载。
+    await c.load('public/src/modules/agent-data-loader.js');
+    const mod = await c.load(SESSION_UI);
+    return probe(mod, c);
+  });
 }
 
 /**
- * Create a minimal sandbox with getRuntimeAwareAgentRecord extracted
- * from app-ui.js, plus mock getCurrentAgentRecord / getCurrentRuntimeRecord.
+ * 真实 app-ui bootstrap：getRuntimeAwareAgentRecord 合并 host 与 runtime 记录。
+ * 两个 record 经 classic 入口注入（生产里由 app-main 的两条解析链提供）。
  */
-function createRuntimeAwareSandbox(hostRecord, runtimeRecord) {
-  const sandbox = {
-    getCurrentAgentRecord: () => hostRecord,
-    getCurrentRuntimeRecord: () => runtimeRecord,
-  };
-  vm.createContext(sandbox);
-  vm.runInContext(
-    `${extractRuntimeAwareAgentSource()}\nglobalThis.__fn = getRuntimeAwareAgentRecord;`,
-    sandbox,
-  );
-  return sandbox;
+/**
+ * overview-data 的 ESM 图在装载时经 window.createP2BootstrapDebugPanelHost()
+ * 取宿主面（classic app-core 工厂），因此先跑 app-core 真实 bootstrap。
+ */
+function withOwnedOverviewData(probe) {
+  return withP2EsmCase({
+    classic: (sandbox) => {
+      // 真实先行脚本序（含 app-core / session-view-state：overview-data 取
+      // createP2BootstrapDebugPanelHost 与 classic 的 normalizeSessionModelState）。
+      prepareClassicSandbox(sandbox);
+    },
+  }, async (c) => probe(c));
+}
+
+function withRuntimeAwareRecord(hostRecord, runtimeRecord, probe) {
+  return withP2EsmCase({
+    classic: (sandbox) => {
+      sandbox.ResizeObserver = ResizeObserverStub;
+      // 真实先行脚本序（index.html 的 classic 标签链，含 app-ui / app-main）；
+      // 记录来源是本案夹具 → 真实链之后覆盖这两个窄观察面。
+      prepareClassicSandbox(sandbox);
+      sandbox.getCurrentAgentRecord = () => hostRecord;
+      sandbox.getCurrentRuntimeRecord = () => runtimeRecord;
+    },
+  }, async (c) => probe(c.read('getRuntimeAwareAgentRecord()'), c));
 }
 
 // ── Tests: contextLength/compressRatio cache round-trip ────
 
 describe('model-info cache: contextLength/compressRatio survive loadAgents gap', () => {
-  it('caches values when session provides them, then serves from cache when session loses them', () => {
-    const ctx = loadSessionUi();
+  it('caches values when session provides them, then serves from cache when session loses them', async () => {
+    await withSessionUi((ui) => {
+      // Phase 1: Full data available (loadAgentDetail has run)
+      const agent = { id: 'ph' };
+      assert.equal(ui.getSessionContextLength({ contextLength: 200000 }, agent), 200000);
+      assert.equal(ui.getSessionCompressRatio({ compressRatio: 70 }, agent), 70);
 
-    // Phase 1: Full data available (loadAgentDetail has run)
-    ctx.run(`var agent = { id: 'ph' }`);
-    assert.equal(ctx.run(`getSessionContextLength({ contextLength: 200000 }, agent)`), 200000);
-    assert.equal(ctx.run(`getSessionCompressRatio({ compressRatio: 70 }, agent)`), 70);
+      // Phase 2: loadAgents replaces allAgents — session fields gone
+      // (simulates light snapshot from getConnectedAgents)
+      assert.equal(ui.getSessionContextLength({}, agent), 200000);
+      assert.equal(ui.getSessionCompressRatio({}, agent), 70);
 
-    // Phase 2: loadAgents replaces allAgents — session fields gone
-    // (simulates light snapshot from getConnectedAgents)
-    assert.equal(ctx.run(`getSessionContextLength({}, agent)`), 200000);
-    assert.equal(ctx.run(`getSessionCompressRatio({}, agent)`), 70);
-
-    // Phase 3: Even agent.workspace_sessions is empty
-    assert.equal(ctx.run(`getSessionContextLength({}, { id: 'ph' })`), 200000);
-    assert.equal(ctx.run(`getSessionCompressRatio({}, { id: 'ph' })`), 70);
+      // Phase 3: Even agent.workspace_sessions is empty
+      assert.equal(ui.getSessionContextLength({}, { id: 'ph' }), 200000);
+      assert.equal(ui.getSessionCompressRatio({}, { id: 'ph' }), 70);
+    });
   });
 });
 
 // ── Tests: getRuntimeAwareAgentRecord modelPresets carry ───
 
 describe('getRuntimeAwareAgentRecord: modelPresets preservation', () => {
-  it('carries modelPresets from host when runtime child lacks it', () => {
+  it('carries modelPresets from host when runtime child lacks it', async () => {
     const host = {
       id: 'programming-helper',
       modelPresets: { default: { primary: 'glm-5.2' } },
@@ -105,14 +123,13 @@ describe('getRuntimeAwareAgentRecord: modelPresets preservation', () => {
       // NO modelPresets — runtime child record
     };
 
-    const sandbox = createRuntimeAwareSandbox(host, runtime);
-    const record = sandbox.__fn();
-
-    assert.ok(record.modelPresets, 'modelPresets should be present on merged record');
-    assert.equal(record.modelPresets.default.primary, 'glm-5.2');
+    await withRuntimeAwareRecord(host, runtime, (record) => {
+      assert.ok(record.modelPresets, 'modelPresets should be present on merged record');
+      assert.equal(record.modelPresets.default.primary, 'glm-5.2');
+    });
   });
 
-  it('preserves runtime record modelPresets when it has its own', () => {
+  it('preserves runtime record modelPresets when it has its own', async () => {
     const host = {
       id: 'programming-helper',
       modelPresets: { default: { primary: 'old-model' } },
@@ -124,14 +141,13 @@ describe('getRuntimeAwareAgentRecord: modelPresets preservation', () => {
       modelPresets: { default: { primary: 'new-model' } },
     };
 
-    const sandbox = createRuntimeAwareSandbox(host, runtime);
-    const record = sandbox.__fn();
-
-    // Runtime record's own modelPresets should win
-    assert.equal(record.modelPresets.default.primary, 'new-model');
+    await withRuntimeAwareRecord(host, runtime, (record) => {
+      // Runtime record's own modelPresets should win
+      assert.equal(record.modelPresets.default.primary, 'new-model');
+    });
   });
 
-  it('carries modelPresets even when host has no workspace_sessions', () => {
+  it('carries modelPresets even when host has no workspace_sessions', async () => {
     const host = {
       id: 'programming-helper',
       modelPresets: { default: { primary: 'glm-5.2' } },
@@ -143,70 +159,66 @@ describe('getRuntimeAwareAgentRecord: modelPresets preservation', () => {
       active_workspace_session_id: 'sess-1',
     };
 
-    const sandbox = createRuntimeAwareSandbox(host, runtime);
-    const record = sandbox.__fn();
-
-    assert.ok(record.modelPresets, 'modelPresets should be carried from host');
-    assert.equal(record.modelPresets.default.primary, 'glm-5.2');
+    await withRuntimeAwareRecord(host, runtime, (record) => {
+      assert.ok(record.modelPresets, 'modelPresets should be carried from host');
+      assert.equal(record.modelPresets.default.primary, 'glm-5.2');
+    });
   });
 
-  it('returns host record with modelPresets when no runtime is active', () => {
+  it('returns host record with modelPresets when no runtime is active', async () => {
     const host = {
       id: 'programming-helper',
       modelPresets: { default: { primary: 'glm-5.2' } },
     };
 
-    const sandbox = createRuntimeAwareSandbox(host, null);
-    const record = sandbox.__fn();
-
-    assert.equal(record.modelPresets.default.primary, 'glm-5.2');
+    await withRuntimeAwareRecord(host, null, (record) => {
+      assert.equal(record.modelPresets.default.primary, 'glm-5.2');
+    });
   });
 });
 
 // ── Tests: Full round-trip — agent switch isolation ────────
 
 describe('model-info: full agent-switch round-trip', () => {
-  it('historical window values stay isolated across agents', () => {
-    const ctx = loadSessionUi();
+  it('historical window values stay isolated across agents', async () => {
+    await withSessionUi((ui) => {
+      // Agent A is active, preset cached
+      ui.getSessionContextLength({ contextLength: 128000, compressRatio: 80 }, { id: 'agentA' });
+      ui.getSessionCompressRatio({ contextLength: 128000, compressRatio: 80 }, { id: 'agentA' });
 
-    // Agent A is active, preset cached
-    ctx.run(`_cacheModelInfo({ id: 'agentA' }, 128000, 80)`);
+      // Simulate switch to agent B — B has different model
+      // Agent B's record arrives from getConnectedAgents
+      ui.getSessionContextLength({ contextLength: 200000, compressRatio: 70 }, { id: 'agentB' });
+      ui.getSessionCompressRatio({ contextLength: 200000, compressRatio: 70 }, { id: 'agentB' });
 
-    // Simulate switch to agent B — B has different model
-    // Agent B's record arrives from getConnectedAgents
-    ctx.run(`_cacheModelInfo({ id: 'agentB' }, 200000, 70)`);
+      // Agent A cache should still be intact (not overwritten by B)
+      assert.equal(ui.getSessionContextLength({}, { id: 'agentA' }), 128000);
 
-    // Agent A cache should still be intact (not overwritten by B)
-    assert.equal(ctx.run(`getSessionContextLength({}, { id: 'agentA' })`), 128000);
-
-    // Agent B cache should be separate
-    assert.equal(ctx.run(`getSessionContextLength({}, { id: 'agentB' })`), 200000);
+      // Agent B cache should be separate
+      assert.equal(ui.getSessionContextLength({}, { id: 'agentB' }), 200000);
+    });
   });
 
-  it('simulates loadAgents gap: cache bridges data loss without flashing defaults', () => {
-    const ctx = loadSessionUi();
+  it('simulates loadAgents gap: cache bridges data loss without flashing defaults', async () => {
+    await withSessionUi((ui) => {
+      // Phase 1: Agent has full data
+      const agent = { id: 'ph', workspace_sessions: { contextLength: 128000, compressRatio: 75 } };
+      const session = { contextLength: 128000, compressRatio: 75 };
+      // Values are read and cached
+      assert.equal(ui.getSessionContextLength(session, agent), 128000);
+      assert.equal(ui.getSessionCompressRatio(session, agent), 75);
 
-    // Phase 1: Agent has full data
-    ctx.run(`
-      var agent = { id: 'ph', workspace_sessions: { contextLength: 128000, compressRatio: 75 } };
-      var session = { contextLength: 128000, compressRatio: 75 };
-    `);
-    // Values are read and cached
-    assert.equal(ctx.run(`getSessionContextLength(session, agent)`), 128000);
-    assert.equal(ctx.run(`getSessionCompressRatio(session, agent)`), 75);
+      // Phase 2: loadAgents replaces allAgents — light snapshot arrives
+      // session and agent.workspace_sessions lose their explicit values
+      const agent2 = { id: 'ph', workspace_sessions: {} };
+      const session2 = {};
 
-    // Phase 2: loadAgents replaces allAgents — light snapshot arrives
-    // session and agent.workspace_sessions lose their explicit values
-    ctx.run(`
-      var agent2 = { id: 'ph', workspace_sessions: {} };
-      var session2 = {};
-    `);
-
-    // Cache should bridge — NO flashing to defaults (200000 / 80)
-    const cl = ctx.run(`getSessionContextLength(session2, agent2)`);
-    const cr = ctx.run(`getSessionCompressRatio(session2, agent2)`);
-    assert.equal(cl, 128000, 'contextLength should come from cache, not default 200000');
-    assert.equal(cr, 75, 'compressRatio should come from cache, not default 80');
+      // Cache should bridge — NO flashing to defaults (200000 / 80)
+      const cl = ui.getSessionContextLength(session2, agent2);
+      const cr = ui.getSessionCompressRatio(session2, agent2);
+      assert.equal(cl, 128000, 'contextLength should come from cache, not default 200000');
+      assert.equal(cr, 75, 'compressRatio should come from cache, not default 80');
+    });
   });
 });
 
@@ -234,7 +246,7 @@ describe('model swap: agentId resolution', () => {
     assert.equal(focusedAgentId, 'programming-helper');
   });
 
-  it('getRuntimeAwareAgentRecord().id can be child UUID — swap must NOT use it', () => {
+  it('getRuntimeAwareAgentRecord().id can be child UUID — swap must NOT use it', async () => {
     // Document the trap: getRuntimeAwareAgentRecord() returns the runtime
     // child record when workspace state is present, and child.id is a UUID.
     const host = {
@@ -250,15 +262,14 @@ describe('model swap: agentId resolution', () => {
       active_workspace_display_name: 'Test',
     };
 
-    const sandbox = createRuntimeAwareSandbox(host, runtime);
-    const record = sandbox.__fn();
+    await withRuntimeAwareRecord(host, runtime, (record) => {
+      // The merged record's id is the child UUID — NOT the host ID
+      assert.equal(record.id, 'viewer-uuid-xyz');
+      assert.notEqual(record.id, 'programming-helper');
 
-    // The merged record's id is the child UUID — NOT the host ID
-    assert.equal(record.id, 'viewer-uuid-xyz');
-    assert.notEqual(record.id, 'programming-helper');
-
-    // This is exactly why _getInputAgentId / _getCurrentAgentIdForSwap
-    // must use focusedAgentId (host ID) instead of record.id.
+      // This is exactly why _getInputAgentId / _getCurrentAgentIdForSwap
+      // must use focusedAgentId (host ID) instead of record.id.
+    });
   });
 });
 
@@ -270,27 +281,33 @@ describe('overview.presetName: per-session data source', () => {
   // runtime process, so overview.presetName is inherently
   // per-session isolated — no frontend cache needed.
 
-  it('normalizeOverviewSnapshot preserves presetName', () => {
-    // Simulate what normalizeOverviewSnapshot does with presetName
-    const raw = { modelName: 'claude-sonnet-4-5', presetName: 'glm-5.2' };
-    const normalized = typeof raw.presetName === 'string' ? raw.presetName : '';
-    assert.equal(normalized, 'glm-5.2');
+  it('normalizeOverviewSnapshot preserves presetName', async () => {
+    await withOwnedOverviewData(async (c) => {
+      const overview = await c.load(OVERVIEW_DATA);
+      const out = overview.normalizeOverviewSnapshot({ modelName: 'claude-sonnet-4-5', presetName: 'glm-5.2' });
+      assert.equal(out.presetName, 'glm-5.2');
+    });
   });
 
-  it('missing presetName normalizes to empty string', () => {
-    const raw = { modelName: 'claude-sonnet-4-5' };
-    const normalized = typeof raw.presetName === 'string' ? raw.presetName : '';
-    assert.equal(normalized, '');
+  it('missing presetName normalizes to empty string', async () => {
+    await withOwnedOverviewData(async (c) => {
+      const overview = await c.load(OVERVIEW_DATA);
+      const out = overview.normalizeOverviewSnapshot({ modelName: 'claude-sonnet-4-5' });
+      assert.equal(out.presetName, '');
+    });
   });
 
-  it('different sessions get different overview from different runtimeIds', () => {
-    // Each session's poll fetches from its own runtimeId.
-    // Session A overview: { presetName: 'glm-5.2' }
-    // Session B overview: { presetName: 'claude-sonnet' }
-    // They are completely independent — no shared state.
-    const overviewA = { presetName: 'glm-5.2' };
-    const overviewB = { presetName: 'claude-sonnet' };
-    assert.notEqual(overviewA.presetName, overviewB.presetName);
+  it('different sessions get different overview from different runtimeIds', async () => {
+    await withOwnedOverviewData(async (c) => {
+      const overview = await c.load(OVERVIEW_DATA);
+      // Session A overview: { presetName: 'glm-5.2' }
+      // Session B overview: { presetName: 'claude-sonnet' }
+      // They are completely independent — no shared state.
+      const overviewA = overview.normalizeOverviewSnapshot({ presetName: 'glm-5.2' });
+      const overviewB = overview.normalizeOverviewSnapshot({ presetName: 'claude-sonnet' });
+      assert.notEqual(overviewA.presetName, overviewB.presetName);
+      assert.equal(overviewA.presetName, 'glm-5.2');
+      assert.equal(overviewB.presetName, 'claude-sonnet');
+    });
   });
 });
-

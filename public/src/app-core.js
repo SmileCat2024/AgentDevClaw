@@ -392,7 +392,6 @@ const _seenChoiceAlertIds = new Set();
 let _lastChoiceAlertCheckAt = 0;
 window.KernelState.defineKey('session-view-storage', 'currentMessages', []);
 window.KernelState.defineKey('session-view-storage', 'currentInputRequests', []);
-let choiceInputState = {};
 window.KernelState.defineKey('session-view-storage', 'toolRenderConfigs', {});
 window.KernelState.defineKey('session-view-storage', 'TOOL_NAMES', {});
 const _autoTitleTriggered = new Set();
@@ -562,7 +561,8 @@ window.KernelState.defineKey('render-entry', 'workspaceSurfaceScrollSaveRaf', 0)
 window.KernelState.defineKey('render-entry', '_lastRenderedChatSig', '');
 window.KernelState.defineKey('orchestration', '_restoredScrollTop', null);    // set by restoreRuntimeFromCache, consumed by switchAgent
 window.KernelState.defineKey('orchestration', '_chatLoadingSession', false);  // true while waiting for a just-opened session's messages to arrive
-window.KernelState.defineKey('orchestration', '_chatLoadingTimeout', null);   // safety timeout to clear _chatLoadingSession
+// _chatLoadingTimeout 桥已注销：该槽无 classic 消费方，状态唯一 owner 是
+// orchestration-state.js（ESM，初值 null），生产读写经 chat-loading-host 的工厂注入。
 window.KernelState.defineKey('orchestration', '_switchEpoch', 0);             // monotonically increasing; used to guard stale async work from rapid switches
 
 // A committed session can be the user's navigation target before its runtime
@@ -1183,8 +1183,8 @@ function createP2BootstrapChatSurfaceHost() {
  * input-helpers / voice-input / generative-ui-panel / remote-connections /
  * sse-client / auto-title / desktop-notify / todo-plan / app-ui。
  * 注：_agentCallActive / _recentlyFinishedRuntimes 另经
- * createAgentCallStatesHost（sidebar-render）供 agent-call-states ESM 使用，
- * 同一容器，不构成双存储。
+ * createAgentCallStatesHost（sidebar-render）供 app-main 的 classic 同步引擎使用
+ * （agent-call-states ESM host 只做 late-bound 转发），同一容器，不构成双存储。
  */
 function createP2BootstrapCallActivityHost() {
   return Object.freeze({
@@ -1246,6 +1246,24 @@ function createP2BootstrapDebugPanelHost() {
 }
 
 /**
+ * 日志快照写入：日志集与其轮询签名成对更新（签名用于 loadLogs 去重）。
+ *
+ * 唯一实现，物理 owner 是本文件顶层的 currentLogs / currentLogsSignature。
+ * 消费方全是 classic：debug-logs（加载 / 刷新 / 清空）、app-ui
+ * （resetRuntimeBackedSurfaceState）。日志面板的 onOpen 入口在首屏 classic 相
+ * 就可点（rail-logs），因此该写入口必须在 classic 相同步可用——它不能住在
+ * ESM 域（原在 overview-data，模块相才可达，早期点击会 ReferenceError）。
+ */
+function setCurrentLogs(logs) {
+  const nextLogs = Array.isArray(logs) ? logs : [];
+  currentLogs = nextLogs;
+  currentLogsSignature = JSON.stringify({
+    count: nextLogs.length,
+    last: nextLogs.length > 0 ? nextLogs[nextLogs.length - 1].id : null,
+  });
+}
+
+/**
  * assembly 工作台 UI 状态：控制面板开合、草稿重渲染句柄、启动在飞标志、
  * 侧栏渐显句柄。消费方：assembly-actions / assembly-data / chat-viewport / app-ui。
  */
@@ -1290,16 +1308,6 @@ function createP2BootstrapSessionSwitchHost() {
 }
 
 /**
- * 选择卡片输入草稿（按 requestId 就地读写的对象）。只读引用：classic 侧按
- * requestId 键写/删，不整体替换。消费方：choice-input。
- */
-function createP2BootstrapChoiceInputHost() {
-  return Object.freeze({
-    get state() { return choiceInputState; },
-  });
-}
-
-/**
  * 上下文菜单待执行目标（6 个顶层 let）：打开菜单时写入、关闭时清空、动作
  * handler 读取后执行。消费方：context-menu / ctx-menu-handlers——这对文件是
  * 该 6 键当前唯一的读写方；菜单用到的 DOM 引用在 createP2BootstrapDomHost。
@@ -1321,3 +1329,56 @@ function createP2BootstrapContextMenuHost() {
     set contextMenuFeatureRepoPackageId(value) { contextMenuFeatureRepoPackageId = value; },
   });
 }
+
+// ── call-interrupt 同步引擎（唯一实例）─────────────────────────────
+// 前台 visibilitychange 在 ESM 模块求值前就会触达 call 状态链路；本引擎必须
+// 在 classic 相可用。ESM host（call-interrupt-host.js）只做 late-bound 转发，
+// 不初始化、不 claim、不注册第二套桥。工厂/解析 helper 全部在 IIFE 词法内部：
+// classic 顶层 function 属性不可配置，同名 KernelState.defineKey 会 TypeError。
+(function bootstrapCallInterrupt() {
+  function getNotificationCallStartedAt(payload) {
+    const value = payload?.runtime?.callStartedAt ?? payload?.callStartedAt;
+    const timestamp = Number(value);
+    return Number.isFinite(timestamp) && timestamp > 0 ? timestamp : 0;
+  }
+
+  function createCallInterruptState(pending, now = () => Date.now()) {
+    function markInterruptPending(runtimeId, callStartedAt = 0) {
+      if (!runtimeId) return;
+      const normalized = Number(callStartedAt);
+      pending.set(runtimeId, {
+        requestedAt: now(),
+        callStartedAt: Number.isFinite(normalized) && normalized > 0 ? normalized : 0,
+      });
+    }
+
+    function isInterruptSuppressed(runtimeId, observedCallStartedAt = 0) {
+      if (!runtimeId) return false;
+      const interrupted = pending.get(runtimeId);
+      if (!interrupted) return false;
+      // Only a newer call may release an active observation. Missing identities
+      // remain sticky until a terminal event or explicit request failure clears it.
+      const interruptedAt = Number(interrupted.callStartedAt);
+      const observed = Number(observedCallStartedAt);
+      if (Number.isFinite(interruptedAt) && interruptedAt > 0
+        && Number.isFinite(observed) && observed > interruptedAt) {
+        pending.delete(runtimeId);
+        return false;
+      }
+      return true;
+    }
+
+    function clearInterruptSuppression(runtimeId) {
+      if (runtimeId) pending.delete(runtimeId);
+    }
+
+    return { getNotificationCallStartedAt, markInterruptPending, isInterruptSuppressed, clearInterruptSuppression };
+  }
+
+  const host = createCallInterruptHost();
+  const policy = createCallInterruptState(host.pending, host.now);
+  window.KernelState.defineKey('call-interrupt', 'getNotificationCallStartedAt', policy.getNotificationCallStartedAt);
+  window.KernelState.defineKey('call-interrupt', 'markInterruptPending', policy.markInterruptPending);
+  window.KernelState.defineKey('call-interrupt', 'isInterruptSuppressed', policy.isInterruptSuppressed);
+  window.KernelState.defineKey('call-interrupt', 'clearInterruptSuppression', policy.clearInterruptSuppression);
+})();

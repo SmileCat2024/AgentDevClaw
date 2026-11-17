@@ -18,73 +18,166 @@
  *   APP 对话事务: start_app_conversation（ADR-0024，端点由 APP block action 声明）
  *   APP 设置面板: open_app_settings（settings 键经 ClawFW.appSettingsPanels 查表）
  *
- * 依赖全局状态（定义在 app-core.js）:
- *   currentLanguage, allAgents, currentRuntimeAgentId,
- *   _navigationGuardEpoch, prebuiltSessionSwitchInFlight,
- *   shouldAnimateWorkspaceSurface, currentWorkspaceArtifactDetail,
- *   currentWorkspaceDocsetDetail, readOnlyMode, currentMessages,
- *   currentInputRequests, lastRenderedWorkspaceHtml, _pendingSessionNavigation
- * 依赖全局函数:
- *   bumpNavigationGuard, t, escapeHtml, invoke (app-core.js)
- *   applySessionViewPatch (session-view-state.js)
- *   getCurrentAgentRecord, hasWorkspaceSessions, getWorkspaceSessions,
- *   getWorkspaceSessionById, requestSwitch, loadAgents,
- *   markSessionLoading, clearSessionLoading, markActionLoading,
- *   beginChatLoadingSession, clearChatLoadingSession,
- *   beginFollowLatestCooldown, beginFollowLatestEntryWindow,
- *   normalizeAgentIdentity, saveCurrentRuntimeToCache,
- *   getRuntimeContextKey, _storeVisibleSessionInputDraft,
- *   openPrebuiltWorkspaceSession, applyOptimisticWorkspaceSession,
- *   upsertConnectedAgent, waitForPrebuiltRuntimeSession,
- *   createCompactedResumeSession, applyManagedPrebuiltAgent,
- *   getWorkspaceFormDraft, saveWorkspaceFormDraft,
- *   normalizeWorkspaceStartupDraft, setPreferredUnitMode,
- *   getFeatureCreatorProjects, getAgentCreatorProjects,
- *   isAssemblySession, isAssemblySessionRunning,
- *   maybeWarnAssemblySessionDrift, markSessionArchivedForMutation,
- *   reconcileArchivedSourceRuntime, clearAgentRuntimeCache,
- *   refreshSidebarRuntimeAfterMutation, ctxArchiveSession,
- *   getAgentWorkspaceState, getIMWorkspaceDraft, ensureIMWorkspaceLoaded (app-main.js / app-ui.js)
- *   renderCurrentMainView, updateAgentRecord (app-ui.js)
- *   ClawToast (modules/toast-notify.js)
- * window 函数:
- *   handlePrebuiltAgentClick, applyWorkspaceBundle, launchAssemblyInstance,
- *   openTrimPage, openSummaryPopup, confirm
+ * ESM 化（P2 长尾批次 · workspace-actions 域，原位转换，行为零变化）：
+ *   - 跨文件能力一律显式 import：状态 owner（i18n-environment / agent-store /
+ *     orchestration / render-entry）、会话与侧栏事实（project-data / session-ui /
+ *     sidebar-operations / session-mutation）、装配工作台（assembly-data /
+ *     assembly-actions / fw-config-panel）、已迁宿主能力（chat-loading /
+ *     runtime-switch / runtime-view-cache / agent-snapshot-loader /
+ *     workspace-entry / compact-resume）、已迁呈现入口（session-readonly-view /
+ *     trim-page / debug-summary-upload / ph-search-locate / session-list-render /
+ *     ctx-menu-items）与通知（toast-notify）。
+ *   - 状态读走 live binding、写走 owner setter（setReadOnlyMode /
+ *     setCurrentWorkspaceTab / setLastRenderedWorkspaceHtml /
+ *     setShouldAnimateWorkspaceSurface / setCurrentWorkspaceArtifactDetail /
+ *     setCurrentWorkspaceDocsetDetail）。会话切换在飞标志沿用既有窄接口
+ *     `sessionSwitch.prebuiltSessionSwitchInFlight`（p2-bootstrap-session-switch），
+ *     不新增桥。幂等键复用 input-actions 的 `newIdempotencyKey` 导出（与
+ *     app-main 的 classic 顶层同名实现逐字相同，本文件不再持有副本）。
+ *   - 仍为 classic 首屏/编排实现的能力经 window 显式晚绑定（不保留 ESM 裸标识符
+ *     续命——那是门禁看不见的债务）。定义域与收敛时点：
+ *       app-core（导航编排域）：bumpNavigationGuard / invoke /
+ *         normalizeAgentIdentity / getRuntimeId / getRuntimeContextKey /
+ *         setViewerSessionBinding / begin|update|clear|hasPendingSessionNavigation
+ *       app-main（轮询与切换域，classic）：getCurrentAgentRecord /
+ *         applyOptimisticWorkspaceSession / markSessionLoading /
+ *         clearSessionLoading / markActionLoading
+ *       app-ui（渲染入口域）：renderCurrentMainView / setPreferredUnitMode /
+ *         upsertConnectedAgent / resetRuntimeBackedSurfaceState /
+ *         saveCurrentWorkspaceSurfaceScroll
+ *       i18n：t；chat-viewport：beginFollowLatestCooldown /
+ *         beginFollowLatestEntryWindow；session-view-state：applySessionViewPatch；
+ *         input-composer：_storeVisibleSessionInputDraft；
+ *         remote-connections：isRemoteNamespaceAgentId / splitRemoteNamespaceId
+ *       thread-store（R4：刷新引擎仍 classic）：refreshThreads /
+ *         isThreadHostAgentId；交互入口（openConversationTarget /
+ *         enterThreadAwaitView / registerSessionActivateTarget）已迁
+ *         thread-store-domain，具名 import
+ *       im-ui / im-actions（悬置域）：getIMWorkspaceDraft /
+ *         ensureIMWorkspaceLoaded / saveIMWorkspaceConfig
+ *       平台与宿主命名空间：window.confirm / alert / fetch /
+ *         ClawFW.workspaceAgents（插件宿主缝）/
+ *         ClawFW.appSettingsPanels（APP 设置面板注册表）/
+ *         ClawFW.actions（插件动作注册表）/ RemoteConnections.*（远程目录、
+ *         命名空间投影与就绪轮询）。
+ *
+ * 兼容桥（KernelState，domain `workspace-actions`）：唯一桥键 runWorkspaceAction。
+ *   消费方按形态分两类（「仍 classic」不等于「未迁 ESM」——桥键对两者同样生效）：
+ *   仍 classic（真 window 调用）：app-main（capture 点击委托与
+ *     runWorkspaceActionFromEvent）、app-ui、desktop-open、claw-host（插件宿主
+ *     API）、thread-store、wg-core / work-group-ui / home-dashboard（悬置域）；
+ *   已 ESM 但经 window 晚绑定（可改 import 后撤桥）：session-list-render、
+ *     workspace-blocks、p2-w2-10-workspace-docset、ctx-menu-handlers /
+ *     ctx-menu-items、session-ui、app-chat-input、assembly-actions、
+ *     runtime-mode-menu、ph-thread-history、slash-commands、plugins/memo/overview。
+ *   注销条件：两类消费方全部改 import 后删除 defineKey 并下调桥债基线。
+ *   `_activateRemoteHistorySession` / `_createRemoteWorkspaceSession` /
+ *   `_waitForRemoteRuntimeForSession` 为模块私有（全仓无外部消费，不上桥）。
+ *
+ * 时序审计（配方第二节，本批复核）：R1 无触线（顶层只有 import、私有状态、
+ *   函数声明与桥注册，无调用 / DOM 查询 / 监听注册）；R2 无触线（app-main boot
+ *   与主 SSE 等待 `__clawAuthReady`，认证初始化在 DOMContentLoaded，静态非 async
+ *   module 求值先于该事件，本入口在 boot / 交互时相才被调用）；R4 等价（模块
+ *   求值相无此前置依赖：静态 `data-workspace-action` 元素为 0，元素全部由 boot
+ *   之后的渲染产出；桌面壳 early eval 由 desktop-open 的
+ *   `typeof window.handlePrebuiltAgentClick === 'function'` 闸挡住，该函数本身来自
+ *   ESM 图 workspace-entry-host，闸后 await 恢复时整图已求值）；S 已核查（无
+ *   'use strict' 依赖、无顶层 this、无未声明标识符赋值）。
+ *
  * 分发器动作引用（data-action="wsBlocks.workspaceAction"，handler 在
  *   modules/workspace-blocks.js，按 dataset.workspaceAction 分发到本文件函数）
  */
 
-// ── 幂等键（ADR-0011）：写类提交统一携带（本地忽略、远程强制）───────────
-function newIdempotencyKey() {
-  const cryptoObj = (typeof crypto !== 'undefined') ? crypto : null;
-  if (cryptoObj && typeof cryptoObj.randomUUID === 'function') {
-    return cryptoObj.randomUUID();
-  }
-  return `key-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-}
-
+import { allAgents, setReadOnlyMode } from './agent-store-state.js';
+import { currentRuntimeAgentId, _navigationGuardEpoch } from './orchestration-state.js';
+import {
+  currentWorkspaceArtifactDetail,
+  currentWorkspaceDocsetDetail,
+  setCurrentWorkspaceArtifactDetail,
+  setCurrentWorkspaceDocsetDetail,
+  setCurrentWorkspaceTab,
+  setLastRenderedWorkspaceHtml,
+  setShouldAnimateWorkspaceSurface,
+} from './render-entry-state.js';
+import { getCurrentLanguage } from './i18n-environment-state.js';
+import { sessionSwitch } from './p2-bootstrap-session-switch.js';
+import {
+  applyManagedPrebuiltAgent,
+  getAgentCreatorProjects,
+  getFeatureCreatorProjects,
+  getPathLeaf,
+  hasWorkspaceSessions,
+  updateAgentRecord,
+} from './project-data.js';
+import { getWorkspaceSessionById, getWorkspaceSessions } from './session-ui.js';
+import {
+  applySessionMutationDelta,
+  applySidebarMutationDeltaWithDiagnostics,
+  beginSidebarOperation,
+  finishSidebarOperation,
+  getSidebarOperation,
+  markPendingRuntimeStop,
+  releasePendingRuntimeStop,
+  updateSidebarOperation,
+} from './sidebar-operations.js';
+import {
+  markSessionArchivedForMutation,
+  navigateToSessionMutationTarget,
+  reconcileArchivedSourceRuntime,
+} from './session-mutation.js';
+import {
+  getWorkspaceFormDraft,
+  isAssemblySession,
+  isAssemblySessionRunning,
+  normalizeWorkspaceStartupDraft,
+  saveWorkspaceFormDraft,
+} from './assembly-data.js';
+import { applyWorkspaceBundle, launchAssemblyInstance } from './assembly-actions.js';
+import { maybeWarnAssemblySessionDrift } from './fw-config-panel.js';
+import { loadAgents } from './agent-snapshot-loader-host.js';
+import { requestSwitch, switchAgent } from './runtime-switch-host.js';
+import { beginChatLoadingSession, clearChatLoadingSession } from './chat-loading-host.js';
+import { clearAgentRuntimeCache, saveCurrentRuntimeToCache } from './runtime-view-cache-host.js';
+import { handlePrebuiltAgentClick, openPrebuiltWorkspaceSession } from './workspace-entry-host.js';
+import { createCompactedResumeSession } from './compact-resume-host.js';
+import { openReadOnlySession } from './session-readonly-view.js';
+import { openTrimPage } from './trim-page.js';
+import { openFeatureUploadDialog, openSummaryPopup } from './debug-summary-upload.js';
+import { phSearchLocateAfterOpen, phSearchLocatePrepare } from './ph-search-locate.js';
+import { phConversationArchived } from './session-list-render.js';
+import { ctxArchiveSession } from './ctx-menu-items.js';
+import { ClawToast } from './toast-notify.js';
+import { newIdempotencyKey } from './input-actions.js';
+import {
+  enterThreadAwaitView,
+  openConversationTarget,
+  registerSessionActivateTarget,
+} from './thread-store-domain.js';
 
 // ── APP 对话事务入口防重入（ADR-0024）────────────────────────────────────
 // start_app_conversation 的服务端事务含 runtime ready 等待（20s 级），前端
-// in-flight 守卫挡双击（服务端另有业务状态串行锁，双保险）。
+// in-flight 守卫挡双击（服务端另有业务状态串行锁，双保险）。模块私有。
 let _appConversationActionInFlight = false;
 
-
+// Studio 新建对话的目录选择：宿主 agent 无显式目录时先开选择器（取消即不建
+// 无目录会话）。模块私有——验证经公开 runWorkspaceAction 与选择器 IO 驱动。
 async function resolveStudioSessionDirectory(agent, action) {
   if (agent?.id !== 'agent-studio' || action.type !== 'create_session'
     || String(action.openDirectory || '').trim()) return action;
   try {
-    const selected = await invoke('select_directory');
+    // 桥接期：invoke 定义于 app-core（导航编排域收敛时改 import）。
+    const selected = await window.invoke('select_directory');
     const directory = String(selected?.path || selected?.paths?.[0] || '').trim();
     return directory ? { ...action, openDirectory: directory } : null;
   } catch (error) {
-    window.alert((currentLanguage === 'zh' ? '选择工作目录失败：' : 'Failed to select working directory: ') + (error?.message || error));
+    window.alert((getCurrentLanguage() === 'zh' ? '选择工作目录失败：' : 'Failed to select working directory: ') + (error?.message || error));
     return null;
   }
 }
 
-window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
-  bumpNavigationGuard();
+export async function runWorkspaceAction(rawAction, triggerButton = undefined) {
+  // 桥接期：bumpNavigationGuard 定义于 app-core（导航编排域收敛时改 import）。
+  window.bumpNavigationGuard();
   let action = rawAction || {};
   if (typeof rawAction === 'string') {
     try {
@@ -96,11 +189,11 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
 
   // 搜索结果进入（action 携带 messageIndex）：导航开始前捕获搜索面身份与
   // 滚动位置——此刻 .ph-session-tabs dataset 与列表 scrollTop 仍在 DOM。
-  if (action.type === 'open_session' && typeof window.phSearchLocatePrepare === 'function') {
-    window.phSearchLocatePrepare(action);
+  if (action.type === 'open_session') {
+    phSearchLocatePrepare(action);
   }
 
-  if (action.type === 'open_session' && isRemoteNamespaceAgentId(action.sessionId)) {
+  if (action.type === 'open_session' && window.isRemoteNamespaceAgentId(action.sessionId)) {
     // 远程历史会话激活（R2-01，ADR-0012 决策 2）：与本地同一动作入口，
     // 身份来自列表项数据层（host 级命名空间 id + 命名空间 sessionId），
     // activate 经服务端命名空间分支转发到远程。
@@ -109,11 +202,11 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
     // 寻址不采用，回退目录查找。
     let hostNsId = '';
     const explicitAgentId = String(action.agentId || '').trim();
-    const sessionSplit = typeof splitRemoteNamespaceId === 'function'
-      ? splitRemoteNamespaceId(action.sessionId)
+    const sessionSplit = typeof window.splitRemoteNamespaceId === 'function'
+      ? window.splitRemoteNamespaceId(action.sessionId)
       : null;
-    if (explicitAgentId && isRemoteNamespaceAgentId(explicitAgentId) && sessionSplit) {
-      const agentSplit = splitRemoteNamespaceId(explicitAgentId);
+    if (explicitAgentId && window.isRemoteNamespaceAgentId(explicitAgentId) && sessionSplit) {
+      const agentSplit = window.splitRemoteNamespaceId(explicitAgentId);
       if (agentSplit && agentSplit.connectionId === sessionSplit.connectionId) {
         hostNsId = explicitAgentId;
       }
@@ -125,30 +218,30 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
     }
     if (!hostNsId) {
       // 目录未含该会话（连接断开/条目消失）：显式失败，不猜测宿主。
-      window.alert(currentLanguage === 'zh'
+      window.alert(getCurrentLanguage() === 'zh'
         ? '远程连接不可用，无法打开该会话'
         : 'Remote connection is unavailable for this session');
       return;
     }
-    await window._activateRemoteHistorySession(hostNsId, action.sessionId, triggerButton, action);
+    await _activateRemoteHistorySession(hostNsId, action.sessionId, triggerButton, action);
     return;
   }
 
   if (action.type === 'create_session'
-    && typeof isRemoteNamespaceAgentId === 'function'
-    && isRemoteNamespaceAgentId(action.agentId)) {
+    && typeof window.isRemoteNamespaceAgentId === 'function'
+    && window.isRemoteNamespaceAgentId(action.agentId)) {
     // 远程目录新建会话（R2-03，ADR-0012）：action 来自 remoteOnly 项目视图，
     // 本地 allAgents 无宿主记录——agentId 即数据层携带的宿主级命名空间 id，
     // 创建经服务端命名空间分支转发到远程宿主（远程分支强制幂等闸）。
-    await window._createRemoteWorkspaceSession(action.agentId, action, triggerButton);
+    await _createRemoteWorkspaceSession(action.agentId, action, triggerButton);
     return;
   }
 
-  const activeAgent = getCurrentAgentRecord();
+  const activeAgent = window.getCurrentAgentRecord();
   action = await resolveStudioSessionDirectory(activeAgent, action);
   if (!action) return;
-  if (typeof saveCurrentWorkspaceSurfaceScroll === 'function') {
-    saveCurrentWorkspaceSurfaceScroll();
+  if (typeof window.saveCurrentWorkspaceSurfaceScroll === 'function') {
+    window.saveCurrentWorkspaceSurfaceScroll();
   }
 
   // ── APP 设置面板入口（注册表查表，公共代码不按 APP ID 分支）──────────
@@ -175,14 +268,14 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
   if (action.type === 'start_app_conversation') {
     const endpoint = String(action.endpoint || '').trim();
     if (!endpoint.startsWith('/protoclaw/')) {
-      window.alert(currentLanguage === 'zh'
+      window.alert(getCurrentLanguage() === 'zh'
         ? '对话入口配置非法（缺少服务端端点）'
         : 'Conversation action is misconfigured (missing server endpoint)');
       return;
     }
     if (_appConversationActionInFlight) return;
     _appConversationActionInFlight = true;
-    if (triggerButton) markActionLoading(triggerButton);
+    if (triggerButton) window.markActionLoading(triggerButton);
     const actionNavEpoch = _navigationGuardEpoch;
     try {
       const response = await fetch(endpoint, {
@@ -202,11 +295,9 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
       if (typeof window.refreshThreads === 'function') {
         await window.refreshThreads(true).catch(() => {});
       }
-      if (typeof loadAgents === 'function') {
-        await loadAgents().catch(() => {});
-      }
+      await loadAgents().catch(() => {});
       if (actionNavEpoch !== _navigationGuardEpoch) return;
-      const opened = await window.openConversationTarget({
+      const opened = await openConversationTarget({
         agentId: String(result.thread?.agentId || activeAgent?.id || '').trim(),
         threadId: result.threadId,
       });
@@ -214,7 +305,7 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
         throw new Error(opened?.reason || 'navigation_failed');
       }
     } catch (error) {
-      window.alert((currentLanguage === 'zh' ? '对话启动失败：' : 'Failed to start conversation: ')
+      window.alert((getCurrentLanguage() === 'zh' ? '对话启动失败：' : 'Failed to start conversation: ')
         + (error?.message || error));
     } finally {
       _appConversationActionInFlight = false;
@@ -275,7 +366,7 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
   }
 
   if (action.type === 'navigate_unit' && action.targetAgentId) {
-    await window.handlePrebuiltAgentClick(action.targetAgentId);
+    await handlePrebuiltAgentClick(action.targetAgentId);
     return;
   }
 
@@ -290,72 +381,72 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
       });
       saveWorkspaceFormDraft(activeAgent.id, draft);
     }
-    setPreferredUnitMode(action.target ? `block:${String(action.target)}` : `block:${formId}`, activeAgent);
-    renderCurrentMainView();
+    window.setPreferredUnitMode(action.target ? `block:${String(action.target)}` : `block:${formId}`, activeAgent);
+    window.renderCurrentMainView();
     return;
   }
 
   if (action.type === 'open_feature_upload') {
-    window.openFeatureUploadDialog();
+    openFeatureUploadDialog();
     return;
   }
 
   if (action.type === 'open_artifact_preview') {
-    currentWorkspaceArtifactDetail = {
+    setCurrentWorkspaceArtifactDetail({
       agentId: activeAgent?.id || '',
       blockId: String(action.blockId || ''),
       artifactId: String(action.artifactId || ''),
-    };
-    renderCurrentMainView();
+    });
+    window.renderCurrentMainView();
     return;
   }
 
   if (action.type === 'close_artifact_preview') {
     if (currentWorkspaceArtifactDetail && currentWorkspaceArtifactDetail.agentId === (activeAgent?.id || '') && currentWorkspaceArtifactDetail.blockId === String(action.blockId || '')) {
-      currentWorkspaceArtifactDetail = null;
+      setCurrentWorkspaceArtifactDetail(null);
     }
-    renderCurrentMainView();
+    window.renderCurrentMainView();
     return;
   }
 
   if (action.type === 'open_project_docset_preview') {
-    currentWorkspaceDocsetDetail = {
+    setCurrentWorkspaceDocsetDetail({
       agentId: activeAgent?.id || '',
       blockId: String(action.blockId || ''),
       section: String(action.section || ''),
       itemId: String(action.itemId || ''),
-    };
-    renderCurrentMainView();
+    });
+    window.renderCurrentMainView();
     return;
   }
 
   if (action.type === 'close_project_docset_preview') {
     if (currentWorkspaceDocsetDetail && currentWorkspaceDocsetDetail.agentId === (activeAgent?.id || '') && currentWorkspaceDocsetDetail.blockId === String(action.blockId || '')) {
-      currentWorkspaceDocsetDetail = null;
+      setCurrentWorkspaceDocsetDetail(null);
     }
-    renderCurrentMainView();
+    window.renderCurrentMainView();
     return;
   }
 
   if (action.type === 'apply_workspace_bundle') {
-    await window.applyWorkspaceBundle(action.formId || 'assembly-form', action.bundle || {});
+    await applyWorkspaceBundle(action.formId || 'assembly-form', action.bundle || {});
     return;
   }
 
   if (action.type === 'launch_assembly_instance') {
-    await window.launchAssemblyInstance();
+    await launchAssemblyInstance();
     return;
   }
 
   if (action.type === 'compacted_resume_session') {
     if (!activeAgent?.id || !action.sessionId) return;
-    const confirmed = window.confirm(t('workspace_compacted_resume_confirm'));
+    const confirmed = window.confirm(window.t('workspace_compacted_resume_confirm'));
     if (!confirmed) {
       return;
     }
 
     const _navGuard = _navigationGuardEpoch;
-    const isZh = currentLanguage === 'zh';
+    const isZh = getCurrentLanguage() === 'zh';
     const toastId = 'compact-resume-' + action.sessionId;
     const sourceSession = getWorkspaceSessionById(activeAgent, action.sessionId);
     let compactSessionCommitted = false;
@@ -380,11 +471,7 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
       const result = await createCompactedResumeSession(activeAgent.id, action.sessionId, 'summarized-nine-section', null, null, null, {
         operationId: compactOperation.operationId,
       });
-      if (typeof applySidebarMutationDeltaWithDiagnostics === 'function') {
-        applySidebarMutationDeltaWithDiagnostics(compactOperation.operationId, activeAgent.id, result);
-      } else if (typeof applySessionMutationDelta === 'function') {
-        applySessionMutationDelta(activeAgent.id, result);
-      }
+      applySidebarMutationDeltaWithDiagnostics(compactOperation.operationId, activeAgent.id, result);
       const targetSessionId = String(result?.session?.id || '').trim();
       compactSessionCommitted = Boolean(targetSessionId);
       updateSidebarOperation(compactOperation.operationId, {
@@ -398,15 +485,15 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
       // poll; a missing immediate runtime is a delayed startup, not a failure.
       // 远程目标（R2-02）：响应中的 agent 是远程端 runtime 形态（裸 id），不进
       // 入本地 allAgents——切换走远程目录轮询（与 R2-01 activate 同链路）。
-      const _isRemoteSession = typeof isRemoteNamespaceAgentId === 'function' && isRemoteNamespaceAgentId(action.sessionId);
+      const _isRemoteSession = typeof window.isRemoteNamespaceAgentId === 'function' && window.isRemoteNamespaceAgentId(action.sessionId);
       const readyAgent = (_isRemoteSession ? null : result?.agent) || null;
       const targetStopped = false;
-      const managedReadyAgent = readyAgent ? (upsertConnectedAgent(readyAgent) || readyAgent) : null;
-      const nextRuntimeId = managedReadyAgent ? (getRuntimeId(managedReadyAgent) || null) : null;
+      const managedReadyAgent = readyAgent ? (window.upsertConnectedAgent(readyAgent) || readyAgent) : null;
+      const nextRuntimeId = managedReadyAgent ? (window.getRuntimeId(managedReadyAgent) || null) : null;
       if (nextRuntimeId) {
         updateSidebarOperation(compactOperation.operationId, { phase: 'target-ready', targetRuntimeId: nextRuntimeId });
         if (_navGuard === _navigationGuardEpoch) {
-          setPreferredUnitMode('chat', managedReadyAgent);
+          window.setPreferredUnitMode('chat', managedReadyAgent);
           beginChatLoadingSession();
           await requestSwitch(nextRuntimeId, 'compact-resume');
         }
@@ -416,18 +503,18 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
         // 目录未及时出现时留给 catalog 轮询自然带出，不伪装失败。
         const remoteRuntimeRef = await window.RemoteConnections?.waitForRuntimeForSession?.(targetSessionId, 50);
         if (remoteRuntimeRef && _navGuard === _navigationGuardEpoch) {
-          await window.switchAgent(remoteRuntimeRef);
+          await switchAgent(remoteRuntimeRef);
         } else {
           void loadAgents();
-          if (typeof renderCurrentMainView === 'function') renderCurrentMainView();
+          if (typeof window.renderCurrentMainView === 'function') window.renderCurrentMainView();
         }
         finishSidebarOperation(compactOperation.operationId, 'settled');
       } else {
         // The session commit succeeded; readiness observation is deliberately
         // non-blocking and must not leave a synthetic sidebar operation behind.
         if (!targetStopped) finishSidebarOperation(compactOperation.operationId, 'settled');
-        lastRenderedWorkspaceHtml = '';
-        renderCurrentMainView();
+        setLastRenderedWorkspaceHtml('');
+        window.renderCurrentMainView();
       }
       loadAgents().catch(e => console.warn(e));
       ClawToast.update(toastId, {
@@ -460,7 +547,7 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
     // from another agent's sidebar runtime ctx-menu — prefer explicit agentId.
     // 远程宿主命名空间 id 不在 allAgents：以最小 agent 形状承载流程，
     // 网络层由 createCompactedResumeSession 的远程分支收敛转发目标。
-    const _csRemoteHostId = (action.agentId && typeof isRemoteNamespaceAgentId === 'function' && isRemoteNamespaceAgentId(action.agentId))
+    const _csRemoteHostId = (action.agentId && typeof window.isRemoteNamespaceAgentId === 'function' && window.isRemoteNamespaceAgentId(action.agentId))
       ? action.agentId
       : '';
     const _csAgent = _csRemoteHostId
@@ -470,7 +557,7 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
     const compactType = action.compactType || 'summary';
 
     if (compactType === 'trim') {
-      window.openTrimPage(_csAgent.id, action.sessionId);
+      openTrimPage(_csAgent.id, action.sessionId);
       return;
     }
 
@@ -478,7 +565,7 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
     const isTrimAll = compactType === 'trim_all';
     const strategy = isTrimAll ? '' : 'summarized-nine-section';
     const _csPolicy = isTrimAll ? { preservedTurns: [], preservedMsgRanges: [] } : null;
-    const _csIsZh2 = currentLanguage === 'zh';
+    const _csIsZh2 = getCurrentLanguage() === 'zh';
     if (!isTrimAll) {
       // 线程会话（ADR-0032）：摘要是同一对话内的上下文接力——不说「创建新
       // 会话」，历史自动存档。索引未就绪时保守回落 Session 语义文案。
@@ -488,20 +575,20 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
         ? (_csIsZh2 ? '确定要总结当前对话历史并继续本对话？\n\n总结前的记录自动存档。' : 'Summarize this conversation and continue here?\n\nPre-summary history is archived automatically.')
         : (action.archiveOriginal
           ? (_csIsZh2 ? '确定要总结当前会话历史并创建新会话？\n\n原会话将被自动归档。' : 'Summarize session history and create a new session?\n\nThe original session will be archived.')
-          : t('workspace_compact_summary_confirm'));
+          : window.t('workspace_compact_summary_confirm'));
       if (!window.confirm(confirmMsg)) {
         return;
       }
     }
 
-    markSessionLoading(_csAgent.id, action.sessionId);
+    window.markSessionLoading(_csAgent.id, action.sessionId);
     const _csNavGuard = _navigationGuardEpoch;
     const _csOldRuntimeId = currentRuntimeAgentId;
-    const _csIsZh = currentLanguage === 'zh';
+    const _csIsZh = getCurrentLanguage() === 'zh';
     const _csToastId = 'compact-summary-' + action.sessionId;
     let _csArchiveRollback = null;
     let _csSessionCommitted = false;
-    if (action.archiveOriginal && typeof markSessionArchivedForMutation === 'function') {
+    if (action.archiveOriginal) {
       _csArchiveRollback = markSessionArchivedForMutation(_csAgent.id, action.sessionId, 'summary');
     }
     const _csSourceSession = getWorkspaceSessionById(_csAgent, action.sessionId);
@@ -537,17 +624,13 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
         _csOptions.trimCutRounds = Number(action.trimCutRounds) || 0;
       }
       const result = await createCompactedResumeSession(_csAgent.id, action.sessionId, strategy, null, null, _csPolicy, _csOptions);
-      if (typeof applySidebarMutationDeltaWithDiagnostics === 'function') {
-        applySidebarMutationDeltaWithDiagnostics(_csOperation?.operationId, _csAgent.id, result);
-      } else if (typeof applySessionMutationDelta === 'function') {
-        applySessionMutationDelta(_csAgent.id, result);
-      }
+      applySidebarMutationDeltaWithDiagnostics(_csOperation?.operationId, _csAgent.id, result);
       const archiveSucceeded = !action.archiveOriginal || result?.archive?.succeeded === true;
       if (!archiveSucceeded && _csArchiveRollback) {
         _csArchiveRollback();
         _csArchiveRollback = null;
       }
-      const _csIsRemote = typeof isRemoteNamespaceAgentId === 'function' && isRemoteNamespaceAgentId(action.sessionId);
+      const _csIsRemote = typeof window.isRemoteNamespaceAgentId === 'function' && window.isRemoteNamespaceAgentId(action.sessionId);
       // 归档已提交：源 runtime 处置与新会话导航解耦，立即发起（内部含侧栏条目
       // 的乐观退场）。停靠在导航之后会让老条目等新会话页面完全加载完才开始关闭。
       if (action.archiveOriginal && archiveSucceeded && !_csIsRemote) {
@@ -557,7 +640,7 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
         // Live-runtime shortcut path: session switch was already handled
         // inside createCompactedResumeSession — skip normal agent/runtime logic
         loadAgents().catch(e => console.warn(e));
-        clearSessionLoading(_csAgent.id);
+        window.clearSessionLoading(_csAgent.id);
         ClawToast.update(_csToastId, {
           status: 'success',
           title: _csDoneTitle,
@@ -577,7 +660,7 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
       // refreshThreads 事实对账经 thread-store 唯一重绑原地换头（幂等）。
       if (result?.threadSuccession?.applied === true) {
         finishSidebarOperation(_csOperation?.operationId, 'settled');
-        clearSessionLoading(_csAgent.id);
+        window.clearSessionLoading(_csAgent.id);
         ClawToast.update(_csToastId, {
           status: 'success',
           title: _csDoneTitle,
@@ -601,8 +684,8 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
       // 入本地 allAgents——切换走远程目录轮询（与 R2-01 activate 同链路）。
       const _csReadyAgent = (_csIsRemote ? null : result?.agent) || null;
       const _csTargetStopped = false;
-      const _csConnectedTarget = _csReadyAgent ? (upsertConnectedAgent(_csReadyAgent) || _csReadyAgent) : null;
-      const nextRuntimeId = _csConnectedTarget ? (getRuntimeId(_csConnectedTarget) || null) : null;
+      const _csConnectedTarget = _csReadyAgent ? (window.upsertConnectedAgent(_csReadyAgent) || _csReadyAgent) : null;
+      const nextRuntimeId = _csConnectedTarget ? (window.getRuntimeId(_csConnectedTarget) || null) : null;
       if (action.archiveOriginal && archiveSucceeded) {
         // The successor and archive were committed by the server. Completing
         // source-runtime disposal later must not turn this summary into a
@@ -625,7 +708,7 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
         return;
       }
       if (nextRuntimeId) {
-        setPreferredUnitMode('chat', _csAgent);
+        window.setPreferredUnitMode('chat', _csAgent);
         beginChatLoadingSession();
         await requestSwitch(nextRuntimeId, 'compact-summary');
         if (!action.archiveOriginal) finishSidebarOperation(_csOperation?.operationId, 'settled');
@@ -634,15 +717,15 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
         // 目录未及时出现时留给 catalog 轮询自然带出，不伪装失败。
         const _csRemoteRuntimeRef = await window.RemoteConnections?.waitForRuntimeForSession?.(targetSessionId, 50);
         if (_csRemoteRuntimeRef && _csNavGuard === _navigationGuardEpoch) {
-          await window.switchAgent(_csRemoteRuntimeRef);
+          await switchAgent(_csRemoteRuntimeRef);
           if (!action.archiveOriginal) finishSidebarOperation(_csOperation?.operationId, 'settled');
         } else {
-          lastRenderedWorkspaceHtml = '';
-          renderCurrentMainView();
+          setLastRenderedWorkspaceHtml('');
+          window.renderCurrentMainView();
         }
       } else {
-        lastRenderedWorkspaceHtml = '';
-        renderCurrentMainView();
+        setLastRenderedWorkspaceHtml('');
+        window.renderCurrentMainView();
       }
       ClawToast.update(_csToastId, {
         status: 'success',
@@ -679,7 +762,7 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
           title: _csDoneTitle,
         });
       }
-      clearSessionLoading(_csAgent.id);
+      window.clearSessionLoading(_csAgent.id);
       clearChatLoadingSession();
     }
     return;
@@ -689,7 +772,7 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
     if (!action.agentId || !action.sessionId) return;
     // 只读浏览唯一实现（归档对话 / 线程历史存档 / 工作群记录共用）：
     // 读会话自身记录渲染、不启动也不绑定 runtime，视图冻结在该 Session。
-    await window.openReadOnlySession({
+    await openReadOnlySession({
       agentId: String(action.agentId),
       sessionId: String(action.sessionId),
       threadId: action.threadId,
@@ -701,25 +784,25 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
 
   if (action.type === 'open_summary') {
     if (!action.agentId || !action.sessionId) return;
-    window.openSummaryPopup(action.agentId, action.sessionId);
+    openSummaryPopup(action.agentId, action.sessionId);
     return;
   }
 
   if (action.type === 'generate_summary') {
     if (!action.agentId || !action.sessionId) return;
-    window.openSummaryPopup(action.agentId, action.sessionId);
+    openSummaryPopup(action.agentId, action.sessionId);
     return;
   }
 
   if (action.type === 'delete_session') {
     // 远程会话（sessionId 命名空间化）：确认后经远程转发删除并刷新远程
     // catalog；不进入本地会话记录手术（远程会话不在 allAgents）。
-    const _delIsRemote = typeof isRemoteNamespaceAgentId === 'function' && isRemoteNamespaceAgentId(action.sessionId);
+    const _delIsRemote = typeof window.isRemoteNamespaceAgentId === 'function' && window.isRemoteNamespaceAgentId(action.sessionId);
     if (_delIsRemote) {
       if (!action.sessionId) return;
       const _delHostNs = window.RemoteConnections?.getHostNamespaceIdForSession?.(action.sessionId, '');
       if (!_delHostNs) return;
-      const _delConfirm = window.confirm(t('workspace_session_delete_confirm').replace('{{id}}', action.sessionId));
+      const _delConfirm = window.confirm(window.t('workspace_session_delete_confirm').replace('{{id}}', action.sessionId));
       if (!_delConfirm) return;
       const _delToastId = 'remote-delete-' + action.sessionId;
       try {
@@ -731,10 +814,10 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
         if (!response.ok) {
           throw new Error(await response.text().catch(() => 'delete session failed'));
         }
-        ClawToast.show({ id: _delToastId, title: currentLanguage === 'zh' ? '会话已删除' : 'Session deleted', status: 'success' });
+        ClawToast.show({ id: _delToastId, title: getCurrentLanguage() === 'zh' ? '会话已删除' : 'Session deleted', status: 'success' });
         window.RemoteConnections?.refresh?.();
       } catch (e) {
-        ClawToast.show({ id: _delToastId, title: (currentLanguage === 'zh' ? '删除失败：' : 'Delete failed: ') + (e?.message || e), status: 'error' });
+        ClawToast.show({ id: _delToastId, title: (getCurrentLanguage() === 'zh' ? '删除失败：' : 'Delete failed: ') + (e?.message || e), status: 'error' });
       }
       return;
     }
@@ -745,7 +828,7 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
     // 确认文案优先用会话标题：裸 session id（session-1793106357101-55ff00）对
     // 用户没有辨识意义。找不到会话记录（竞态/列表滞后）时回退 id。
     const sessionTitle = deletedSession?.title || action.sessionId;
-    const confirmMsg = t('workspace_session_delete_confirm').replace('{{id}}', sessionTitle);
+    const confirmMsg = window.t('workspace_session_delete_confirm').replace('{{id}}', sessionTitle);
     const confirmed = window.confirm(confirmMsg);
     if (!confirmed) {
       return;
@@ -776,7 +859,7 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
     // snapshot has dropped its child entry. Suppress this exact runtime until a
     // fresh snapshot confirms retirement; otherwise the stale child reappears
     // as an ungrouped row named after its Session id.
-    if (affectedRuntimeId && typeof markPendingRuntimeStop === 'function') {
+    if (affectedRuntimeId) {
       markPendingRuntimeStop(activeAgent.id, action.sessionId, affectedRuntimeId);
     }
 
@@ -799,7 +882,7 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
     // 保留的清理：若删除的正是升级前遗留的接线员会话，顺手清掉
     // receptionistSessionId。该字段只供升级迁移读取，残留会让每次换代都
     // 重复尝试归档一个已不存在的会话（best-effort 失败会一直重试）。
-    const staleImDraft = typeof getIMWorkspaceDraft === 'function' ? getIMWorkspaceDraft() : null;
+    const staleImDraft = typeof window.getIMWorkspaceDraft === 'function' ? window.getIMWorkspaceDraft() : null;
     if (staleImDraft?.workspaceConfig
       && String(staleImDraft.workspaceConfig.receptionistSessionId) === String(action.sessionId)) {
       staleImDraft.workspaceConfig.receptionistSessionId = '';
@@ -807,8 +890,8 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
         window.saveIMWorkspaceConfig().catch((e) => console.warn('IM legacy reference cleanup failed:', e));
       }
     }
-    shouldAnimateWorkspaceSurface = false;
-    renderCurrentMainView();
+    setShouldAnimateWorkspaceSurface(false);
+    window.renderCurrentMainView();
 
     try {
       const response = await fetch('/protoclaw/prebuilt_sessions/delete', {
@@ -828,7 +911,7 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
       if (result?.ok === false || result?.status === 'partial') {
         throw new Error(result?.code || 'delete_incomplete');
       }
-      if (typeof applySessionMutationDelta === 'function') applySessionMutationDelta(activeAgent.id, result);
+      applySessionMutationDelta(activeAgent.id, result);
       // T006 / T005：Session 删除入口返回实际对象是 Thread（target shape，
       // 响应带 threadId + cleanup 级联清理事实）时，UI 刷新 Thread 而不是
       // 只刷新 Session——线程视图（coder 入口）立即反映删除/成员归并。
@@ -855,14 +938,14 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
       // IM 工作空间删除会话后仍需刷新 IM 草稿（归一化后的形状），其余走
       // Agent 列表刷新。判定按「当前是否正在编辑 IM 配置」，不再依赖已退役
       // 的门户会话列表字段。
-      if (typeof getIMWorkspaceDraft === 'function' && activeAgent.id === 'qqbot') {
-        ensureIMWorkspaceLoaded(true).catch(e => console.warn(e));
+      if (typeof window.getIMWorkspaceDraft === 'function' && activeAgent.id === 'qqbot') {
+        window.ensureIMWorkspaceLoaded(true).catch(e => console.warn(e));
       } else {
         loadAgents().catch(e => console.warn(e));
       }
     } catch (error) {
       console.error('Failed to delete session:', error);
-      if (affectedRuntimeId && typeof releasePendingRuntimeStop === 'function') {
+      if (affectedRuntimeId) {
         releasePendingRuntimeStop(affectedRuntimeId, activeAgent.id, action.sessionId);
       }
       updateAgentRecord(activeAgent.id, {
@@ -871,12 +954,12 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
       });
       finishSidebarOperation(deleteOperation.operationId, 'failed', { errorCode: 'delete_failed' });
       // 失败回滚后 IM 草稿需要重新对齐服务端事实
-      if (typeof getIMWorkspaceDraft === 'function' && activeAgent.id === 'qqbot') {
-        ensureIMWorkspaceLoaded(true).catch(e => console.warn(e));
+      if (typeof window.getIMWorkspaceDraft === 'function' && activeAgent.id === 'qqbot') {
+        window.ensureIMWorkspaceLoaded(true).catch(e => console.warn(e));
       }
-      lastRenderedWorkspaceHtml = '';
-      renderCurrentMainView();
-      window.alert((currentLanguage === 'zh' ? '删除会话失败：' : 'Failed to delete session: ') + (error?.message || error));
+      setLastRenderedWorkspaceHtml('');
+      window.renderCurrentMainView();
+      window.alert((getCurrentLanguage() === 'zh' ? '删除会话失败：' : 'Failed to delete session: ') + (error?.message || error));
     }
     return;
   }
@@ -914,10 +997,9 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
   // 打开。执行位置必须在受管会话分支之前——那里会真正调 activate。
   if (action.type === 'open_session' && activeAgent?.id && action.sessionId
     && (action.archived === true
-      || (typeof window.phConversationArchived === 'function'
-        && window.phConversationArchived(activeAgent.id,
-          getWorkspaceSessionById(activeAgent, action.sessionId))))) {
-    await window.openReadOnlySession({
+      || phConversationArchived(activeAgent.id,
+        getWorkspaceSessionById(activeAgent, action.sessionId)))) {
+    await openReadOnlySession({
       agentId: activeAgent.id,
       sessionId: action.sessionId,
       title: getWorkspaceSessionById(activeAgent, action.sessionId)?.title || '',
@@ -946,25 +1028,25 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
     // that path still needs the existing same-runtime switch safeguards.
     const showPendingChatSurface = !currentRuntimeAgentId;
     if (showPendingChatSurface) {
-      beginPendingSessionNavigation(activeAgent.id, action.sessionId || '', 'committing');
-      resetRuntimeBackedSurfaceState();
-      currentWorkspaceTab = 'chat';
+      window.beginPendingSessionNavigation(activeAgent.id, action.sessionId || '', 'committing');
+      window.resetRuntimeBackedSurfaceState();
+      setCurrentWorkspaceTab('chat');
       beginChatLoadingSession();
-      lastRenderedWorkspaceHtml = '';
-      renderCurrentMainView();
+      setLastRenderedWorkspaceHtml('');
+      window.renderCurrentMainView();
     }
     else {
-      beginPendingSessionNavigation(activeAgent.id, action.sessionId || '', 'committing');
+      window.beginPendingSessionNavigation(activeAgent.id, action.sessionId || '', 'committing');
     }
     if (action.type === 'open_session' && action.sessionId) {
-      markSessionLoading(activeAgent.id, action.sessionId);
+      window.markSessionLoading(activeAgent.id, action.sessionId);
     }
-    if (triggerButton) markActionLoading(triggerButton);
+    if (triggerButton) window.markActionLoading(triggerButton);
     // Declared outside try so the catch block can still settle the operation.
     let sidebarOperation = null;
     const managedNavigationEpoch = _navigationGuardEpoch;
     try {
-      prebuiltSessionSwitchInFlight = true;
+      sessionSwitch.prebuiltSessionSwitchInFlight = true;
       const sessionAction = action.type === 'open_session'
         ? { type: 'open_session', sessionId: action.sessionId }
         : {
@@ -984,7 +1066,7 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
       };
       const runSessionOpen = async () => {
         const _navGuard = _navigationGuardEpoch;
-        const previousRuntimeId = normalizeAgentIdentity(activeAgent.runtime_session_id || activeAgent.runtimeSessionId || currentRuntimeAgentId);
+        const previousRuntimeId = window.normalizeAgentIdentity(activeAgent.runtime_session_id || activeAgent.runtimeSessionId || currentRuntimeAgentId);
         const sourceSessionId = String(activeAgent?.active_workspace_session_id || activeAgent?.workspace_sessions?.activeSessionId || '').trim();
         const knownTargetSession = sessionAction.type === 'open_session'
           ? getWorkspaceSessionById(activeAgent, sessionAction.sessionId)
@@ -1006,15 +1088,15 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
           title: knownTargetSession?.title || action.agentName || action.featureName || '',
         });
         sessionAction.operationId = sidebarOperation.operationId;
-        _storeVisibleSessionInputDraft();
+        window._storeVisibleSessionInputDraft();
         // Cache handoff is only meaningful for a runtime the user is actually
         // leaving. The host record's runtime_session_id can point at a sibling
         // session's live runtime while the user sits on the workspace home;
         // saving the (already-cleared) view state there would clobber that
         // runtime's valid cache with an empty snapshot.
-        const departingRuntimeId = normalizeAgentIdentity(currentRuntimeAgentId);
+        const departingRuntimeId = window.normalizeAgentIdentity(currentRuntimeAgentId);
         if (departingRuntimeId) {
-          saveCurrentRuntimeToCache(departingRuntimeId, getRuntimeContextKey(departingRuntimeId, activeAgent));
+          saveCurrentRuntimeToCache(departingRuntimeId, window.getRuntimeContextKey(departingRuntimeId, activeAgent));
         }
         const result = await openPrebuiltWorkspaceSession(activeAgent.id, sessionAction);
         // T006 / T003：activate 响应按 Thread 成员关系解析目标（target shape）。
@@ -1023,11 +1105,9 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
         // 历史会话不显示写入入口；实际生效对象是 Thread 时刷新 Thread 而不是
         // 只刷 Session。
         const _activateBrowseOnly = result?.browseOnly === true;
-        if (typeof window.registerSessionActivateTarget === 'function') {
-          window.registerSessionActivateTarget(result);
-        }
+        registerSessionActivateTarget(result);
         if (_activateBrowseOnly) {
-          readOnlyMode = true;
+          setReadOnlyMode(true);
           // 工单 037：手动 reset 退役——readOnlyMode 已入渲染签名，
           // 后续 loadAgentData / 主视图渲染按签名差异展示只读面。
         }
@@ -1035,12 +1115,12 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
         if (typeof window.refreshThreads === 'function') {
           window.refreshThreads(true).catch(() => {});
         }
-        if (typeof applySessionMutationDelta === 'function') applySessionMutationDelta(activeAgent.id, result);
+        applySessionMutationDelta(activeAgent.id, result);
         const optimisticAgent = result?.session
-          ? (applyOptimisticWorkspaceSession(activeAgent.id, result.session) || activeAgent)
+          ? (window.applyOptimisticWorkspaceSession(activeAgent.id, result.session) || activeAgent)
           : activeAgent;
         const targetSessionId = String(result?.session?.id || sessionAction.sessionId || '').trim();
-        updatePendingSessionNavigation(targetSessionId, 'starting-runtime');
+        window.updatePendingSessionNavigation(targetSessionId, 'starting-runtime');
         updateSidebarOperation(sidebarOperation.operationId, {
           phase: 'target-starting',
           targetSessionId,
@@ -1053,14 +1133,14 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
         // session appear in the list without waiting for the runtime to start.
         // Guard: skip render if user already navigated to a different surface.
         if (!currentRuntimeAgentId && _navGuard === _navigationGuardEpoch) {
-          lastRenderedWorkspaceHtml = '';
-          renderCurrentMainView();
+          setLastRenderedWorkspaceHtml('');
+          window.renderCurrentMainView();
         }
         const isAssemblyLaunch =
           activeAgent?.id === 'agent-creator'
           && action.type === 'create_session'
           && String(action.formId || '') === 'assembly-form';
-        const nextAgent = result?.agent ? (upsertConnectedAgent(result.agent) || result.agent) : null;
+        const nextAgent = result?.agent ? (window.upsertConnectedAgent(result.agent) || result.agent) : null;
         // 用户主动打开/创建会话：立即冻结 viewer 绑定。同 runtime 的会话
         // 切换不经过 switchAgent；若不在此绑定，乐观更新与服务器确认之间
         // contextKey 会沿 allAgents 的 activeSessionId 出现瞬时漂移。
@@ -1069,19 +1149,19 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
             nextAgent?.runtime_session_id || nextAgent?.runtimeSessionId || previousRuntimeId || '',
           ).trim();
           if (bindRuntimeId) {
-            setViewerSessionBinding(bindRuntimeId, targetSessionId);
+            window.setViewerSessionBinding(bindRuntimeId, targetSessionId);
             const ownerAgentId = String(nextAgent?.parent_id || activeAgent?.id || '').trim();
             if (ownerAgentId) {
-              applySessionViewPatch({ identity: { agentId: ownerAgentId, sessionId: targetSessionId } });
+              window.applySessionViewPatch({ identity: { agentId: ownerAgentId, sessionId: targetSessionId } });
             }
           }
         }
         if (isAssemblyLaunch) {
           finishSidebarOperation(sidebarOperation.operationId, 'settled');
           if (_navGuard !== _navigationGuardEpoch) return;
-          setPreferredUnitMode('assembly', activeAgent);
+          window.setPreferredUnitMode('assembly', activeAgent);
           loadAgents().catch((error) => console.error('Failed to refresh agents after assembly launch:', error));
-          renderCurrentMainView();
+          window.renderCurrentMainView();
           return;
         }
         if (nextAgent?.runtime_session_id || nextAgent?.runtimeSessionId) {
@@ -1094,18 +1174,18 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
             finishSidebarOperation(sidebarOperation.operationId, 'settled');
             return;
           }
-          setPreferredUnitMode('chat', nextAgent);
+          window.setPreferredUnitMode('chat', nextAgent);
           let switchSettled = true;
           if (nextRuntimeId === currentRuntimeAgentId) {
-            clearPendingSessionNavigation();
+            window.clearPendingSessionNavigation();
             clearChatLoadingSession();
-            beginFollowLatestEntryWindow();
-            renderCurrentMainView();
+            window.beginFollowLatestEntryWindow();
+            window.renderCurrentMainView();
           } else {
             switchSettled = (await requestSwitch(nextRuntimeId, 'session-open'))?.switched === true;
           }
           if (managedNavigationEpoch === _navigationGuardEpoch) {
-            clearPendingSessionNavigation();
+            window.clearPendingSessionNavigation();
             clearChatLoadingSession();
           }
           finishSidebarOperation(sidebarOperation.operationId, 'settled');
@@ -1117,9 +1197,8 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
           // 落定判据；定位模块内部另有 runtime+session 身份锚。
           if (switchSettled
             && currentRuntimeAgentId === nextRuntimeId
-            && Number.isInteger(Number(action.messageIndex))
-            && typeof window.phSearchLocateAfterOpen === 'function') {
-            window.phSearchLocateAfterOpen(action);
+            && Number.isInteger(Number(action.messageIndex))) {
+            phSearchLocateAfterOpen(action);
           }
           loadAgents().catch((error) => console.error('Failed to refresh agents after opening prebuilt session:', error));
           return;
@@ -1143,7 +1222,7 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
           // Pass the runtime the user is actually viewing — empty from the
           // home surface skips the guard; the nav-guard epoch still protects
           // the "user navigated away meanwhile" case.
-          const navigationSourceRuntimeId = normalizeAgentIdentity(currentRuntimeAgentId);
+          const navigationSourceRuntimeId = window.normalizeAgentIdentity(currentRuntimeAgentId);
           void navigateToSessionMutationTarget(activeAgent.id, {
             targetSessionId,
             operationId: sidebarOperation.operationId,
@@ -1161,14 +1240,13 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
             // 锚，用户已切走会自行放弃。epoch 已被 switchAgent 推进，下方旧
             // 代次比较恒否，定位必须在其 return 之前）。
             if (navigated
-              && Number.isInteger(Number(action.messageIndex))
-              && typeof window.phSearchLocateAfterOpen === 'function') {
-              window.phSearchLocateAfterOpen(action);
+              && Number.isInteger(Number(action.messageIndex))) {
+              phSearchLocateAfterOpen(action);
             }
             if (_navGuard !== _navigationGuardEpoch) return;
-            clearPendingSessionNavigation();
+            window.clearPendingSessionNavigation();
             clearChatLoadingSession();
-            renderCurrentMainView();
+            window.renderCurrentMainView();
             if (!navigated) {
               console.warn('Session committed but its runtime did not become ready:', targetSessionId);
             }
@@ -1176,9 +1254,9 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
             settleManagedOperation();
             console.warn('Session navigation failed after commit:', error);
             if (_navGuard === _navigationGuardEpoch) {
-              clearPendingSessionNavigation();
+              window.clearPendingSessionNavigation();
               clearChatLoadingSession();
-              renderCurrentMainView();
+              window.renderCurrentMainView();
             }
           });
         } else {
@@ -1221,7 +1299,7 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
         }
         try {
           if (typeof window.refreshThreads === 'function') await window.refreshThreads(true).catch(() => {});
-          await window.enterThreadAwaitView?.({
+          await enterThreadAwaitView({
             threadId: error.handoff.threadId,
             sessionId: error.handoff.sessionId,
           });
@@ -1232,7 +1310,7 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
       }
       console.error('Failed to open prebuilt session:', error);
       if (managedNavigationEpoch === _navigationGuardEpoch) {
-        clearPendingSessionNavigation();
+        window.clearPendingSessionNavigation();
       }
       if (sidebarOperation?.operationId) {
         finishSidebarOperation(sidebarOperation.operationId, 'failed', { errorCode: 'session_open_failed' });
@@ -1240,7 +1318,7 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
       window.alert(`Session failed: ${error && error.message ? error.message : error}`);
       return;
     } finally {
-      prebuiltSessionSwitchInFlight = false;
+      sessionSwitch.prebuiltSessionSwitchInFlight = false;
       // Keep the target chat surface mounted while a newly committed session is
       // still waiting for its runtime. The pending navigation is cleared by
       // switchAgent on successful runtime binding (or by a newer user
@@ -1248,28 +1326,28 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
       // between session commit and runtime readiness.
       if (shouldMarkLoading
         && managedNavigationEpoch === _navigationGuardEpoch
-        && !hasPendingSessionNavigation(activeAgent)) {
+        && !window.hasPendingSessionNavigation(activeAgent)) {
         clearChatLoadingSession();
-        renderCurrentMainView();
+        window.renderCurrentMainView();
       }
-      if (shouldMarkLoading) clearSessionLoading(activeAgent.id);
+      if (shouldMarkLoading) window.clearSessionLoading(activeAgent.id);
       else if (triggerButton) triggerButton.classList.remove('action-loading');
     }
   }
 
   if (action.type === 'show_chat' || action.type === 'resume_session') {
-    beginFollowLatestCooldown();
-    beginFollowLatestEntryWindow();
-    setPreferredUnitMode('chat', activeAgent);
+    window.beginFollowLatestCooldown();
+    window.beginFollowLatestEntryWindow();
+    window.setPreferredUnitMode('chat', activeAgent);
   } else if (action.type === 'show_home') {
-    setPreferredUnitMode('home', activeAgent);
+    window.setPreferredUnitMode('home', activeAgent);
   } else if (action.type === 'show_workspace_tab' && action.tab) {
-    setPreferredUnitMode(String(action.tab), activeAgent);
+    window.setPreferredUnitMode(String(action.tab), activeAgent);
   } else if (action.type === 'show_block' && action.target) {
-    setPreferredUnitMode(`block:${action.target}`, activeAgent);
+    window.setPreferredUnitMode(`block:${action.target}`, activeAgent);
   }
-  renderCurrentMainView();
-};
+  window.renderCurrentMainView();
+}
 
 
 // ── Remote history session activation (R2-01, ADR-0012 决策 2) ──────────────
@@ -1277,8 +1355,8 @@ window.runWorkspaceAction = async (rawAction, triggerButton = undefined) => {
 // runtime），无确认层、无远程特判 UI。激活后远程 catalog 出现运行中 runtime，
 // Phase 1.5 统一投影自动带出（零新代码）；此处轮询目录条目出现后切换焦点。
 // 断线/远程不可达按 ADR-0011 三分类由 operation 契约显式呈现。
-window._activateRemoteHistorySession = async function(hostNsId, sessionId, triggerButton, locateAction) {
-  if (triggerButton) markActionLoading(triggerButton);
+async function _activateRemoteHistorySession(hostNsId, sessionId, triggerButton, locateAction) {
+  if (triggerButton) window.markActionLoading(triggerButton);
   // 导航代次守卫锚点：等待 runtime 期间用户切走（epoch 前进）则放弃，
   // 不把用户抢回目标会话。
   const navEpoch = _navigationGuardEpoch;
@@ -1297,36 +1375,35 @@ window._activateRemoteHistorySession = async function(hostNsId, sessionId, trigg
       // 契约失败形态（三分类）显式呈现，不静默排队、不伪装成功。
       throw new Error(result?.message || result?.error || (await response.text().catch(() => `HTTP ${response.status}`)));
     }
-    window.ClawToast?.show?.({
+    ClawToast.show({
       id: `remote-activate-${result?.session?.id || sessionId}`,
       status: 'success',
-      title: currentLanguage === 'zh' ? '远程会话已启动' : 'Remote session started',
+      title: getCurrentLanguage() === 'zh' ? '远程会话已启动' : 'Remote session started',
       description: result?.session?.title || '',
     });
     // 远程 runtime 经 Phase 1.5 投影自动进入侧栏；等待目录条目出现后切换。
     const runtimeRef = await _waitForRemoteRuntimeForSession(sessionId, 50);
     if (navEpoch !== _navigationGuardEpoch) return;
     if (runtimeRef) {
-      await window.switchAgent(runtimeRef);
+      await switchAgent(runtimeRef);
       // 搜索结果进入（locateAction 携带 messageIndex）：导航落定后定位到
       // 命中消息。switchAgent 内部推进导航代次，此处不可再用入口 epoch
       // 比较；定位模块自带 runtime+session 身份锚，用户已切走会自行放弃。
       if (locateAction
-        && Number.isInteger(Number(locateAction.messageIndex))
-        && typeof window.phSearchLocateAfterOpen === 'function') {
-        window.phSearchLocateAfterOpen(locateAction);
+        && Number.isInteger(Number(locateAction.messageIndex))) {
+        phSearchLocateAfterOpen(locateAction);
       }
     } else {
       // 会话已在远程激活；runtime 就绪有延迟时留给 catalog 轮询自然带出。
       void loadAgents();
-      if (typeof renderCurrentMainView === 'function') renderCurrentMainView();
+      if (typeof window.renderCurrentMainView === 'function') window.renderCurrentMainView();
     }
   } catch (error) {
     window.alert(`Session failed: ${error && error.message ? error.message : error}`);
   } finally {
     if (triggerButton) triggerButton.classList.remove('action-loading');
   }
-};
+}
 
 // ── Remote workspace session creation (R2-03, ADR-0012 决策 2) ──────────────
 // remoteOnly 项目视图的"新对话"：本地无宿主 agent 记录，创建请求携带宿主级
@@ -1334,14 +1411,14 @@ window._activateRemoteHistorySession = async function(hostNsId, sessionId, trigg
 // 响应中的裸会话 id 经 namespaceMutationResult 命名空间化（宿主 id 自带
 // connectionId，可直接作为归一化基准），随后与 R2-01 activate 同链路：轮询
 // 远程目录条目出现后切换焦点。断线/失败按 ADR-0011 三分类显式呈现，无静默重试。
-window._createRemoteWorkspaceSession = async function(hostNsId, action, triggerButton) {
-  if (triggerButton) markActionLoading(triggerButton);
+async function _createRemoteWorkspaceSession(hostNsId, action, triggerButton) {
+  if (triggerButton) window.markActionLoading(triggerButton);
   const openDirectory = String(action.openDirectory || '').trim();
   let sidebarOperation = null;
   try {
     if (!hostNsId || !openDirectory) {
       // 无目录身份无法在远程定位创建目标：显式失败，不猜测。
-      throw new Error(currentLanguage === 'zh'
+      throw new Error(getCurrentLanguage() === 'zh'
         ? '缺少创建会话所需的项目目录'
         : 'Missing project directory for session creation');
     }
@@ -1393,10 +1470,10 @@ window._createRemoteWorkspaceSession = async function(hostNsId, action, triggerB
       title: namespaced?.session?.title || sidebarOperation.title,
       serverRevision: namespaced?.revision ?? null,
     });
-    window.ClawToast?.show?.({
+    ClawToast.show({
       id: `remote-create-${targetSessionId || sidebarOperation.operationId}`,
       status: 'success',
-      title: currentLanguage === 'zh' ? '远程会话已创建' : 'Remote session created',
+      title: getCurrentLanguage() === 'zh' ? '远程会话已创建' : 'Remote session created',
       description: namespaced?.session?.title || '',
     });
     if (typeof window.refreshThreads === 'function') {
@@ -1423,7 +1500,7 @@ window._createRemoteWorkspaceSession = async function(hostNsId, action, triggerB
   } finally {
     if (triggerButton) triggerButton.classList.remove('action-loading');
   }
-};
+}
 
 // 轮询远程目录直到目标会话的 runtime 出现（远程 activate 启动 runtime 的
 // 就绪观察）。目录身份：entry.sessionId 命名空间化匹配目标会话。
@@ -1441,3 +1518,21 @@ async function _waitForRemoteRuntimeForSession(namespacedSessionId, attempts = 5
   }
   return null;
 }
+// ── 桥接期兼容面（kernel-state 访问器桥）────────────────────────────────────
+// 唯一桥键 runWorkspaceAction：仍 classic 的消费方在调用时点经 window 取用
+// （app-main 的 capture 点击委托与 runWorkspaceActionFromEvent、desktop-open、
+// claw-host 插件宿主 API、thread-store、im-actions、ctx-menu-handlers /
+// ctx-menu-items、session-list-render、workspace-blocks、
+// p2-w2-10-workspace-docset、session-ui、app-chat-input、assembly-actions、
+// runtime-mode-menu、ph-thread-history、slash-commands 与悬置域
+// wg-core / work-group-ui / home-dashboard）。注销条件：上列消费方全部改 import
+// 后删除对应 defineKey 并下调桥债基线。
+// 注册相位：模块求值相——R1/R2/R4 审计已证 classic 相无触达点（静态
+// data-workspace-action 元素为 0，元素全部由 boot 之后的渲染产出；桌面壳
+// early eval 先经 desktop-open 的 handlePrebuiltAgentClick 闸）。
+const actionApi = { runWorkspaceAction };
+window.KernelState.defineKey('workspace-actions', 'runWorkspaceAction', runWorkspaceAction);
+window.KernelState.claim('workspace-actions', {
+  get: (key) => actionApi[key],
+  set: (key, value) => { actionApi[key] = value; },
+});

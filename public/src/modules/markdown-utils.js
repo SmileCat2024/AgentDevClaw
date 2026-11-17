@@ -1,6 +1,7 @@
 // Markdown / 数学公式渲染工具（ESM owner）
 
 import { getCurrentLanguage } from './i18n-environment-state.js';
+import { ClawToast } from './toast-notify.js';
 
 const renderer = window.renderer; // markdown-bootstrap 的 KernelState 桥键，classic renderer 消费者收敛后注销
 const escapeHtml = window.escapeHtml; // markdown-bootstrap 的 KernelState 桥键，classic escapeHtml 消费者收敛后注销
@@ -403,10 +404,8 @@ const copyMarkdownTable = async function(btn) {
     } catch (e) { ok = false; }
   }
   if (!ok) {
-    if (typeof window.ClawToast !== 'undefined') {
-      const isZh = getCurrentLanguage() === 'zh';
-      window.ClawToast.show({ id: 'md-table-copy', status: 'error', title: isZh ? '复制失败' : 'Failed to copy table' });
-    }
+    const isZh = getCurrentLanguage() === 'zh';
+    ClawToast.show({ id: 'md-table-copy', status: 'error', title: isZh ? '复制失败' : 'Failed to copy table' });
     return;
   }
   if (btn) {
@@ -486,10 +485,8 @@ const copyMarkdownCode = async function(btn) {
     } catch (e) { ok = false; }
   }
   if (!ok) {
-    if (typeof window.ClawToast !== 'undefined') {
-      const isZh = getCurrentLanguage() === 'zh';
-      window.ClawToast.show({ id: 'md-code-copy', status: 'error', title: isZh ? '复制失败' : 'Failed to copy code' });
-    }
+    const isZh = getCurrentLanguage() === 'zh';
+    ClawToast.show({ id: 'md-code-copy', status: 'error', title: isZh ? '复制失败' : 'Failed to copy code' });
     return;
   }
   if (btn) {
@@ -580,7 +577,6 @@ function enhanceMathInElement(root) {
 const bridgeState = {
   escapeHtml,
   renderer,
-  splitMarkdownFrontmatter,
   renderMarkdown,
   enhanceMarkdownTables,
   enhanceMathInElement,
@@ -588,7 +584,6 @@ const bridgeState = {
   isEditableMarkdownBlock,
   replaceMarkdownBlock,
 };
-window.KernelState.defineKey('markdown-utils', 'splitMarkdownFrontmatter', splitMarkdownFrontmatter);
 window.KernelState.defineKey('markdown-utils', 'renderMarkdown', renderMarkdown);
 window.KernelState.defineKey('markdown-utils', 'enhanceMarkdownTables', enhanceMarkdownTables);
 window.KernelState.defineKey('markdown-utils', 'enhanceMathInElement', enhanceMathInElement);

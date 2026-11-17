@@ -1,27 +1,16 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createFrontendSandbox } from './helpers/frontend-vm.js';
+import { withThreadDomainCase } from './p2-thread-case.js';
+
+// 交互域的六个用例（打开线程 / 线程输入 / activate 登记 / 挡板等待视图）走真实
+// ESM：`thread-store-domain.js` 具名 import + 真实 classic 引擎（同一个沙箱）。
+// 其余用例只碰刷新引擎与事实对账，保持原来的 classic 沙箱（加载快、断言不变）。
 
 // thread-store.js 在模块加载时注册 2s 启动刷新 + 20s 周期刷新（未 unref），
 // 若沿用 Node 全局定时器会让测试进程挂在事件循环上。注入 unref 版定时器，
 // 使断言结束后进程可正常退出（后续 call 由桩 refreshThreads 短路）。
 function unrefTimer(handle) { if (handle && typeof handle.unref === 'function') handle.unref(); return handle; }
-
-function loadThreadStore({ refreshThreadsImpl = async () => null } = {}) {
-  const ctx = createFrontendSandbox({
-    currentLanguage: 'zh',
-    getCurrentHostAgentRecord: () => null,
-    setTimeout: (fn, ms) => unrefTimer(globalThis.setTimeout(fn, ms)),
-    setInterval: (fn, ms) => unrefTimer(globalThis.setInterval(fn, ms)),
-  });
-  ctx.loadSource('public/src/modules/session-view-state.js'); // ADR-0026：thread-store 依赖会话视图提交原语
-  ctx.loadSource('public/src/modules/thread-store.js');
-  // 模块在加载时自注册 window.refreshThreads / updateThreadHeaderIndicator；
-  // 加载完成后用桩覆盖，隔离网络与 DOM 渲染（断言只针对状态机逻辑）。
-  ctx.window.refreshThreads = refreshThreadsImpl;
-  ctx.window.updateThreadHeaderIndicator = () => {};
-  return ctx;
-}
 
 describe('thread-store: successor view rebind', () => {
   it('rebinds the viewed runtime to the successor without opening another session', async () => {
@@ -154,96 +143,113 @@ describe('thread-store: handoff-started visibility', () => {
 
 describe('thread-store: stable thread conversation input', () => {
   it('opens a thread by its stable identity and current head runtime', async () => {
-    let ctx;
-    ctx = createFrontendSandbox({
-      focusedAgentId: 'coder',
-      currentRuntimeAgentId: 'runtime-old',
-      getCurrentHostAgentRecord: () => ({ id: 'coder' }),
-      getRuntimeWorkspaceSessionId: (runtimeId) => runtimeId === 'runtime-new' ? 'session-new' : 'session-old',
-      setViewerSessionBinding: (runtimeId, sessionId) => { ctx.bindings.push([runtimeId, sessionId]); },
-      allAgents: [{
-        id: 'runtime-new', source: 'child', parent_id: 'coder',
-        active_workspace_session_id: 'session-new', runtime_session_id: 'runtime-new',
-      }],
-      setTimeout: (fn, ms) => unrefTimer(globalThis.setTimeout(fn, ms)),
-      setInterval: (fn, ms) => unrefTimer(globalThis.setInterval(fn, ms)),
-    });
-    ctx.bindings = [];
-    ctx.window.switchAgent = async (runtimeId) => { ctx.currentRuntimeAgentId = runtimeId; };
-    ctx.loadSource('public/src/modules/session-view-state.js'); // ADR-0026：thread-store 依赖会话视图提交原语
-  ctx.loadSource('public/src/modules/thread-store.js');
+    const bindings = [];
     const thread = {
       threadId: 'wt-open', agentId: 'coder', headSessionId: 'session-new',
       sessionIds: ['session-old', 'session-new'],
     };
-    ctx.window.ClawThreads.threads = [thread];
-    ctx.window.ClawThreads.byId[thread.threadId] = thread;
-    ctx.window.ClawThreads.sessionIndex['coder::session-new'] = thread;
-    const result = await ctx.window.openConversationTarget({ agentId: thread.agentId, threadId: thread.threadId });
-    assert.equal(result.ok, true);
-    assert.deepEqual(ctx.bindings.at(-1), ['runtime-new', 'session-new']);
-    assert.equal(ctx.window.ClawThreads.activeConversation.threadId, 'wt-open');
-    assert.equal(ctx.window.ClawThreads.activeConversation.sessionId, 'session-new');
+    await withThreadDomainCase({
+      threads: [thread],
+      fixtures: {
+        focusedAgentId: 'coder',
+        currentRuntimeAgentId: 'runtime-old',
+        allAgents: [
+          { id: 'coder', source: 'prebuilt', kind: 'workspace' },
+          {
+            id: 'runtime-new', source: 'child', parent_id: 'coder',
+            active_workspace_session_id: 'session-new', runtime_session_id: 'runtime-new',
+          },
+        ],
+        getCurrentHostAgentRecord: () => ({ id: 'coder', source: 'prebuilt', kind: 'workspace' }),
+        getRuntimeWorkspaceSessionId: (runtimeId) => (runtimeId === 'runtime-new' ? 'session-new' : 'session-old'),
+        setViewerSessionBinding: (runtimeId, sessionId) => { bindings.push([runtimeId, sessionId]); },
+        renderAgentList: () => {},
+        renderCurrentMainView: () => {},
+        updateQueueIndicator: () => {},
+      },
+    }, async ({ c, domain }) => {
+      const result = await domain.openConversationTarget({ agentId: 'coder', threadId: 'wt-open' });
+      assert.equal(result.ok, true);
+      assert.deepEqual(bindings.at(-1), ['runtime-new', 'session-new']);
+      assert.equal(c.read('window.ClawThreads.activeConversation.threadId'), 'wt-open');
+      assert.equal(c.read('window.ClawThreads.activeConversation.sessionId'), 'session-new');
+    });
   });
 
   it('posts to the thread input endpoint without resolving a session or runtime target', async () => {
     const requests = [];
-    const ctx = createFrontendSandbox({
+    await withThreadDomainCase({
+      fixtures: {
+        refreshThreads: async () => null,
+        updateThreadHeaderIndicator: () => {},
+      },
       fetch: async (url, init) => {
         requests.push({ url, init });
         return { ok: true, json: async () => ({ ok: true, threadId: 'wt-input', delivery: 'delivered' }) };
       },
-      setTimeout: (fn, ms) => unrefTimer(globalThis.setTimeout(fn, ms)),
-      setInterval: (fn, ms) => unrefTimer(globalThis.setInterval(fn, ms)),
+    }, async ({ domain }) => {
+      const result = await domain.submitThreadInput('wt-input', {
+        text: 'continue', images: [{ id: 'img-1' }], source: 'chat-composer',
+        capabilityActivations: ['skill-x'], metadata: { note: 1 },
+      });
+      assert.equal(result.delivery, 'delivered');
+      assert.equal(requests[0].url, '/protoclaw/threads/wt-input/input');
+      const body = JSON.parse(requests[0].init.body);
+      assert.equal(body.text, 'continue');
+      assert.deepEqual(body.images, [{ id: 'img-1' }]);
+      assert.deepEqual(body.capabilityActivations, ['skill-x']);
+      assert.deepEqual(body.metadata, { note: 1 });
     });
-    ctx.loadSource('public/src/modules/session-view-state.js'); // ADR-0026：thread-store 依赖会话视图提交原语
-  ctx.loadSource('public/src/modules/thread-store.js');
-    const result = await ctx.window.submitThreadInput('wt-input', {
-      text: 'continue', images: [{ id: 'img-1' }], source: 'chat-composer',
-      capabilityActivations: ['skill-x'], metadata: { note: 1 },
-    });
-    assert.equal(result.delivery, 'delivered');
-    assert.equal(requests[0].url, '/protoclaw/threads/wt-input/input');
-    const body = JSON.parse(requests[0].init.body);
-    assert.equal(body.text, 'continue');
-    assert.deepEqual(body.images, [{ id: 'img-1' }]);
-    assert.deepEqual(body.capabilityActivations, ['skill-x']);
-    assert.deepEqual(body.metadata, { note: 1 });
   });
 });
 
 describe('T006 thread-store: Session→Thread 目标登记与只读事实', () => {
-  it('历史成员 activate（browseOnly:true + target 为 thread）置位只读事实', () => {
-    const ctx = loadThreadStore();
-    ctx.run(`window.registerSessionActivateTarget({
-      browseOnly: true,
-      target: { type: 'thread', threadId: 'wt-9', headSessionId: 's-2' },
-    })`);
-    assert.equal(ctx.run(`window.ClawThreads.browseOnly`), true);
-    assert.equal(ctx.run(`window.ClawThreads.browseOnlyThreadId`), 'wt-9');
+  const fixtures = () => ({
+    renderAgentList: () => {},
+    renderCurrentMainView: () => {},
+    updateQueueIndicator: () => {},
+    updateThreadHeaderIndicator: () => {},
   });
 
-  it('打开/创建 head（browseOnly 缺失）清除历史残留只读事实', () => {
-    const ctx = loadThreadStore();
-    ctx.run(`window.ClawThreads.browseOnly = true; window.ClawThreads.browseOnlyThreadId = 'wt-9';`);
-    ctx.run(`window.registerSessionActivateTarget({ target: { type: 'thread', threadId: 'wt-9', headSessionId: 's-3' } })`);
-    assert.equal(ctx.run(`window.ClawThreads.browseOnly`), false);
-    assert.equal(ctx.run(`window.ClawThreads.browseOnlyThreadId`), '');
+  it('历史成员 activate（browseOnly:true + target 为 thread）置位只读事实', async () => {
+    await withThreadDomainCase({ fixtures: fixtures() }, async ({ c, domain }) => {
+      domain.registerSessionActivateTarget({
+        browseOnly: true,
+        target: { type: 'thread', threadId: 'wt-9', headSessionId: 's-2' },
+      });
+      assert.equal(c.read('window.ClawThreads.browseOnly'), true);
+      assert.equal(c.read('window.ClawThreads.browseOnlyThreadId'), 'wt-9');
+    });
   });
 
-  it('Session 入口返回 Thread 时刷新 Thread（而非只刷 Session）', () => {
+  it('打开/创建 head（browseOnly 缺失）清除历史残留只读事实', async () => {
+    await withThreadDomainCase({ fixtures: fixtures() }, async ({ c, domain }) => {
+      c.sandbox.run("window.ClawThreads.browseOnly = true; window.ClawThreads.browseOnlyThreadId = 'wt-9';");
+      domain.registerSessionActivateTarget({ target: { type: 'thread', threadId: 'wt-9', headSessionId: 's-3' } });
+      assert.equal(c.read('window.ClawThreads.browseOnly'), false);
+      assert.equal(c.read('window.ClawThreads.browseOnlyThreadId'), '');
+    });
+  });
+
+  it('Session 入口返回 Thread 时刷新 Thread（而非只刷 Session）', async () => {
     let refreshes = 0;
-    const ctx = loadThreadStore({ refreshThreadsImpl: async () => { refreshes += 1; return null; } });
-    ctx.run(`window.registerSessionActivateTarget({ target: { type: 'thread', threadId: 'wt-1', headSessionId: 's-2' } })`);
-    // refreshThreads 是异步触发；同步返回后此处已调用
-    assert.equal(refreshes, 1);
+    await withThreadDomainCase({
+      fixtures: { ...fixtures(), refreshThreads: async () => { refreshes += 1; return null; } },
+    }, async ({ domain }) => {
+      domain.registerSessionActivateTarget({ target: { type: 'thread', threadId: 'wt-1', headSessionId: 's-2' } });
+      // refreshThreads 是异步触发；同步返回后此处已调用
+      assert.equal(refreshes, 1);
+    });
   });
 
-  it('非 Thread 的普通 Session activate 不触发线程刷新', () => {
+  it('非 Thread 的普通 Session activate 不触发线程刷新', async () => {
     let refreshes = 0;
-    const ctx = loadThreadStore({ refreshThreadsImpl: async () => { refreshes += 1; return null; } });
-    ctx.run(`window.registerSessionActivateTarget({ session: { id: 's-1' } })`);
-    assert.equal(refreshes, 0);
+    await withThreadDomainCase({
+      fixtures: { ...fixtures(), refreshThreads: async () => { refreshes += 1; return null; } },
+    }, async ({ domain }) => {
+      domain.registerSessionActivateTarget({ session: { id: 's-1' } });
+      assert.equal(refreshes, 0);
+    });
   });
 });
 
@@ -298,17 +304,32 @@ describe('T014b thread-store: wasHead 冻结事实写入', () => {
   });
 
   it('handoff 窗口本地挂线程等待视图（openConversationTarget）→ wasHead=true', async () => {
-    const ctx = baseSandbox({ currentRuntimeAgentId: '' });
-    const thread = installThread(ctx);
     // 接续窗口的两个投影成对出现（服务端仅在 status='rotating' 时补读
     // handoffStartedAt）；只给 startedAt 的夹具有不出的状态。
-    thread.status = 'rotating';
-    thread.handoffStartedAt = Date.now();
-    ctx.window.switchAgent = async () => {};
-    const result = await ctx.window.openConversationTarget({ agentId: 'coder', threadId: 'wt-was' });
-    assert.equal(result.ok, true);
-    assert.equal(ctx.window.ClawThreads.activeConversation.wasHead, true,
-      '接续中点击条目的本地等待视图必须保住等待重绑资格');
+    const thread = {
+      threadId: 'wt-was', agentId: 'coder', headSessionId: 'session-old',
+      sessionIds: ['session-old'], status: 'rotating', handoffStartedAt: Date.now(),
+    };
+    await withThreadDomainCase({
+      threads: [thread],
+      fixtures: {
+        currentRuntimeAgentId: '',
+        focusedAgentId: 'coder',
+        allAgents: [{ id: 'coder', source: 'prebuilt', kind: 'workspace' }],
+        getCurrentHostAgentRecord: () => ({ id: 'coder', source: 'prebuilt', kind: 'workspace' }),
+        getRuntimeWorkspaceSessionId: () => '',
+        renderAgentList: () => {},
+        renderCurrentMainView: () => {},
+        updateQueueIndicator: () => {},
+        updateThreadHeaderIndicator: () => {},
+      },
+      fetch: async () => ({ ok: true, json: async () => ({ ok: true, messages: [] }) }),
+    }, async ({ c, domain }) => {
+      const result = await domain.openConversationTarget({ agentId: 'coder', threadId: 'wt-was' });
+      assert.equal(result.ok, true);
+      assert.equal(c.read('window.ClawThreads.activeConversation.wasHead'), true,
+        '接续中点击条目的本地等待视图必须保住等待重绑资格');
+    });
   });
 
   it('head-advanced 重绑落定后 → wasHead=true（新 head 冻结）', async () => {

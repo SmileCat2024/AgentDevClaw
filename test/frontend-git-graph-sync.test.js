@@ -18,6 +18,25 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createFrontendSandbox } from './helpers/frontend-vm.js';
 import { loadEsmPluginInSandbox } from './helpers/load-esm-plugin.js';
+import { loadModuleOnce } from './helpers/esm-module-loader.js';
+
+/**
+ * git-graph.js 已 ESM 化（P2 批次 2）：真实 import 后把它的 window.GitGraph
+ * 挂载点落在沙箱宿主上（模块在导入期读 globalThis.window），插件仍按
+ * 既有协议读 window.GitGraph。
+ */
+async function loadGitGraphInto(ctx) {
+  const prevWindow = globalThis.window;
+  const prevDocument = globalThis.document;
+  globalThis.window = ctx.window;
+  globalThis.document = ctx.document;
+  try {
+    await loadModuleOnce('public/src/modules/git-graph.js', { installGlobals: false });
+  } finally {
+    if (prevWindow === undefined) delete globalThis.window; else globalThis.window = prevWindow;
+    if (prevDocument === undefined) delete globalThis.document; else globalThis.document = prevDocument;
+  }
+}
 
 function makeCommits(n, salt) {
   const tag = salt ? salt : '';
@@ -37,7 +56,7 @@ function makeCommits(n, salt) {
   return commits;
 }
 
-function makeHarness() {
+async function makeHarness() {
   const ROWS = 300;
   const rows = [];
   for (let i = 0; i < ROWS; i++) rows.push({ offsetTop: 26 * i });
@@ -107,8 +126,8 @@ function makeHarness() {
     getCurrentAgentRecord: () => record,
     renderFeaturePanel: () => { ctx.__lastHtml = ctx.__gitPanel.render(); },
   });
-  ctx.loadSource('public/src/modules/git-graph.js');
   ctx.loadSource('public/src/modules/claw-host.js');
+  await loadGitGraphInto(ctx);
   const mod = loadEsmPluginInSandbox(ctx, 'public/src/panel-plugins/git.js');
   ctx.__gitPanel = mod;
   mod.__pluginDefault.mount({ effect() {} }); // 监听挂载（本套测试断言渲染输出，不触发监听）
@@ -133,7 +152,7 @@ const tick = () => new Promise((r) => setTimeout(r, 40));
 
 describe('git 面板图形区渲染 churn 守卫', () => {
   it('数据与行几何未变时，重复 render 零 canvas 写入、零泳道重算', async () => {
-    const ctx = makeHarness();
+    const ctx = await makeHarness();
     try {
       ctx.__gitPanel.onOpen();
       await tick(); await tick();
@@ -152,7 +171,7 @@ describe('git 面板图形区渲染 churn 守卫', () => {
   });
 
   it('行几何与数据同时变化恰好触发一次度量重绘，随后恢复零 churn', async () => {
-    const ctx = makeHarness();
+    const ctx = await makeHarness();
     try {
       ctx.__gitPanel.onOpen();
       await tick(); await tick();
@@ -174,7 +193,7 @@ describe('git 面板图形区渲染 churn 守卫', () => {
   });
 
   it('数据变化（新 commits 数组）恰好触发一次泳道重算与画布替换', async () => {
-    const ctx = makeHarness();
+    const ctx = await makeHarness();
     try {
       ctx.__gitPanel.onOpen();
       await tick(); await tick();
@@ -195,7 +214,7 @@ describe('git 面板图形区渲染 churn 守卫', () => {
   });
 
   it('status 变化的静默刷新走定向 patch：上区恰好替换一次、图形区零 churn', async () => {
-    const ctx = makeHarness();
+    const ctx = await makeHarness();
     try {
       ctx.__gitPanel.onOpen();
       await tick(); await tick();
@@ -223,7 +242,7 @@ describe('git 面板图形区渲染 churn 守卫', () => {
   });
 
   it('HEAD 变化的静默刷新仍走全量重绘：图形区恰好替换一次', async () => {
-    const ctx = makeHarness();
+    const ctx = await makeHarness();
     try {
       ctx.__gitPanel.onOpen();
       await tick(); await tick();

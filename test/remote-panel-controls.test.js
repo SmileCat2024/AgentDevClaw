@@ -4,8 +4,7 @@ import { describe, it, afterEach } from 'node:test';
 import { createAgentLifecycleModule } from '../server/routes/agent-lifecycle.js';
 import { setupCapabilityRoutes } from '../server/routes/capability.js';
 import { setProxyConnectionLookup } from '../server/shared/proxy.js';
-import { createFrontendSandbox } from './helpers/frontend-vm.js';
-import { loadEsmPluginInSandbox } from './helpers/load-esm-plugin.js';
+import { withP2EsmCase } from './helpers/p2-esm-case.js';
 
 // R2-04：面板资源远程扩列——会话控制面板（force continuation / context guard /
 // capability）。覆盖工单最低测试集：
@@ -542,7 +541,89 @@ const REMOTE_CATALOG = {
   }],
 };
 
-async function panelSandbox({ catalog = REMOTE_CATALOG, currentRuntimeAgentId = 'remote:server-a:rt-1', focusedAgentId = 'remote:server-a:programming-helper', viewerSessionId = '' } = {}) {
+const SESSION_CONTROLS = 'public/src/panel-plugins/session-controls.js';
+const CONTEXT_GUARD_TOGGLE = 'public/src/modules/context-guard-toggle.js';
+const TOAST_NOTIFY = 'public/src/modules/toast-notify.js';
+
+/**
+ * 面板插件与守卫开关都已是 ES 模块（ADR-0044 P4 / P2 批次）：一律真实 import
+ * （withP2EsmCase 的 c.load，每 case 整图隔离），不再做源码变换装载。
+ *
+ * 两者保留对 classic 宿主面的裸引用（focusedAgentId / activeFeaturePanel /
+ * escapeHtml ...）。浏览器里 window 就是模块的 globalThis，测试进程没有这个
+ * 等式：这里按真实桥键把同名全局转发到本 case 的沙箱——读写都落在同一个
+ * owner（KernelState 访问器 / classic 函数）上，不复制状态。
+ */
+const PANEL_HOST_GLOBALS = [
+  'focusedAgentId', 'currentRuntimeAgentId', 'currentLanguage', 'currentHookInspector',
+  'activeFeaturePanel', 'renderFeaturePanel', 'renderAgentList', 'featurePanelBody',
+  'escapeHtml', 'isRemoteNamespaceAgentId', 'getRuntimeWorkspaceSessionId',
+];
+
+function linkHostGlobals(p2case, keys) {
+  const saved = [];
+  const restore = () => {
+    for (const [key, descriptor] of saved.reverse()) {
+      if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+      else delete globalThis[key];
+    }
+  };
+  try {
+    for (const key of keys) {
+      saved.push([key, Object.getOwnPropertyDescriptor(globalThis, key)]);
+      Object.defineProperty(globalThis, key, {
+        configurable: true,
+        enumerable: false,
+        get: () => p2case.window[key],
+        set: (value) => { p2case.window[key] = value; },
+      });
+    }
+  } catch (error) {
+    // 装到一半失败（如撞上不可配置的全局）：失败那次没装上，不参与回滚；
+    // 已装上的键按原描述符还原（原本不存在的删除），再把原错误抛给调用方。
+    saved.pop();
+    restore();
+    throw error;
+  }
+  return restore;
+}
+
+describe('panel host-global bridge (linkHostGlobals)', () => {
+  it('forwards reads/writes live and unlink removes every installed key', () => {
+    const win = { renderFeaturePanel: () => 'from-sandbox' };
+    const unlink = linkHostGlobals({ window: win }, ['renderFeaturePanel']);
+    try {
+      assert.equal(globalThis.renderFeaturePanel(), 'from-sandbox', '裸引用解析到沙箱侧实现');
+      win.renderFeaturePanel = () => 'rewritten';
+      assert.equal(globalThis.renderFeaturePanel(), 'rewritten', '转发是活引用，不是取值快照');
+    } finally {
+      unlink();
+    }
+    assert.equal('renderFeaturePanel' in globalThis, false, 'unlink 摘除全部转发键');
+  });
+
+  it('mid-way install failure rolls back the installed keys and rethrows the original error', () => {
+    // Infinity 是规范保证的非可配置全局属性：拿它当「装到一半就失败」的第二个
+    // 键，既能触发 defineProperty 抛 TypeError，又不必在本进程里制造或遗留任何
+    // 全局状态（失败那次不参与回滚）。
+    assert.equal('renderFeaturePanel' in globalThis, false);
+    const before = Object.getOwnPropertyDescriptor(globalThis, 'Infinity');
+    assert.throws(
+      () => linkHostGlobals({ window: { renderFeaturePanel: () => {} } }, ['renderFeaturePanel', 'Infinity']),
+      TypeError,
+    );
+    assert.equal('renderFeaturePanel' in globalThis, false, '已安装的键必须回滚（原本不存在 → 删除）');
+    assert.deepEqual(Object.getOwnPropertyDescriptor(globalThis, 'Infinity'), before, '失败的键保持原 descriptor');
+  });
+});
+
+/** 一个面板用例：真实 classic bootstrap + 真实 ESM 面板图 + 本 case 的 fetch 桩。 */
+async function panelCase({
+  catalog = REMOTE_CATALOG,
+  currentRuntimeAgentId = 'remote:server-a:rt-1',
+  focusedAgentId = 'remote:server-a:programming-helper',
+  viewerSessionId = '',
+} = {}, fn) {
   const calls = [];
   const fetchStub = async (url, init = {}) => {
     calls.push({ url: String(url), init: init || {} });
@@ -555,81 +636,103 @@ async function panelSandbox({ catalog = REMOTE_CATALOG, currentRuntimeAgentId = 
     }
     return { ok: true, status: 200, json: async () => ({ ok: true, status: { enabled: false } }) };
   };
-  const ctx = createFrontendSandbox({
-    currentRuntimeAgentId,
-    focusedAgentId,
-    currentHookInspector: {
-      features: [{ name: 'force-continuation' }, { name: 'context-guard' }, { name: 'stylized-output' }],
+  return withP2EsmCase({
+    classic: (sandbox) => {
+      // 真实 classic bootstrap：app-core 注册内核桥键与生产全局函数，沙箱即
+      // window（ESM 侧的 window.* 读到同一个宿主面）。
+      sandbox.loadSource('public/src/app-core.js');
+      sandbox.fetch = fetchStub;
+      sandbox.currentRuntimeAgentId = currentRuntimeAgentId;
+      sandbox.focusedAgentId = focusedAgentId;
+      sandbox.currentHookInspector = {
+        features: [{ name: 'force-continuation' }, { name: 'context-guard' }, { name: 'stylized-output' }],
+      };
+      sandbox.activeFeaturePanel = '';
+      sandbox.featurePanelBody = { addEventListener() {} };
+      sandbox.renderFeaturePanel = () => {};
+      sandbox.renderAgentList = () => {};
+      sandbox.getRuntimeWorkspaceSessionId = (runtimeId) => (
+        viewerSessionId && !String(runtimeId || '').startsWith('remote:') ? viewerSessionId : ''
+      );
+      // app-main（编排域）的幂等键入口：本沙箱不装载 app-main，按契约给确定性值。
+      sandbox.newIdempotencyKey = () => 'test-idem-key';
+      sandbox.loadSource('public/src/modules/remote-connections.js');
+      sandbox.loadSource('public/src/modules/claw-host.js');
     },
-    featurePanelBody: { addEventListener() {} },
-    activeFeaturePanel: '',
-    renderFeaturePanel: () => {},
-    renderAgentList: () => {},
-    getRuntimeWorkspaceSessionId: (runtimeId) => (
-      viewerSessionId && !String(runtimeId || '').startsWith('remote:') ? viewerSessionId : ''
-    ),
-    setInterval: () => ({ unref() {} }),
-    clearInterval: () => {},
-    // 面板 fetch 参数用 new URLSearchParams 构造；沙箱默认全局面没有它。
-    URLSearchParams,
-    fetch: fetchStub,
+    globals: { URLSearchParams },
+  }, async (c) => {
+    const unlink = linkHostGlobals(c, PANEL_HOST_GLOBALS);
+    // 守卫开关的操作反馈已改走 toast-notify 的具名导出：把真实模块对象的 show
+    // 换成无副作用记录器（本文件不断言 toast 呈现面）。
+    const toastModule = await c.load(TOAST_NOTIFY);
+    const realToastShow = toastModule.ClawToast.show;
+    toastModule.ClawToast.show = () => {};
+    try {
+      const plugin = await c.load(SESSION_CONTROLS);
+      // 目录条目先入位：面板身份解析依赖 catalog（getEntryRuntimeSessionId /
+      // getEntryHostNamespaceId / capabilityFor 均消费 ingest 后的可见分区）。
+      await c.window.RemoteConnections.refresh();
+      const result = await fn({ c, plugin, calls });
+      // 面板的挂载探测与状态刷新是 fire-and-forget（渲染即发）：让它们的
+      // promise 链在本 case 内落定，续体不会跑到 case 外的全局上。
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      return result;
+    } finally {
+      toastModule.ClawToast.show = realToastShow;
+      unlink();
+    }
   });
-  ctx.loadSource('public/src/modules/remote-connections.js');
-  ctx.loadSource('public/src/modules/claw-host.js');
-  loadEsmPluginInSandbox(ctx, 'public/src/panel-plugins/session-controls.js');
-  // 目录条目先入位：面板身份解析依赖 catalog（getEntryRuntimeSessionId /
-  // getEntryHostNamespaceId / capabilityFor 均消费 ingest 后的可见分区）。
-  await ctx.window.RemoteConnections.refresh();
-  return { ctx, calls };
 }
 
 describe('frontend session-controls-panel identity (R2-04)', () => {
   it('addresses a remote session with the host-level namespace id and the catalog session id', async () => {
-    const { ctx, calls } = await panelSandbox();
-    await ctx.window.__pluginModule.refreshStatus();
-    const statusCall = calls.find((c) => c.url.startsWith('/protoclaw/force_continuation_status'));
-    assert.ok(statusCall, 'status refresh must fire for a remote session');
-    assert.equal(statusCall.url,
-      '/protoclaw/force_continuation_status?agentId=remote%3Aserver-a%3Aprogramming-helper&sessionId=remote%3Aserver-a%3Asession-1');
+    await panelCase({}, async ({ plugin, calls }) => {
+      await plugin.refreshStatus();
+      const statusCall = calls.find((c) => c.url.startsWith('/protoclaw/force_continuation_status'));
+      assert.ok(statusCall, 'status refresh must fire for a remote session');
+      assert.equal(statusCall.url,
+        '/protoclaw/force_continuation_status?agentId=remote%3Aserver-a%3Aprogramming-helper&sessionId=remote%3Aserver-a%3Asession-1');
+    });
   });
 
   it('keeps local identity plain: agentId is the focused logical id and sessionId the viewer binding', async () => {
-    const { ctx, calls } = await panelSandbox({
+    await panelCase({
       currentRuntimeAgentId: 'rt-local-1',
       focusedAgentId: 'programming-helper',
       viewerSessionId: 'local-session-1',
+    }, async ({ plugin, calls }) => {
+      await plugin.refreshStatus();
+      const statusCall = calls.find((c) => c.url.startsWith('/protoclaw/force_continuation_status'));
+      assert.ok(statusCall);
+      assert.equal(statusCall.url,
+        '/protoclaw/force_continuation_status?agentId=programming-helper&sessionId=local-session-1');
     });
-    await ctx.window.__pluginModule.refreshStatus();
-    const statusCall = calls.find((c) => c.url.startsWith('/protoclaw/force_continuation_status'));
-    assert.ok(statusCall);
-    assert.equal(statusCall.url,
-      '/protoclaw/force_continuation_status?agentId=programming-helper&sessionId=local-session-1');
   });
 
   it('carries the idempotency key on all three panel write paths with namespaced ids', async () => {
-    const { ctx, calls } = await panelSandbox();
-    // guard 写路径随开关迁至上边栏 badge（context-guard-toggle），与面板
-    // 剩余两条写路径共用同一身份纪律
-    ctx.newIdempotencyKey = () => 'test-idem-key';
-    ctx.loadSource('public/src/modules/context-guard-toggle.js');
-    await ctx.window.__pluginModule.updateTrigger('apiErrorRetry', true);
-    await ctx.window.ContextGuardToggle.toggleGuard();
-    // 第三条写路径走 capability_invoke 通用路由（模型轮转已卸载，由输出风格承接）
-    await ctx.window.__pluginModule.updateStyleSelection('正式汇报');
+    await panelCase({}, async ({ c, plugin, calls }) => {
+      // guard 写路径随开关迁至上边栏 badge（context-guard-toggle），与面板
+      // 剩余两条写路径共用同一身份纪律
+      await plugin.updateTrigger('apiErrorRetry', true);
+      await c.load(CONTEXT_GUARD_TOGGLE);
+      await c.window.ContextGuardToggle.toggleGuard();
+      // 第三条写路径走 capability_invoke 通用路由（模型轮转已卸载，由输出风格承接）
+      await plugin.updateStyleSelection('正式汇报');
 
-    const writes = calls.filter((c) => c.init.method === 'POST');
-    assert.equal(writes.length, 3, 'fc control + guard control + capability invoke');
-    for (const write of writes) {
-      assert.ok(write.init.headers['x-idempotency-key'], `${write.url} carries an idempotency key`);
-      const body = JSON.parse(write.init.body);
-      assert.equal(body.agentId, 'remote:server-a:programming-helper');
-      assert.equal(body.sessionId, 'remote:server-a:session-1');
-    }
-    const invoke = writes.find((c) => c.url === '/protoclaw/capability_invoke');
-    assert.equal(JSON.parse(invoke.init.body).runtimeId, 'remote:server-a:rt-1', 'invoke forwards the runtime ref for bare-id rewrite');
-    assert.equal(JSON.parse(invoke.init.body).ref, 'stylized-output.configure');
-    const guardWrite = writes.find((c) => c.url === '/protoclaw/context_guard_control');
-    assert.equal(JSON.parse(guardWrite.init.body).mode, 'interrupt', 'badge toggle posts the next cycle mode');
+      const writes = calls.filter((c) => c.init.method === 'POST');
+      assert.equal(writes.length, 3, 'fc control + guard control + capability invoke');
+      for (const write of writes) {
+        assert.ok(write.init.headers['x-idempotency-key'], `${write.url} carries an idempotency key`);
+        const body = JSON.parse(write.init.body);
+        assert.equal(body.agentId, 'remote:server-a:programming-helper');
+        assert.equal(body.sessionId, 'remote:server-a:session-1');
+      }
+      const invoke = writes.find((c) => c.url === '/protoclaw/capability_invoke');
+      assert.equal(JSON.parse(invoke.init.body).runtimeId, 'remote:server-a:rt-1', 'invoke forwards the runtime ref for bare-id rewrite');
+      assert.equal(JSON.parse(invoke.init.body).ref, 'stylized-output.configure');
+      const guardWrite = writes.find((c) => c.url === '/protoclaw/context_guard_control');
+      assert.equal(JSON.parse(guardWrite.init.body).mode, 'interrupt', 'badge toggle posts the next cycle mode');
+    });
   });
 });
 
@@ -637,33 +740,34 @@ describe('frontend session-controls-panel capability gating (ADR-0011 #5)', () =
   it('degrades to a read-only panel when the connection lacks the write bit, without a remote marker', async () => {
     const legacyCatalog = JSON.parse(JSON.stringify(REMOTE_CATALOG));
     delete legacyCatalog.connections[0].capabilities;
-    const { ctx, calls } = await panelSandbox({ catalog: legacyCatalog });
-    ctx.newIdempotencyKey = () => 'test-idem-key';
-    ctx.loadSource('public/src/modules/context-guard-toggle.js');
-    await ctx.window.ContextGuardToggle.toggleGuard();
-    assert.equal(calls.filter((c) => c.url === '/protoclaw/context_guard_control').length, 0,
-      'no-write remote must not dispatch panel writes');
-    const html = ctx.window.__pluginModule.render();
-    assert.match(html, / disabled/, 'switches render disabled (read-only degradation, no remote marker)');
-    assert.ok(!html.includes('remote:'), 'no remote namespace id leaks into the panel markup');
+    await panelCase({ catalog: legacyCatalog }, async ({ c, plugin, calls }) => {
+      await c.load(CONTEXT_GUARD_TOGGLE);
+      await c.window.ContextGuardToggle.toggleGuard();
+      assert.equal(calls.filter((c) => c.url === '/protoclaw/context_guard_control').length, 0,
+        'no-write remote must not dispatch panel writes');
+      const html = plugin.render();
+      assert.match(html, / disabled/, 'switches render disabled (read-only degradation, no remote marker)');
+      assert.ok(!html.includes('remote:'), 'no remote namespace id leaks into the panel markup');
+    });
   });
 
   it('keeps the panel writable for capable remotes and for local sessions', async () => {
-    const remote = await panelSandbox();
-    const remoteHtml = remote.ctx.window.__pluginModule.render();
-    assert.ok(!remoteHtml.includes(' disabled'), 'write-capable remote keeps switches enabled');
+    await panelCase({}, async ({ plugin }) => {
+      const remoteHtml = plugin.render();
+      assert.ok(!remoteHtml.includes(' disabled'), 'write-capable remote keeps switches enabled');
+    });
 
-    const local = await panelSandbox({
+    await panelCase({
       currentRuntimeAgentId: 'rt-local-1',
       focusedAgentId: 'programming-helper',
       viewerSessionId: 'local-session-1',
+    }, async ({ c, plugin, calls }) => {
+      const localHtml = plugin.render();
+      assert.ok(!localHtml.includes(' disabled'), 'local sessions always stay writable');
+      await c.load(CONTEXT_GUARD_TOGGLE);
+      await c.window.ContextGuardToggle.toggleGuard();
+      assert.equal(calls.filter((c) => c.url === '/protoclaw/context_guard_control').length, 1,
+        'local writes go through the local path (no gate)');
     });
-    const localHtml = local.ctx.window.__pluginModule.render();
-    assert.ok(!localHtml.includes(' disabled'), 'local sessions always stay writable');
-    local.ctx.newIdempotencyKey = () => 'test-idem-key';
-    local.ctx.loadSource('public/src/modules/context-guard-toggle.js');
-    await local.ctx.window.ContextGuardToggle.toggleGuard();
-    assert.ok(local.calls.filter((c) => c.url === '/protoclaw/context_guard_control').length === 1,
-      'local writes go through the local path (no gate)');
   });
 });

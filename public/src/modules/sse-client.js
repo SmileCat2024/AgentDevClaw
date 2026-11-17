@@ -16,13 +16,44 @@
  * refreshAgentCallStates 等按该谓词切换行为；断连（CLOSED）即置 false，
  * 全量轮询自动恢复，事件通道恢复后由 hello 重新激活。
  *
- * 依赖（全局，运行时解析）：EventSource、currentRuntimeAgentId、
- * updateNotificationStatus、applyAgentCallStateFromNotification、
- * getRuntimeRecord、commitMetadataUpdate、
- * runMessagesProbeCycle、applyQueuedInputsTexts、loadAgents、
- * captureSessionViewToken、_syncForegroundState、_presentAppNotification、
- * _seenChoiceAlertIds、ClawToast、window.ClawFW.requestImmediatePoll
+ * ESM 迁移（P2 W2-2）：连接状态 / 排队快照缓存 / thread 订阅表是模块私有状态；
+ * 对 classic 消费方只保留 isSseActive 桥键与既有 window.ClawFW.SseClient 公开
+ * 命名空间协议（persistent-input / thread-store 读排队快照与订阅 thread 事件）。
+ * - 已迁 ESM 依赖走 import：currentRuntimeAgentId（orchestration-state）、
+ *   allAgents（agent-store-state）、currentLanguage（i18n-environment-state）、
+ *   调用状态应用（agent-call-states-host）、元数据提交（metadata-commit-host）、
+ *   消息 probe（message-probe-host）、列表加载（agent-snapshot-loader-host）、
+ *   404 恢复（runtime-not-found-host）、toast（toast-notify）、排队气泡投影
+ *   （p2-w2-3a-queue-projection 的 applyQueuedInputsTexts）。
+ *   与 queue-projection 的双向静态环：两侧对端绑定都只在函数体内调用，
+ *   模块求值期零解引用；本模块只 import 一个具名函数，队列快照缓存的公开
+ *   读取面仍以 window.ClawFW.SseClient 供 classic 消费方使用。
+ * - app-notification 呈现与前台时钟仍由 desktop-notify 提供：该模块保持唯一
+ *   classic 实现（桌面壳原生 toast 激活入口必须在经典相同轮次可投递，见
+ *   desktop-notify 头注），本模块按其**既有 window 函数协议**
+ *   （window._presentAppNotification / window._syncForegroundState）调用，
+ *   不 import classic 文件、不复制通知业务。
+ * - 仍 classic 的函数按调用时点显式 window 晚绑定：updateNotificationStatus
+ *   （runtime-status）、captureSessionViewToken（session-view-state）、
+ *   getRuntimeRecord（app-core）、renderAgentList（sidebar-render）。
+ *
+ * 启动链路不变：鉴权就绪（window.__clawAuthReady）后才建连；模块转 ESM 后
+ * 顶层语句在 deferred 执行相运行，而 __clawAuthReady 本身等待
+ * DOMContentLoaded（= 静态非 async ESM 执行完成），启动时序与 classic 相等价。
  */
+
+import { currentRuntimeAgentId } from './orchestration-state.js';
+import { allAgents } from './agent-store-state.js';
+import { getCurrentLanguage } from './i18n-environment-state.js';
+import { callActivity } from './p2-bootstrap-call-activity.js';
+import { applyAgentCallStateFromNotification } from './agent-call-states-host.js';
+import { commitMetadataUpdate } from './metadata-commit-host.js';
+import { runMessagesProbeCycle } from './message-probe-host.js';
+import { loadAgents } from './agent-snapshot-loader-host.js';
+import { handleCoreResponsesNotFound } from './runtime-not-found-host.js';
+import { commitSessionViewPatch } from './session-view-commit-host.js';
+import { ClawToast } from './toast-notify.js';
+import { applyQueuedInputsTexts } from './p2-w2-3a-queue-projection.js';
 
 // ── 连接状态（模块局部）────────────────────────────────────────────
 let _mode = 'auto';            // 'off' | 'on' | 'auto'（boot 时从 URL 解析）
@@ -89,7 +120,7 @@ function handleThreadEvent(type, event) {
  * @param {(evt: {type: string, threadId: string, payload: object}) => void} handler
  * @returns {() => void} 取消订阅函数（移除该 handler 的全部订阅 id）
  */
-function subscribeThreadEvents(threadIds, handler) {
+export function subscribeThreadEvents(threadIds, handler) {
   const ids = Array.from(new Set((Array.isArray(threadIds) ? threadIds : [threadIds])
     .map((v) => String(v ?? '').trim())
     .filter(Boolean)));
@@ -120,7 +151,7 @@ function refreshThreadSubscription() {
   connect();
 }
 
-function isSseActive() {
+export function isSseActive() {
   return _active;
 }
 
@@ -143,36 +174,42 @@ function isSameRuntime(a, b) {
 function handleNotificationEvent(frame) {
   // 事件到达本身证明页面代码在运行：顺带刷新前台时钟（§5.4 时钟源迁移的
   // 预置钩子，P3 心跳改造后成为宽限期判定的主时钟源之一）
-  if (typeof _syncForegroundState === 'function') _syncForegroundState();
+  // 桥接期：_syncForegroundState 定义于 desktop-notify（classic 顶层函数，
+  // 通知域收敛时改 import）
+  if (typeof window._syncForegroundState === 'function') window._syncForegroundState();
   const payload = frame?.data;
   if (!payload || typeof payload !== 'object') return;
   if (isSameRuntime(frame.agentId, currentRuntimeAgentId)) {
     // 焦点：捕获当前 SessionView，确保通知按事件抵达时的身份提交。
-    const token = captureSessionViewToken(frame.agentId);
-    updateNotificationStatus(payload, frame.agentId, token);
-  } else if (typeof applyAgentCallStateFromNotification === 'function') {
+    const token = window.captureSessionViewToken(frame.agentId);
+    // 桥接期：updateNotificationStatus 定义于 runtime-status（classic，
+    // 运行时状态域收敛时改 import）
+    window.updateNotificationStatus(payload, frame.agentId, token);
+  } else {
     // 非焦点：只更新侧栏级 call 状态（转圈、true→false 完成通知）。
     // 边沿变化（calling / suspended）必须即时渲染——否则唤醒轮的转圈
     // 与挂起绿灯依赖"恰好有别的渲染事件"才显形（历史 bug：唤醒轮转圈
     // 从未显示，直接从绿灯跳到完成蓝灯）
     const changed = applyAgentCallStateFromNotification(frame.agentId, payload);
-    if (changed && typeof renderAgentList === 'function') renderAgentList();
+    // 桥接期：renderAgentList 定义于 sidebar-render（classic，侧栏域收敛时改 import）
+    if (changed && typeof window.renderAgentList === 'function') window.renderAgentList();
   }
 }
 
 function handleConnectionEvent(frame) {
   const connected = frame?.connected !== false;
   if (isSameRuntime(frame.agentId, currentRuntimeAgentId)) {
-    const token = captureSessionViewToken(frame.agentId);
+    // 桥接期：captureSessionViewToken 定义于 session-view-state（classic，
+    // 会话视图域收敛时改 import）
+    const token = window.captureSessionViewToken(frame.agentId);
     commitSessionViewPatch(token, { connected }, () => {
-      const record = typeof getRuntimeRecord === 'function' ? getRuntimeRecord(frame.agentId) : null;
+      // 桥接期：getRuntimeRecord 定义于 app-core（classic，身份域收敛时改 import）
+      const record = typeof window.getRuntimeRecord === 'function' ? window.getRuntimeRecord(frame.agentId) : null;
       if (record) record.connected = connected;
     });
   }
   // connection 事件触发即时 agent 列表刷新（§5.2：替代 3s 轮询的即时路径）
-  if (typeof loadAgents === 'function') {
-    loadAgents().catch((e) => console.warn('[sse] loadAgents on connection failed:', e));
-  }
+  loadAgents().catch((e) => console.warn('[sse] loadAgents on connection failed:', e));
   // UDS 层断连恢复（§6.5 层 2）：register 重连对账尾部的事件携带
   // reconnected:true，对该 agent 做一次全量对账兜底
   if (frame?.reconnected && window.ClawFW?.forceFullPollOnce) {
@@ -182,25 +219,24 @@ function handleConnectionEvent(frame) {
 
 function handleTodoEvent(frame) {
   if (!isSameRuntime(frame.agentId, currentRuntimeAgentId)) return;
-  if (typeof commitMetadataUpdate !== 'function') return;
-  const token = captureSessionViewToken(frame.agentId);
+  // 桥接期：captureSessionViewToken 定义于 session-view-state（classic）
+  const token = window.captureSessionViewToken(frame.agentId);
   commitMetadataUpdate(token, { todoRaw: frame?.data ?? null });
 }
 
 function handleOverviewEvent(frame) {
   if (!isSameRuntime(frame.agentId, currentRuntimeAgentId)) return;
-  if (typeof commitMetadataUpdate !== 'function') return;
-  const token = captureSessionViewToken(frame.agentId);
+  // 桥接期：同上（session-view-state classic）
+  const token = window.captureSessionViewToken(frame.agentId);
   commitMetadataUpdate(token, { overviewJson: frame?.data ?? null });
 }
 
 function handleInputRequestsEvent(frame) {
   const requests = Array.isArray(frame?.data) ? frame.data : [];
   if (isSameRuntime(frame.agentId, currentRuntimeAgentId)) {
-    const token = captureSessionViewToken(frame.agentId);
-    if (typeof commitMetadataUpdate === 'function') {
-      commitMetadataUpdate(token, { inputRequestsRaw: requests });
-    }
+    // 桥接期：captureSessionViewToken 定义于 session-view-state（classic）
+    const token = window.captureSessionViewToken(frame.agentId);
+    commitMetadataUpdate(token, { inputRequestsRaw: requests });
     // choice 的桌面通知不经此处触发：server 统一出口判定 notifications.input
     // 权限后发布 app-notification 帧（desktop-notify.js 呈现，ADR-0030）。
   } else {
@@ -225,24 +261,23 @@ function handleQueuedInputsEvent(frame) {
   // 非焦点快照也确认乐观锚点，避免离开期间已消费、切回后气泡复活。
   const texts = reconcileQueuedTexts(items, Date.now(), runtimeId);
   if (!isSameRuntime(runtimeId, currentRuntimeAgentId)) return;
-  if (typeof applyQueuedInputsTexts === 'function') {
-    applyQueuedInputsTexts(runtimeId, texts,
-      items.filter((item) => isUserQueuedItem(item) && !isClaimedQueuedItem(item)).length);
-  }
+  applyQueuedInputsTexts(runtimeId, texts,
+    items.filter((item) => isUserQueuedItem(item) && !isClaimedQueuedItem(item)).length);
 }
 
 function handleMessagesEvent(frame) {
   if (!isSameRuntime(frame.agentId, currentRuntimeAgentId)) return;
   const probe = frame?.probe;
-  if (!probe || typeof runMessagesProbeCycle !== 'function') return;
+  if (!probe) return;
   // probe 到达路径从 overview 响应换成事件帧；seq 对账矩阵与取数逻辑
   // 原样复用（ADR-0013 契约不动）。token 捕获后取数是异步的，stale 由
   // 周期内既有的 isSessionViewTokenCurrent 检查兜底。
-  const token = captureSessionViewToken(frame.agentId);
+  // 桥接期：captureSessionViewToken 定义于 session-view-state（classic）
+  const token = window.captureSessionViewToken(frame.agentId);
   runMessagesProbeCycle(token, probe)
     .then((outcome) => {
       // /messages 404：runtime 已消失，与轮询路径共用 runtime 消失处理（F3）
-      if (outcome === 'handled404' && typeof handleCoreResponsesNotFound === 'function') {
+      if (outcome === 'handled404') {
         return handleCoreResponsesNotFound(token);
       }
       return undefined;
@@ -260,8 +295,10 @@ function handleAppNotificationEvent(event) {
   let frame;
   try { frame = JSON.parse(event.data); } catch { return; }
   if (!frame || typeof frame.agentId !== 'string') return;
-  if (typeof _presentAppNotification === 'function') {
-    _presentAppNotification(frame);
+  // 桥接期：_presentAppNotification 定义于 desktop-notify（classic 顶层函数，
+  // 通知域收敛时改 import）
+  if (typeof window._presentAppNotification === 'function') {
+    window._presentAppNotification(frame);
   }
 }
 
@@ -275,11 +312,13 @@ function notifyChoiceAlerts(alerts) {
   if (!Array.isArray(alerts)) return;
   for (const alert of alerts) {
     const requestId = alert?.requestId;
-    if (!requestId || typeof _seenChoiceAlertIds === 'undefined') continue;
-    if (_seenChoiceAlertIds.has(requestId)) continue;
-    if (_seenChoiceAlertIds.size > 500) _seenChoiceAlertIds.clear();
-    _seenChoiceAlertIds.add(requestId);
-    if (typeof ClawToast === 'undefined' || !ClawToast?.show) continue;
+    if (!requestId) continue;
+    // 「已提醒」容器是 app-core 的 classic 顶层 Set（经 bootstrap 适配对象按引用交出）
+    const seenChoiceAlertIds = callActivity._seenChoiceAlertIds;
+    if (seenChoiceAlertIds.has(requestId)) continue;
+    if (seenChoiceAlertIds.size > 500) seenChoiceAlertIds.clear();
+    seenChoiceAlertIds.add(requestId);
+    if (!ClawToast?.show) continue;
     const matched = (Array.isArray(allAgents) ? allAgents : []).find(
       (a) => (a.runtime_session_id || a.runtimeSessionId) === alert.agentId
     );
@@ -288,7 +327,7 @@ function notifyChoiceAlerts(alerts) {
       || matched?.name
       || alert.agentName
       || alert.agentId;
-    const isZh = currentLanguage === 'zh';
+    const isZh = getCurrentLanguage() === 'zh';
     ClawToast.show({
       id: 'choice-alert-' + requestId,
       title: isZh ? '等待用户选择' : 'Waiting for user choice',
@@ -317,7 +356,7 @@ function isClaimedQueuedItem(item) {
   return !!item?.inputLease;
 }
 
-function reconcileQueuedTexts(items, nowMs = Date.now(), runtimeId = currentRuntimeAgentId) {
+export function reconcileQueuedTexts(items, nowMs = Date.now(), runtimeId = currentRuntimeAgentId) {
   const scopedRuntimeId = String(runtimeId || '').trim();
   const snapshotIds = new Set();
   const snapshotTexts = [];
@@ -352,7 +391,7 @@ function reconcileQueuedTexts(items, nowMs = Date.now(), runtimeId = currentRunt
   return [...snapshotTexts, ...preservedTexts];
 }
 
-function noteQueuedOptimistic(id, text, runtimeId) {
+export function noteQueuedOptimistic(id, text, runtimeId) {
   if (!id) return false;
   const scopedRuntimeId = String(runtimeId ?? currentRuntimeAgentId ?? '').trim();
   if (_observedQueuedIds.get(id) === scopedRuntimeId) return false;
@@ -364,7 +403,7 @@ function noteQueuedOptimistic(id, text, runtimeId) {
   return true;
 }
 
-function getLastQueuedSnapshot(runtimeId) {
+export function getLastQueuedSnapshot(runtimeId) {
   if (runtimeId) return _lastQueuedSnapshots.get(String(runtimeId).trim()) || null;
   return _lastQueuedSnapshots.get(String(currentRuntimeAgentId || '').trim()) || null;
 }
@@ -399,7 +438,7 @@ function onShutdown() {
 
 function scheduleRetry(delayMs) {
   if (_retryTimer !== null) return;
-  _retryTimer = setTimeout(() => {
+  _retryTimer = window.setTimeout(() => {
     _retryTimer = null;
     connect();
   }, Math.max(0, Number(delayMs) || 0));
@@ -411,7 +450,7 @@ function scheduleRetry(delayMs) {
  */
 async function probeAuthThenRetry(delayMs) {
   try {
-    const res = await fetch('/protoclaw/choice_alerts');
+    const res = await window.fetch('/protoclaw/choice_alerts');
     if (res && res.status === 401) {
       _unauthorized = true;
       _active = false;
@@ -443,7 +482,7 @@ function onSourceError() {
 
 function connect() {
   if (_mode === 'off' || _unauthorized) return;
-  if (typeof EventSource === 'undefined') return;
+  if (typeof window.EventSource === 'undefined') return;
   if (_source) return;
   const now = Date.now();
   if (now < _cooldownUntil) {
@@ -452,7 +491,7 @@ function connect() {
   }
   const threadsParam = threadsQueryParam();
   const streamUrl = `/protoclaw/events${threadsParam ? `?threads=${threadsParam}` : ''}`;
-  const source = new EventSource(window.__PROTOCLAW_APP_URL__?.(streamUrl) || streamUrl);
+  const source = new window.EventSource(window.__PROTOCLAW_APP_URL__?.(streamUrl) || streamUrl);
   _threadsParamOnConnect = threadsParam;
   _source = source;
   source.addEventListener('hello', onHello);
@@ -504,7 +543,7 @@ const WATCHDOG_INTERVAL_MS = 5000;
  * - 静默超阈值且连接已死（onerror 未收敛的半开态）：先降级，再全量对账
  * - 静默超阈值且连接健康：只触发全量对账
  */
-function watchdogDecide(active, lastFrameAt, nowMs, readyState) {
+export function watchdogDecide(active, lastFrameAt, nowMs, readyState) {
   if (!active) return { poll: false, deactivate: false };
   if (nowMs - lastFrameAt < WATCHDOG_SILENT_MS) return { poll: false, deactivate: false };
   return { poll: true, deactivate: readyState !== 1 };
@@ -512,7 +551,7 @@ function watchdogDecide(active, lastFrameAt, nowMs, readyState) {
 
 function startWatchdog() {
   if (_watchdogTimer !== null) return;
-  _watchdogTimer = setInterval(() => {
+  _watchdogTimer = window.setInterval(() => {
     const decision = watchdogDecide(_active, _lastFrameAt, Date.now(), _source ? _source.readyState : -1);
     if (decision.poll) {
       _lastFrameAt = Date.now(); // 防止 5s 粒度内重复触发
@@ -525,14 +564,18 @@ function startWatchdog() {
 
 // ── 自举 ───────────────────────────────────────────────────────────
 
-function bootSseClient() {
+export function bootSseClient() {
   _mode = sseModeFromUrl();
   if (_mode === 'off') return;
-  if (typeof EventSource === 'undefined') return;
+  if (typeof window.EventSource === 'undefined') return;
   connect();
   startWatchdog();
 }
 
+// 既有公开命名空间协议（桥接期）：persistent-input / thread-store 仍以
+// window.ClawFW.SseClient.* 读取排队快照、对账乐观文本、订阅 thread 事件。
+// 这些消费方迁移为 import 后删除本节；isSseActive 另有桥键服务裸标识符消费方
+// （app-main / persistent-input / sidebar-render）。
 window.ClawFW = window.ClawFW || {};
 window.ClawFW.SseClient = {
   isSseActive,
@@ -541,6 +584,17 @@ window.ClawFW.SseClient = {
   reconcileQueuedTexts,
   subscribeThreadEvents,
 };
+
+// ── 兼容桥（桥接期）─────────────────────────────────────────────────────
+// 未迁移的 classic 消费方以裸标识符判定模式切换（poll 循环 / 调用状态刷新 /
+// 输入面队列同步）。调用时点晚绑定：classic 顶层无触达点，注册行放在模块
+// 执行相即可。注销条件 = app-main / persistent-input / sidebar-render 改 import。
+const sseBridge = { isSseActive };
+window.KernelState.defineKey('sse-client', 'isSseActive', isSseActive);
+window.KernelState.claim('sse-client', {
+  get: (key) => sseBridge[key],
+  set: (key, value) => { sseBridge[key] = value; },
+});
 
 // 鉴权就绪后再连接（EventSource 同源自动携带 Cookie，但连接早于登录
 // 完成只会收到 401 徒增熔断计数）；__clawAuthReady 由 auth-client.js

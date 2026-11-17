@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
-import { createFrontendSandbox } from './helpers/frontend-vm.js';
+import { withP2EsmCase } from './helpers/p2-esm-case.js';
+import { prepareClassicSandbox } from './p2-classic-hosts.js';
 
 /**
  * 模型设置编辑表单「思考强度」下拉与协议下拉的回归测试。
@@ -12,10 +13,15 @@ import { createFrontendSandbox } from './helpers/frontend-vm.js';
  * select.value 恒为空、fallback 也找不到 option，thinkingEffort 被写回 null，
  * 表现为「思考强度加载不出来 + 自动保存成不开启思考」。
  *
- * 本测试走真实用户路径（edit action → renderSettingsOverlay）锁定：
+ * 本测试走真实用户路径（data-action="modelSettings.editPreset" → 分发器 →
+ * editSettingsPreset → renderSettingsOverlay）锁定：
  *   - 思考强度下拉按协议填充选项，且当前值处于选中态；
  *   - 自定义模型的协议下拉只提供 OpenAI / Anthropic 两族协议（OpenCode 与
  *     OpenAI Auth 有专门配置页，不再出现在自定义表单）。
+ *
+ * 装载路线（ESM 迁移配方第三节）：真实 import + 最小 window/document 桩。
+ * 语音配置缓存、OAuth 流程、分发器都装载真实现——旧沙箱里靠注入
+ * getClawSpeechModelConfig / refreshOAuthStatus 桩维持的路径已不再需要。
  */
 
 /** 按 id 持久化的追踪型 DOM stub：记录 innerHTML 写入，可断言渲染产物 */
@@ -67,91 +73,112 @@ function createTrackingDocument() {
     body: makeElement('body'),
     head: makeElement('head'),
     documentElement: makeElement('html'),
+    activeElement: null,
     readyState: 'complete',
   };
   trackingDocument.elements = elements;
   return trackingDocument;
 }
 
-function createSettingsSandbox() {
+async function withSettingsHarness(fn) {
   const trackingDocument = createTrackingDocument();
-  const ctx = createFrontendSandbox({
-    document: trackingDocument,
-    // renderModelCatalogSettingsOverlay 无条件求值的语音配置依赖（生产由
-    // speech-config-cache.js 提供；此处按非语音 tab 的取值注入）
-    getClawSpeechModelConfig: () => null,
-    getClawSpeechPresets: () => [],
-    refreshOAuthStatus: () => {},
+  // 服务端载荷：seedCustomPreset 只换「服务端给什么」，设置面板经 openSettings
+  // 的真实读取链（GET /protoclaw/model_config）取得设置数据（不再借宿 window.ClawFW）。
+  const server = { config: { defaultModel: {}, agent: {} }, presets: [] };
+  return withP2EsmCase({
+    globals: {
+      document: trackingDocument,
+      fetch: async (url) => {
+        if (String(url) === '/protoclaw/model_config') {
+          return { ok: true, json: async () => ({ config: server.config, presets: server.presets }) };
+        }
+        return { ok: true, json: async () => ({}) };
+      },
+    },
+    classic: (sandbox) => {
+      sandbox.run('window.__clawAuthReady = new Promise(() => {}); applyTheme = () => {}; applyLanguage = () => {};'
+        + 'ResizeObserver = class { observe() {} unobserve() {} disconnect() {} };');
+      prepareClassicSandbox(sandbox);
+      sandbox.KernelState.defineKey('markdown-utils', 'escapeHtml', (value) => String(value ?? ''));
+    },
+  }, async (c) => {
+    const module = await c.load('public/src/modules/model-settings.js');
+    return fn({
+      trackingDocument,
+      module,
+      server,
+      settle: () => new Promise((resolve) => { setImmediate(resolve); }),
+    });
   });
-  // 分发器必须先于任何经 ClawFW.actions 注册动作的模块装载（生产加载顺序第一位）
-  ctx.loadSource('public/src/modules/action-dispatcher.js');
-  ctx.loadSource('public/src/modules/oauth-flow.js');
-  ctx.loadSource('public/src/modules/model-settings.js');
-  ctx.run('window.ClawFW = window.ClawFW || {}');
-  return { ctx, trackingDocument };
 }
 
-function seedCustomPreset(ctx, overrides = {}) {
-  ctx.run(`window.ClawFW.settingsData = ${JSON.stringify({
-    config: { defaultModel: {}, agent: {} },
-    presets: [{
-      name: '回归用模型',
-      provider: 'anthropic',
-      apiSurface: 'chat',
-      model: 'claude-test',
-      thinkingEffort: 'high',
-      ...overrides,
-    }],
-    connections: { opencode: { hasApiKey: false, tier: 'zen' } },
-  })}`);
-  ctx.run('window.ClawFW.settingsOpen = true');
-  ctx.run('window.ClawFW.settingsTab = \'custom\'');
+/** 真实用户路径打开设置面板：服务端载荷 → openSettings → 渲染（设置态归模块私有） */
+async function seedCustomPreset(h, overrides = {}) {
+  h.server.config = { defaultModel: {}, agent: {} };
+  h.server.presets = [{
+    name: '回归用模型',
+    provider: 'anthropic',
+    apiSurface: 'chat',
+    model: 'claude-test',
+    thinkingEffort: 'high',
+    ...overrides,
+  }];
+  window.ClawFW.settingsTab = 'custom';
+  await h.module.openSettings();
 }
 
 /** 真实用户路径：点击预设卡片的「编辑」→ editSettingsPreset → renderSettingsOverlay */
-async function openEditForm(ctx) {
-  await ctx.run('window.ClawFW.actions.invoke(\'modelSettings.editPreset\', { dataset: {} }, null, 0)');
+async function openEditForm(h) {
+  const { invoke } = window.ClawFW.actions;
+  const result = invoke('modelSettings.editPreset', { dataset: {} }, { type: 'click' }, 0);
+  await h.settle();
+  return result;
 }
 
 describe('模型设置编辑表单渲染', () => {
   it('编辑预设时思考强度下拉被填充选项且当前值选中（d9783e39 回归）', async () => {
-    const { ctx, trackingDocument } = createSettingsSandbox();
-    seedCustomPreset(ctx);
-    await openEditForm(ctx);
+    await withSettingsHarness(async (h) => {
+      await seedCustomPreset(h);
+      await openEditForm(h);
 
-    assert.equal(ctx.run('window.ClawFW.settingsEditing'), 0, '编辑态已建立');
-    const select = trackingDocument.elements.get('settings-preset-thinking-effort');
-    assert.ok(select, '思考强度下拉已渲染');
-    // 修复前：populate 调用走 window.* 守卫静默失败，innerHTML 恒为空串
-    assert.ok(select.innerHTML.length > 0, '思考强度下拉选项已填充（不能是空壳）');
-    assert.ok(select.innerHTML.includes('<option value="high" selected'), '当前值 high 处于选中态');
-    // anthropic 协议专属档位，证明按协议分档生效
-    assert.ok(select.innerHTML.includes('<option value="max"'), 'anthropic 档位集合含 max');
+      // 编辑态已建立（设置态归模块私有，按渲染产物断言：编辑索引 0 的保存按钮）
+      const overlayHtml = h.trackingDocument.elements.get('settings-overlay-host').innerHTML;
+      assert.ok(overlayHtml.includes('data-args="[0]"'), '编辑态已建立（编辑索引 0）');
+      const select = h.trackingDocument.elements.get('settings-preset-thinking-effort');
+      assert.ok(select, '思考强度下拉已渲染');
+      // 修复前：populate 调用走 window.* 守卫静默失败，innerHTML 恒为空串
+      assert.ok(select.innerHTML.length > 0, '思考强度下拉选项已填充（不能是空壳）');
+      assert.ok(select.innerHTML.includes('<option value="high" selected'), '当前值 high 处于选中态');
+      // anthropic 协议专属档位，证明按协议分档生效
+      assert.ok(select.innerHTML.includes('<option value="max"'), 'anthropic 档位集合含 max');
+    });
   });
 
   it('openai 协议预设使用 openai 档位集合', async () => {
-    const { ctx, trackingDocument } = createSettingsSandbox();
-    seedCustomPreset(ctx, { provider: 'openai', thinkingEffort: 'medium' });
-    await openEditForm(ctx);
+    await withSettingsHarness(async (h) => {
+      await seedCustomPreset(h, { provider: 'openai', thinkingEffort: 'medium' });
+      await openEditForm(h);
 
-    const select = trackingDocument.elements.get('settings-preset-thinking-effort');
-    assert.ok(select.innerHTML.includes('<option value="medium" selected'), '当前值 medium 选中');
-    assert.ok(select.innerHTML.includes('<option value="minimal"'), 'openai 档位集合含 minimal');
-    assert.ok(!select.innerHTML.includes('<option value="max"'), 'openai 档位不含 anthropic 的 max');
+      const select = h.trackingDocument.elements.get('settings-preset-thinking-effort');
+      assert.ok(select.innerHTML.includes('<option value="medium" selected'), '当前值 medium 选中');
+      assert.ok(select.innerHTML.includes('<option value="minimal"'), 'openai 档位集合含 minimal');
+      assert.ok(!select.innerHTML.includes('<option value="max"'), 'openai 档位不含 anthropic 的 max');
+    });
   });
 
   it('自定义模型协议下拉只提供 OpenAI / Anthropic 两族协议', async () => {
-    const { ctx, trackingDocument } = createSettingsSandbox();
-    seedCustomPreset(ctx);
-    await openEditForm(ctx);
+    await withSettingsHarness(async (h) => {
+      await seedCustomPreset(h);
+      await openEditForm(h);
 
-    const hostHtml = trackingDocument.elements.get('settings-overlay-host').innerHTML;
-    assert.ok(hostHtml.includes('id="settings-preset-provider"'), '协议下拉存在');
-    for (const option of ['value="anthropic"', 'value="openai"', 'value="openai-responses"']) {
-      assert.ok(hostHtml.includes('<option ' + option), '协议下拉提供 ' + option);
-    }
-    // OpenCode 与 OpenAI Auth 有专门配置页，不再出现在自定义表单
-    assert.ok(!hostHtml.includes('<option value="opencode"'), '协议下拉不含 OpenCode');
-    assert.ok(!hostHtml.includes('<option value="openai-oauth"'), '协议下拉不含 OpenAI Auth (OAuth)');
+      const hostHtml = h.trackingDocument.elements.get('settings-overlay-host').innerHTML;
+      assert.ok(hostHtml.includes('id="settings-preset-provider"'), '协议下拉存在');
+      for (const option of ['value="anthropic"', 'value="openai"', 'value="openai-responses"']) {
+        assert.ok(hostHtml.includes('<option ' + option), '协议下拉提供 ' + option);
+      }
+      // OpenCode 与 OpenAI Auth 有专门配置页，不再出现在自定义表单
+      assert.ok(!hostHtml.includes('<option value="opencode"'), '协议下拉不含 OpenCode');
+      assert.ok(!hostHtml.includes('<option value="openai-oauth"'), '协议下拉不含 OpenAI Auth (OAuth)');
+    });
   });
 });

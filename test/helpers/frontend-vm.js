@@ -177,14 +177,19 @@ export function createFrontendSandbox(overrides = {}) {
     vm.runInContext(source, context, { filename: fullPath });
     if (relativePath === 'public/src/app-core.js') {
       context.__createChatLoading = createChatLoading;
-      Object.assign(context, vm.runInContext(`__createChatLoading({
-        loading: () => _chatLoadingSession, timer: () => _chatLoadingTimeout,
-        setLoading: value => { _chatLoadingSession = value; },
-        setTimer: value => { _chatLoadingTimeout = value; },
-        setTimeout: (callback, delay) => setTimeout(callback, delay),
-        clearTimeout: id => clearTimeout(id),
-        render: () => { if (typeof renderCurrentMainView === 'function') renderCurrentMainView(); },
-      })`, context));
+      // 计时句柄是本沙箱私有的：生产的 _chatLoadingTimeout 已归 ESM owner
+      // （orchestration-state），classic 相没有该全局，也不为测试重建桥。
+      Object.assign(context, vm.runInContext(`(() => {
+        let chatLoadingTimeout = null;
+        return __createChatLoading({
+          loading: () => _chatLoadingSession, timer: () => chatLoadingTimeout,
+          setLoading: value => { _chatLoadingSession = value; },
+          setTimer: value => { chatLoadingTimeout = value; },
+          setTimeout: (callback, delay) => setTimeout(callback, delay),
+          clearTimeout: id => clearTimeout(id),
+          render: () => { if (typeof renderCurrentMainView === 'function') renderCurrentMainView(); },
+        });
+      })()`, context));
       delete context.__createChatLoading;
     }
     // Classic first-paint code stays synchronous; async producers exercise the

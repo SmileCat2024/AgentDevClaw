@@ -12,17 +12,21 @@ app.get('/fixture', (_req, res) => res.type('html').send(body.replace('</body>',
 <script src="/src/modules/kernel-state.js"></script>
 <script src="/src/app-core.js"></script>
 <script src="/src/modules/action-dispatcher.js"></script>
-<script src="/src/modules/overview-data.js"></script>
+<script type="module" src="/src/modules/overview-data.js"></script>
 <script src="/src/modules/todo-plan.js"></script>
 <script src="/src/modules/session-view-state.js"></script>
-<script src="/src/modules/agent-data-loader.js"></script>
+<script src="/src/modules/runtime-status.js"></script>
 <script>
  focusedAgentId = 'host'; currentRuntimeAgentId = 'rt';
  allAgents = [{ id: 'host', source: 'prebuilt' }];
- applySessionViewPatch({ identity: { agentId: 'host', sessionId: 'a' } });
+ // R2 边界：显式 identity patch 在身份变化时会调用 overview-data（ESM）的
+ // setCurrentHookInspector / setCurrentOverviewSnapshot 桥键，这两个键在 overview-data
+ // 求值前不存在；首屏身份因此改走 sessionMeta 推导（同一条生产数据加载路径）。
+ // 生产 classic 相是否存在早于模块的身份 patch，由主助手审计收口。
+ applySessionViewPatch({ sessionMeta: { sessionId: 'a' } });
  window.attachMessagesTimestamps = (messages) => messages;
  window.resetRuntimeStatusForSwitch = window.updateNotificationStatus = window.renderFeaturePanel =
-   window.updateRollbackActionVisibility = window.recheckAutoTitleCandidate = window.clearChatLoadingSession = () => {};
+   window.updateRollbackActionVisibility = window.clearChatLoadingSession = () => {};
  window.collectTemplateNames = () => [];
  window.warmTemplatesInBackground = () => {};
  window.renderCurrentMainView = (view) => { document.getElementById('chat-container').textContent = view.messages.map(m => m.content).join(','); };

@@ -12,12 +12,17 @@ app.get('/fixture', (_req, res) => res.type('html').send(body.replace('</body>',
 <script src="/src/modules/kernel-state.js"></script>
 <script src="/src/app-core.js"></script>
 <script src="/src/modules/action-dispatcher.js"></script>
-<script src="/src/modules/overview-data.js"></script>
+<script type="module" src="/src/modules/overview-data.js"></script>
 <script src="/src/modules/todo-plan.js"></script>
+<script src="/src/modules/runtime-status.js"></script>
 <script src="/src/modules/session-view-state.js"></script>
 <script>
  currentRuntimeAgentId = 'rt'; focusedAgentId = 'host';
- applySessionViewPatch({ identity: { agentId: 'host', sessionId: 'a' } });
+ // R2 边界：显式 identity patch 在身份变化时会调用 overview-data（ESM）的
+ // setCurrentHookInspector / setCurrentOverviewSnapshot 桥键，这两个键在 overview-data
+ // 求值前不存在；首屏身份因此改走 sessionMeta 推导（同一条生产数据加载路径），
+ // classic 相即可落地会话视图身份与 token。生产 classic 相的早触达审计由主助手收口。
+ applySessionViewPatch({ sessionMeta: { sessionId: 'a' } });
  applySessionViewPatch({ messages: [{content: 'first paint'}] });
  window.beforeModule = captureSessionViewToken();
  document.getElementById('chat-container').textContent = readCurrentSessionViewState().messages[0].content;
@@ -42,7 +47,12 @@ try {
   page.on('pageerror', (error) => errors.push(error.message));
   await page.route('**/src/modules/session-view-commit-host.js', async (route) => { await gate; await route.continue(); });
   await page.goto(`http://127.0.0.1:${server.address().port}/fixture`, { waitUntil: 'commit' });
-  await page.waitForFunction(() => document.readyState === 'interactive' && window.started === false);
+  try {
+    await page.waitForFunction(() => document.readyState === 'interactive' && window.started === false, null, { timeout: 5000 });
+  } catch (error) {
+    console.error({ errors, state: await page.evaluate(() => ({ ready: document.readyState, started: window.started, paint: document.getElementById('chat-container').textContent })) });
+    throw error;
+  }
   assert.equal(await page.locator('#chat-container').textContent(), 'first paint');
   release();
   await page.waitForFunction(() => window.started === true);

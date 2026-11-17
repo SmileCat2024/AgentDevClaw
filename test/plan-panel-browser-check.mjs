@@ -17,19 +17,32 @@ try {
       requests.push(route.request().postDataJSON());
       return route.fulfill({ json: { ok: true } });
     }
+    // 迁出后的 ESM 模块按真实模块 URL 从 public/ 取源，走真实 import 图。
+    const pathname = new URL(route.request().url()).pathname;
+    if (pathname.startsWith('/src/')) {
+      return route.fulfill({ contentType: 'text/javascript', body: await fs.readFile(`public${pathname}`, 'utf8') });
+    }
     return route.fulfill({ contentType: 'text/html', body: source.replace(/<script\b[^>]*>[\s\S]*?<\/script>/g, '').replace(/<link\b[^>]*>/g, '') });
   });
   await page.goto('http://claw.test/');
   for (const name of ['base', 'layout', 'components']) {
     await page.addStyleTag({ content: await fs.readFile(`public/styles/${name}.css`, 'utf8') });
   }
+  // 几何断言比较稳定布局，不比较入场过渡中的瞬时位移。
+  await page.addStyleTag({ content: '.feature-panel-body { transition: none; }' });
   await page.addScriptTag({ content: await fs.readFile('node_modules/marked/lib/marked.umd.js', 'utf8') });
   await page.addScriptTag({ content: await fs.readFile('public/src/modules/kernel-state.js', 'utf8') });
-  for (const name of ['i18n', 'app-core', 'modules/markdown-utils', 'modules/todo-plan']) {
+  // 右栏面板唯一注册表是 ClawPanels（claw-host 的 panels 命名空间 + 旧入口包装）；
+  // 渲染寻址从它读，不再有平行清单。
+  await page.addScriptTag({ content: await fs.readFile('public/src/modules/claw-host.js', 'utf8') });
+  await page.addScriptTag({ content: await fs.readFile('public/src/modules/right-panel-registry.js', 'utf8') });
+  await page.addScriptTag({ content: await fs.readFile('public/src/modules/action-dispatcher.js', 'utf8') });
+  for (const name of ['i18n', 'app-core', 'modules/markdown-bootstrap', 'modules/todo-plan']) {
     await page.addScriptTag({ content: await fs.readFile(`public/src/${name}.js`, 'utf8') });
   }
+  await page.addScriptTag({ type: 'module', url: 'http://claw.test/src/modules/markdown-utils.js' });
   await page.evaluate(() => {
-    window.featurePanels = { plan: { title: '计划', render: () => renderPlanPanel() } };
+    window.ClawPanels.register('plan', { title: '计划', render: () => renderPlanPanel() });
   });
   await page.addScriptTag({ content: await fs.readFile('public/src/modules/debug-panel-host.js', 'utf8') });
   const tasks = [

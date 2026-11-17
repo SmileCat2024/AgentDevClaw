@@ -5,8 +5,10 @@ import fs from 'node:fs/promises';
 import { chromium } from 'playwright';
 
 const main = await fs.readFile('public/src/app-main.js', 'utf8');
-const start = main.indexOf('function createMetadataCommitHost()');
-const adapter = main.slice(start, main.indexOf('/**', start));
+// classic 宿主切片：metadata commit 适配器与其复用的窄 UI 适配器（classic 唯一实现），
+// 边界锚在下一个宿主工厂。
+const start = main.indexOf('function createCommittedViewRendererHost(');
+const adapter = main.slice(start, main.indexOf('function createPollMaintenanceHost(', start));
 const index = await fs.readFile('public/index.html', 'utf8');
 const body = index.replace(/<script\b[^>]*>[\s\S]*?<\/script>/g, '').replace(/<link\b[^>]*>/g, '');
 const app = express();
@@ -15,13 +17,18 @@ app.get('/fixture', (_req, res) => res.type('html').send(body.replace('</body>',
 <script src="/src/modules/kernel-state.js"></script>
 <script src="/src/app-core.js"></script>
 <script src="/src/modules/action-dispatcher.js"></script>
-<script src="/src/modules/overview-data.js"></script>
+<script type="module" src="/src/modules/overview-data.js"></script>
 <script src="/src/modules/todo-plan.js"></script>
 <script src="/src/modules/session-view-state.js"></script>
+<script src="/src/modules/runtime-status.js"></script>
 <script>
  ${adapter}
  currentRuntimeAgentId = 'rt'; focusedAgentId = 'host';
- applySessionViewPatch({ identity: { agentId: 'host', sessionId: 'a' } });
+ // R2 边界：显式 identity patch 在身份变化时会调用 overview-data（ESM）的
+ // setCurrentHookInspector / setCurrentOverviewSnapshot 桥键，这两个键在 overview-data
+ // 求值前不存在；首屏身份因此改走 sessionMeta 推导（同一条生产数据加载路径）。
+ // 生产 classic 相是否存在早于模块的身份 patch，由主助手审计收口。
+ applySessionViewPatch({ sessionMeta: { sessionId: 'a' } });
  window.updateChatContextBar = window.updateInputModelSwitcher = window.updateThinkingEffortSwitcher =
    window.updateRollbackActionVisibility = window._syncPersistentInputUi = () => {};
  window.isChatSurfaceActive = () => false;

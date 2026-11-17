@@ -135,19 +135,25 @@ describe('Feature detail tab bar identity', () => {
   });
 });
 
-describe('window.setFeatureDetailTab', () => {
+describe('features.setDetailTab action', () => {
   it('switches the visible panel in place without rebuilding the tab bar', () => {
-    const buttons = ['tools', 'skills', 'hooks'].map(key => ({
-      dataset: { featureDetailTab: key },
-      selected: key === 'tools',
-      classList: {
-        add(name) { if (name === 'active') this.owner.selected = true; },
-        remove(name) { if (name === 'active') this.owner.selected = false; },
-        owner: null,
-      },
-      setAttribute(name, value) { if (name === 'aria-selected') this.selected = value === 'true'; },
-    }));
-    for (const button of buttons) button.classList.owner = button;
+    // 活页签条替身：active 类与 aria-selected 分别记账，节点身份用同一批按钮对象
+    // 证明（生产代码走 querySelectorAll 取活页签，不重建整条）。
+    const makeLiveTabButton = (key) => {
+      const state = { active: key === 'tools', ariaSelected: key === 'tools' ? 'true' : 'false' };
+      return {
+        dataset: { featureDetailTab: key },
+        get active() { return state.active; },
+        get ariaSelected() { return state.ariaSelected; },
+        classList: {
+          add(name) { if (name === 'active') state.active = true; },
+          remove(name) { if (name === 'active') state.active = false; },
+        },
+        setAttribute(name, value) { if (name === 'aria-selected') state.ariaSelected = String(value); },
+      };
+    };
+    const buttons = ['tools', 'skills', 'hooks'].map(makeLiveTabButton);
+    const liveBarReads = [];
 
     const panel = { replaceWith(next) { this.replacedBy = next; } };
     let innerHTMLWrites = 0;
@@ -156,7 +162,11 @@ describe('window.setFeatureDetailTab', () => {
       get innerHTML() { return this._html; },
       set innerHTML(value) { this._html = value; innerHTMLWrites += 1; },
       querySelector(selector) { return selector === '[role="tabpanel"]' ? panel : null; },
-      querySelectorAll(selector) { return selector === '[data-feature-detail-tab]' ? buttons : []; },
+      querySelectorAll(selector) {
+        if (selector !== '[data-feature-detail-tab]') return [];
+        liveBarReads.push(buttons);
+        return buttons;
+      },
     };
     const document = {
       getElementById(id) { return id === 'feature-detail-portal' ? portal : null; },
@@ -197,12 +207,20 @@ describe('window.setFeatureDetailTab', () => {
     ctx.loadSource('public/src/modules/action-dispatcher.js');
     ctx.loadSource('public/src/modules/debug-features-hooks.js');
 
-    ctx.run('window.setFeatureDetailTab("skills", "with-skills")');
+    // 生产路径：模板 data-action="features.setDetailTab" 经分发器注册表分发。
+    ctx.run(`window.ClawFW.actions.invoke('features.setDetailTab', {
+      dataset: { tabKey: 'skills', featureName: 'with-skills' },
+    })`);
 
     assert.equal(innerHTMLWrites, writesBeforeSwitch, 'tab switching must not rebuild the portal');
     assert.match(panel.replacedBy.outerHTML, /feature-skill-list/, 'skills tab must replace the visible content panel');
-    assert.equal(buttons.find(button => button.dataset.featureDetailTab === 'skills').selected, true);
-    assert.equal(buttons.find(button => button.dataset.featureDetailTab === 'tools').selected, false);
+    // 节点身份：动作分发后读到/改到的仍是同一批活页签节点，没有整条重建。
+    assert.equal(liveBarReads.filter(read => read === buttons).length >= 1, true, 'action must reuse the live tab bar');
+    // active 类与 aria-selected 成对更新：目标页签选中，原页签取消。
+    assert.equal(buttons[1].active, true, 'skills tab must be the active one');
+    assert.equal(buttons[0].active, false, 'tools tab must be deactivated');
+    assert.equal(buttons[1].ariaSelected, 'true');
+    assert.equal(buttons[0].ariaSelected, 'false');
   });
 });
 

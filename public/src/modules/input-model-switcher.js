@@ -1,34 +1,95 @@
 /**
- * input-model-switcher.js — 自 persistent-input.js 拆出（ticket 020，纯搬移不改逻辑）
- * 挂在输入框工具栏上的两个独立切换器组件。
+ * input-model-switcher.js — 输入区「模型」与「思考强度」两个切换器域
+ * （自 persistent-input.js 拆出，ticket 020 纯搬移不改逻辑）。
+ *
+ * P2 长尾批次：整域原位转 ESM——路径 / 文件名 / 既有函数名与键名全部不变，
+ * 只做搬移 + export 化，不重命名、不改业务逻辑。装载相位由 classic 加载序变为
+ * 「首个 import 它的模块执行时」（deferred），时序审计结论见下。
  *
  * 包含：
  * - model 切换下拉：_getInputAgentId / _getInputDefaultPresetName /
  *   _closeInputModelDropdown / _inputModelDropdownOutsideClick /
- *   _performInputModelSwap / window.toggleInputModelDropdown / updateInputModelSwitcher
+ *   _performInputModelSwap / toggleInputModelDropdown / updateInputModelSwitcher
  * - thinking effort 切换下拉：OPENAI_EFFORT_LABELS / ANTHROPIC_EFFORT_LABELS /
- *   _getCurrentPreset / _getCurrentPresetProtocol / _getEffortList / _getEffortLabel /
- *   _getCurrentThinkingEffort /
- *   _currentModelSupportsThinking /
+ *   _getCurrentPreset / _getCurrentPresetProtocol / _getEffortLabel /
+ *   _getCurrentThinkingEffort / _currentModelSupportsThinking /
  *   _closeThinkingEffortDropdown / _inputThinkingDropdownOutsideClick /
- *   _performThinkingEffortSwap / window.toggleThinkingEffortDropdown / updateThinkingEffortSwitcher
+ *   _performThinkingEffortSwap / toggleThinkingEffortDropdown /
+ *   updateThinkingEffortSwitcher
+ * - `getThinkingEffortOptions`：既有 `window.ClawFW.getThinkingEffortOptions`
+ *   命名空间协议（memo 插件 / ph-settings / ph-project-actions 按既有协议取用）
  *
- * 依赖（全局符号，由先于本文件加载的脚本提供，加载序见 index.html）：
- * - escapeHtml, currentLanguage, ClawToast (app-core.js)
- * - getClawModelPresets / ensureClawModelPresetsForSession /
- *   clawModelPresetsMatchSession (model-preset-cache.js)
- * - focusedAgentId (app-core.js / app-main.js)
- * - currentRuntimeAgentId,
- *   getRuntimeAwareAgentRecord, getCurrentHostAgentRecord, getCurrentAgentRecord (app-main.js)
- * - readCurrentSessionViewState / captureSessionViewToken / isSessionViewTokenCurrent /
- *   commitSessionViewPatch (session-view-state.js)
- * - window.ClawFeatureCommunication (feature-communication.js)
+ * 依赖形态（一律「当前源码已是 ESM 就直接 import」，不退回 window、不复制状态）：
+ *   - import：`getCurrentLanguage`（i18n-environment-state）、`escapeHtml`
+ *     （markdown-utils）、`ClawToast`（toast-notify）、`ClawFeatureCommunication`
+ *     （feature-communication）、`getClawModelPresets` /
+ *     `clawModelPresetsMatchSession` / `ensureClawModelPresetsForSession`
+ *     （model-preset-cache）、`focusedAgentId`（agent-store-state，live binding）、
+ *     `currentRuntimeAgentId`（orchestration-state，live binding）、
+ *     `isSessionViewTokenCurrent` / `commitSessionViewPatch`
+ *     （session-view-commit-host，会话视图提交策略的唯一 ESM 入口）。
+ *   - 仍是 classic 唯一实现，只能经 `window.X` 晚绑定调用；**保留原 `typeof`
+ *     守卫**（缺失时按原语义跳过）：`getCurrentHostAgentRecord` /
+ *     `getCurrentAgentRecord`（app-main）、`getRuntimeAwareAgentRecord`（app-ui）、
+ *     `formatPresetDisplayName`（app-core）、`updateChatContextBar`
+ *     （chat-context-bar）。
+ *   - `readCurrentSessionViewState` / `captureSessionViewToken`：session-view-state
+ *     的同步快照读取仍为 classic（首屏同步链使用），本域原实现即无守卫直调，
+ *     保持 `window.` 直调。
  *
- * 投递路径（ADR-0034）：模型/思考档位切换统一走 model-selection Feature 的
+ * 兼容桥（KernelState 访问器，注册在本模块执行相；逐键消费面见文件末尾）：
+ *   - `updateInputModelSwitcher` / `updateThinkingEffortSwitcher`：persistent-input
+ *     （classic，renderPersistentInput 无守卫直调）、app-main（classic，宿主
+ *     适配器带 typeof 守卫）、agent-data-loader / p2-w2-3a-queue-projection
+ *     （ESM 侧仍是 `window.` 调用，由那两个文件的批次改 import 后注销）。
+ *   - `toggleInputModelDropdown` / `toggleThinkingEffortDropdown`：input-composer
+ *     （classic，按钮 onclick 装配处无守卫直调）。
+ *   其余函数与全部状态（两个下拉元素、单飞标志、通道可用性缓存、恢复失败
+ *   提示标志）零跨文件消费，按配方收敛为模块私有，不上桥。
+ *
+ * 时序审计（R1–R4 + S；「键 × 触达点」逐条结论见批次交付报告）：
+ *   - R1/R2：classic 相位与 boot 首轮都不触达本域任何函数。首屏同步链
+ *     `app-main` 顶层 applyLanguage → renderCurrentMainView →
+ *     `notifyInputSurfaceChanged(viewState.inputRequests)` → renderInputRequests
+ *     在冷态（currentRuntimeAgentId 为空、无 thread await target、非只读、无
+ *     回退对话框、无压缩、请求为空）下逐级短路到 `renderMode === 'hidden'`
+ *     分支，先 detach + 隐藏 composer 再 return——**不执行** renderPersistentInput，
+ *     因此两个 update*Switcher 不在首屏触达。认证启动等待 DOMContentLoaded
+ *     （静态非 async module 先求值），boot 之后才第一次可能进入 interactive
+ *     分支，此时桥键已注册。故本域保留零 classic 实现，无残余键。
+ *   - R3：本域无 DOM 引用类状态键——两个下拉元素都是函数内局部、模块私有。
+ *   - R4：模块顶层只有 import、常量表、协议挂载、桥注册与 claim；无 DOM 查询、
+ *     无监听安装、无定时器，延迟到模块执行相与加载序等价。
+ *   - S（sloppy → strict）：原文件无 'use strict'。逐条排查：无隐式全局赋值、
+ *     无对只读属性的静默失败赋值、无 `with`、无顶层 `this`、函数体内无裸
+ *     `this`（全部是具名函数声明 / 对象方法形态）。转为 strict 后唯一形态差异
+ *     是 `typeof <未声明标识符>` 的守卫——本文件里这些目标已改为 import 或显式
+ *     `window.X`，不再依赖 sloppy 的「未声明标识符 typeof 也安全」行为。
+ *
+ * TDZ 修复与语言读取边界：`toggleInputModelDropdown` 原有两处语言读取（点击时 /
+ * 异步查询后起菜单前），后者与外层同名 `isZh` 把失败提示分支整段遮蔽成 TDZ。
+ * 修法保留两个读取时点：失败提示（runtime 未就绪 / 通道未声明 / 请求冲突 /
+ * 恢复失败）用点击时的 `isZh`；菜单文案用独立变量 `menuIsZh`，读取点仍是原
+ * 声明位置（通道 / 状态 / 预设三次查询之后），作用范围只到菜单渲染。
+ *
+ * 投递路径（ADR-0034）：模型 / 思考档位切换统一走 model-selection Feature 的
  * feature-comms 请求面（selectModel / clearThinkingOverride）；旧
  * /protoclaw/swap_model、/protoclaw/swap_thinking_effort 路由已退役。
- * 控件可用性 = 通道声明事实（未装配/远程/runtime 未起 → 不可用提示）。
+ * 控件可用性 = 通道声明事实（未装配 / 远程 / runtime 未起 → 不可用提示）。
  */
+
+import { getCurrentLanguage } from './i18n-environment-state.js';
+import { escapeHtml } from './markdown-utils.js';
+import { ClawToast } from './toast-notify.js';
+import { ClawFeatureCommunication } from './feature-communication.js';
+import {
+  clawModelPresetsMatchSession,
+  ensureClawModelPresetsForSession,
+  getClawModelPresets,
+} from './model-preset-cache.js';
+import { focusedAgentId } from './agent-store-state.js';
+import { currentRuntimeAgentId } from './orchestration-state.js';
+import { commitSessionViewPatch, isSessionViewTokenCurrent } from './session-view-commit-host.js';
 
 // ── 输入框模型切换下拉 ──────────────────────────────────────────────
 
@@ -47,28 +108,28 @@ function _getInputAgentId() {
   // (user data agent-configs/{agentId}.json) and IPC delivery
   // (sendIPCToAllSessions → listAgentRuntimes) both use the host ID.
   // focusedAgentId is set to the host ID by switchAgent().
-  if (typeof focusedAgentId !== 'undefined' && focusedAgentId) return focusedAgentId;
+  if (focusedAgentId) return focusedAgentId;
   // Fallback: resolve via host record
-  if (typeof getCurrentHostAgentRecord === 'function') {
-    let host = getCurrentHostAgentRecord();
+  if (typeof window.getCurrentHostAgentRecord === 'function') {
+    let host = window.getCurrentHostAgentRecord();
     if (host && host.id) return host.id;
   }
-  if (typeof getCurrentAgentRecord === 'function') {
-    let agent = getCurrentAgentRecord();
+  if (typeof window.getCurrentAgentRecord === 'function') {
+    let agent = window.getCurrentAgentRecord();
     if (agent && agent.id) return agent.id;
   }
   return null;
 }
 
 function _getInputDefaultPresetName() {
-  const model = readCurrentSessionViewState().overview;
+  const model = window.readCurrentSessionViewState().overview;
   if (model.presetName) return model.presetName;
   if (model.modelRevision != null || model.modelName) return '';
 
   // 启动配置只用于首份运行时模型状态到达之前。
   // Priority 2: preset from agent config (startup default, before first poll)
-  let agent = typeof getRuntimeAwareAgentRecord === 'function'
-    ? getRuntimeAwareAgentRecord()
+  let agent = typeof window.getRuntimeAwareAgentRecord === 'function'
+    ? window.getRuntimeAwareAgentRecord()
     : null;
   if (!agent) return '';
   let modelPresets = agent.modelPresets || {};
@@ -111,7 +172,7 @@ function _inputModelDropdownOutsideClick(e) {
 let _modelSelectionChannelOk = false; // { key, ok }
 let _restoreFailureNotified = false; // per page session（会话切换重置）
 
-function _modelSelectionTarget(agentId, viewToken = captureSessionViewToken()) {
+function _modelSelectionTarget(agentId, viewToken = window.captureSessionViewToken()) {
   // 请求目标与回执归属必须来自同一份视图身份。宿主 active 是跨标签页可变的
   // 工作空间状态，不能用它补齐缺失身份，否则会切到另一个对话。
   const identity = viewToken.identity;
@@ -134,7 +195,7 @@ function _notifyModelSelectionTargetUnavailable(agentId, viewToken, isZh) {
   _notifyModelSelectionUnavailable(isZh);
 }
 
-async function _ensureModelSelectionChannel(agentId, viewToken = captureSessionViewToken()) {
+async function _ensureModelSelectionChannel(agentId, viewToken = window.captureSessionViewToken()) {
   const target = _modelSelectionTarget(agentId, viewToken);
   if (!target) return _isModelSelectionTargetPending(agentId, viewToken) ? null : false;
   if (!isSessionViewTokenCurrent(viewToken)) return false;
@@ -143,7 +204,7 @@ async function _ensureModelSelectionChannel(agentId, viewToken = captureSessionV
   if (_modelSelectionChannelOk && _modelSelectionChannelOk.key === key && _modelSelectionChannelOk.ok) return true;
   if (!_modelSelectionChannelOk || _modelSelectionChannelOk.key !== key) _restoreFailureNotified = false;
   try {
-    let channels = await window.ClawFeatureCommunication.listChannels(agentId, sessionId);
+    let channels = await ClawFeatureCommunication.listChannels(agentId, sessionId);
     if (!isSessionViewTokenCurrent(viewToken)) return false;
     let declared = (channels || []).some(function(ch) {
       return ch && ch.featureId === 'model-selection' && ch.channelId === 'selection';
@@ -159,25 +220,21 @@ async function _ensureModelSelectionChannel(agentId, viewToken = captureSessionV
 }
 
 function _notifyModelSelectionUnavailable(isZh) {
-  if (typeof ClawToast !== 'undefined') {
-    ClawToast.show({
-      id: 'input-model-unavailable',
-      title: isZh ? '当前会话不支持模型切换' : 'Model switching unavailable for this session',
-      status: 'info',
-      autoDismiss: 3500,
-    });
-  }
+  ClawToast.show({
+    id: 'input-model-unavailable',
+    title: isZh ? '当前会话不支持模型切换' : 'Model switching unavailable for this session',
+    status: 'info',
+    autoDismiss: 3500,
+  });
 }
 
 function _notifyModelSelectionNotReady(isZh) {
-  if (typeof ClawToast !== 'undefined') {
-    ClawToast.show({
-      id: 'input-model-not-ready',
-      title: isZh ? '会话正在加载，请稍后再试' : 'Session is loading. Try again shortly.',
-      status: 'info',
-      autoDismiss: 3500,
-    });
-  }
+  ClawToast.show({
+    id: 'input-model-not-ready',
+    title: isZh ? '会话正在加载，请稍后再试' : 'Session is loading. Try again shortly.',
+    status: 'info',
+    autoDismiss: 3500,
+  });
 }
 
 function _isSessionOperationConflict(error) {
@@ -185,7 +242,6 @@ function _isSessionOperationConflict(error) {
 }
 
 function _notifySessionOperationInProgress(isZh, toastId = null) {
-  if (typeof ClawToast === 'undefined') return;
   const notice = {
     status: 'info',
     title: isZh ? '会话正在切换，请稍后重试' : 'Session is changing. Try again shortly.',
@@ -203,37 +259,33 @@ function _notifyModelSelectionRequestError(error, isZh, toastId) {
     _notifySessionOperationInProgress(isZh, toastId);
     return;
   }
-  if (typeof ClawToast !== 'undefined') {
-    ClawToast.update(toastId, {
-      status: 'error',
-      title: isZh ? '切换失败' : 'Switch failed',
-      description: error?.message || String(error),
-      closable: true,
-      autoDismiss: 8000,
-    });
-  }
+  ClawToast.update(toastId, {
+    status: 'error',
+    title: isZh ? '切换失败' : 'Switch failed',
+    description: error?.message || String(error),
+    closable: true,
+    autoDismiss: 8000,
+  });
 }
 
-async function _performInputModelSwap(agentId, presetName, viewToken = captureSessionViewToken()) {
-  let isZh = typeof currentLanguage !== 'undefined' && currentLanguage === 'zh';
+async function _performInputModelSwap(agentId, presetName, viewToken = window.captureSessionViewToken()) {
+  let isZh = getCurrentLanguage() === 'zh';
   if (!isSessionViewTokenCurrent(viewToken)) return;
   const target = _modelSelectionTarget(agentId, viewToken);
   if (!target) { _notifyModelSelectionTargetUnavailable(agentId, viewToken, isZh); return; }
   let toastId = 'input-model-swap';
 
-  if (typeof ClawToast !== 'undefined') {
-    ClawToast.show({
-      id: toastId,
-      title: isZh ? '正在切换模型...' : 'Switching model...',
-      status: 'loading',
-      closable: false,
-    });
-  }
+  ClawToast.show({
+    id: toastId,
+    title: isZh ? '正在切换模型...' : 'Switching model...',
+    status: 'loading',
+    closable: false,
+  });
 
   try {
     // 会话级 Feature 请求面（ADR-0034）：精确四元组寻址会话 runtime，
     // 回执 meta 为 Feature 端 getLLMMeta() 快照；代次拒绝机制沿用。
-    const result = await window.ClawFeatureCommunication.request(
+    const result = await ClawFeatureCommunication.request(
       target,
       'selectModel',
       { presetName },
@@ -242,20 +294,18 @@ async function _performInputModelSwap(agentId, presetName, viewToken = captureSe
       commitSessionViewPatch(viewToken, { model: result.meta }, () => {
         updateInputModelSwitcher();
         updateThinkingEffortSwitcher();
-        if (typeof updateChatContextBar === 'function') updateChatContextBar();
+        if (typeof window.updateChatContextBar === 'function') window.updateChatContextBar();
       });
-      if (typeof ClawToast !== 'undefined') {
-        // __default__ 合成名 → 显示实际切换到的模型名（回执 meta 携带）
-        let swapDesc = presetName;
-        if (presetName === '__default__' && result?.meta?.modelName) swapDesc = result.meta.modelName;
-        else if (typeof formatPresetDisplayName === 'function') swapDesc = formatPresetDisplayName(presetName);
-        ClawToast.update(toastId, {
-          status: 'success',
-          title: isZh ? '模型已切换' : 'Model switched',
-          description: swapDesc,
-          autoDismiss: 3000,
-        });
-      }
+      // __default__ 合成名 → 显示实际切换到的模型名（回执 meta 携带）
+      let swapDesc = presetName;
+      if (presetName === '__default__' && result?.meta?.modelName) swapDesc = result.meta.modelName;
+      else if (typeof window.formatPresetDisplayName === 'function') swapDesc = window.formatPresetDisplayName(presetName);
+      ClawToast.update(toastId, {
+        status: 'success',
+        title: isZh ? '模型已切换' : 'Model switched',
+        description: swapDesc,
+        autoDismiss: 3000,
+      });
     } else {
       const error = new Error((result && (result.error || result.code)) || 'Unknown error');
       error.code = result?.code;
@@ -267,7 +317,7 @@ async function _performInputModelSwap(agentId, presetName, viewToken = captureSe
   }
 }
 
-window.toggleInputModelDropdown = function(event) {
+export function toggleInputModelDropdown(event) {
   if (event) {
     event.preventDefault();
     event.stopPropagation();
@@ -284,10 +334,10 @@ window.toggleInputModelDropdown = function(event) {
 
   let agentId = _getInputAgentId();
   if (!agentId) return;
-  const viewToken = captureSessionViewToken();
+  const viewToken = window.captureSessionViewToken();
   const target = _modelSelectionTarget(agentId, viewToken);
 
-  let isZh = typeof currentLanguage !== 'undefined' && currentLanguage === 'zh';
+  let isZh = getCurrentLanguage() === 'zh';
   if (!target) { _notifyModelSelectionTargetUnavailable(agentId, viewToken, isZh); return; }
 
   _inputModelDropdownLoading = true;
@@ -309,7 +359,7 @@ window.toggleInputModelDropdown = function(event) {
       // 恢复失败事实对账（§5.3）：每次打开下拉查一次 getStatus，
       // 有 lastRestoreFailure 时 toast 呈现一次（per session）。
       try {
-        const status = await window.ClawFeatureCommunication.request(
+        const status = await ClawFeatureCommunication.request(
           target,
           'getStatus',
           {},
@@ -318,24 +368,22 @@ window.toggleInputModelDropdown = function(event) {
         if (status?.ok && status.lastRestoreFailure && !_restoreFailureNotified) {
           _restoreFailureNotified = true;
           let presetLabel = status?.choice?.presetName || '';
-          if (typeof formatPresetDisplayName === 'function' && presetLabel) {
-            presetLabel = formatPresetDisplayName(presetLabel);
+          if (typeof window.formatPresetDisplayName === 'function' && presetLabel) {
+            presetLabel = window.formatPresetDisplayName(presetLabel);
           }
-          if (typeof ClawToast !== 'undefined') {
-            ClawToast.show({
-              id: 'model-restore-failure',
-              title: isZh ? '模型恢复失败' : 'Model restore failed',
-              description: isZh
-                ? `模型 ${presetLabel || '(未知)'} 恢复失败，已回退全局默认；原选择保留`
-                : `Model ${presetLabel || '(unknown)'} could not be restored; fell back to global default (choice kept)`,
-              status: 'warn',
-              autoDismiss: 8000,
-            });
-          }
+          ClawToast.show({
+            id: 'model-restore-failure',
+            title: isZh ? '模型恢复失败' : 'Model restore failed',
+            description: isZh
+              ? `模型 ${presetLabel || '(未知)'} 恢复失败，已回退全局默认；原选择保留`
+              : `Model ${presetLabel || '(unknown)'} could not be restored; fell back to global default (choice kept)`,
+            status: 'warn',
+            autoDismiss: 8000,
+          });
         }
       } catch (error) {
         if (_isSessionOperationConflict(error)) {
-          _notifySessionOperationInProgress(typeof currentLanguage !== 'undefined' && currentLanguage === 'zh');
+          _notifySessionOperationInProgress(getCurrentLanguage() === 'zh');
           return;
         }
         // 状态对账失败不代表 Feature 不支持；非冲突错误不阻止打开菜单。
@@ -352,7 +400,11 @@ window.toggleInputModelDropdown = function(event) {
       if (!isSessionViewTokenCurrent(viewToken) || !presets.length) return;
 
       let currentPreset = _getInputDefaultPresetName();
-    let isZh = typeof currentLanguage !== 'undefined' && currentLanguage === 'zh';
+      // 菜单文案的语言在**原声明时点**重新读取（通道 / 状态 / 预设三次查询与
+      // 其间可能发生的语言切换之后）。原实现就是在这里再读一次当前语言，只是
+      // 与外层同名 `isZh` 而整段遮蔽了失败提示分支；改用独立变量后读取时点与
+      // 作用范围都保持原样——只服务菜单渲染，失败提示仍用点击时的 isZh。
+      const menuIsZh = getCurrentLanguage() === 'zh';
 
     let dropdown = document.createElement('div');
     _inputModelDropdown = dropdown;
@@ -366,7 +418,7 @@ window.toggleInputModelDropdown = function(event) {
      };
      const sourceTabs = '<div class="ccb-model-source-tabs">'
        + ['all', 'custom', 'codex', 'opencode'].map(function(source) {
-         const label = source === 'all' ? (isZh ? '全部' : 'All') : source === 'custom' ? (isZh ? '自定义' : 'Custom') : source === 'codex' ? 'Codex' : 'OpenCode';
+         const label = source === 'all' ? (menuIsZh ? '全部' : 'All') : source === 'custom' ? (menuIsZh ? '自定义' : 'Custom') : source === 'codex' ? 'Codex' : 'OpenCode';
          return '<button type="button" class="ccb-model-source-tab' + (source === 'all' ? ' active' : '') + '" data-source="' + source + '">' + label + '</button>';
        }).join('') + '</div>';
       let html = '<div class="ccb-model-dropdown-card">' + sourceTabs + '<div class="ccb-model-dropdown-list">';
@@ -374,7 +426,7 @@ window.toggleInputModelDropdown = function(event) {
       let name = p.name || p.model || '';
       let isActive = name === currentPreset;
       let visionIcon = p.vision === true
-        ? '<svg class="ccb-md-vision" title="' + (isZh ? '支持视觉' : 'Vision') + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>'
+        ? '<svg class="ccb-md-vision" title="' + (menuIsZh ? '支持视觉' : 'Vision') + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>'
         : '';
       let ctxText = p.contextLength && p.contextLength > 0
         ? Math.round(p.contextLength / 1000) + 'K'
@@ -425,22 +477,22 @@ window.toggleInputModelDropdown = function(event) {
       _inputModelDropdownLoading = false;
     }
   })();
-};
+}
 
 /**
  * Update the model name shown in the input-area switcher button.
  * Called on render and after model swap.
  */
 
-function updateInputModelSwitcher() {
+export function updateInputModelSwitcher() {
   let nameEl = document.querySelector('.input-model-name');
   if (!nameEl) return;
-  let displayName = _getInputDefaultPresetName() || readCurrentSessionViewState().overview.modelName || '';
+  let displayName = _getInputDefaultPresetName() || window.readCurrentSessionViewState().overview.modelName || '';
   if (displayName === '__default__') {
-    displayName = readCurrentSessionViewState().overview.modelName;
+    displayName = window.readCurrentSessionViewState().overview.modelName;
   }
-  if (typeof formatPresetDisplayName === 'function') displayName = formatPresetDisplayName(displayName);
-  nameEl.textContent = displayName || (currentLanguage === 'zh' ? '模型' : 'Model');
+  if (typeof window.formatPresetDisplayName === 'function') displayName = window.formatPresetDisplayName(displayName);
+  nameEl.textContent = displayName || (getCurrentLanguage() === 'zh' ? '模型' : 'Model');
 }
 
 // ── 输入框思考强度切换下拉 ──────────────────────────────────────────
@@ -462,10 +514,15 @@ const ANTHROPIC_EFFORT_LABELS = {
   'max': 'max',
 };
 
-window.ClawFW = window.ClawFW || {};
-window.ClawFW.getThinkingEffortOptions = function(protocol) {
+// 既有命名空间协议：protocol → 可选思考档位列表。
+// 消费方（ph-settings / ph-project-actions / memo 插件）按 ClawFW 命名空间
+// 取用，因此保留挂载；本域内部直接调用同一函数，不再经 window 绕行。
+export function getThinkingEffortOptions(protocol) {
   return Object.keys(protocol === 'openai' ? OPENAI_EFFORT_LABELS : ANTHROPIC_EFFORT_LABELS);
-};
+}
+
+window.ClawFW = window.ClawFW || {};
+window.ClawFW.getThinkingEffortOptions = getThinkingEffortOptions;
 
 let _inputThinkingDropdown = null;
 
@@ -478,14 +535,10 @@ function _getCurrentPreset() {
 }
 
 function _getCurrentPresetProtocol() {
-  const provider = readCurrentSessionViewState().overview.provider;
+  const provider = window.readCurrentSessionViewState().overview.provider;
   if (provider) return provider;
   let preset = _getCurrentPreset();
   return (preset && (preset.provider || preset.protocol)) || 'anthropic';
-}
-
-function _getEffortList(protocol) {
-  return window.ClawFW.getThinkingEffortOptions(protocol);
 }
 
 function _getEffortLabel(effort) {
@@ -493,7 +546,7 @@ function _getEffortLabel(effort) {
 }
 
 function _getCurrentThinkingEffort() {
-  const model = readCurrentSessionViewState().overview;
+  const model = window.readCurrentSessionViewState().overview;
   if (model.modelRevision != null || model.modelName || model.presetName) return model.thinkingEffort ?? null;
   return _getCurrentPreset()?.thinkingEffort || null;
 }
@@ -504,7 +557,7 @@ function _currentModelSupportsThinking() {
     return preset.thinkingEffort != null && preset.thinkingEffort !== '' && preset.thinkingEffort !== 'none';
   }
   // preset 表查不到（如 __default__ 全局默认）时以 runtime live meta 判断
-  const effort = readCurrentSessionViewState().overview.thinkingEffort;
+  const effort = window.readCurrentSessionViewState().overview.thinkingEffort;
   return effort != null && effort !== '' && effort !== 'none';
 }
 
@@ -530,21 +583,19 @@ function _inputThinkingDropdownOutsideClick(e) {
   }
 }
 
-async function _performThinkingEffortSwap(agentId, thinkingEffort, viewToken = captureSessionViewToken()) {
-  let isZh = typeof currentLanguage !== 'undefined' && currentLanguage === 'zh';
+async function _performThinkingEffortSwap(agentId, thinkingEffort, viewToken = window.captureSessionViewToken()) {
+  let isZh = getCurrentLanguage() === 'zh';
   if (!isSessionViewTokenCurrent(viewToken)) return;
   const target = _modelSelectionTarget(agentId, viewToken);
   if (!target) { _notifyModelSelectionTargetUnavailable(agentId, viewToken, isZh); return; }
   let toastId = 'input-thinking-swap';
 
-  if (typeof ClawToast !== 'undefined') {
-    ClawToast.show({
-      id: toastId,
-      title: isZh ? '正在切换思考强度...' : 'Switching thinking effort...',
-      status: 'loading',
-      closable: false,
-    });
-  }
+  ClawToast.show({
+    id: toastId,
+    title: isZh ? '正在切换思考强度...' : 'Switching thinking effort...',
+    status: 'loading',
+    closable: false,
+  });
 
   try {
     // 两态契约（ADR-0034 §7）：显式档位 = selectModel（当前 preset + thinkingEffort）；
@@ -556,13 +607,13 @@ async function _performThinkingEffortSwap(agentId, thinkingEffort, viewToken = c
       if (!presetName) {
         throw new Error(isZh ? '当前模型无 preset 锚点，无法切换思考强度' : 'No preset anchor for thinking effort switch');
       }
-      result = await window.ClawFeatureCommunication.request(
+      result = await ClawFeatureCommunication.request(
         target,
         'selectModel',
         { presetName, thinkingEffort },
       );
     } else {
-      result = await window.ClawFeatureCommunication.request(
+      result = await ClawFeatureCommunication.request(
         target,
         'clearThinkingOverride',
         {},
@@ -572,15 +623,13 @@ async function _performThinkingEffortSwap(agentId, thinkingEffort, viewToken = c
       commitSessionViewPatch(viewToken, { model: result.meta }, () => {
         updateInputModelSwitcher();
         updateThinkingEffortSwitcher();
-        if (typeof updateChatContextBar === 'function') updateChatContextBar();
+        if (typeof window.updateChatContextBar === 'function') window.updateChatContextBar();
       });
-      if (typeof ClawToast !== 'undefined') {
-        ClawToast.update(toastId, {
-          status: 'success',
-          title: isZh ? '思考强度已切换' : 'Thinking effort switched',
-          autoDismiss: 3000,
-        });
-      }
+      ClawToast.update(toastId, {
+        status: 'success',
+        title: isZh ? '思考强度已切换' : 'Thinking effort switched',
+        autoDismiss: 3000,
+      });
     } else {
       const error = new Error((result && (result.error || result.code)) || 'Unknown error');
       error.code = result?.code;
@@ -592,7 +641,7 @@ async function _performThinkingEffortSwap(agentId, thinkingEffort, viewToken = c
   }
 }
 
-window.toggleThinkingEffortDropdown = async function(event) {
+export async function toggleThinkingEffortDropdown(event) {
   if (event) {
     event.preventDefault();
     event.stopPropagation();
@@ -609,8 +658,8 @@ window.toggleThinkingEffortDropdown = async function(event) {
   let agentId = _getInputAgentId();
   if (!agentId) return;
 
-  let isZh0 = typeof currentLanguage !== 'undefined' && currentLanguage === 'zh';
-  const viewToken = captureSessionViewToken();
+  let isZh0 = getCurrentLanguage() === 'zh';
+  const viewToken = window.captureSessionViewToken();
 
   // 与模型下拉同一可用性闸（ADR-0034 §5.1）：两控件同属 model-selection 通道。
   const available = await _ensureModelSelectionChannel(agentId, viewToken);
@@ -629,9 +678,9 @@ window.toggleThinkingEffortDropdown = async function(event) {
     return;
   }
 
-  let isZh = typeof currentLanguage !== 'undefined' && currentLanguage === 'zh';
+  let isZh = getCurrentLanguage() === 'zh';
   let protocol = _getCurrentPresetProtocol();
-  let efforts = _getEffortList(protocol);
+  let efforts = getThinkingEffortOptions(protocol);
   let currentEffort = _getCurrentThinkingEffort();
 
   _inputThinkingDropdown = document.createElement('div');
@@ -678,21 +727,20 @@ window.toggleThinkingEffortDropdown = async function(event) {
   setTimeout(function() {
     document.addEventListener('click', _inputThinkingDropdownOutsideClick, { once: true });
   }, 0);
-};
+}
 
-function updateThinkingEffortSwitcher() {
+export function updateThinkingEffortSwitcher() {
   let btn = document.getElementById('input-thinking-btn');
   let nameEl = document.querySelector('.input-thinking-name');
   if (!nameEl) return;
-  let isZh = typeof currentLanguage !== 'undefined' && currentLanguage === 'zh';
+  let isZh = getCurrentLanguage() === 'zh';
 
   // If presets aren't loaded yet, fetch them first and re-render.
   // This MUST happen before the supportsThinking check, otherwise
   // the early return for "不支持思考" blocks the fallback forever.
   // Presets must match the current session namespace (ADR-0011)：缓存按会话
   // 身份失效，回源带当前会话 agentId（远程会话拿到远程自己的 preset 列表）。
-  let presets = clawModelPresetsMatchSession(
-    (typeof currentRuntimeAgentId !== 'undefined' && currentRuntimeAgentId) || '')
+  let presets = clawModelPresetsMatchSession(currentRuntimeAgentId || '')
     ? getClawModelPresets() : [];
   if (!presets.length) {
     // Show a neutral label while loading — NOT "不支持思考" which is misleading
@@ -703,12 +751,10 @@ function updateThinkingEffortSwitcher() {
       btn.classList.remove('thinking-disabled');
       btn.title = '';
     }
-    ensureClawModelPresetsForSession(
-      (typeof currentRuntimeAgentId !== 'undefined' && currentRuntimeAgentId) || '').then(function() {
+    ensureClawModelPresetsForSession(currentRuntimeAgentId || '').then(function() {
       // 只在缓存真正命中时重渲染：列表为空（或 ClawFW 未就绪）时不再递归
       // 回源，避免空 preset 列表场景下的无限 fetch 循环。
-      if (clawModelPresetsMatchSession(
-        (typeof currentRuntimeAgentId !== 'undefined' && currentRuntimeAgentId) || '')) updateThinkingEffortSwitcher();
+      if (clawModelPresetsMatchSession(currentRuntimeAgentId || '')) updateThinkingEffortSwitcher();
     }).catch(function() {});
     return;
   }
@@ -737,3 +783,32 @@ function updateThinkingEffortSwitcher() {
     ? _getEffortLabel(effort)
     : (isZh ? '思考强度' : 'Thinking');
 }
+
+// ── 兼容桥（KernelState 访问器）────────────────────────────────────────
+// 逐键消费面（grep public/，排除定义方）：
+//   updateInputModelSwitcher         ← persistent-input.js（renderPersistentInput，
+//     无守卫直调）、app-main.js（两处宿主适配器，typeof 守卫）、
+//     agent-data-loader.js（ESM，window 调用 + typeof 守卫）、
+//     p2-w2-3a-queue-projection.js（ESM，window 调用）
+//   updateThinkingEffortSwitcher     ← 同上四处
+//   toggleInputModelDropdown         ← input-composer.js（按钮 onclick 装配）
+//   toggleThinkingEffortDropdown     ← input-composer.js（同上）
+// 注销条件：上述 classic 文件与两个 ESM 消费方各自迁移后改 import、逐键注销
+// （ESM 消费方由后续批次收敛，不在本批授权范围）。
+// 注册相位 = 本模块执行相：四个键只在函数体 / 事件回调内被调用或读取，classic
+// 相与 boot 首轮均无触达点（见文件头时序审计 R1/R2）。
+const bridgeApi = {
+  updateInputModelSwitcher,
+  updateThinkingEffortSwitcher,
+  toggleInputModelDropdown,
+  toggleThinkingEffortDropdown,
+};
+
+window.KernelState.defineKey('input-model-switcher', 'updateInputModelSwitcher', updateInputModelSwitcher);
+window.KernelState.defineKey('input-model-switcher', 'updateThinkingEffortSwitcher', updateThinkingEffortSwitcher);
+window.KernelState.defineKey('input-model-switcher', 'toggleInputModelDropdown', toggleInputModelDropdown);
+window.KernelState.defineKey('input-model-switcher', 'toggleThinkingEffortDropdown', toggleThinkingEffortDropdown);
+window.KernelState.claim('input-model-switcher', {
+  get: (key) => bridgeApi[key],
+  set: (key, value) => { bridgeApi[key] = value; },
+});

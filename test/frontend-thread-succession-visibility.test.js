@@ -19,6 +19,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createFrontendSandbox } from './helpers/frontend-vm.js';
+import { withThreadDomainCase } from './p2-thread-case.js';
 
 function unrefTimer(handle) { if (handle && typeof handle.unref === 'function') handle.unref(); return handle; }
 
@@ -106,31 +107,52 @@ describe('thread-store: handoff visibility during the succession window', () => 
   });
 
   it('placeholder entry click resolves agent and head from thread facts when the runtime is gone', async () => {
-    const actions = [];
-    const ctx = baseCtx({
-      currentRuntimeAgentId: '',
-      switchAgent: async () => {},
-    });
-    ctx.window.runWorkspaceAction = async (payload) => { actions.push(JSON.parse(payload)); };
-    installThread(ctx, {
+    // 交互入口已迁 ESM：跑真实模块 + 真实 classic 引擎。「不得发出 open_session」
+    // 的观察点从 window.runWorkspaceAction 桩改为真实网络面——open_session 的
+    // 实体请求是 activate（挡板窗口的发出去路）。
+    const requests = [];
+    const thread = {
       threadId: 'wt-vis', agentId: 'coder',
       headSessionId: 'session-old', sessionIds: ['session-old'],
       status: 'rotating', lifeState: 'executing', handoffStartedAt: Date.now(),
-    });
-    ctx.window.ClawThreads.activeConversation = {
-      agentId: 'coder', threadId: 'wt-vis', sessionId: 'session-old', runtimeId: '',
     };
+    await withThreadDomainCase({
+      threads: [thread],
+      fixtures: {
+        currentRuntimeAgentId: '',
+        focusedAgentId: 'coder',
+        allAgents: [{ id: 'coder', source: 'prebuilt', kind: 'workspace' }],
+        getCurrentHostAgentRecord: () => ({ id: 'coder', source: 'prebuilt', kind: 'workspace' }),
+        getRuntimeWorkspaceSessionId: () => '',
+        renderAgentList: () => {},
+        renderCurrentMainView: () => {},
+        updateQueueIndicator: () => {},
+        updateThreadHeaderIndicator: () => {},
+      },
+      fetch: async (url) => {
+        requests.push(String(url));
+        return { ok: true, json: async () => ({ ok: true, messages: [] }) };
+      },
+    }, async ({ c, domain }) => {
+      c.sandbox.run(`window.ClawThreads.activeConversation = ${JSON.stringify({
+        agentId: 'coder', threadId: 'wt-vis', sessionId: 'session-old', runtimeId: '',
+      })};`);
 
-    // 占位条目点击：只有 threadId 可用（runtimeId 已不在 allAgents）。
-    // T018：挡板窗口（rotating + fresh handoff）本地挂线程等待视图——
-    // open_session 会给退役中的 head 启动 runtime（与 rotation 竞态），
-    // 服务端 activate 同样拒绝（thread_handoff_in_progress）。
-    const result = await ctx.window.openConversationTarget({ threadId: 'wt-vis' });
+      // 占位条目点击：只有 threadId 可用（runtimeId 已不在 allAgents）。
+      // T018：挡板窗口（rotating + fresh handoff）本地挂线程等待视图——
+      // open_session 会给退役中的 head 启动 runtime（与 rotation 竞态），
+      // 服务端 activate 同样拒绝（thread_handoff_in_progress）。
+      const result = await domain.openConversationTarget({ threadId: 'wt-vis' });
 
-    assert.equal(actions.length, 0, '挡板窗口不得发出 open_session（runtime 竞态根因）');
-    assert.equal(result?.ok, true, '点击成功挂线程等待视图');
-    assert.equal(ctx.window.ClawThreads.activeConversation?.threadId, 'wt-vis');
-    assert.equal(ctx.window.ClawThreads.activeConversation?.sessionId, 'session-old');
+      assert.deepEqual(
+        requests.filter((url) => url.includes('/activate')),
+        [],
+        '挡板窗口不得发出 open_session / activate（runtime 竞态根因）',
+      );
+      assert.equal(result?.ok, true, '点击成功挂线程等待视图');
+      assert.equal(c.read('window.ClawThreads.activeConversation?.threadId'), 'wt-vis');
+      assert.equal(c.read('window.ClawThreads.activeConversation?.sessionId'), 'session-old');
+    });
   });
 
   it('guard: leaving the thread clears the conversation fallback', () => {

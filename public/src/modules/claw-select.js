@@ -13,260 +13,265 @@
  *   ClawSelect.enhance(selectEl)            — 增强单个 select
  *   ClawSelect.enhanceAll(container, sel)   — 批量增强
  *   ClawSelect.closeAll()                   — 关闭当前打开的面板
+ *
+ * 消费面：已迁 ESM 的消费方直接 import 命名导出（ph-settings / model-settings /
+ * feature-config-editor / workspace-settings / ph-project-actions）；仍经
+ * window.ClawSelect 命名空间调用的是 debug-panel-host / generative-ui-panel 与
+ * memo 插件（既有公开协议，window 挂载保留到它们改 import）。
  */
-(function () {
-  'use strict';
 
-  var CHEVRON_SVG =
-    '<svg class="claw-select-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none"' +
-    ' stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">' +
-    '<polyline points="6 9 12 15 18 9"></polyline></svg>';
+const CHEVRON_SVG =
+  '<svg class="claw-select-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none"' +
+  ' stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">' +
+  '<polyline points="6 9 12 15 18 9"></polyline></svg>';
 
-  // ── 全局状态 ──
-  var _openCtx = null; // { panel, wrapper, select }
+// ── 全局状态 ──
+let _openCtx = null; // { panel, wrapper, select }
 
-  // ── 辅助函数 ──
+// ── 辅助函数 ──
 
-  function _getSelectedLabel(select) {
-    var opt = select.options[select.selectedIndex];
-    return opt ? opt.textContent : '';
+function _getSelectedLabel(select) {
+  const opt = select.options[select.selectedIndex];
+  return opt ? opt.textContent : '';
+}
+
+function _buildTrigger(select) {
+  const trigger = document.createElement('button');
+  trigger.type = 'button';
+  trigger.className = 'claw-select-trigger';
+  if (select.disabled) trigger.classList.add('disabled');
+  trigger.innerHTML =
+    '<span class="claw-select-label">' + escapeHtml(_getSelectedLabel(select)) + '</span>' +
+    CHEVRON_SVG;
+  trigger.addEventListener('click', function (e) {
+    e.preventDefault();
+    e.stopPropagation();
+    _toggle(select);
+  });
+  return trigger;
+}
+
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+function _updateLabel(wrapper, select) {
+  const label = wrapper.querySelector('.claw-select-label');
+  if (label) label.textContent = _getSelectedLabel(select);
+}
+
+// ── 面板构建 & 定位 ──
+
+function _buildPanel(select) {
+  const panel = document.createElement('div');
+  panel.className = 'claw-select-panel';
+
+  // 继承紫色系变体标记
+  const wrapper = select.closest('.claw-select');
+  if (wrapper && wrapper.classList.contains('var-accent')) {
+    panel.classList.add('accent');
   }
 
-  function _buildTrigger(select) {
-    var trigger = document.createElement('button');
-    trigger.type = 'button';
-    trigger.className = 'claw-select-trigger';
-    if (select.disabled) trigger.classList.add('disabled');
-    trigger.innerHTML =
-      '<span class="claw-select-label">' + escapeHtml(_getSelectedLabel(select)) + '</span>' +
-      CHEVRON_SVG;
-    trigger.addEventListener('click', function (e) {
-      e.preventDefault();
-      e.stopPropagation();
-      _toggle(select);
+  // 继承 no-scroll 变体：选项少、展示高度足够的下拉不限制面板高度
+  //（默认 max-height 280px 会在恰好溢出几像素时出现多余滚动条）
+  if (select.dataset.clawNoScroll === 'true') {
+    panel.classList.add('no-scroll');
+  }
+
+  const inner = document.createElement('div');
+  inner.className = 'claw-select-panel-inner';
+
+  for (let i = 0; i < select.options.length; i++) {
+    const opt = select.options[i];
+    const item = document.createElement('div');
+    item.className = 'claw-select-item' + (opt.selected ? ' active' : '');
+    item.textContent = opt.textContent;
+    (function (val) {
+      item.addEventListener('click', function (e) {
+        e.stopPropagation();
+        _selectOption(select, val);
+        _close();
+      });
+    })(opt.value);
+    inner.appendChild(item);
+  }
+
+  panel.appendChild(inner);
+  return panel;
+}
+
+function _positionPanel(panel, trigger) {
+  const rect = trigger.getBoundingClientRect();
+  panel.style.minWidth = Math.max(rect.width, 180) + 'px';
+  panel.style.left = rect.left + 'px';
+
+  // 测量高度后决定向上还是向下展开
+  const panelH = panel.offsetHeight;
+  const spaceBelow = window.innerHeight - rect.bottom;
+  if (panelH > spaceBelow && rect.top > spaceBelow) {
+    panel.style.top = rect.top - panelH - 4 + 'px';
+  } else {
+    panel.style.top = rect.bottom + 4 + 'px';
+  }
+}
+
+// ── 开关逻辑 ──
+
+function _toggle(select) {
+  if (select.disabled) return;
+  const wrapper = select.closest('.claw-select');
+  if (!wrapper) return;
+  if (wrapper.classList.contains('open')) {
+    _close();
+    return;
+  }
+  _close(); // 先关掉已有的
+
+  if (!select.options.length) return;
+
+  const panel = _buildPanel(select);
+  document.body.appendChild(panel);
+  _positionPanel(panel, wrapper.querySelector('.claw-select-trigger'));
+
+  wrapper.classList.add('open');
+  panel.classList.add('visible');
+
+  _openCtx = { panel: panel, wrapper: wrapper, select: select };
+
+  // 延迟注册，防止当前 click 冒泡触发立即关闭
+  setTimeout(function () {
+    document.addEventListener('click', _outsideClick, { once: true });
+    document.addEventListener('scroll', _onScrollClose, { once: true, capture: true });
+  }, 0);
+}
+
+function _close() {
+  if (!_openCtx) return;
+  const ctx = _openCtx;
+  _openCtx = null;
+  ctx.panel.remove();
+  ctx.wrapper.classList.remove('open');
+}
+
+function _outsideClick(e) {
+  if (!_openCtx) return;
+  if (_openCtx.panel.contains(e.target)) {
+    document.addEventListener('click', _outsideClick, { once: true });
+    return;
+  }
+  const trigger = _openCtx.wrapper.querySelector('.claw-select-trigger');
+  if (trigger && trigger.contains(e.target)) {
+    // 点击了同一触发器 —— 交给 trigger click 处理
+    return;
+  }
+  _close();
+}
+
+function _onScrollClose(e) {
+  if (!_openCtx) return;
+  // Don't close if scrolling inside the dropdown panel itself
+  if (_openCtx.panel.contains(e.target)) {
+    document.addEventListener('scroll', _onScrollClose, { once: true, capture: true });
+    return;
+  }
+  _close();
+}
+
+// ── 选项选择 ──
+
+function _selectOption(select, value) {
+  select.value = value;
+  const wrapper = select.closest('.claw-select');
+  if (wrapper) _updateLabel(wrapper, select);
+  select.dispatchEvent(new Event('change', { bubbles: true }));
+}
+
+// ── 公开 API ──
+
+/**
+ * 增强单个 <select> 元素。
+ * 在原生 select 外包裹 .claw-select 容器，插入自定义触发器。
+ * 原生 select 保留在 DOM 中但视觉隐藏。
+ */
+export function enhance(select) {
+  if (!select || select.tagName !== 'SELECT') return null;
+  if (select.dataset.clawEnhanced === 'true') return null;
+  select.dataset.clawEnhanced = 'true';
+
+  const wrapper = document.createElement('div');
+  wrapper.className = 'claw-select';
+
+  // compact 变体
+  if (select.dataset.clawCompact === 'true') {
+    wrapper.classList.add('compact');
+  }
+
+  // 紫色系变体（第一优先级 UI）
+  if (select.dataset.clawAccent === 'true') {
+    wrapper.classList.add('var-accent');
+  }
+
+  // 将原生 select 的 inline 布局样式转移到 wrapper
+  const inlineStyle = select.getAttribute('style');
+  if (inlineStyle) {
+    wrapper.setAttribute('style', inlineStyle);
+    select.removeAttribute('style');
+  }
+
+  // 插入 wrapper
+  select.parentNode.insertBefore(wrapper, select);
+
+  // 构建触发器
+  const trigger = _buildTrigger(select);
+  wrapper.appendChild(trigger);
+
+  // 移动原生 select 到 wrapper（视觉隐藏）
+  select.classList.add('claw-select-native');
+  wrapper.appendChild(select);
+
+  // 监听 options 变更 & value/disabled 变化（外部程序修改）
+  if (window.MutationObserver) {
+    const observer = new MutationObserver(function () {
+      _updateLabel(wrapper, select);
+      const trigger = wrapper.querySelector('.claw-select-trigger');
+      if (trigger) trigger.classList.toggle('disabled', select.disabled);
     });
-    return trigger;
+    observer.observe(select, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['selected', 'disabled'],
+    });
+    // 存储 observer 引用，防止 GC（select 存活期间 observer 存活）
+    select._clawObserver = observer;
   }
 
-  function escapeHtml(text) {
-    var div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
+  return wrapper;
+}
+
+/**
+ * 批量增强容器内所有匹配的 <select>。
+ * @param {Element|Document} container — 搜索容器
+ * @param {string} selector — CSS 选择器，默认 'select[data-claw-select]'
+ */
+export function enhanceAll(container, selector) {
+  if (!container) container = document;
+  if (!selector) selector = 'select[data-claw-select]';
+  const selects = container.querySelectorAll(selector);
+  let count = 0;
+  for (let i = 0; i < selects.length; i++) {
+    if (enhance(selects[i])) count++;
   }
+  return count;
+}
 
-  function _updateLabel(wrapper, select) {
-    var label = wrapper.querySelector('.claw-select-label');
-    if (label) label.textContent = _getSelectedLabel(select);
-  }
+export { _close as closeAll };
 
-  // ── 面板构建 & 定位 ──
-
-  function _buildPanel(select) {
-    var panel = document.createElement('div');
-    panel.className = 'claw-select-panel';
-
-    // 继承紫色系变体标记
-    var wrapper = select.closest('.claw-select');
-    if (wrapper && wrapper.classList.contains('var-accent')) {
-      panel.classList.add('accent');
-    }
-
-    // 继承 no-scroll 变体：选项少、展示高度足够的下拉不限制面板高度
-    //（默认 max-height 280px 会在恰好溢出几像素时出现多余滚动条）
-    if (select.dataset.clawNoScroll === 'true') {
-      panel.classList.add('no-scroll');
-    }
-
-    var inner = document.createElement('div');
-    inner.className = 'claw-select-panel-inner';
-
-    for (var i = 0; i < select.options.length; i++) {
-      var opt = select.options[i];
-      var item = document.createElement('div');
-      item.className = 'claw-select-item' + (opt.selected ? ' active' : '');
-      item.textContent = opt.textContent;
-      (function (val) {
-        item.addEventListener('click', function (e) {
-          e.stopPropagation();
-          _selectOption(select, val);
-          _close();
-        });
-      })(opt.value);
-      inner.appendChild(item);
-    }
-
-    panel.appendChild(inner);
-    return panel;
-  }
-
-  function _positionPanel(panel, trigger) {
-    var rect = trigger.getBoundingClientRect();
-    panel.style.minWidth = Math.max(rect.width, 180) + 'px';
-    panel.style.left = rect.left + 'px';
-
-    // 测量高度后决定向上还是向下展开
-    var panelH = panel.offsetHeight;
-    var spaceBelow = window.innerHeight - rect.bottom;
-    if (panelH > spaceBelow && rect.top > spaceBelow) {
-      panel.style.top = rect.top - panelH - 4 + 'px';
-    } else {
-      panel.style.top = rect.bottom + 4 + 'px';
-    }
-  }
-
-  // ── 开关逻辑 ──
-
-  function _toggle(select) {
-    if (select.disabled) return;
-    var wrapper = select.closest('.claw-select');
-    if (!wrapper) return;
-    if (wrapper.classList.contains('open')) {
-      _close();
-      return;
-    }
-    _close(); // 先关掉已有的
-
-    if (!select.options.length) return;
-
-    var panel = _buildPanel(select);
-    document.body.appendChild(panel);
-    _positionPanel(panel, wrapper.querySelector('.claw-select-trigger'));
-
-    wrapper.classList.add('open');
-    panel.classList.add('visible');
-
-    _openCtx = { panel: panel, wrapper: wrapper, select: select };
-
-    // 延迟注册，防止当前 click 冒泡触发立即关闭
-    setTimeout(function () {
-      document.addEventListener('click', _outsideClick, { once: true });
-      document.addEventListener('scroll', _onScrollClose, { once: true, capture: true });
-    }, 0);
-  }
-
-  function _close() {
-    if (!_openCtx) return;
-    var ctx = _openCtx;
-    _openCtx = null;
-    ctx.panel.remove();
-    ctx.wrapper.classList.remove('open');
-  }
-
-  function _outsideClick(e) {
-    if (!_openCtx) return;
-    if (_openCtx.panel.contains(e.target)) {
-      document.addEventListener('click', _outsideClick, { once: true });
-      return;
-    }
-    var trigger = _openCtx.wrapper.querySelector('.claw-select-trigger');
-    if (trigger && trigger.contains(e.target)) {
-      // 点击了同一触发器 —— 交给 trigger click 处理
-      return;
-    }
-    _close();
-  }
-
-  function _onScrollClose(e) {
-    if (!_openCtx) return;
-    // Don't close if scrolling inside the dropdown panel itself
-    if (_openCtx.panel.contains(e.target)) {
-      document.addEventListener('scroll', _onScrollClose, { once: true, capture: true });
-      return;
-    }
-    _close();
-  }
-
-  // ── 选项选择 ──
-
-  function _selectOption(select, value) {
-    select.value = value;
-    var wrapper = select.closest('.claw-select');
-    if (wrapper) _updateLabel(wrapper, select);
-    select.dispatchEvent(new Event('change', { bubbles: true }));
-  }
-
-  // ── 公开 API ──
-
-  /**
-   * 增强单个 <select> 元素。
-   * 在原生 select 外包裹 .claw-select 容器，插入自定义触发器。
-   * 原生 select 保留在 DOM 中但视觉隐藏。
-   */
-  function enhance(select) {
-    if (!select || select.tagName !== 'SELECT') return null;
-    if (select.dataset.clawEnhanced === 'true') return null;
-    select.dataset.clawEnhanced = 'true';
-
-    var wrapper = document.createElement('div');
-    wrapper.className = 'claw-select';
-
-    // compact 变体
-    if (select.dataset.clawCompact === 'true') {
-      wrapper.classList.add('compact');
-    }
-
-    // 紫色系变体（第一优先级 UI）
-    if (select.dataset.clawAccent === 'true') {
-      wrapper.classList.add('var-accent');
-    }
-
-    // 将原生 select 的 inline 布局样式转移到 wrapper
-    var inlineStyle = select.getAttribute('style');
-    if (inlineStyle) {
-      wrapper.setAttribute('style', inlineStyle);
-      select.removeAttribute('style');
-    }
-
-    // 插入 wrapper
-    select.parentNode.insertBefore(wrapper, select);
-
-    // 构建触发器
-    var trigger = _buildTrigger(select);
-    wrapper.appendChild(trigger);
-
-    // 移动原生 select 到 wrapper（视觉隐藏）
-    select.classList.add('claw-select-native');
-    wrapper.appendChild(select);
-
-    // 监听 options 变更 & value/disabled 变化（外部程序修改）
-    if (window.MutationObserver) {
-      var observer = new MutationObserver(function () {
-        _updateLabel(wrapper, select);
-        var trigger = wrapper.querySelector('.claw-select-trigger');
-        if (trigger) trigger.classList.toggle('disabled', select.disabled);
-      });
-      observer.observe(select, {
-        childList: true,
-        subtree: true,
-        attributes: true,
-        attributeFilter: ['selected', 'disabled'],
-      });
-      // 存储 observer 引用，防止 GC（select 存活期间 observer 存活）
-      select._clawObserver = observer;
-    }
-
-    return wrapper;
-  }
-
-  /**
-   * 批量增强容器内所有匹配的 <select>。
-   * @param {Element|Document} container — 搜索容器
-   * @param {string} selector — CSS 选择器，默认 'select[data-claw-select]'
-   */
-  function enhanceAll(container, selector) {
-    if (!container) container = document;
-    if (!selector) selector = 'select[data-claw-select]';
-    var selects = container.querySelectorAll(selector);
-    var count = 0;
-    for (var i = 0; i < selects.length; i++) {
-      if (enhance(selects[i])) count++;
-    }
-    return count;
-  }
-
-  window.ClawSelect = {
-    enhance: enhance,
-    enhanceAll: enhanceAll,
-    closeAll: _close,
-  };
-})();
+// ── window 命名空间（现有公开协议：9 个 classic 渲染模块 + memo 插件消费）──
+window.ClawSelect = {
+  enhance: enhance,
+  enhanceAll: enhanceAll,
+  closeAll: _close,
+};

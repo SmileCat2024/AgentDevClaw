@@ -2,25 +2,109 @@
  * Session List Render 模块
  * 从 session-ui.js 拆出 (renderWorkspaceSessionList 按 agent 类型拆分)
  *
- * 依赖全局函数 (定义在 session-ui.js):
- *   getWorkspaceSessions, sortPhSessionsByMode,
- *   renderSessionResumeBadge, renderSessionArchivedBadge,
- *   renderSessionTodoBadge, renderSessionTitleAiButton,
- *   renderSessionTokenBar
- * 依赖全局函数 (定义在 app-core.js 或 app-ui.js):
- *   escapeHtml, localizeWorkspaceValue, formatWorkspaceDate, t,
- *   renderActionButton, currentLanguage,
- *   getFeatureCreatorProjects, getAgentCreatorProjects,
- *   getProgrammingHelperProjects, getFeatureProjectDisplayName,
- *   getAgentProjectDisplayName, getProgrammingHelperProjectDisplayName,
- *   getAgentWorkspaceState, getFeatureSessionDisplayName, isAssemblySession,
- *   phSearchQuery, phSessionSortMode,
- *   getSessionShortTime, getSessionRecencyClass, getTimeGroupLabel
- * 依赖全局变量 (定义在 session-ui.js):
- *   _phOpenSessionsCache
- * 导出全局函数:
- *   renderWorkspaceSessionList
+ * ESM 化：P2 W2-7（2026-11-17）。原位转换，渲染模板与行为零变化。
+ *
+ * 依赖（ESM，装载顺序由 import 图确定）：
+ *   - session-ui：会话列表查询、徽标 / 标题 / token 渲染、开放会话卡片与
+ *     _phOpenSessionsCache（live binding，读写同一对象）
+ *   - time-format-host：相对时间 / 分组 / 紧凑时间标签
+ *   - i18n-environment-state：实时语言；markdown-utils：escapeHtml
+ *   - workspace-blocks：renderActionButton
+ *   - model-preset-cache：getClawModelPresets；assembly-data：isAssemblySession
+ *   - render-entry-state：setLastRenderedWorkspaceHtml（宿主渲染缓存失效）
+ *   - session-reference-picker：SESSION_REF_MIME / setDragSource（拖拽引用源）
+ *   - p2-bootstrap-ph-session：phSessionSortMode / phSearchQuery（owner 仍是
+ *     app-core 的词法状态，经 classic 工厂适配）
+ *
+ * 已改直接 import（P2 兼容债收敛）：project-data 的项目 / 目录视图查询
+ * （含 getAgentWorkspaceState / getPhBrowsingTarget / ensurePhProjectEntitiesLoaded）、
+ * ph-project-actions / ph-session-list / ph-session-move 的动作入口。
+ *
+ * 仍 classic（调用时点显式 window 晚绑定，各域收敛时改 import）：
+ *   - app-core 的 localizeWorkspaceValue；t（i18n.js）
+ *   - app-ui / app-main 的 renderCurrentMainView；thread-store 的线程索引
+ *   - workspace-actions 的动作入口（`window.runWorkspaceAction`）：生产方已 ESM
+ *     并导出该函数，兼容桥因 classic claw-host / desktop-open 仍读而保留；ESM
+ *     消费方改 import 属 workspace-actions 批的后续收敛，不在本批
+ *
+ * 桥接期兼容面（KernelState defineKey/claim，domain: session-list-render）：
+ *   renderWorkspaceSessionList ← classic app-ui（ClawHost block 注册回调）
+ *   onPhSessionDragStart        ← 本模块生成的条目内联 ondragstart 属性
+ *   phConversationArchived     桥已注销（唯一消费方 workspace-actions 已验收为
+ *                              ESM 并在文件头具名 import）
+ *   （其余导出无 classic 消费面，只作命名导出，不上桥。）
  */
+
+import { getCurrentLanguage } from './i18n-environment-state.js';
+import { escapeHtml } from './markdown-utils.js';
+import { formatWorkspaceDate, getSessionShortTime, getSessionRecencyClass, getTimeGroupLabel } from './time-format-host.js';
+import {
+  getWorkspaceSessions,
+  sortPhSessionsByMode,
+  renderSessionResumeBadge,
+  renderSessionArchivedBadge,
+  renderSessionTodoBadge,
+  renderSessionTitleAiButton,
+  renderSessionTokenBar,
+  phLoadOpenSessionsCard,
+  handleSessionTitleDoubleClick,
+  _phOpenSessionsCache,
+} from './session-ui.js';
+import { renderActionButton } from './workspace-blocks.js';
+import { getClawModelPresets } from './model-preset-cache.js';
+import { isAssemblySession } from './assembly-data.js';
+import { setLastRenderedWorkspaceHtml } from './render-entry-state.js';
+import { SESSION_REF_MIME, setDragSource } from './session-reference-picker.js';
+import { openThreadHistory } from './ph-thread-history.js';
+import { phSessionUi } from './p2-bootstrap-ph-session.js';
+import {
+  phOpenSettings,
+  phOpenProject,
+  phLoadMoreSessions,
+  phToggleProjectDropdown,
+  phOpenNewProjectDialog,
+  phToggleModelSlot,
+  phOpenManageProjectsDialog,
+  phSwitchProject,
+} from './ph-project-actions.js';
+import {
+  phTopicPanelInnerHtml,
+  switchPhSessionTab,
+  phToggleSessionSort,
+  _buildPhSearchPanelHtml,
+  phOnSearchInput,
+  phClearSearch,
+  phShowSessionCtxMenu,
+  getPhSurfaceViewProjectId,
+  setPhSurfaceViewProjectId,
+} from './ph-session-list.js';
+import {
+  phSessionMove,
+  phSessionMoveSyncScope,
+  phToggleSessionSelectMode,
+  phToggleSessionSelection,
+  phOpenSessionMoveDialog,
+} from './ph-session-move.js';
+import {
+  getFeatureSessionDisplayName,
+  getFeatureProjectDisplayName,
+  getAgentProjectDisplayName,
+  getPhDirectoryNavigationList,
+  getPhCurrentDirectoryContext,
+  getPhProjectsInDirectory,
+  getPhProjectBoundDirectoryBucket,
+  getProgrammingHelperProjects,
+  getProgrammingHelperProjectDisplayName,
+  getFeatureCreatorProjects,
+  getAgentCreatorProjects,
+  ensurePhProjectEntitiesLoaded,
+  getAgentWorkspaceState,
+  getPhBrowsingTarget,
+} from './project-data.js';
+
+// 桥接期：t 仍定义于 classic public/src/i18n.js（i18n 域收敛时改 import）。
+// 经 window 晚绑定，不取加载期快照。
+const t = (...args) => window.t(...args);
 
 // ── Workspace Session List ───────────────────────────────────────
 
@@ -38,7 +122,7 @@ function viewCapabilityEnabled(identity, action) {
   if (typeof capabilityFor === 'function') {
     return capabilityFor(id, action) === true;
   }
-  return !isRemoteNamespaceAgentId(id);
+  return !window.isRemoteNamespaceAgentId(id);
 }
 
 // remoteOnly 项目桶的视图身份 = 桶内会话数据层携带的宿主级命名空间 id；
@@ -58,9 +142,8 @@ function projectViewIdentity(agent, project) {
  * dataset 读取，sessionType 用 data-ref-session-type——data-session-type
  * 在归档 tab 存的是分区语义（'archived'），不是会话真实身份。
  */
-window.onPhSessionDragStart = function(event, el) {
-  const ref = window.SessionReference;
-  if (!ref || !event.dataTransfer) return;
+function onPhSessionDragStart(event, el) {
+  if (!event.dataTransfer) return;
   const sessionId = String(el?.dataset?.ctxId || '').trim();
   const agentId = String(el?.dataset?.ctxNs || '').trim();
   if (!sessionId || !agentId) { event.preventDefault(); return; }
@@ -71,11 +154,11 @@ window.onPhSessionDragStart = function(event, el) {
     sessionType: String(el?.dataset?.refSessionType || 'main').trim() || 'main',
     title: (titleEl?.textContent || '').trim(),
   };
-  event.dataTransfer.setData(ref.MIME, JSON.stringify(payload));
+  event.dataTransfer.setData(SESSION_REF_MIME, JSON.stringify(payload));
   event.dataTransfer.effectAllowed = 'copy';
   // 登记源身份：dragover 据此禁止把会话拖回它自己的侧栏条目
-  if (ref.setDragSource) ref.setDragSource(payload);
-};
+  setDragSource(payload);
+}
 
 function renderWorkspaceSessionList(agent, block) {
   const sessionFilters = block?.sessionList || {};
@@ -90,8 +173,8 @@ function renderWorkspaceSessionList(agent, block) {
   const isAgentCreator = agent?.id === 'agent-creator';
   const sessionListMode = String(sessionFilters.mode || '').trim();
   const activeSessionId = agent?.active_workspace_session_id || agent?.workspace_sessions?.activeSessionId || null;
-  const title = localizeWorkspaceValue(block.title, t('workspace_history_current'));
-  const desc = localizeWorkspaceValue(block.description, '');
+  const title = window.localizeWorkspaceValue(block.title, t('workspace_history_current'));
+  const desc = window.localizeWorkspaceValue(block.description, '');
   const headerAction = block?.headerAction ? renderActionButton(block.headerAction) : '';
 
   const ctx = { sessions, isFeatureCreator, isAgentCreator, sessionListMode, activeSessionId, title, desc, headerAction };
@@ -138,7 +221,7 @@ function _renderFeatureCreatorSessionList(agent, block, ctx) {
                 '<div class="feature-project-session-item workspace-history-item" data-prebuilt-session-agent-id="' + escapeHtml(agent.id) + '" data-prebuilt-session-id="' + escapeHtml(session.id) + '" data-ctx-role="session" data-ctx-ns="' + escapeHtml(agent.id) + '" data-ctx-id="' + escapeHtml(session.id) + '" data-ctx-variant="' + escapeHtml(isAssemblySession(session) ? 'assembly' : 'default') + '">',
                 '<div class="workspace-history-main">',
                 '<div class="workspace-history-title-row">',
-                '<div class="workspace-history-title" data-action="sessions.titleDblClick" title="' + escapeHtml(currentLanguage === 'zh' ? '双击编辑标题' : 'Double-click to edit title') + '">' + escapeHtml(session.title || session.id) + '</div>',
+                '<div class="workspace-history-title" data-action="sessions.titleDblClick" title="' + escapeHtml(getCurrentLanguage() === 'zh' ? '双击编辑标题' : 'Double-click to edit title') + '">' + escapeHtml(session.title || session.id) + '</div>',
                 renderSessionResumeBadge(session),
                 session.id === activeSessionId ? '<span class="workspace-history-active">当前</span>' : '',
                 renderSessionArchivedBadge(session),
@@ -231,7 +314,7 @@ function _renderAgentCreatorSessionList(agent, block, ctx) {
                 '<div class="feature-project-session-item workspace-history-item" data-prebuilt-session-agent-id="' + escapeHtml(agent.id) + '" data-prebuilt-session-id="' + escapeHtml(session.id) + '" data-ctx-role="session" data-ctx-ns="' + escapeHtml(agent.id) + '" data-ctx-id="' + escapeHtml(session.id) + '" data-ctx-variant="' + escapeHtml(isAssemblySession(session) ? 'assembly' : 'default') + '">',
                 '<div class="workspace-history-main">',
                 '<div class="workspace-history-title-row">',
-                '<div class="workspace-history-title" data-action="sessions.titleDblClick" title="' + escapeHtml(currentLanguage === 'zh' ? '双击编辑标题' : 'Double-click to edit title') + '">' + escapeHtml(session.title || session.id) + '</div>',
+                '<div class="workspace-history-title" data-action="sessions.titleDblClick" title="' + escapeHtml(getCurrentLanguage() === 'zh' ? '双击编辑标题' : 'Double-click to edit title') + '">' + escapeHtml(session.title || session.id) + '</div>',
                 renderSessionResumeBadge(session),
                 session.id === activeSessionId ? '<span class="workspace-history-active">当前</span>' : '',
                 renderSessionArchivedBadge(session),
@@ -313,7 +396,7 @@ function _renderAgentCreatorSessionList(agent, block, ctx) {
  * 会话是某线程 head 时返回历史代数量，否则 0。列表接口的 thread 摘要
  * 不带 sessionChain（详情端点才带），以 sessionIds 兜底计数。
  */
-window.phThreadArchiveCount = function (agentId, sessionId) {
+function phThreadArchiveCount(agentId, sessionId) {
   if (typeof window.getThreadForSession !== 'function') return 0;
   const thread = window.getThreadForSession(agentId, sessionId);
   if (!thread || thread.headSessionId !== sessionId) return 0;
@@ -322,7 +405,7 @@ window.phThreadArchiveCount = function (agentId, sessionId) {
     ? chain.filter((entry) => entry?.sessionId !== thread.headSessionId).length
     : Math.max(0, (Array.isArray(thread.sessionIds) ? thread.sessionIds.length : 1) - 1);
   return Math.max(0, archiveCount);
-};
+}
 
 /**
  * 对话历史徽标（ticket 050）：会话是某线程 head 且存在历史代时渲染
@@ -331,18 +414,18 @@ window.phThreadArchiveCount = function (agentId, sessionId) {
  * 渲染（归档区的历史代成员由列表过滤收敛，只经本入口可达）。线程数据
  * 未加载（getThreadForSession 缺席）时保守不渲染——轮询到位后自动补。
  */
-window.renderSessionThreadBadge = function (agentId, session) {
-  const archiveCount = window.phThreadArchiveCount(agentId, session?.id);
+function renderSessionThreadBadge(agentId, session) {
+  const archiveCount = phThreadArchiveCount(agentId, session?.id);
   if (archiveCount <= 0) return '';
   const thread = typeof window.getThreadForSession === 'function'
     ? window.getThreadForSession(agentId, session?.id) : null;
   if (!thread) return '';
-  const isZh = currentLanguage === 'zh';
+  const isZh = getCurrentLanguage() === 'zh';
   return '<button type="button" class="session-thread-badge" data-action="sessions.threadHistory" data-agent-id="' + escapeHtml(agentId) + '" data-thread-id="' + escapeHtml(thread.threadId) + '"'
     + ' title="' + escapeHtml(isZh ? '查看本对话的精简前存档' : 'View pre-trim archives of this conversation') + '">'
     + escapeHtml(isZh ? '历史 · ' + archiveCount : 'History · ' + archiveCount)
     + '</button>';
-};
+}
 
 /**
  * 对话归档状态谓词（线程优先）：有线程的行以线程 lifeState 为准——
@@ -352,13 +435,13 @@ window.renderSessionThreadBadge = function (agentId, session) {
  * 返回 null → 按 session 标志保守渲染，数据到位后 sig 变化触发重渲染
  * 收敛（与 phIsThreadArchivedMember 同模式）。
  */
-window.phConversationArchived = function (agentId, session) {
+function phConversationArchived(agentId, session) {
   if (typeof window.getThreadForSession === 'function') {
     const thread = window.getThreadForSession(agentId, session?.id);
     if (thread) return thread.lifeState === 'archived';
   }
   return session?.archived === true;
-};
+}
 
 /**
  * 归档区线程收敛谓词（ticket 050）：历史代成员（线程内非 head）不再在
@@ -367,11 +450,11 @@ window.phConversationArchived = function (agentId, session) {
  * false（保守渲染），数据到位后 sig 变化触发重渲染收敛。已归档线程的
  * head 保留为对话行（历史入口仍可用）。
  */
-window.phIsThreadArchivedMember = function (agentId, session) {
+function phIsThreadArchivedMember(agentId, session) {
   if (typeof window.getThreadForSession !== 'function') return false;
   const thread = window.getThreadForSession(agentId, session?.id);
   return !!(thread && thread.headSessionId !== session?.id);
-};
+}
 
 /**
  * 列表分区（一行 = 一段对话，ADR-0032）：
@@ -381,20 +464,20 @@ window.phIsThreadArchivedMember = function (agentId, session) {
  *     「历史 · N」入口可达（旧「精简并归档原会话」产物带会话级
  *     archived=true，线程活跃时该标志被覆盖，不能作为分区依据）
  */
-window.phPartitionSessions = function (agentId, sessions) {
+function phPartitionSessions(agentId, sessions) {
   const source = Array.isArray(sessions) ? sessions : [];
   const main = [];
   const archived = [];
   for (const session of source) {
-    if (window.phIsThreadArchivedMember(agentId, session)) continue;
-    if (window.phConversationArchived(agentId, session)) archived.push(session);
+    if (phIsThreadArchivedMember(agentId, session)) continue;
+    if (phConversationArchived(agentId, session)) archived.push(session);
     else main.push(session);
   }
   return { main, archived };
-};
+}
 
-window.renderPhSessionItemHtml = function (agent, session, opts = {}) {
-  const isZh = currentLanguage === 'zh';
+function renderPhSessionItemHtml(agent, session, opts = {}) {
+  const isZh = getCurrentLanguage() === 'zh';
   const sType = opts.type || session.sessionType || 'main';
   // 远程历史会话（ADR-0012 决策 1）：操作寻址用宿主级命名空间 id——
   // 服务端会话端点按命名空间 agentId 解析远程目标并转发（裸 id）。
@@ -423,9 +506,7 @@ window.renderPhSessionItemHtml = function (agent, session, opts = {}) {
   // 归档徽标按对话归档口径渲染（phConversationArchived，线程优先）：
   // 线程 head 行的徽标跟随线程状态——旧时代会话级 archived 标志不再让
   // 「我的对话」里的行错误显示「已归档」（徽标在搜索混排时用于辨别分区）。
-  const conversationArchived = typeof window.phConversationArchived === 'function'
-    ? window.phConversationArchived(agent.id, session)
-    : session.archived === true;
+  const conversationArchived = phConversationArchived(agent.id, session);
   const archivedBadgeHtml = conversationArchived
     ? renderSessionArchivedBadge({ ...session, archived: true })
     : '';
@@ -444,7 +525,7 @@ window.renderPhSessionItemHtml = function (agent, session, opts = {}) {
     indicatorHtml,
     '<div class="workspace-history-title" data-action="sessions.titleDblClick" title="' + escapeHtml(isZh ? '双击编辑标题' : 'Double-click to edit title') + '">' + (opts.titleHtml || escapeHtml(session.title || session.id)) + '</div>',
     renderSessionResumeBadge(session),
-    (typeof window.renderSessionThreadBadge === 'function' ? window.renderSessionThreadBadge(agent.id, session) : ''),
+    renderSessionThreadBadge(agent.id, session),
     renderSessionTodoBadge(session),
     archivedBadgeHtml,
     renderSessionTitleAiButton(session),
@@ -459,7 +540,7 @@ window.renderPhSessionItemHtml = function (agent, session, opts = {}) {
     '</div>',
     '</div>',
   ].join('');
-};
+}
 
 // ── PH 会话空态卡（gen-ui-empty / git-empty-card 同款配方）──────────
 // 虚线卡片 + 图标块 + 标题 + 描述 + 可选动作。图标走 24 viewBox stroke
@@ -483,21 +564,18 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
   const { desc } = ctx;
   // 项目实体清单按需拉取（在飞合并）；无显式项目目标时不强制重渲染——
   // 轮询自然刷新 surface，项目组随下次渲染出现（避免渲染-加载循环）。
-  if (typeof ensurePhProjectEntitiesLoaded === 'function') {
-    ensurePhProjectEntitiesLoaded();
-  }
+  ensurePhProjectEntitiesLoaded();
   const projects = getProgrammingHelperProjects(agent);
   const wsState = getAgentWorkspaceState(agent);
   const currentOpenDir = String(wsState?.openDirectory || '').trim();
-  const isZh = currentLanguage === 'zh';
+  const isZh = getCurrentLanguage() === 'zh';
   const agentName = isZh ? '智能编码空间' : 'Intelligent Coding Space';
 
   // Determine current project — typed browsing target first (ticket 045):
   // 显式项目目标 > 显式目录目标 > workspace_state.openDirectory 目录回退。
   // 轮询刷新的 workspace_state 不会覆盖显式选择；项目元数据未加载完时
   // 保持项目待定态（projectPending），不退回目录。
-  const browsingTarget = (typeof getPhBrowsingTarget === 'function')
-    ? getPhBrowsingTarget(agent) : null;
+  const browsingTarget = getPhBrowsingTarget(agent);
   let normCurrentDir = currentOpenDir.replace(/\\/g, '/').toLowerCase();
   let currentProject = null;
   let projectPending = false;
@@ -507,8 +585,8 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
     } else {
       projectPending = true; // 元数据加载中：不退回另一个目标（契约）
       ensurePhProjectEntitiesLoaded().then(() => {
-        lastRenderedWorkspaceHtml = '';
-        renderCurrentMainView();
+        setLastRenderedWorkspaceHtml('');
+        window.renderCurrentMainView();
       });
     }
   }
@@ -520,8 +598,7 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
       : null;
     // 项目绑定目录（非注册目录桶）：合成目录呈现桶——只驱动 surface 视图
     // 与目录切片，不进目录注册表、不写 workspace_state。
-    if (!currentProject && browsingTarget?.type === 'dir'
-      && typeof getPhProjectBoundDirectoryBucket === 'function') {
+    if (!currentProject && browsingTarget?.type === 'dir') {
       const boundBucket = getPhProjectBoundDirectoryBucket(agent);
       if (boundBucket) {
         currentProject = { ...boundBucket, sessions: getWorkspaceSessions(agent) };
@@ -536,13 +613,13 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
 
   // 远程独有项目视图覆盖（ADR-0012 决策 1）：view-only 选中优先于工作区目录；
   // 项目消失（断线 / 目录历史清空）时自动回落到工作区目录并清除覆盖。
-  const overrideProjectId = (typeof window !== 'undefined' && window.ClawFW?.phSurfaceViewProjectId) || '';
+  const overrideProjectId = getPhSurfaceViewProjectId() || '';
   if (!projectPending && overrideProjectId && overrideProjectId !== currentProject?.id) {
     const overrideProject = projects.find((p) => p.id === overrideProjectId && p.remoteOnly);
     if (overrideProject) {
       currentProject = overrideProject;
-    } else if (typeof window !== 'undefined' && window.ClawFW) {
-      window.ClawFW.phSurfaceViewProjectId = null;
+    } else {
+      setPhSurfaceViewProjectId(null);
     }
   }
 
@@ -562,10 +639,8 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
   // 点目录本体进默认集合，不恢复上次项目）。右：归属胶囊（默认项目
   // + 当前同目录项目 + 新建/管理入口；项目不跨目录）。远程目录保持既有
   // 视图寻址，不伪造远程项目。
-  const dirNavEntries = (typeof getPhDirectoryNavigationList === 'function')
-    ? getPhDirectoryNavigationList(agent) : [];
-  const dirContext = (!projectPending && typeof getPhCurrentDirectoryContext === 'function')
-    ? getPhCurrentDirectoryContext(agent) : null;
+  const dirNavEntries = getPhDirectoryNavigationList(agent);
+  const dirContext = projectPending ? null : getPhCurrentDirectoryContext(agent);
   const currentDirId = dirContext?.dirId || '';
   const currentDirPath = dirContext?.openDirectory || '';
   const dirEntryActive = dirNavEntries.find((e) => e.id === currentDirId) || null;
@@ -653,7 +728,7 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
   // 右侧归属选择器：默认项目+ 当前同目录项目 + 新建/管理。
   // 项目不跨目录——跨目录导航经左侧目录树（一次切换两者）。
   const sameDirProjects = (!projectPending && currentDirPath)
-    ? (typeof getPhProjectsInDirectory === 'function' ? getPhProjectsInDirectory(currentDirPath) : [])
+    ? getPhProjectsInDirectory(currentDirPath)
     : [];
   const isOrgProject = currentProject?.type === 'project';
   const orgTriggerName = projectPending ? (isZh ? '项目加载中…' : 'Loading project…')
@@ -835,24 +910,24 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
   // Project is active - show its sessions with tabs
   // 分区契约见 phPartitionSessions：历史代成员不进入任何分区（此前仅
   // 归档区过滤，线程未归档时历史代会漏进「我的对话」）。
-  const { main: mainSessionsUnsorted, archived: archivedSessionsUnsorted } = window.phPartitionSessions(agent.id, currentProject.sessions);
+  const { main: mainSessionsUnsorted, archived: archivedSessionsUnsorted } = phPartitionSessions(agent.id, currentProject.sessions);
   const mainSessions = sortPhSessionsByMode(mainSessionsUnsorted);
   const archivedSessions = sortPhSessionsByMode(archivedSessionsUnsorted);
   const needsTabs = true; // 始终显示分页器，不管每个类型有没有对话
 
   // 会话移动多选（本地 PH only）：远程会话不可选——移动是本地归属变更，
   // 不伪造远程移动（ADR-0012 远程目录仅保持既有视图寻址）。
-  const moveState = (typeof window !== 'undefined' && window.ClawFW?.phSessionMove) || null;
+  const moveState = phSessionMove;
   const selectModeOn = agent.id === 'programming-helper'
     && currentProject && !currentProject.remoteOnly
     && moveState?.selectMode === true;
   // 多选状态与当前切片和解：浏览目标/切片更换（轮询、加载更多替换）后，
   // 清理不可见的选中 id；目标漂移则整体作废（回调 reset 之外的兜底）。
-  if (selectModeOn && typeof window.phSessionMoveSyncScope === 'function') {
-    window.phSessionMoveSyncScope(agent.id, currentProject.id, currentProject.sessions.map((s) => s.id));
+  if (selectModeOn) {
+    phSessionMoveSyncScope(agent.id, currentProject.id, currentProject.sessions.map((s) => s.id));
   }
   const renderPhSessionItem = (session, type) =>
-    window.renderPhSessionItemHtml(agent, session, {
+    renderPhSessionItemHtml(agent, session, {
       type,
       selectMode: selectModeOn && !session.remoteHostNsId,
       selected: selectModeOn && moveState.selected.has(session.id),
@@ -889,7 +964,7 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
       _PH_EMPTY_ARCHIVE_ICON,
       isZh ? '还没有归档对话' : 'No archived conversations',
       isZh ? '归档的对话会收纳到这里，随时可恢复。' : 'Archived conversations are kept here and can be restored anytime.');
-    const isSearching = phSearchQuery.trim().length > 0;
+    const isSearching = phSessionUi.phSearchQuery.trim().length > 0;
     // 分页徽标：服务端切片携带当前项目 main/archived 真实总数（远程旧版
     // 无此字段时回退已加载数）。加载更多按整体切片进度（sessionTotal vs
     // 已加载条数），两个 tab 共用同一条追加流。
@@ -925,10 +1000,10 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
     sessionsHtml += '<div class="ph-session-toolbar">';
     sessionsHtml += '<div class="ph-session-search-inline">';
     sessionsHtml += '<svg class="ph-search-icon" width="13" height="13" viewBox="0 0 14 14" fill="none"><circle cx="6" cy="6" r="4.5" stroke="currentColor" stroke-width="1.3"/><path d="M9.5 9.5L12.5 12.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>';
-    sessionsHtml += '<input type="text" class="ph-search-input" placeholder="' + escapeHtml(isZh ? '搜索对话内容...' : 'Search conversations...') + '" value="' + escapeHtml(phSearchQuery) + '" data-action="sessions.searchInput" data-event="input keydown">';
+    sessionsHtml += '<input type="text" class="ph-search-input" placeholder="' + escapeHtml(isZh ? '搜索对话内容...' : 'Search conversations...') + '" value="' + escapeHtml(phSessionUi.phSearchQuery) + '" data-action="sessions.searchInput" data-event="input keydown">';
     sessionsHtml += '<button class="ph-search-clear-btn" type="button" data-action="sessions.clearSearch" title="' + escapeHtml(isZh ? '清除搜索' : 'Clear search') + '"' + (isSearching ? '' : ' style="display:none"') + '><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M3 3l6 6M9 3l-6 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>';
     sessionsHtml += '</div>';
-    sessionsHtml += '<div class="ph-session-sort-toggle"><button type="button" data-action="sessions.toggleSort" title="' + escapeHtml(isZh ? '切换排序方式' : 'Toggle sort order') + '"><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M3 2v8M3 10L1.5 8.5M3 10l1.5-1.5M9 10V2M9 2L7.5 3.5M9 2l1.5 1.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>' + escapeHtml(phSessionSortMode === 'createdAt' ? t('workspace_sort_created') : t('workspace_sort_updated')) + '</button></div>';
+    sessionsHtml += '<div class="ph-session-sort-toggle"><button type="button" data-action="sessions.toggleSort" title="' + escapeHtml(isZh ? '切换排序方式' : 'Toggle sort order') + '"><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M3 2v8M3 10L1.5 8.5M3 10l1.5-1.5M9 10V2M9 2L7.5 3.5M9 2l1.5 1.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>' + escapeHtml(phSessionUi.phSessionSortMode === 'createdAt' ? t('workspace_sort_created') : t('workspace_sort_updated')) + '</button></div>';
     // 会话多选入口（「移动到…」批量路径，本地 PH only）
     if (agent.id === 'programming-helper' && currentProject && !currentProject.remoteOnly) {
       if (moveState?.selectMode === true) {
@@ -951,13 +1026,11 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
     sessionsHtml += '<div class="ph-session-tab-panel" data-ph-panel="archived"><div class="feature-project-session-list">' + (archivedSessions.length > 0 ? renderPhSessionsWithGroups(archivedSessions, 'archived') + loadMoreBtnHtml : archivedEmptyNote + (hasMore ? loadMoreBtnHtml : '')) + '</div></div>';
     // 面板初始内容按 topic 状态键取（未加载占位/在途加载中/已加载缓存卡片）：
     // 工作区 innerHTML 重建（轮询、切回）不会把已加载的数据闪回占位文案。
-    const topicPanelInner = typeof window.phTopicPanelInnerHtml === 'function'
-      ? window.phTopicPanelInnerHtml(agent.id, searchIdentity.projectId, searchIdentity.openDirectory)
-      : '<div class="ph-topic-status">' + escapeHtml(isZh ? '切换到 Topics 后加载' : 'Switch to Topics to load') + '</div>';
+    const topicPanelInner = phTopicPanelInnerHtml(agent.id, searchIdentity.projectId, searchIdentity.openDirectory);
     sessionsHtml += '<div class="ph-session-tab-panel" data-ph-panel="topics"><div class="ph-topic-panel" data-topic-agent-id="' + escapeHtml(agent.id) + '" data-topic-project-id="' + escapeHtml(searchIdentity.projectId) + '" data-topic-directory="' + escapeHtml(searchIdentity.openDirectory) + '">' + topicPanelInner + '</div></div>';
     sessionsHtml += '</div>';
     sessionsHtml += '<div class="ph-search-panel">';
-    sessionsHtml += (typeof window._buildPhSearchPanelHtml === 'function' ? window._buildPhSearchPanelHtml(searchIdentity) : '');
+    sessionsHtml += _buildPhSearchPanelHtml(searchIdentity);
     sessionsHtml += '</div>';
     sessionsHtml += '</div>';
   } else {
@@ -967,7 +1040,7 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
 
   // Schedule async open-sessions recovery card（归属随目标：项目目标传
   // projectId，目录目标传目录；卡片内部按完整归属过滤）
-  setTimeout(() => window.phLoadOpenSessionsCard(agent.id, currentProject.openDirectory, currentProject.id), 0);
+  setTimeout(() => phLoadOpenSessionsCard(agent.id, currentProject.openDirectory, currentProject.id), 0);
 
   return [
     bannerHtml,
@@ -1011,9 +1084,9 @@ function _renderGenericSessionList(agent, block, ctx) {
         '<div class="workspace-history-item" data-prebuilt-session-agent-id="' + escapeHtml(agent.id) + '" data-prebuilt-session-id="' + escapeHtml(session.id) + '" data-ctx-role="session" data-ctx-ns="' + escapeHtml(agent.id) + '" data-ctx-id="' + escapeHtml(session.id) + '" data-ctx-variant="' + escapeHtml(ctxVariant) + '">',
         '<div class="workspace-history-main">',
         '<div class="workspace-history-title-row">',
-        '<div class="workspace-history-title" data-action="sessions.titleDblClick" title="' + escapeHtml(currentLanguage === 'zh' ? '双击编辑标题' : 'Double-click to edit title') + '">' + escapeHtml(primaryTitle) + '</div>',
+        '<div class="workspace-history-title" data-action="sessions.titleDblClick" title="' + escapeHtml(getCurrentLanguage() === 'zh' ? '双击编辑标题' : 'Double-click to edit title') + '">' + escapeHtml(primaryTitle) + '</div>',
         renderSessionResumeBadge(session),
-        (typeof window.renderSessionThreadBadge === 'function' ? window.renderSessionThreadBadge(agent.id, session) : ''),
+        renderSessionThreadBadge(agent.id, session),
         session.id === activeSessionId ? '<span class="workspace-history-active">当前</span>' : '',
         renderSessionArchivedBadge(session),
         renderSessionTitleAiButton(session),
@@ -1060,7 +1133,7 @@ function _renderGenericSessionList(agent, block, ctx) {
 // 此处只做转发——session-ui / workspace-actions / ph-thread-history /
 // ph-session-list / ph-project-actions / ph-session-move / app-main）
 window.ClawFW.actions.registerMany({
-  'sessions.titleDblClick': (el, event) => window.handleSessionTitleDoubleClick(event),
+  'sessions.titleDblClick': (el, event) => handleSessionTitleDoubleClick(event),
   'sessions.workspaceAction': (el) => window.runWorkspaceAction(el.dataset.workspaceAction, el),
   'sessions.workspaceActionEvent': (el, event) => {
     // 原 runWorkspaceActionFromEvent：preventDefault 由 handler 返回 false 统一触发
@@ -1068,25 +1141,62 @@ window.ClawFW.actions.registerMany({
     window.runWorkspaceAction(el.dataset.workspaceAction, el.closest('button[data-workspace-action]') || undefined);
     return false;
   },
-  'sessions.threadHistory': (el) => window.phOpenThreadHistory(el.dataset.agentId, el.dataset.threadId),
-  'sessions.ctxMenu': (el, event) => window.phShowSessionCtxMenu(event, el, el.dataset.ctxNs, el.dataset.sessionId, el.dataset.sessionType),
-  'sessions.toggleSelect': (el) => window.phToggleSessionSelection(el.dataset.selectSessionId, el.checked),
-  'sessions.switchProject': (el) => window.phSwitchProject(el.dataset.projectId || el.dataset.dirId),
-  'sessions.openProject': () => window.phOpenProject(),
-  'sessions.newProjectDialog': () => window.phOpenNewProjectDialog(),
-  'sessions.manageProjects': () => window.phOpenManageProjectsDialog(),
-  'sessions.toggleProjectDropdown': (el, event) => window.phToggleProjectDropdown(event),
-  'sessions.openSettings': () => window.phOpenSettings({ initialTab: 'feature' }),
-  'sessions.openModelSettings': () => window.phOpenSettings({ initialTab: 'model' }),
-  'sessions.toggleModelSlot': () => window.phToggleModelSlot(),
-  'sessions.loadMore': () => window.phLoadMoreSessions(),
-  'sessions.switchTab': (el) => window.switchPhSessionTab(el),
+  'sessions.threadHistory': (el) => openThreadHistory(el.dataset.agentId, el.dataset.threadId),
+  'sessions.ctxMenu': (el, event) => phShowSessionCtxMenu(event, el, el.dataset.ctxNs, el.dataset.sessionId, el.dataset.sessionType),
+  'sessions.toggleSelect': (el) => phToggleSessionSelection(el.dataset.selectSessionId, el.checked),
+  'sessions.switchProject': (el) => phSwitchProject(el.dataset.projectId || el.dataset.dirId),
+  'sessions.openProject': () => phOpenProject(),
+  'sessions.newProjectDialog': () => phOpenNewProjectDialog(),
+  'sessions.manageProjects': () => phOpenManageProjectsDialog(),
+  'sessions.toggleProjectDropdown': (el, event) => phToggleProjectDropdown(event),
+  'sessions.openSettings': () => phOpenSettings({ initialTab: 'feature' }),
+  'sessions.openModelSettings': () => phOpenSettings({ initialTab: 'model' }),
+  'sessions.toggleModelSlot': () => phToggleModelSlot(),
+  'sessions.loadMore': () => phLoadMoreSessions(),
+  'sessions.switchTab': (el) => switchPhSessionTab(el),
   'sessions.searchInput': (el, event) => {
-    if (event.type === 'keydown') { if (event.key === 'Escape') window.phClearSearch(); return; }
-    window.phOnSearchInput(el.value);
+    if (event.type === 'keydown') { if (event.key === 'Escape') phClearSearch(); return; }
+    phOnSearchInput(el.value);
   },
-  'sessions.clearSearch': () => window.phClearSearch(),
-  'sessions.toggleSort': (el) => window.phToggleSessionSort(el),
-  'sessions.openMoveDialog': () => window.phOpenSessionMoveDialog(),
-  'sessions.toggleSelectMode': () => window.phToggleSessionSelectMode(),
+  'sessions.clearSearch': () => phClearSearch(),
+  'sessions.toggleSort': (el) => phToggleSessionSort(el),
+  'sessions.openMoveDialog': () => phOpenSessionMoveDialog(),
+  'sessions.toggleSelectMode': () => phToggleSessionSelectMode(),
+});
+
+export {
+  renderWorkspaceSessionList,
+  onPhSessionDragStart,
+  phThreadArchiveCount,
+  renderSessionThreadBadge,
+  phConversationArchived,
+  phIsThreadArchivedMember,
+  phPartitionSessions,
+  renderPhSessionItemHtml,
+};
+
+// —— 桥接期兼容面（kernel-state 访问器桥）——
+// 保留原因：classic 消费方在调用时点以裸标识符 / window.* 取用；逐键证据：
+//   renderWorkspaceSessionList ← classic app-ui（ClawHost.blocks.registerPrimitive
+//     'session-list' 的渲染回调）
+//   onPhSessionDragStart       ← 本模块条目内联 ondragstart 属性（字符串引用，
+//     事件时点按裸标识符解析到 window）
+// 已注销：phConversationArchived（classic 消费方归零——workspace-actions 验收为
+//   ESM 后在文件头具名 import，成为唯一消费方）
+// 零 classic 消费面、只作命名导出（不上桥）：renderPhSessionItemHtml
+//   （ph-session-list 已改 import）、phThreadArchiveCount
+//   （ctx-menu-items 本批改 import）、renderSessionThreadBadge（本模块内部）、
+//   phIsThreadArchivedMember / phPartitionSessions（本模块内部；检索/分区
+//   消费方迁 ESM 时直接 import）。
+// 注销条件：上列 classic 消费方迁移后改 import，删除对应 defineKey 并下调
+// 桥债基线。
+const bridgeApi = {
+  renderWorkspaceSessionList,
+  onPhSessionDragStart,
+};
+window.KernelState.defineKey('session-list-render', 'renderWorkspaceSessionList', renderWorkspaceSessionList);
+window.KernelState.defineKey('session-list-render', 'onPhSessionDragStart', onPhSessionDragStart);
+window.KernelState.claim('session-list-render', {
+  get: (key) => bridgeApi[key],
+  set: (key, value) => { bridgeApi[key] = value; },
 });

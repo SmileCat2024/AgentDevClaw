@@ -19,9 +19,8 @@
  * 已知偏差（UI 读数标注「估算」）：不含 keepRecentSkillInvokes 技能保护与
  * 摘要生成长度；maxFoldedToolChars 只作用于引擎 args 截断（默认关闭），不影响。
  *
- * 挂载：ESM 化（P2 消费方批次）——7 个 api 命名导出；classic 消费方
- * trim-page.js 经桥访问器 window.TrimRatioCore 调用（kernel-state 兼容桥，
- * 精简域收敛时撤桥）。装载经 kernel-entry；测试经真实 import。
+ * 挂载：ESM 化（P2 消费方批次）——7 个 api 命名导出；唯一消费方 trim-page.js
+ * 已直接 import，桥已注销。装载经 kernel-entry；测试经真实 import。
  */
 // 引擎 flushPendingToolFold 的注记前缀（trim-transcript.ts lines 数组拼接）
 var FOLD_NOTE_PREFIX = '[Folded tool activity]\nTool calls since user input above, through here:\nassistant tool calls: ';
@@ -267,20 +266,4 @@ export function computeReadout(messages, preambleCharCount, cutIndex) {
   };
 }
 
-// —— 桥接期兼容面（kernel-state 访问器桥）——
-// classic 消费方 trim-page.js 经 window.TrimRatioCore.* 调用（渲染/交互函数内，
-// 无 classic 相触达）；精简域收敛时撤桥。
-const TrimRatioCore = {
-  safeCutCandidates: safeCutCandidates,
-  keepZoneHasDialogue: keepZoneHasDialogue,
-  estimateFoldResidue: estimateFoldResidue,
-  keptCharCount: keptCharCount,
-  ratioToCut: ratioToCut,
-  cutToRatio: cutToRatio,
-  computeReadout: computeReadout,
-};
-window.KernelState.defineKey('trim-ratio-core', 'TrimRatioCore', TrimRatioCore);
-window.KernelState.claim('trim-ratio-core', {
-  get: (key) => TrimRatioCore[key],
-  set: (key, value) => { TrimRatioCore[key] = value; },
-});
+// 桥已注销：trim-page.js 已直接 import 命名导出，TrimRatioCore 无 window 消费方。

@@ -9,7 +9,8 @@ const entry = createWorkspaceEntry({
   findWorkspace: id => allAgents.find(agent => agent.id === id && agent.source === 'prebuilt'),
   focus: setFocusedAgentId,
   navigationEpoch: () => _navigationGuardEpoch,
-  loadDetail: loadAgentDetail,
+  // 静态环内惰性转调（同 session-data-loader-host）：环可能先求值本模块。
+  loadDetail: (...args) => loadAgentDetail(...args),
   switchAgent,
   requestSwitch,
 });

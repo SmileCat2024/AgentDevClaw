@@ -21,12 +21,17 @@
  *   - manifest 属性查找（fsPropFor）与目录名（fsBaseName）
  *
  * UI 模块持有状态并调用这些函数；测试见 test/feature-setup-core.test.js
- * （frontend-vm 沙箱）。
+ * （真实 import，esm-module-loader 装载）。
+ *
+ * ESM 化（P2 迁移批次 6，Feature 存储与配置编辑器）：本文件是纯逻辑，无模块
+ * 状态、无顶层副作用，因此不注册桥键也不 claim。全部原顶层函数为命名导出：
+ * 同域消费方 feature-store.js / feature-config-editor.js 直接 import，点路径
+ * 原语同时是测试锚点（模块 API 面，不是私有 helper）。
  */
 
 // ── 点路径原语 ────────────────────────────────────────────────
 
-function fsGetPathValue(obj, segs) {
+export function fsGetPathValue(obj, segs) {
   let cur = obj;
   for (const seg of segs) {
     if (!cur || typeof cur !== 'object' || !(seg in cur)) return undefined;
@@ -35,7 +40,7 @@ function fsGetPathValue(obj, segs) {
   return cur;
 }
 
-function fsHasField(obj, segs) {
+export function fsHasField(obj, segs) {
   let cur = obj;
   for (let i = 0; i < segs.length - 1; i++) {
     if (!cur || typeof cur !== 'object' || !(segs[i] in cur)) return false;
@@ -44,7 +49,7 @@ function fsHasField(obj, segs) {
   return !!cur && typeof cur === 'object' && (segs[segs.length - 1] in cur);
 }
 
-function fsSetPath(obj, segs, value) {
+export function fsSetPath(obj, segs, value) {
   let cur = obj;
   for (let i = 0; i < segs.length - 1; i++) {
     if (cur[segs[i]] == null || typeof cur[segs[i]] !== 'object') cur[segs[i]] = {};
@@ -53,7 +58,7 @@ function fsSetPath(obj, segs, value) {
   cur[segs[segs.length - 1]] = value;
 }
 
-function fsDeletePath(obj, segs) {
+export function fsDeletePath(obj, segs) {
   const del = (cur, i) => {
     if (!cur || typeof cur !== 'object') return;
     const seg = segs[i];
@@ -71,7 +76,7 @@ function fsDeletePath(obj, segs) {
 // ── 两态分类（判定数据全部来自 resolved layers，前端不自算合并）──
 
 /** 上游信息：早于本层、最后包含该字段的层；都没有则出厂默认（虚拟第 0 层）。 */
-function fsUpstreamInfo(fullKey, layerIndex, layers) {
+export function fsUpstreamInfo(fullKey, layerIndex, layers) {
   for (let i = layerIndex - 1; i >= 0; i--) {
     const segs = fullKey.split('.');
     if (fsHasField(layers[i]?.sparse, segs)) {
@@ -92,7 +97,7 @@ function fsUpstreamInfo(fullKey, layerIndex, layers) {
  * fsControlValue 由 upstream / manifest default 决定）。
  * 接管态也携带 upstream（"重置为跟随"后据此显示生效值）。
  */
-function fsClassifyField(fullKey, layerIndex, layers) {
+export function fsClassifyField(fullKey, layerIndex, layers) {
   const local = layers[layerIndex];
   if (!local) {
     return { status: 'follow', upstream: { kind: 'default', value: undefined, label: null, layerId: null } };
@@ -106,7 +111,7 @@ function fsClassifyField(fullKey, layerIndex, layers) {
 }
 
 /** 全部 manifest 字段的两态表（不含 dirty）。sections 为 UI 侧 _buildSections 产物。 */
-function fsFieldStates(sections, layers, scopeId) {
+export function fsFieldStates(sections, layers, scopeId) {
   const idx = layers.findIndex((l) => l.id === scopeId);
   const map = new Map();
   if (idx < 0) return map;
@@ -130,7 +135,7 @@ function fsFieldStates(sections, layers, scopeId) {
 }
 
 /** 控件值：接管→本层值；跟随→上游最近层值，无则 manifest default。 */
-function fsControlValue(state, prop) {
+export function fsControlValue(state, prop) {
   if (state?.status === 'takeover') {
     return state.layerValue;
   }
@@ -145,7 +150,7 @@ function fsControlValue(state, prop) {
  *   - agent / 目录层：接管即显示（"恢复为上级配置"，值相同也存在锁定需解除）；
  *   - 全局层："恢复默认值"；接管值已等于出厂默认时按钮无意义，不显示。
  */
-function fsShowReset(scopeId, state, prop) {
+export function fsShowReset(scopeId, state, prop) {
   if (!state || state.status !== 'takeover') return false;
   if (scopeId === 'global') {
     return JSON.stringify(state.layerValue) !== JSON.stringify(prop?.default);
@@ -159,7 +164,7 @@ function fsShowReset(scopeId, state, prop) {
  * 以层 sparse 为底（深拷贝，不变异输入）写入/删除单个字段。
  * value === null 表示删除该字段（重置为跟随），删除后递归剪枝空容器。
  */
-function fsWithField(layerSparse, fullKey, value) {
+export function fsWithField(layerSparse, fullKey, value) {
   const content = JSON.parse(JSON.stringify(layerSparse || {}));
   const segs = fullKey.split('.');
   if (value === null) {
@@ -172,13 +177,13 @@ function fsWithField(layerSparse, fullKey, value) {
 
 // ── 杂项 ──────────────────────────────────────────────────────
 
-function fsBaseName(dir) {
+export function fsBaseName(dir) {
   const parts = String(dir || '').split(/[\\/]+/).filter(Boolean);
   return parts.length ? parts[parts.length - 1] : String(dir || '');
 }
 
 /** 按 fullKey（feature[.group].prop）在 sections 中找 manifest 属性定义。 */
-function fsPropFor(sections, fullKey) {
+export function fsPropFor(sections, fullKey) {
   const segs = String(fullKey || '').split('.');
   if (segs.length < 2) return null;
   for (const sec of sections) {

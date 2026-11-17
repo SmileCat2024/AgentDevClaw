@@ -16,10 +16,13 @@
  *   toggleVoiceRecording, startVoiceRecording, stopVoiceRecording,
  *   _cancelVoiceRecording, _playVoiceSound, _updateVoiceUI,
  *   sendAudioToASR, insertTextAtCursor, _injectPendingVoiceResult
- * 导出全局变量:
- *   _voiceRecording, _voiceStarting, _voiceStopping, _voiceTranscribing, _voiceMediaRecorder, _voiceAudioChunks,
- *   _voiceTargetBtn, _voiceTargetId, _voiceCancelled, _voicePendingSend, _voiceAgentId,
- *   _voiceCacheKey, _pendingVoiceResults
+ * 导出全局变量（P2 W2-3a 之后：跨文件键的 owner 是 p2-w2-3a-voice-state.js，
+ * 见文件内注册区块；下列名字仍是这些键的 window 访问器名）:
+ *   _voiceRecording, _voiceStopping, _voiceTranscribing, _voicePendingSend,
+ *   _voiceTargetBtn, _voiceTargetId（以上 owner 在 ESM）
+ *   _voiceStarting, _voiceCancelled, _voiceMediaRecorder, _voiceAudioChunks,
+ *   _voiceAgentId, _voiceCacheKey, _pendingVoiceResults
+ *   （零跨文件生产消费方，保持本文件模块私有）
  * 分发器动作引用（voice 按钮动作在各输入面模板声明）:
  *   data-action 指向 toggleVoiceRecording（对话视图 composer 为属性绑定，
  *   APP 快记条为 appChatInput.voice 动作）
@@ -27,16 +30,27 @@
 
 // ── Voice Input / ASR ──────────────────────────────────────────────────────
 
-let _voiceRecording = false;
+// ESM 迁移（P2 W2-3a）：跨文件语音状态的 owner 已移到
+// p2-w2-3a-voice-state.js。这里保留**classic 相注册**：首屏同步链
+// （renderInputRequests → `_shouldPreserveVoiceInputForRender` 与
+// `_voiceRecording/_voiceStopping/_voicePendingSend` 判定）在这些键上读写，
+// 必须带真初值早于 deferred 模块可用；ESM owner 装载时 claim 吸收现值，
+// 之后本文件与其它 classic 消费方经访问器读写，无双存储。
+//
+// 只按原全局符号读写即可——去掉顶层声明后裸标识符落到 window 访问器上。
+window.KernelState.defineKey('voice-input', '_voiceRecording', false);
+window.KernelState.defineKey('voice-input', '_voiceStopping', false);
+window.KernelState.defineKey('voice-input', '_voiceTranscribing', false);
+window.KernelState.defineKey('voice-input', '_voicePendingSend', false);   // 录音期间点了发送：停止录音后，转写完成自动发送
+window.KernelState.defineKey('voice-input', '_voiceTargetBtn', null);
+window.KernelState.defineKey('voice-input', '_voiceTargetId', null);
+
+// 以下键零跨文件生产消费方（work-group 的语音状态是 WgState 自有同名属性，
+// 不解析本文件的绑定），按配方「消费面为零 → 模块私有」留在本文件。
 let _voiceStarting = false;         // startVoiceRecording 进行中（含 mic 等待期），防连点重入
-let _voiceStopping = false;
-let _voiceTranscribing = false;
+let _voiceCancelled = false;
 let _voiceMediaRecorder = null;
 let _voiceAudioChunks = [];
-let _voiceTargetBtn = null;
-let _voiceTargetId = null;
-let _voiceCancelled = false;
-let _voicePendingSend = false;      // 录音期间点了发送：停止录音后，转写完成自动发送
 let _voiceAgentId = null;           // 录音发起时的 runtime agent ID（用于 API 调用）
 let _voiceCacheKey = null;          // 录音发起时的 session cache key（用于检测会话切换）
 let _pendingVoiceResults = {};      // { agentId: text } — ASR 结果在会话切换后暂存，待切回时注入

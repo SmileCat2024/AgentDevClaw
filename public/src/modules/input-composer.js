@@ -18,7 +18,8 @@
  *   ensurePersistentComposerCard, applyComposerMode, syncPersistentComposerSession,
  *   hidePersistentComposerCard, showPersistentComposerCard,
  *   detachTransientInputContent
- * 导出全局变量：
+ * 导出全局变量（P2 W2-3a 之后 owner 是 p2-w2-3a-composer-state.js，
+ * 这里保留 classic 相注册与访问器名）：
  *   _sessionInputCache
  * 导出全局函数（草稿缓存，原 voice-input.js 符号，引用方零改动）：
  *   _cacheSessionInput, _restoreSessionInputDraft, _storeSessionInputDraft,
@@ -44,7 +45,13 @@
 
 // ── 会话草稿缓存（迁自 voice-input.js，composer 本体状态）─────────────────
 
-let _sessionInputCache = {};        // { cacheKey: text } — 每个会话 persistent 输入框内容缓存
+// ESM 迁移（P2 W2-3a）：草稿缓存的 owner 已移到
+// p2-w2-3a-composer-state.js。这里保留**classic 相注册**：首屏同步链
+// （renderInputRequests → `_applyLeaseInitialDraft`）读该键，须带真初值早于
+// deferred 模块可用；ESM owner 装载时 claim 吸收现值，之后各 classic 消费方
+// （persistent-input / input-render / voice-input / input-helpers /
+// app-chat-input）经访问器读写，无双存储。
+window.KernelState.defineKey('input-composer', '_sessionInputCache', {}); // { cacheKey: text } — 每个会话 persistent 输入框内容缓存
 
 // Real-time cache for the persistent composer draft per session.
 function _cacheSessionInput(textarea) {

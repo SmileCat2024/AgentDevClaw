@@ -1,51 +1,90 @@
+/**
+ * 聊天导航时间线点击 → 「先中断跟随」的跨模块契约
+ * （chat-nav-timeline 点击 → chat-viewport 的 registerManualScrollIntent）。
+ *
+ * 装载路线（P2）：chat-nav-timeline 已迁 ESM，经 withP2EsmCase 的 `c.load`
+ * 真实 import——模块底部启动分支在 readyState === 'complete' 时立即初始化，
+ * 与本用例的完整 DOM 桩一致。chat-viewport 仍 classic，按 index.html 真实
+ * 加载序装载（action-dispatcher → i18n → app-core → chat-viewport），
+ * 导航点击通过它提供的 window.registerManualScrollIntent 真实生效。
+ *
+ * 公开入口：不再直接调用私有 `_onBarClick` 或注入 `_navUserIndices`；
+ * 用例构建真实 DOM（container 行 + `#msg-7` + `#chat-nav-timeline`），
+ * 让模块自己重建 slot 结构，然后派发 slot 的 click 事件。
+ */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import vm from 'node:vm';
+import { withP2EsmCase } from './helpers/p2-esm-case.js';
 
-const viewportSource = fs.readFileSync(
-  new URL('../public/src/modules/chat-viewport.js', import.meta.url),
-  'utf8',
-);
-const navSource = fs.readFileSync(
-  new URL('../public/src/modules/chat-nav-timeline.js', import.meta.url),
-  'utf8',
-);
+const NAV_TIMELINE = 'public/src/modules/chat-nav-timeline.js';
 
-function createHarness() {
+function makeClassList(initial = []) {
+  const set = new Set(initial);
+  return {
+    add: (...names) => names.forEach(n => set.add(n)),
+    remove: (...names) => names.forEach(n => set.delete(n)),
+    toggle(name, force) {
+      const enable = force === undefined ? !set.has(name) : Boolean(force);
+      if (enable) set.add(name); else set.delete(name);
+      return enable;
+    },
+    contains: name => set.has(name),
+  };
+}
+
+/** 记录监听器的元素桩：导航 slot 的 click 需要真实派发。 */
+function makeElement(tag = 'div', { height = 600, top = 0 } = {}) {
+  const listeners = new Map();
+  const children = [];
+  return {
+    tagName: String(tag).toUpperCase(),
+    id: '', className: '', innerHTML: '', textContent: '',
+    style: { props: {}, setProperty(k, v) { this.props[k] = v; }, removeProperty(k) { delete this.props[k]; } },
+    classList: makeClassList(),
+    dataset: {},
+    children,
+    appendChild(child) { children.push(child); return child; },
+    addEventListener(type, callback) { listeners.set(type, callback); },
+    removeEventListener(type) { listeners.delete(type); },
+    dispatch(type, event = {}) {
+      const callback = listeners.get(type);
+      if (callback) callback(event);
+      return Boolean(callback);
+    },
+    querySelector() { return null; },
+    querySelectorAll() { return []; },
+    getBoundingClientRect() { return { top, left: 0, width: 800, height }; },
+  };
+}
+
+function createRig() {
   const timers = new Map();
   const cancelledRafs = [];
   const targetRow = {
-    classList: {
-      add() {},
-      remove() {},
-      contains() { return false; },
-    },
-    closest(selector) {
-      return selector === '.message-row' ? targetRow : null;
-    },
-    getBoundingClientRect() {
-      return { top: 180 };
-    },
+    classList: makeClassList(['message-row', 'user']),
+    closest(selector) { return selector === '.message-row' ? targetRow : null; },
+    querySelector(selector) { return selector === '[id^="msg-"]' ? targetMessage : null; },
+    querySelectorAll() { return []; },
+    getBoundingClientRect() { return { top: 180 }; },
   };
   const targetMessage = {
     id: 'msg-7',
-    closest(selector) {
-      return selector === '.message-row' ? targetRow : null;
-    },
-    getBoundingClientRect() {
-      return { top: 180 };
-    },
+    textContent: 'target',
+    closest(selector) { return selector === '.message-row' ? targetRow : null; },
+    getBoundingClientRect() { return { top: 180 }; },
   };
   const container = {
     _scrollTop: 900,
     clientHeight: 600,
+    clientWidth: 1000,
     scrollHeight: 3000,
     parentElement: {
       getBoundingClientRect() { return { top: 0 }; },
     },
     querySelector() { return null; },
-    querySelectorAll() { return []; },
+    querySelectorAll(selector) {
+      return selector === '.message-row.user' ? [targetRow] : [];
+    },
     getBoundingClientRect() { return { top: 100 }; },
     addEventListener() {},
     removeEventListener() {},
@@ -55,111 +94,109 @@ function createHarness() {
     set(value) { container._scrollTop = Number(value); },
   });
 
-  const navTimeline = {
-    classList: { add() {}, remove() {}, toggle() {} },
-    addEventListener() {},
-    style: { setProperty() {} },
-  };
-  const navCard = {
-    classList: { add() {}, remove() {}, toggle() {} },
-    style: {},
-    addEventListener() {},
-  };
+  const navTimeline = makeElement('div', { height: 600 });
+  const navCard = makeElement('div');
+  const elementStub = () => makeElement('div');
+
   const document = {
-    readyState: 'loading',
+    activeElement: null,
+    readyState: 'complete',
     getElementById(id) {
       if (id === 'chat-nav-timeline') return navTimeline;
       if (id === 'chat-nav-card') return navCard;
+      if (id === 'chat-container') return container;
       if (id === 'msg-7') return targetMessage;
       return null;
     },
-    addEventListener() {},
-    body: { contains() { return true; } },
+    querySelector() { return null; },
+    querySelectorAll() { return []; },
+    createElement: (tag) => elementStub(tag),
+    createTextNode: (text) => ({ textContent: text }),
+    addEventListener() {}, removeEventListener() {},
+    body: makeElement('body'),
+    head: makeElement('head'),
+    documentElement: makeElement('html'),
   };
 
-  const sandbox = {
-    console,
-    Date,
-    Math,
-    JSON,
-    Map,
-    Set,
-    Array,
-    Object,
-    Number,
-    String,
-    Promise,
-    document,
-    window: { addEventListener() {} },
-    container,
-    currentMessages: [{ role: 'user', content: 'target' }],
-    followLatestEnabled: true,
-    suppressFollowScrollEvent: false,
-    lastManualScrollIntentAt: 0,
-    _progScrollCooldownUntil: 0,
-    followLatestEntryUntil: 0,
-    chatViewportObserversReady: false,
-    chatViewportObserverSuppressDepth: 0,
-    chatViewportObserverQuietUntil: 0,
-    chatViewportMutationObserver: null,
-    chatViewportResizeObserver: null,
-    chatViewportSettlementToken: 0,
-    chatViewportSettlementRaf: 41,
-    chatViewportSettlementTimer: 42,
-    chatViewportSettlementContext: { reasons: new Set(['append']) },
-    chatViewportFollowRaf: 43,
-    chatViewportFollowToken: 0,
-    chatViewportFollowTransition: 'smooth',
-    followLatestButton: null,
-    workspaceTabsBar: null,
-    assemblySideRailRevealTimer: null,
-    isChatSurfaceActive: () => true,
-    shouldRenderWorkspaceSurface: () => false,
-    escapeHtml: (value) => String(value),
-    t: (key) => key,
-    ResizeObserver: class { observe() {} },
-    MutationObserver: class { observe() {} },
-    requestAnimationFrame() { return 99; },
-    cancelAnimationFrame(id) { cancelledRafs.push(id); },
+  const fakeTimers = {
     setTimeout(callback) {
       const id = timers.size + 1;
       timers.set(id, callback);
       return id;
     },
     clearTimeout(id) { timers.delete(id); },
+    requestAnimationFrame() { return 99; },
+    cancelAnimationFrame(id) { cancelledRafs.push(id); },
   };
 
-  vm.createContext(sandbox);
-  vm.runInContext(`${viewportSource}\n${navSource}\n` +
-    'globalThis.__setupNav = () => { _navUserIndices = [7]; };\n' +
-    'globalThis.__clickNav = _onBarClick;\n', sandbox);
-  sandbox.__setupNav();
-
-  return { sandbox, container, cancelledRafs };
+  return { container, navTimeline, document, fakeTimers, cancelledRafs };
 }
 
-test('clicking the conversation navigation cancels follow-latest before jumping', () => {
-  const harness = createHarness();
-  harness.sandbox.__clickNav(0);
+test('clicking the conversation navigation cancels follow-latest before jumping', async () => {
+  const rig = createRig();
+  const globals = {
+    document: rig.document,
+    currentMessages: [{ role: 'user', content: 'target' }],
+    t: (key) => key,
+    escapeHtml: (value) => String(value),
+    isChatSurfaceActive: () => true,
+    shouldRenderWorkspaceSurface: () => false,
+    MutationObserver: class { observe() {} disconnect() {} },
+    ResizeObserver: class { observe() {} disconnect() {} },
+  };
 
-  assert.equal(
-    harness.sandbox.followLatestEnabled,
-    false,
-    'navigation click must turn off follow-latest',
-  );
-  assert.deepEqual(
-    harness.cancelledRafs.sort((a, b) => a - b),
-    [41, 43],
-    'navigation click must cancel both settlement and follow animation frames',
-  );
-  assert.equal(
-    harness.sandbox.chatViewportSettlementContext,
-    null,
-    'navigation click must clear the pending settlement context',
-  );
-  assert.equal(
-    harness.container.scrollTop,
-    964,
-    'navigation click must still place the target row at the navigation offset',
-  );
+  await withP2EsmCase({
+    classic: (sandbox) => {
+      Object.assign(sandbox, rig.fakeTimers);
+      // index.html 真实加载序：分发器 → i18n → app-core → 业务 classic。
+      sandbox.loadSource('public/src/modules/action-dispatcher.js');
+      sandbox.loadSource('public/src/i18n.js');
+      sandbox.loadSource('public/src/app-core.js');
+      sandbox.loadSource('public/src/modules/chat-viewport.js');
+    },
+    globals,
+  }, async (c) => {
+    // 跟随状态与未完成的 settlement / follow 动画帧（生产由 app-core 持有）。
+    // 这些键都有 chatSurface host 的成对 get/set —— 与未迁移 classic 消费方
+    // 读写同一份状态，不直接触碰 app-core 的词法绑定。
+    const surface = c.window.createP2BootstrapChatSurfaceHost();
+    surface.followLatestEnabled = true;
+    surface.suppressFollowScrollEvent = false;
+    surface.lastManualScrollIntentAt = 0;
+    surface._progScrollCooldownUntil = 0;
+    surface.followLatestEntryUntil = 0;
+    surface.chatViewportObserversReady = false;
+    surface.chatViewportSettlementToken = 0;
+    surface.chatViewportSettlementRaf = 41;
+    surface.chatViewportSettlementTimer = 42;
+    surface.chatViewportSettlementContext = { reasons: new Set(['append']) };
+    surface.chatViewportFollowRaf = 43;
+    surface.chatViewportFollowToken = 0;
+    surface.chatViewportFollowTransition = 'smooth';
+    assert.equal(surface.followLatestEnabled, true, 'precondition: follow-latest is on');
+    c.window.currentMessages = [{ role: 'user', content: 'target' }];
+
+    await c.load(NAV_TIMELINE);
+    // 模块初始化后时间线里恰有一个 user 消息 slot；点击它 = 用户点击导航条。
+    assert.equal(rig.navTimeline.children.length, 1, 'one nav slot per user message');
+    const slot = rig.navTimeline.children[0];
+    slot.dispatch('click', {});
+
+    assert.equal(surface.followLatestEnabled, false, 'navigation click must turn off follow-latest');
+    assert.deepEqual(
+      rig.cancelledRafs.sort((a, b) => a - b),
+      [41, 43],
+      'navigation click must cancel both settlement and follow animation frames',
+    );
+    assert.equal(
+      c.read('chatViewportSettlementContext'),
+      null,
+      'navigation click must clear the pending settlement context',
+    );
+    assert.equal(
+      rig.container.scrollTop,
+      964,
+      'navigation click must still place the target row at the navigation offset',
+    );
+  });
 });

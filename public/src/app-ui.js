@@ -1926,8 +1926,9 @@ window.updateLogFilter = (key, value) => {
   renderFeaturePanel();
 };
 
-// [工作项 D] 装配预检面板动作（模块函数声明于 modules/debug-preflight.js）
-window.loadPreflight = loadPreflight;
+// [工作项 D] 装配预检面板定义在 modules/debug-preflight.js（P2 已转 ESM）：
+// renderPreflightPanel 经 KernelState 桥服务上面的面板注册闭包；loadPreflight
+// 为零消费模块私有实现（预检取数由面板渲染路径自身触发），此处不发布、不转调。
 
 // Domain P (context-menu functions) → modules/context-menu.js
 

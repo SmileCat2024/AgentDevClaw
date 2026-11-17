@@ -1,26 +1,44 @@
 /**
  * Session UI 模块
  * 从 app-ui.js 拆出 (workspace session 列表、标题与 token 小工具)
+ * ESM 化：P2 W2-6（2026-11-17）
  *
- * 依赖全局状态 (定义在 app-core.js):
- *   allAgents, currentLanguage
- * 依赖全局函数 (定义在 app-core.js 或 app-ui.js):
- *   getCurrentAgentRecord, escapeHtml, localizeWorkspaceValue,
- *   formatWorkspaceDate, t, updateChatContextBar,
- *   getFeatureCreatorProjects, getAgentCreatorProjects, getProgrammingHelperProjects,
- *   getFeatureProjectDisplayName, getAgentProjectDisplayName,
- *   getProgrammingHelperProjectDisplayName, getAgentWorkspaceState,
- *   renderActionButton, canEnterWorkspaceChat, isAssemblySession
- * 导出全局函数:
- *   getWorkspaceSessions, getWorkspaceSessionById, isCompactedResumeSession,
- *   renderSessionResumeBadge, renderSessionTitleAiButton, getSessionContextLength,
- *   getSessionCompressRatio, renderSessionTokenBar, refreshSessionTokenCount,
- *   window.handleSessionTitleDoubleClick
+ * 依赖（ESM，装载顺序由 import 图确定）：
+ *   - allAgents（agent-store-state.js，live binding 引用）
+ *   - 实时语言（i18n-environment-state.js 的 getCurrentLanguage；原 currentLanguage 词法）
+ *   - escapeHtml（markdown-utils.js）、ClawToast（toast-notify.js）
+ *   - formatWorkspaceDate（time-format-host.js）
+ *   - loadAgents（agent-snapshot-loader-host.js）
+ *   - applySessionMutationDelta（sidebar-operations.js）
+ *   - phSessionUi（p2-bootstrap-ph-session.js 的排序偏好适配面；owner 仍是 app-core）
+ *
+ * 仍 classic（调用时点显式 window 晚绑定）：getCurrentAgentRecord (app-main.js)、
+ * updateChatContextBar (chat-context-bar.js)、runWorkspaceAction (workspace-actions.js)
+ *
+ * 桥接期兼容面（KernelState defineKey/claim，domain: session-ui）：
+ * 会话列表渲染（classic session-list-render.js）、上下文菜单（ctx-menu-items /
+ * ctx-menu-handlers）、项目数据（project-data / workspace-actions / ph-session-move）、
+ * 装配面板（fw-config-panel / workspace-blocks）与本批之外的 ESM 模块
+ * （trim-page / session-dialogs / assembly-actions）仍以裸标识符取用下列键；
+ * 逐键消费面与注销条件见文件末尾清单。
+ *
+ * 跨模块 UI 状态：_phOpenSessionsCache 以 live binding 导出（下一批直接 import
+ * 读写同一对象），classic 消费者经兼容桥读同一引用。
+ *
  * 控件动作: 模板声明 data-action="sessionUi.*"，处理器在文件尾部集中注册
  * （action-dispatcher.js）；generateSessionTitle / phRestore* / phDismiss*
  * 已收敛为模块级函数
  * 注意: renderWorkspaceSessionList 已迁移到 session-list-render.js
  */
+
+import { allAgents } from './agent-store-state.js';
+import { getCurrentLanguage } from './i18n-environment-state.js';
+import { escapeHtml } from './markdown-utils.js';
+import { ClawToast } from './toast-notify.js';
+import { formatWorkspaceDate } from './time-format-host.js';
+import { loadAgents } from './agent-snapshot-loader-host.js';
+import { applySessionMutationDelta } from './sidebar-operations.js';
+import { phSessionUi } from './p2-bootstrap-ph-session.js';
 
 // ── 幂等键（ADR-0011）：写类提交统一携带（本地忽略、远程强制）───────────
 function newIdempotencyKey() {
@@ -32,16 +50,16 @@ function newIdempotencyKey() {
 }
 
 // ── Session Helpers ──────────────────────────────────────────────
-function getWorkspaceSessions(agent = getCurrentAgentRecord()) {
+function getWorkspaceSessions(agent = window.getCurrentAgentRecord()) {
   return Array.isArray(agent?.workspace_sessions?.sessions) ? agent.workspace_sessions.sessions : [];
 }
 
-function getWorkspaceSessionById(agent = getCurrentAgentRecord(), sessionId = '') {
+function getWorkspaceSessionById(agent = window.getCurrentAgentRecord(), sessionId = '') {
   return getWorkspaceSessions(agent).find((session) => session.id === String(sessionId || '').trim()) || null;
 }
 
 function sortPhSessionsByMode(sessions) {
-  let mode = phSessionSortMode === 'createdAt' ? 'createdAt' : 'updatedAt';
+  let mode = phSessionUi.phSessionSortMode === 'createdAt' ? 'createdAt' : 'updatedAt';
   let sorted = sessions.slice();
   sorted.sort(function (a, b) {
     // TODO sessions always sort above non-TODO sessions
@@ -72,18 +90,18 @@ function renderSessionResumeBadge(session) {
 
 function renderSessionArchivedBadge(session) {
   if (!session || session.archived !== true) return '';
-  let isZh = currentLanguage === 'zh';
+  let isZh = getCurrentLanguage() === 'zh';
   return '<span class="workspace-history-archived">' + escapeHtml(isZh ? '已归档' : 'Archived') + '</span>';
 }
 
 function renderSessionTodoBadge(session) {
   if (!session || session.todo !== true) return '';
-  let isZh = currentLanguage === 'zh';
+  let isZh = getCurrentLanguage() === 'zh';
   return '<span class="workspace-history-todo">' + escapeHtml(isZh ? '待办' : 'TODO') + '</span>';
 }
 
 function renderSessionTitleAiButton(session) {
-  let isZh = currentLanguage === 'zh';
+  let isZh = getCurrentLanguage() === 'zh';
   // onmousedown 保留内联（mousedown 不在 action-dispatcher 默认绑定，bindEventType
   // 新类型属禁区）：按下即置 generating 标志，必须先于 input blur 触发，否则
   // saveTitle 抢先保存替换 DOM、click 落在脱离文档的按钮上。click 走委托。
@@ -179,24 +197,24 @@ async function refreshSessionTokenCount(sessionId, agentId, btnElement) {
   btnElement.innerHTML = '⟳';
   btnElement.classList.add('loading');
   btnElement.disabled = true;
-  
+
   try {
     const response = await fetch('/protoclaw/refresh_session_token_count', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ sessionId, agentId }),
     });
-    
+
     if (!response.ok) {
       const errorText = await response.text();
       throw new Error(errorText || 'Failed to refresh token count');
     }
-    
+
     const result = await response.json();
-    
+
     if (result.success) {
       // 局部更新：只刷新 token 用量显示，不触发全量渲染（避免滚动位置丢失）
-      let agent = typeof getCurrentAgentRecord === 'function' ? getCurrentAgentRecord() : null;
+      let agent = typeof window.getCurrentAgentRecord === 'function' ? window.getCurrentAgentRecord() : null;
       if (agent) {
         let sessions = agent.workspace_sessions && agent.workspace_sessions.sessions || [];
         let target = sessions.find(function(s) { return s.id === sessionId; });
@@ -209,8 +227,8 @@ async function refreshSessionTokenCount(sessionId, agentId, btnElement) {
         }
       }
       // 更新顶部 context bar
-      if (typeof updateChatContextBar === 'function') {
-        updateChatContextBar();
+      if (typeof window.updateChatContextBar === 'function') {
+        window.updateChatContextBar();
       }
       // 更新 workspace surface 中的 session token bar（局部替换）
       let tokenBarEl = btnElement && btnElement.closest('.session-token-inline');
@@ -219,7 +237,7 @@ async function refreshSessionTokenCount(sessionId, agentId, btnElement) {
         let activeId = (agent.workspace_sessions && agent.workspace_sessions.activeSessionId)
           || agent.active_workspace_session_id;
         let sess = sessionId ? sessions2.find(function(s) { return s.id === sessionId; }) : null;
-        if (sess && typeof renderSessionTokenBar === 'function') {
+        if (sess) {
           let newBar = renderSessionTokenBar(sess, agent);
           if (newBar) {
             let temp = document.createElement('span');
@@ -231,11 +249,11 @@ async function refreshSessionTokenCount(sessionId, agentId, btnElement) {
       }
     } else {
       // 显示错误信息
-      window.alert(result.error || (currentLanguage === 'zh' ? '刷新失败' : 'Refresh failed'));
+      window.alert(result.error || (getCurrentLanguage() === 'zh' ? '刷新失败' : 'Refresh failed'));
     }
   } catch (error) {
     console.error('Failed to refresh token count:', error);
-    window.alert((currentLanguage === 'zh' ? '刷新 Token 计数失败: ' : 'Failed to refresh token count: ') + error.message);
+    window.alert((getCurrentLanguage() === 'zh' ? '刷新 Token 计数失败: ' : 'Failed to refresh token count: ') + error.message);
   } finally {
     // 恢复按钮状态
     btnElement.innerHTML = originalContent;
@@ -246,8 +264,8 @@ async function refreshSessionTokenCount(sessionId, agentId, btnElement) {
 
 async function generateSessionTitle(sessionId, btnElement) {
   if (!btnElement) return;
-  
-  let isZh = currentLanguage === 'zh';
+
+  let isZh = getCurrentLanguage() === 'zh';
   let generated = false;
   let originalContent = btnElement.innerHTML;
   let toastId = 'title-gen-' + sessionId;
@@ -259,7 +277,7 @@ async function generateSessionTitle(sessionId, btnElement) {
     title: isZh ? '正在生成标题...' : 'Generating title...',
     status: 'loading',
   });
-  
+
   // Set generating flag to prevent closing
   if (btnElement._setGenerating) {
     btnElement._setGenerating(true);
@@ -282,9 +300,7 @@ async function generateSessionTitle(sessionId, btnElement) {
     }
 
     let result = await response.json();
-    if (typeof applySessionMutationDelta === 'function') {
-      applySessionMutationDelta(agentId, result);
-    }
+    applySessionMutationDelta(agentId, result);
     if (result.ok && result.title) {
       let titleRow = btnElement.closest('.workspace-history-title-row');
       if (titleRow) {
@@ -297,7 +313,7 @@ async function generateSessionTitle(sessionId, btnElement) {
           if (titleDiv) titleDiv.textContent = result.title;
         }
       }
-      let agent = typeof getCurrentAgentRecord === 'function' ? getCurrentAgentRecord() : null;
+      let agent = typeof window.getCurrentAgentRecord === 'function' ? window.getCurrentAgentRecord() : null;
       if (agent) {
         let sessions = agent.workspace_sessions && agent.workspace_sessions.sessions || [];
         let target = sessions.find(function(s) { return s.id === sessionId; });
@@ -339,7 +355,7 @@ async function generateSessionTitle(sessionId, btnElement) {
 
 // ── Session Title Double-Click Edit ──────────────────────────────────────────
 
-window.handleSessionTitleDoubleClick = function(event) {
+function handleSessionTitleDoubleClick(event) {
   event.preventDefault();
   event.stopPropagation();
 
@@ -361,7 +377,7 @@ window.handleSessionTitleDoubleClick = function(event) {
     aiButton.classList.remove('session-title-ai-btn-hidden');
   }
 
-  titleDiv.innerHTML = '<input type="text" class="session-title-edit-input" value="' + escapeHtml(isSessionId ? '' : currentTitle) + '" placeholder="' + escapeHtml(currentLanguage === 'zh' ? '输入对话标题' : 'Enter session title') + '">';
+  titleDiv.innerHTML = '<input type="text" class="session-title-edit-input" value="' + escapeHtml(isSessionId ? '' : currentTitle) + '" placeholder="' + escapeHtml(getCurrentLanguage() === 'zh' ? '输入对话标题' : 'Enter session title') + '">';
 
   const input = titleDiv.querySelector('input');
   input.focus();
@@ -369,7 +385,7 @@ window.handleSessionTitleDoubleClick = function(event) {
 
   let saved = false;
   let isGeneratingTitle = false;
-  
+
   const saveTitle = async () => {
     if (saved || isGeneratingTitle) return;
     saved = true;
@@ -389,9 +405,7 @@ window.handleSessionTitleDoubleClick = function(event) {
         body: JSON.stringify({ agentId, title: newTitle }),
       });
       const result = await resp.json();
-      if (typeof applySessionMutationDelta === 'function') {
-        applySessionMutationDelta(agentId, result);
-      }
+      applySessionMutationDelta(agentId, result);
       if (result.ok) {
         titleDiv.textContent = newTitle;
         const agent = allAgents.find(a => a.id === agentId);
@@ -442,7 +456,7 @@ window.handleSessionTitleDoubleClick = function(event) {
       }
     }
   });
-};
+}
 
 // ── Workspace Session List ───────────────────────────────────────
 // renderWorkspaceSessionList 已迁移到 session-list-render.js
@@ -466,11 +480,15 @@ window.handleSessionTitleDoubleClick = function(event) {
  */
 let _phOpenSessionsCache = { sig: null, html: '' };
 
+// 面向 ESM 导入方的整值写入口（live binding 对导入方只读；classic 写方走
+// kernel-state 访问器，两条路径都落到同一绑定）。模块内只做字段 mutate 时不需要它。
+const setPhOpenSessionsCache = (value) => { _phOpenSessionsCache = value; };
+
 // 屏蔽"上次未关闭的会话"恢复卡片：置为 true 后入口函数直接返回，卡片不再渲染；
 // 代码全部保留，恢复显示时改回 false 即可。
 const PH_OPEN_SESSIONS_CARD_DISABLED = true;
 
-window.phLoadOpenSessionsCard = async function(agentId, openDirectory, targetProjectId) {
+async function phLoadOpenSessionsCard(agentId, openDirectory, targetProjectId) {
   if (PH_OPEN_SESSIONS_CARD_DISABLED) return;
   const container = document.getElementById('ph-open-sessions-container');
   if (!container) return;
@@ -503,7 +521,7 @@ window.phLoadOpenSessionsCard = async function(agentId, openDirectory, targetPro
     const toRestore = projectSessions.filter((s) => !runningSessionIds.has(String(s.sessionId)));
 
     // Dedup via module-level signature (survives DOM rebuilds)
-    const isZh = currentLanguage === 'zh';
+    const isZh = getCurrentLanguage() === 'zh';
     const sig = isZh + '|' + toRestore.map((s) => s.sessionId + ':' + (s.title || '') + ':' + (s.updatedAt || '')).sort().join(',');
     if (_phOpenSessionsCache.sig === sig) return; // data unchanged
     _phOpenSessionsCache.sig = sig;
@@ -514,16 +532,16 @@ window.phLoadOpenSessionsCard = async function(agentId, openDirectory, targetPro
       return;
     }
 
-    _phOpenSessionsCache.html = window._buildPhOpenSessionsCardHtml(toRestore, isZh, agentId);
+    _phOpenSessionsCache.html = _buildPhOpenSessionsCardHtml(toRestore, isZh, agentId);
     container.innerHTML = _phOpenSessionsCache.html;
   } catch {
     _phOpenSessionsCache.sig = null;
     _phOpenSessionsCache.html = '';
     if (container.innerHTML) container.innerHTML = '';
   }
-};
+}
 
-window._buildPhOpenSessionsCardHtml = function(sessions, isZh, agentId) {
+function _buildPhOpenSessionsCardHtml(sessions, isZh, agentId) {
   const itemsHtml = sessions.map((s) => {
     const timeStr = s.updatedAt ? formatWorkspaceDate(s.updatedAt) : '';
     const title = s.title || s.sessionId;
@@ -558,7 +576,7 @@ window._buildPhOpenSessionsCardHtml = function(sessions, isZh, agentId) {
     '</div>',
     '</div>',
   ].join('');
-};
+}
 
 async function phRestoreOneOpenSession(agentId, sessionId, btnEl) {
   if (btnEl) {
@@ -583,7 +601,7 @@ async function phRestoreOneOpenSession(agentId, sessionId, btnEl) {
   } catch (err) {
     if (btnEl) {
       btnEl.disabled = false;
-      btnEl.textContent = currentLanguage === 'zh' ? '进入对话' : 'Open';
+      btnEl.textContent = getCurrentLanguage() === 'zh' ? '进入对话' : 'Open';
     }
   }
 }
@@ -591,7 +609,7 @@ async function phRestoreOneOpenSession(agentId, sessionId, btnEl) {
 async function phRestoreAllOpenSessions(agentId, sessionIds, btnEl) {
   if (btnEl) {
     btnEl.disabled = true;
-    btnEl.textContent = currentLanguage === 'zh' ? '恢复中...' : 'Restoring...';
+    btnEl.textContent = getCurrentLanguage() === 'zh' ? '恢复中...' : 'Restoring...';
   }
   try {
     const resp = await fetch('/protoclaw/open_sessions/restore', {
@@ -601,9 +619,7 @@ async function phRestoreAllOpenSessions(agentId, sessionIds, btnEl) {
     });
     const data = await resp.json();
     // Reload agent data to reflect newly started runtimes
-    if (typeof loadAgents === 'function') {
-      await loadAgents();
-    }
+    await loadAgents();
     // Hide the card
     const card = document.querySelector('.ph-open-sessions-card');
     if (card) card.style.display = 'none';
@@ -613,7 +629,7 @@ async function phRestoreAllOpenSessions(agentId, sessionIds, btnEl) {
   } catch (err) {
     if (btnEl) {
       btnEl.disabled = false;
-      btnEl.textContent = currentLanguage === 'zh' ? '全部恢复' : 'Restore All';
+      btnEl.textContent = getCurrentLanguage() === 'zh' ? '全部恢复' : 'Restore All';
     }
   }
 }
@@ -644,4 +660,46 @@ window.ClawFW.actions.registerMany({
   'sessionUi.openSessionRestore': (el) => phRestoreOneOpenSession(el.dataset.agentId, el.dataset.sessionId, el),
   'sessionUi.openSessionRestoreAll': (el) => phRestoreAllOpenSessions(el.dataset.agentId, JSON.parse(el.dataset.sessionIds), el),
   'sessionUi.openSessionDismiss': (el) => phDismissOpenSessions(el.dataset.agentId, el),
+});
+
+export {
+  getWorkspaceSessions,
+  getWorkspaceSessionById,
+  sortPhSessionsByMode,
+  isCompactedResumeSession,
+  renderSessionResumeBadge,
+  renderSessionArchivedBadge,
+  renderSessionTodoBadge,
+  renderSessionTitleAiButton,
+  getSessionContextLength,
+  getSessionCompressRatio,
+  renderSessionTokenBar,
+  refreshSessionTokenCount,
+  generateSessionTitle,
+  handleSessionTitleDoubleClick,
+  phLoadOpenSessionsCard,
+  // 跨模块 UI 状态（live binding + 整值写入口）：下一批直接 import 读写同一对象
+  _phOpenSessionsCache,
+  setPhOpenSessionsCache,
+};
+
+// —— 桥接期兼容面（kernel-state 访问器桥）——
+// 保留原因：会话列表渲染与上下文菜单等 classic 消费方在调用时点以裸标识符 /
+// window.* 取用。逐键消费面与注销条件：
+//   getWorkspaceSessions        ← classic session-list-render / ctx-menu-items / ctx-menu-handlers / project-data / workspace-actions / workspace-blocks / app-ui / ph-session-move (+ ESM assembly-actions / agent-studio 插件)
+// 注销条件：上列消费方全部改 import 后删除对应 defineKey 并下调桥债基线。
+// 已注销（消费方改直引即触发）：getWorkspaceSessionById（全部消费方 assembly-actions /
+// ctx-menu-items / fw-config-panel / session-dialogs / trim-page / workspace-actions 均
+// 已具名 import，classic 侧零消费面）、sortPhSessionsByMode / renderSessionResumeBadge /
+// renderSessionArchivedBadge / renderSessionTodoBadge / renderSessionTitleAiButton /
+// renderSessionTokenBar / phLoadOpenSessionsCard / handleSessionTitleDoubleClick /
+// _phOpenSessionsCache —— 全部消费方（ESM session-list-render）已 import；这些键只保留
+// 命名导出（_phOpenSessionsCache 另有 live binding 与 setPhOpenSessionsCache 写入口）。
+const bridgeApi = {
+  getWorkspaceSessions,
+};
+window.KernelState.defineKey('session-ui', 'getWorkspaceSessions', getWorkspaceSessions);
+window.KernelState.claim('session-ui', {
+  get: (key) => bridgeApi[key],
+  set: (key, value) => { bridgeApi[key] = value; },
 });

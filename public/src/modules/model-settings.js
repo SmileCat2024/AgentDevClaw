@@ -2,10 +2,65 @@
  * model-settings.js — 文本模型预设管理 + 设置覆盖层主编排（从 settings-overlay.js 拆分）
  *
  * 包含：overlay host 管理、模型设置覆盖层主渲染、文本模型预设增删改、API Key 可视性切换。
- * 依赖（全局）：escapeHtml, currentLanguage, getCurrentAgentRecord, updateChatContextBar
- * 依赖（跨文件）：renderSpeechModelSection（speech-settings.js）、
- *   refreshOAuthStatus / renderOAuthLoginArea / resolveOpenCodeProtocolClient / _oauthPollTimer（oauth-flow.js）
+ *
+ * ESM 化（P2 消费方批次 7）：命名导出 + 显式 import。跨模块依赖全部走 import：
+ *   转义 / 语言：markdown-utils（escapeHtml）、i18n-environment-state（getCurrentLanguage）
+ *   下拉增强：claw-select（enhanceAll）
+ *   模型 / 语音缓存：model-preset-cache、speech-config-cache
+ *   语音设置渲染：speech-settings；OAuth 流程：oauth-flow
+ * 两个子面板在增删改/登录后需要本面板重渲染，反向依赖经 configure*Host 注入的
+ * 宿主面（静态依赖方向只有 model-settings → 子面板，避免模块环；宿主面只带
+ * 子面板实际调用的成员）。
+ * 已迁 ESM 的依赖直接 import：侧栏会话快照合并（mergeWorkspaceSessionSnapshots ←
+ *   sidebar-operations）、会话切片重取（phFetchSessionsWithOwnership ← project-data，
+ *   单向依赖，project-data 无路径回本模块，不新增环）。
+ * 仍为 classic 的键（getCurrentAgentRecord / getLogicalAgentId /
+ *   updateChatContextBar）经显式 window.* 晚绑定，随编排域批次收敛。
+ * 设置态 settingsData / settingsEditing / codexConnectionView 归本模块私有，OAuth
+ *   子面板经宿主面 getter 读取；语音预设编辑态归 speech-settings（命名导出读写）。
+ *   settingsOpen / settingsTab 仍留 ClawFW（classic app-ui 读写）。
+ * openSettings / closeSettings / renderSettingsOverlay 三个键供 classic 消费方
+ * （app-ui / home-dashboard / chat-renderer）经 KernelState 受控桥访问。
  */
+
+import { escapeHtml } from './markdown-utils.js';
+import { getCurrentLanguage } from './i18n-environment-state.js';
+import { enhanceAll } from './claw-select.js';
+import { setClawModelPresets } from './model-preset-cache.js';
+// project-data 无反向依赖（不回指本模块），静态 import 不新增环。
+import { phFetchSessionsWithOwnership } from './project-data.js';
+// 已迁 ESM 的侧栏会话快照合并（owner：sidebar-operations，P2 W2-6）
+import { mergeWorkspaceSessionSnapshots } from './sidebar-operations.js';
+import {
+  getClawSpeechModelConfig,
+  getClawSpeechPresets,
+  setClawSpeechModelConfig,
+  setClawSpeechPresets,
+} from './speech-config-cache.js';
+import {
+  addSpeechPreset,
+  cancelSpeechPresetEdit,
+  configureSpeechSettingsHost,
+  getSpeechEditing,
+  renderSpeechModelSection,
+  saveSpeechPreset,
+  setSpeechEditing,
+  speechApiTypeLabel,
+} from './speech-settings.js';
+import {
+  checkOAuthProxy,
+  configureOAuthFlowHost,
+  fetchOpenCodeModels,
+  onOpenCodeModelSelect,
+  onOpenCodeTierChange,
+  onProtocolChange,
+  refreshOAuthStatus,
+  renderCodexAccountsList,
+  renderOAuthLoginArea,
+  resolveOpenCodeProtocolClient,
+  startOAuthLogin,
+  stopOAuthPolling,
+} from './oauth-flow.js';
 
 function ensureSettingsHost() {
   let host = document.getElementById('settings-overlay-host');
@@ -17,12 +72,33 @@ function ensureSettingsHost() {
   return host;
 }
 
+// 设置覆盖层的会话级状态（唯一持有方）：
+//   settingsData      最近一次 GET /protoclaw/model_config 的载荷（config / presets / connections）
+//   settingsEditing   文本预设编辑索引（null = 未编辑）
+//   codexConnectionView Codex 账号列表子页开关
+// 三者只被 OAuth 子面板读取（经下方 configureOAuthFlowHost 的宿主面 getter），
+// 不再借宿 window.ClawFW；settingsOpen / settingsTab 仍留在 ClawFW，因为
+// classic app-ui 读写它们（P3 收敛）。
+let settingsData = null;
+let settingsEditing = null;
+let codexConnectionView = false;
+
+// 目录页的会话级状态（零外部消费方：只有本模块的渲染、多选与行索引动作使用）：
+//   modelCatalogs          provider → { models, loaded, loading, error }，惰性建表
+//   modelCatalogSelection  多选勾选集合（modelId → true），惰性建表
+//   modelCatalogMulti      多选模式开关
+//   modelCatalogAvailable  当前 provider 页「可添加」行的 modelId 序列（行索引寻址）
+let modelCatalogs = null;
+let modelCatalogSelection = null;
+let modelCatalogMulti = false;
+let modelCatalogAvailable = [];
+
 async function openSettings() {
   window.ClawFW.settingsOpen = true;
   if (!['overview', 'custom', 'codex', 'opencode', 'speech'].includes(window.ClawFW.settingsTab)) window.ClawFW.settingsTab = 'overview';
-  window.ClawFW.settingsEditing = null;
-  window.ClawFW.codexConnectionView = false;
-  window.ClawFW.settingsData = null;
+  settingsEditing = null;
+  codexConnectionView = false;
+  settingsData = null;
   setClawSpeechModelConfig(null);
   setClawSpeechPresets([]);
   renderSettingsOverlay();
@@ -34,7 +110,7 @@ async function openSettings() {
     const data = await modelResp.json();
     const connectionsResp = await fetch('/protoclaw/model_connections');
     if (connectionsResp.ok) data.connections = await connectionsResp.json();
-    window.ClawFW.settingsData = data;
+    settingsData = data;
     setClawModelPresets(Array.isArray(data?.presets) ? data.presets : []);
     try {
       const speechData = await speechResp.json();
@@ -53,14 +129,14 @@ async function openSettings() {
 }
 
 function closeSettings() {
-  if (_oauthPollTimer) { clearInterval(_oauthPollTimer); _oauthPollTimer = null; }
+  stopOAuthPolling();
   // 输入中的 API Key 立即落盘（DOM 拆除前同步捕获值），不随面板关闭丢弃
   flushOpenCodeKeySave();
   window.ClawFW.settingsOpen = false;
-  window.ClawFW.settingsEditing = null;
-  window.ClawFW.codexConnectionView = false;
-  window.ClawFW.settingsData = null;
-  window.ClawFW._speechEditing = null;
+  settingsEditing = null;
+  codexConnectionView = false;
+  settingsData = null;
+  setSpeechEditing(null);
   setClawSpeechPresets([]);
   const host = document.getElementById('settings-overlay-host');
   if (host) host.innerHTML = '';
@@ -178,11 +254,11 @@ function renderOverviewContent(presets, dm, isZh) {
 // 全局模型配置面板不承载工作空间策略。
 
 function renderModelCatalogSettingsOverlay(host, data) {
-  const isZh = currentLanguage === 'zh';
+  const isZh = getCurrentLanguage() === 'zh';
   const tab = window.ClawFW.settingsTab || 'overview';
   const presets = Array.isArray(data.presets) ? data.presets : [];
   const connections = data.connections || { opencode: { hasApiKey: false, tier: 'zen' } };
-  const catalog = window.ClawFW.modelCatalogs?.[tab] || { models: [], loaded: false, loading: false, error: '' };
+  const catalog = modelCatalogs?.[tab] || { models: [], loaded: false, loading: false, error: '' };
   const labels = { overview: isZh ? '总览' : 'Overview', custom: isZh ? '自定义模型' : 'Custom', codex: 'Codex', opencode: 'OpenCode', speech: isZh ? '语音识别' : 'Speech' };
   // 侧栏分组：核心四项直排，「其他」之下放语音识别
   const tabButton = (key) =>
@@ -194,8 +270,8 @@ function renderModelCatalogSettingsOverlay(host, data) {
   const dm = data.config?.defaultModel || {};
   const speechConfig = getClawSpeechModelConfig() || {};
   const speechPreset = getClawSpeechPresets().find((preset) => preset.baseUrl === speechConfig.baseUrl && preset.apiKey === speechConfig.apiKey && preset.model === speechConfig.model && (preset.apiType || 'chat') === (speechConfig.apiType || 'chat'));
-  const editing = Number.isInteger(window.ClawFW.settingsEditing) ? window.ClawFW.settingsEditing : null;
-  const speechEditing = tab === 'speech' && window.ClawFW._speechEditing != null ? window.ClawFW._speechEditing : null;
+  const editing = Number.isInteger(settingsEditing) ? settingsEditing : null;
+  const speechEditing = tab === 'speech' && getSpeechEditing() != null ? getSpeechEditing() : null;
 
   let content = '';
   if (tab === 'overview') {
@@ -213,8 +289,8 @@ function renderModelCatalogSettingsOverlay(host, data) {
       + '</div>';
   } else {
     const isCodex = tab === 'codex';
-    const selected = window.ClawFW.modelCatalogSelection || {};
-    const multi = window.ClawFW.modelCatalogMulti === true;
+    const selected = modelCatalogSelection || {};
+    const multi = modelCatalogMulti === true;
     const providerPresets = presets.map((p, idx) => ({ p, idx })).filter(({ p }) => p.catalogProvider === tab || (isCodex && p.authType === 'oauth-codex') || (!isCodex && ['OpenCode Zen', 'OpenCode Go'].includes(p.providerName)));
     const addedIds = new Set(providerPresets.map(({ p }) => p.model));
     const available = catalog.models.filter((model) => !addedIds.has(model.id));
@@ -226,7 +302,7 @@ function renderModelCatalogSettingsOverlay(host, data) {
     if (isCodex) {
       // Codex 连接：列表页只保留入口卡片，账号管理（多账号登录/切换/登出）进入专门配置页
       const cardIntro = '<div><div class="settings-connection-title">OpenAI Auth</div><div class="settings-connection-description">' + (isZh ? '通过 OpenAI 账户连接 Codex 模型目录，支持多账号切换' : 'Connect OpenAI accounts to discover Codex models; multiple accounts supported') + '</div></div>';
-      if (window.ClawFW.codexConnectionView) {
+      if (codexConnectionView) {
         // 专门配置页：账号列表（refreshCodexAccounts 渲染）+ 登录入口；登录流程
         // 反馈仍由 #oauth-status-display 承载（轮询期间独占）
         connectionCard = '<div class="settings-section settings-connection-card settings-codex-auth">'
@@ -248,7 +324,7 @@ function renderModelCatalogSettingsOverlay(host, data) {
       ? '<div class="settings-presets-grid">' + providerPresets.map(({ p, idx }) => modelCatalogPresetCard(p, idx, isZh, catalog.loaded && !catalog.models.some((m) => m.id === p.model), modelConfigMatchesPreset(dm, p))).join('') + '</div>'
       : renderCatalogEmptyState(isZh ? '尚未添加模型' : 'No models added', isZh ? '从下方可添加列表中选择模型加入' : 'Pick models from the available list below');
     // 可添加行索引寻址（inline onclick 传索引而非模型 id，避免注入与转义问题）
-    window.ClawFW.modelCatalogAvailable = available.map((m) => m.id);
+    modelCatalogAvailable = available.map((m) => m.id);
     const selectedCount = available.filter((m) => selected[m.id]).length;
     const modelInfoSpan = (m) => '<span class="settings-catalog-info"><strong>' + escapeHtml(m.displayName || m.id) + '</strong></span>';
     const availableHtml = available.length ? '<div class="settings-catalog-list">' + available.map((m, i) => multi
@@ -265,7 +341,7 @@ function renderModelCatalogSettingsOverlay(host, data) {
       + '<button class="settings-btn settings-btn-secondary" type="button" data-action="modelSettings.refreshCatalog" data-provider="' + escapeHtml(tab) + '">' + (isZh ? '刷新' : 'Refresh') + '</button>';
     // 间距节奏由 .settings-catalog-page 统一控制：区块间 16px，标题到内容 12px
     content = connectionCard
-      + (isCodex && window.ClawFW.codexConnectionView ? '' : ''
+      + (isCodex && codexConnectionView ? '' : ''
         + '<div class="settings-section"><div class="settings-section-title">' + (isZh ? '已添加' : 'Added') + '</div>' + addedGrid + '</div>'
         + '<div class="settings-section"><div class="settings-catalog-toolbar"><div class="settings-section-title">' + (isZh ? '可添加' : 'Available') + '</div><div class="settings-catalog-status">' + statusHtml + '</div><div class="settings-actions">' + toolbarActions + '</div></div>' + availableHtml + '</div>');
   }
@@ -293,7 +369,7 @@ function renderModelCatalogSettingsOverlay(host, data) {
     selEnd: opencodeKeyEl.selectionEnd,
   } : null;
   // 配置子页：head 左侧返回按钮（项目既有形态：feature-detail-close + 左箭头，同 ph-settings / feature-store）
-  const isCodexAuthPage = tab === 'codex' && window.ClawFW.codexConnectionView;
+  const isCodexAuthPage = tab === 'codex' && codexConnectionView;
   const headLeftHtml = isCodexAuthPage
     ? '<div style="display:flex;align-items:center;gap:4px;">'
       + '<button class="feature-detail-close" type="button" title="' + (isZh ? '返回' : 'Back') + '" data-action="modelSettings.closeCodexConnections" style="margin-right:8px;font-size:16px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 19-7-7 7-7"></path><path d="M19 12H5"></path></svg></button>'
@@ -332,7 +408,7 @@ function renderModelCatalogSettingsOverlay(host, data) {
   //  d9783e39 收敛导出时这里曾残留 window. 前缀调用，守卫静默失败导致
   //  下拉空壳、保存把 thinkingEffort 写成 null。必须裸标识符调用。）
   if (editing !== null) populateThinkingEffortOptions();
-  if (window.ClawSelect) window.ClawSelect.enhanceAll(host);
+  enhanceAll(host);
   if (editing !== null) {
     const protocolSelect = document.getElementById('settings-preset-provider');
     const baseUrlInput = document.getElementById('settings-preset-baseurl');
@@ -347,13 +423,13 @@ function renderModelCatalogSettingsOverlay(host, data) {
   // 账号页统一回填：本函数整体重建 DOM，#codex-accounts-list 随之变为空容器；
   // 目录刷新（refreshModelCatalog 前后各一次）、保存配置等任何路径触发的重渲染
   // 都必须重新拉取账号列表，否则列表悬空（表现为账号"莫名消失"）
-  if (window.ClawFW.codexConnectionView && tab === 'codex' && typeof renderCodexAccountsList === 'function') {
+  if (codexConnectionView && tab === 'codex') {
     renderCodexAccountsList();
   }
 }
 
 async function refreshModelCatalog(provider) {
-  const catalogs = window.ClawFW.modelCatalogs || (window.ClawFW.modelCatalogs = {});
+  const catalogs = modelCatalogs || (modelCatalogs = {});
   const current = catalogs[provider] || { models: [], loaded: false, loading: false, error: '' };
   if (current.loading) return;
   catalogs[provider] = { ...current, loading: true, error: '' };
@@ -370,14 +446,14 @@ async function refreshModelCatalog(provider) {
 }
 
 function setCatalogModelSelection(input) {
-  const selected = window.ClawFW.modelCatalogSelection || (window.ClawFW.modelCatalogSelection = {});
+  const selected = modelCatalogSelection || (modelCatalogSelection = {});
   if (input.checked) selected[input.value] = true;
   else delete selected[input.value];
   // 就地更新按钮计数，不整体重渲染（避免勾选时列表跳动）
   const addBtn = document.getElementById('settings-catalog-add-selected');
   if (addBtn) {
     const count = document.querySelectorAll('.settings-catalog-list input[type="checkbox"]:checked').length;
-    const isZh = currentLanguage === 'zh';
+    const isZh = getCurrentLanguage() === 'zh';
     addBtn.textContent = isZh ? '添加所选' + (count ? '（' + count + '）' : '') : 'Add selected' + (count ? ' (' + count + ')' : '');
   }
 }
@@ -394,8 +470,8 @@ function toggleOpenCodeKeyVisibility() {
 }
 
 function toggleCatalogMultiSelect() {
-  window.ClawFW.modelCatalogMulti = window.ClawFW.modelCatalogMulti !== true;
-  window.ClawFW.modelCatalogSelection = {};
+  modelCatalogMulti = modelCatalogMulti !== true;
+  modelCatalogSelection = {};
   renderSettingsOverlay();
 }
 
@@ -405,8 +481,8 @@ async function onOpenCodeServiceChange() {
 }
 
 async function addCatalogModels(provider, ids) {
-  const data = window.ClawFW.settingsData;
-  const catalog = window.ClawFW.modelCatalogs?.[provider];
+  const data = settingsData;
+  const catalog = modelCatalogs?.[provider];
   if (!data || !catalog || !ids.length) return;
   const chosen = new Set(ids);
   for (const model of catalog.models) {
@@ -455,12 +531,12 @@ async function addCatalogModels(provider, ids) {
       starred: false,
     });
   }
-  window.ClawFW.modelCatalogSelection = {};
+  modelCatalogSelection = {};
   await saveSettingsConfig();
 }
 
 async function addCatalogModel(provider, rowIdx) {
-  const modelId = (window.ClawFW.modelCatalogAvailable || [])[rowIdx];
+  const modelId = modelCatalogAvailable[rowIdx];
   if (!modelId) return;
   await addCatalogModels(provider, [modelId]);
 }
@@ -498,7 +574,7 @@ async function saveModelConnection(opts) {
   const quiet = opts?.quiet === true;
   const key = document.getElementById('settings-opencode-key')?.value || '';
   const tier = document.getElementById('settings-opencode-tier')?.value === 'go' ? 'go' : 'zen';
-  const prev = window.ClawFW.settingsData?.connections?.opencode;
+  const prev = settingsData?.connections?.opencode;
   const response = await fetch('/protoclaw/model_connections', {
     method: 'PUT', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ opencode: { apiKey: key, tier } }),
@@ -506,12 +582,12 @@ async function saveModelConnection(opts) {
   const result = response ? await response.json().catch(() => ({})) : {};
   if (!response || !response.ok) {
     if (!quiet) alert(result.error || 'Failed to save connection');
-    updateOpenCodeSaveFeedback(true, currentLanguage === 'zh' ? 'API Key 自动保存失败' : 'Auto-save failed');
+    updateOpenCodeSaveFeedback(true, getCurrentLanguage() === 'zh' ? 'API Key 自动保存失败' : 'Auto-save failed');
     return;
   }
   // 面板可能已在请求飞行中关闭（settingsData 置空），此时无需再更新本地状态
   if (!window.ClawFW.settingsOpen) return;
-  window.ClawFW.settingsData.connections = { opencode: result.opencode };
+  settingsData.connections = { opencode: result.opencode };
   // 自动保存成功不打扰（不重渲染，避免打断输入焦点）；显式保存走整体重渲染
   if (!quiet) renderSettingsOverlay();
   // 凭证或服务发生变化才刷新目录；输入过程中的重复保存不重复拉取
@@ -521,18 +597,18 @@ async function saveModelConnection(opts) {
 }
 
 function openCodexConnectionView() {
-  window.ClawFW.codexConnectionView = true;
+  codexConnectionView = true;
   // 账号列表回填由 renderSettingsOverlay 统一负责（见其尾部），无需再经
   // refreshOAuthStatus 转发一次（避免双 fetch）
   renderSettingsOverlay();
   // 进入配置页时检查代理环境（未配置代理时 OpenAI 登录请求可能被地区限制拦截）
-  checkOAuthProxy(currentLanguage === 'zh');
+  checkOAuthProxy(getCurrentLanguage() === 'zh');
 }
 
 function closeCodexConnectionView() {
   // 返回列表页时终止未完成的登录轮询（服务端流程继续，状态以再次进入时的刷新为准）
-  if (_oauthPollTimer) { clearInterval(_oauthPollTimer); _oauthPollTimer = null; }
-  window.ClawFW.codexConnectionView = false;
+  stopOAuthPolling();
+  codexConnectionView = false;
   renderSettingsOverlay();
   refreshOAuthStatus();
 }
@@ -561,12 +637,12 @@ function renderSettingsOverlay() {
     host.innerHTML = '';
     return;
   }
-  const data = window.ClawFW.settingsData;
+  const data = settingsData;
   if (data) {
     renderModelCatalogSettingsOverlay(host, data);
     return;
   }
-  const isZh = currentLanguage === 'zh';
+  const isZh = getCurrentLanguage() === 'zh';
   host.innerHTML = '<div class="feature-detail-overlay"><div class="feature-detail-window ph-settings-window">'
     + '<div class="feature-detail-head"><div><div class="feature-detail-title">' + (isZh ? '设置' : 'Settings') + '</div><div class="feature-detail-subtitle">' + (isZh ? '管理模型连接与模型' : 'Manage model connections and models') + '</div></div><button class="feature-detail-close" type="button" data-action="modelSettings.close">×</button></div>'
     + '<div class="ph-settings-empty">' + (isZh ? '正在加载…' : 'Loading…') + '</div>'
@@ -597,7 +673,7 @@ const onThinkingBudgetInput = function() {
   let input = document.getElementById('settings-preset-thinking-budget');
   let errEl = document.getElementById('settings-thinking-budget-error');
   if (!input || !errEl) return;
-  let isZh = currentLanguage === 'zh';
+  let isZh = getCurrentLanguage() === 'zh';
   let raw = input.value.trim();
   if (raw !== '') {
     let val = parseInt(raw, 10);
@@ -620,7 +696,7 @@ const populateThinkingEffortOptions = function() {
   if (!select) return;
   const provider = select.dataset.provider || 'anthropic';
   const selectedValue = select.dataset.current || select.value || '';
-  const isZh = currentLanguage === 'zh';
+  const isZh = getCurrentLanguage() === 'zh';
   const efforts = provider === 'openai' ? OPENAI_EFFORTS : ANTHROPIC_EFFORTS;
   let html = '<option value="" ' + (selectedValue === '' ? 'selected' : '') + '>'
     + (isZh ? '默认（厂商决定）' : 'Default (vendor decides)') + '</option>';
@@ -631,7 +707,8 @@ const populateThinkingEffortOptions = function() {
   select.dataset.current = '';
 };
 
-window.onProviderChangeUpdateThinking = function() {
+// oauth-flow 的协议切换路径在程序化改动协议下拉后调用（无 input 事件可依赖）
+function onProviderChangeUpdateThinking() {
   const select = document.getElementById('settings-preset-thinking-effort');
   if (!select) return;
   const providerEl = document.getElementById('settings-preset-provider');
@@ -640,7 +717,7 @@ window.onProviderChangeUpdateThinking = function() {
   const selectedValue = select.value || '';
   select.dataset.current = selectedValue;
   populateThinkingEffortOptions();
-};
+}
 
 function syncBaseEndpointBadge() {
   const protocolSelect = document.getElementById('settings-preset-provider');
@@ -649,7 +726,7 @@ function syncBaseEndpointBadge() {
   const suffixBadge = document.querySelector('.base-url-combo .base-url-suffix');
   const combo = document.querySelector('.base-url-combo');
   if (!protocolSelect || !baseUrlInput || !suffixBadge || !combo) return;
-  const isZh = currentLanguage === 'zh';
+  const isZh = getCurrentLanguage() === 'zh';
   const raw = baseUrlInput.value.trim();
   const normalized = normalizeModelBaseUrl(raw);
   const duplicate = !!raw && normalized !== raw.replace(/\/+$/, '');
@@ -661,9 +738,8 @@ function syncBaseEndpointBadge() {
     : (isZh ? '服务自动追加' : 'Added automatically');
   suffixBadge.innerHTML = '<span class="base-url-plus">+</span>' + escapeHtml(suffix);
 }
-// Exposed for oauth-flow.js: its protocol/tier/model handlers mutate the Base
-// URL and Model fields programmatically, which fires no input events.
-window.syncBaseEndpointBadge = syncBaseEndpointBadge;
+// 导出给 oauth-flow.js：其协议/服务/模型处理器会程序化改 Base URL 与 Model 字段，
+// 不产生 input 事件，需要显式刷新后缀徽章。
 
 const MODEL_ENDPOINT_SUFFIXES = ['/chat/completions', '/responses', '/messages'];
 
@@ -727,13 +803,13 @@ function validateProviderOptionsDraft(raw, protocolValue, apiSurfaceValue = 'cha
   try {
     value = raw.trim() ? JSON.parse(raw) : {};
   } catch {
-    return { valid: false, error: currentLanguage === 'zh' ? '额外请求体参数必须是有效 JSON。' : 'Additional request body parameters must be valid JSON.' };
+    return { valid: false, error: getCurrentLanguage() === 'zh' ? '额外请求体参数必须是有效 JSON。' : 'Additional request body parameters must be valid JSON.' };
   }
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    return { valid: false, error: currentLanguage === 'zh' ? '额外请求体参数必须是 JSON 对象。' : 'Additional request body parameters must be a JSON object.' };
+    return { valid: false, error: getCurrentLanguage() === 'zh' ? '额外请求体参数必须是 JSON 对象。' : 'Additional request body parameters must be a JSON object.' };
   }
   if (Object.keys(value).length && !['anthropic', 'openai', 'openai-responses', 'openai-oauth', 'opencode'].includes(protocolValue)) {
-    return { valid: false, error: currentLanguage === 'zh' ? '当前协议不支持额外请求体参数。' : 'Additional parameters are not supported for this protocol.' };
+    return { valid: false, error: getCurrentLanguage() === 'zh' ? '当前协议不支持额外请求体参数。' : 'Additional parameters are not supported for this protocol.' };
   }
   const dangerous = new Set(['__proto__', 'prototype', 'constructor']);
   const isResponses = protocolValue === 'openai-responses' || protocolValue === 'openai-oauth'
@@ -745,12 +821,12 @@ function validateProviderOptionsDraft(raw, protocolValue, apiSurfaceValue = 'cha
       : ['model', 'messages', 'tools', 'tool_choice', 'stream', 'stream_options', 'max_tokens', 'max_completion_tokens', 'reasoning_effort', 'parallel_tool_calls'];
   const inspect = (node, depth = 0, visited = new Set()) => {
     if (!node || typeof node !== 'object') return null;
-    if (depth >= 32) return currentLanguage === 'zh' ? '参数嵌套过深。' : 'Parameter nesting is too deep.';
+    if (depth >= 32) return getCurrentLanguage() === 'zh' ? '参数嵌套过深。' : 'Parameter nesting is too deep.';
     if (visited.has(node)) return null;
     visited.add(node);
     for (const key of Object.getOwnPropertyNames(node)) {
       const child = node[key];
-      if (dangerous.has(key)) return currentLanguage === 'zh' ? '参数中包含不安全的键：' + key : 'Unsafe parameter key: ' + key;
+      if (dangerous.has(key)) return getCurrentLanguage() === 'zh' ? '参数中包含不安全的键：' + key : 'Unsafe parameter key: ' + key;
       const nested = inspect(child, depth + 1, visited);
       if (nested) return nested;
     }
@@ -760,7 +836,7 @@ function validateProviderOptionsDraft(raw, protocolValue, apiSurfaceValue = 'cha
   if (unsafe) return { valid: false, error: unsafe };
   const conflict = Object.keys(value).find((key) => reserved.includes(key));
   if (conflict) {
-    return { valid: false, error: currentLanguage === 'zh'
+    return { valid: false, error: getCurrentLanguage() === 'zh'
       ? '字段“' + conflict + '”由运行时管理，不能放入额外请求体参数。'
       : 'The runtime manages “' + conflict + '”; it cannot be overridden here.' };
   }
@@ -772,7 +848,7 @@ function renderSettingsEditForm(editIdx, presets, isZh) {
   let openCodeTier = preset.providerName === 'OpenCode Go' || preset.baseUrl === OPENCODE_GO_BASE_URL ? 'go' : 'zen';
   const isCodex = isCodexPreset(preset);
   const modelCatalog = isCodex
-    ? (window.ClawFW.modelCatalogs?.codex?.models || []).find((model) => model.id === preset.model)
+    ? (modelCatalogs?.codex?.models || []).find((model) => model.id === preset.model)
     : null;
   const availableServiceTiers = isCodex ? getCodexServiceTiers(preset, modelCatalog) : [];
   const selectedServiceTier = isCodex ? selectedCodexTier(preset) : '';
@@ -816,7 +892,7 @@ function renderSettingsEditForm(editIdx, presets, isZh) {
       ...(unsupportedServiceTier ? ['<option value="' + escapeHtml(selectedServiceTier) + '" selected>'
         + escapeHtml(selectedServiceTier) + (isZh ? '（目录未提供，请选择支持的档位）' : ' (not in catalog; choose a supported tier)') + '</option>'] : []),
       '</select>',
-      !availableServiceTiers.length ? '<div class="settings-static-value">' + escapeHtml(window.ClawFW.modelCatalogs?.codex?.error || (isZh
+      !availableServiceTiers.length ? '<div class="settings-static-value">' + escapeHtml(modelCatalogs?.codex?.error || (isZh
         ? '尚无可用的加速档位信息。请在 Codex 页面刷新模型目录后重试。'
         : 'No speed tiers available. Refresh the Codex model catalog and try again.')) + '</div>' : '',
       unsupportedServiceTier ? '<div class="settings-service-tier-warning" role="alert">'
@@ -1010,10 +1086,10 @@ function createSettingsHeaderRowHTML(idx, key, value, mode, isZh) {
 const addSettingsHeaderRow = function() {
   let container = document.getElementById('settings-headers-container');
   if (!container) return;
-  let isZh = currentLanguage === 'zh';
+  let isZh = getCurrentLanguage() === 'zh';
   container.insertAdjacentHTML('beforeend', createSettingsHeaderRowHTML(container.children.length, '', '', 'static', isZh));
   // Enhance newly added select
-  if (window.ClawSelect) window.ClawSelect.enhanceAll(container);
+  enhanceAll(container);
 };
 
 const onSettingsHeaderModeChange = function(select) {
@@ -1021,7 +1097,7 @@ const onSettingsHeaderModeChange = function(select) {
   let valueInput = row ? row.querySelector('[data-header-value]') : null;
   if (!valueInput) return;
   let isDynamic = select.value === 'uuid' || select.value === 'random';
-  let isZh = currentLanguage === 'zh';
+  let isZh = getCurrentLanguage() === 'zh';
   valueInput.disabled = isDynamic;
   valueInput.placeholder = isDynamic ? '(auto)' : (isZh ? 'Header 值' : 'Header value');
   valueInput.style.opacity = isDynamic ? '0.4' : '';
@@ -1046,7 +1122,7 @@ function newPresetGenerationDefaults() {
 }
 
 function addSettingsPreset() {
-  const presets = window.ClawFW.settingsData?.presets || [];
+  const presets = settingsData?.presets || [];
   presets.push({
     _isNew: true,
     name: '',
@@ -1060,48 +1136,48 @@ function addSettingsPreset() {
     ...newPresetGenerationDefaults(),
     starred: false,
   });
-  window.ClawFW.settingsData = window.ClawFW.settingsData || {};
-  window.ClawFW.settingsData.presets = presets;
-  window.ClawFW.settingsEditing = presets.length - 1;
+  settingsData = settingsData || {};
+  settingsData.presets = presets;
+  settingsEditing = presets.length - 1;
   renderSettingsOverlay();
 }
 
 async function editSettingsPreset(idx) {
-  const preset = window.ClawFW.settingsData?.presets?.[idx];
+  const preset = settingsData?.presets?.[idx];
   // Load capabilities before opening the form: an async catalog refresh must not erase edits.
-  if (isCodexPreset(preset) && !window.ClawFW.modelCatalogs?.codex?.loaded) {
+  if (isCodexPreset(preset) && !modelCatalogs?.codex?.loaded) {
     await refreshModelCatalog('codex');
-    if (window.ClawFW.settingsData?.presets?.[idx] !== preset) return;
+    if (settingsData?.presets?.[idx] !== preset) return;
   }
-  window.ClawFW.settingsEditing = idx;
+  settingsEditing = idx;
   renderSettingsOverlay();
 }
 
 function cancelSettingsEdit() {
-  if (_oauthPollTimer) { clearInterval(_oauthPollTimer); _oauthPollTimer = null; }
-  const presets = window.ClawFW.settingsData?.presets || [];
-  const editing = window.ClawFW.settingsEditing;
+  stopOAuthPolling();
+  const presets = settingsData?.presets || [];
+  const editing = settingsEditing;
   if (editing !== null && presets[editing]?._isNew) {
     presets.splice(editing, 1);
   }
-  window.ClawFW.settingsEditing = null;
+  settingsEditing = null;
   renderSettingsOverlay();
 }
 
 async function deleteSettingsPreset(idx) {
-  const presets = window.ClawFW.settingsData?.presets || [];
+  const presets = settingsData?.presets || [];
   presets.splice(idx, 1);
-  window.ClawFW.settingsData.presets = presets;
-  window.ClawFW.settingsEditing = null;
+  settingsData.presets = presets;
+  settingsEditing = null;
   await saveSettingsConfig();
 }
 
 async function toggleSettingsPresetStar(idx) {
-  const presets = window.ClawFW.settingsData?.presets || [];
+  const presets = settingsData?.presets || [];
   const preset = presets[idx];
   if (!preset) return;
   preset.starred = preset.starred !== true;
-  window.ClawFW.settingsData.presets = presets;
+  settingsData.presets = presets;
   await saveSettingsConfig();
 }
 
@@ -1125,10 +1201,10 @@ function toggleApiKeyVisibility() {
 
 async function saveSettingsPreset(idx, opts) {
   const keepEditing = opts?.keepEditing === true;
-  if (_oauthPollTimer) { clearInterval(_oauthPollTimer); _oauthPollTimer = null; }
-  const presets = window.ClawFW.settingsData?.presets || [];
+  stopOAuthPolling();
+  const presets = settingsData?.presets || [];
   const el = (id) => document.getElementById(id);
-  const isZh = currentLanguage === 'zh';
+  const isZh = getCurrentLanguage() === 'zh';
 
   // ── Thinking config ──
   const thinkingEnabled = el('settings-preset-thinking-enabled')?.checked === true;
@@ -1196,7 +1272,7 @@ async function saveSettingsPreset(idx, opts) {
   if (optionsError) optionsError.style.display = 'none';
   el('settings-preset-provider-options')?.classList.remove('invalid');
   const providerOptions = { ...optionsValidation.value };
-  const modelCatalog = (window.ClawFW.modelCatalogs?.codex?.models || []).find((model) => model.id === existing.model);
+  const modelCatalog = (modelCatalogs?.codex?.models || []).find((model) => model.id === existing.model);
   if (isCodexPreset(existing)) {
      const newTier = el('settings-preset-service-tier')?.value ?? selectedCodexTier(existing);
      const availableServiceTiers = getCodexServiceTiers(existing, modelCatalog);
@@ -1278,10 +1354,10 @@ async function saveSettingsPreset(idx, opts) {
     };
   }
   presets[idx] = preset;
-  window.ClawFW.settingsData.presets = presets;
-  if (!keepEditing) window.ClawFW.settingsEditing = null;
+  settingsData.presets = presets;
+  if (!keepEditing) settingsEditing = null;
   // Check if no model is currently active — auto-select the first/newly saved preset
-  let config = window.ClawFW.settingsData?.config || {};
+  let config = settingsData?.config || {};
   let dm = config.defaultModel || {};
   let hasActive = presets.some(function(p) {
     return modelConfigMatchesPreset(dm, p);
@@ -1293,15 +1369,15 @@ async function saveSettingsPreset(idx, opts) {
   }
   if (keepEditing) {
     // Server round-trip refreshed settingsData; surface the assigned provider name
-    return window.ClawFW.settingsData?.presets?.[idx]?.providerName || '';
+    return settingsData?.presets?.[idx]?.providerName || '';
   }
 }
 
 async function applySettingsPreset(idx) {
-  const presets = window.ClawFW.settingsData?.presets || [];
+  const presets = settingsData?.presets || [];
   const preset = presets[idx];
   if (!preset) return;
-  const config = window.ClawFW.settingsData?.config || { defaultModel: {}, agent: {} };
+  const config = settingsData?.config || { defaultModel: {}, agent: {} };
   const defaultModel = {
     provider: preset.provider || 'anthropic',
     apiSurface: preset.apiSurface || 'chat',
@@ -1340,36 +1416,34 @@ async function applySettingsPreset(idx) {
       return;
     }
     const result = await resp.json();
-    window.ClawFW.settingsData.config = result.config;
-    window.ClawFW.settingsData.presets = result.presets;
+    settingsData.config = result.config;
+    settingsData.presets = result.presets;
     setClawModelPresets(Array.isArray(result?.presets) ? result.presets : []);
     renderSettingsOverlay();
     // Refresh session data to reflect updated model config
-    let _agent = typeof getCurrentAgentRecord === 'function' ? getCurrentAgentRecord() : null;
-    const logicalAgentId = typeof getLogicalAgentId === 'function' ? getLogicalAgentId(_agent) : _agent?.id;
+    // 桥接期：getCurrentAgentRecord / getLogicalAgentId 定义于 app-main / app-core（编排域收敛时改 import）
+    let _agent = typeof window.getCurrentAgentRecord === 'function' ? window.getCurrentAgentRecord() : null;
+    const logicalAgentId = typeof window.getLogicalAgentId === 'function' ? window.getLogicalAgentId(_agent) : _agent?.id;
     if (logicalAgentId) {
       try {
         // 元数据刷新不改变列表归属：按当前浏览目标取切片并合并，避免用
         // 目录切片整体覆盖项目列表（并把已加载的深层分页段一并保住）。
-        const fresh = typeof phFetchSessionsWithOwnership === 'function'
-          ? await phFetchSessionsWithOwnership(_agent || { id: logicalAgentId })
-          : null;
+        const fresh = await phFetchSessionsWithOwnership(_agent || { id: logicalAgentId });
         if (fresh && fresh.unchanged !== true && _agent) {
-          _agent.workspace_sessions = typeof mergeWorkspaceSessionSnapshots === 'function'
-            ? mergeWorkspaceSessionSnapshots(_agent.workspace_sessions || {}, fresh, logicalAgentId)
-            : fresh;
+          _agent.workspace_sessions = mergeWorkspaceSessionSnapshots(_agent.workspace_sessions || {}, fresh, logicalAgentId);
         }
       } catch {}
     }
-    if (typeof updateChatContextBar === 'function') { updateChatContextBar(); }
+    // 桥接期：updateChatContextBar 定义于 chat-context-bar（聊天栏域收敛时改 import）
+    if (typeof window.updateChatContextBar === 'function') { window.updateChatContextBar(); }
   } catch (error) {
     console.error('Failed to save model config:', error);
   }
 }
 
 async function saveSettingsConfig() {
-  const config = window.ClawFW.settingsData?.config || { defaultModel: {}, agent: {} };
-  const presets = window.ClawFW.settingsData?.presets || [];
+  const config = settingsData?.config || { defaultModel: {}, agent: {} };
+  const presets = settingsData?.presets || [];
   try {
     const resp = await fetch('/protoclaw/model_config', {
       method: 'PUT',
@@ -1383,28 +1457,26 @@ async function saveSettingsConfig() {
       return;
     }
     const result = await resp.json();
-    window.ClawFW.settingsData.config = result.config;
-    window.ClawFW.settingsData.presets = result.presets;
+    settingsData.config = result.config;
+    settingsData.presets = result.presets;
     setClawModelPresets(Array.isArray(result?.presets) ? result.presets : []);
     renderSettingsOverlay();
     // Refresh session data to reflect updated model config
-    let _agent = typeof getCurrentAgentRecord === 'function' ? getCurrentAgentRecord() : null;
-    const logicalAgentId = typeof getLogicalAgentId === 'function' ? getLogicalAgentId(_agent) : _agent?.id;
+    // 桥接期：getCurrentAgentRecord / getLogicalAgentId 定义于 app-main / app-core（编排域收敛时改 import）
+    let _agent = typeof window.getCurrentAgentRecord === 'function' ? window.getCurrentAgentRecord() : null;
+    const logicalAgentId = typeof window.getLogicalAgentId === 'function' ? window.getLogicalAgentId(_agent) : _agent?.id;
     if (logicalAgentId) {
       try {
         // 元数据刷新不改变列表归属：按当前浏览目标取切片并合并，避免用
         // 目录切片整体覆盖项目列表（并把已加载的深层分页段一并保住）。
-        const fresh = typeof phFetchSessionsWithOwnership === 'function'
-          ? await phFetchSessionsWithOwnership(_agent || { id: logicalAgentId })
-          : null;
+        const fresh = await phFetchSessionsWithOwnership(_agent || { id: logicalAgentId });
         if (fresh && fresh.unchanged !== true && _agent) {
-          _agent.workspace_sessions = typeof mergeWorkspaceSessionSnapshots === 'function'
-            ? mergeWorkspaceSessionSnapshots(_agent.workspace_sessions || {}, fresh, logicalAgentId)
-            : fresh;
+          _agent.workspace_sessions = mergeWorkspaceSessionSnapshots(_agent.workspace_sessions || {}, fresh, logicalAgentId);
         }
       } catch {}
     }
-    if (typeof updateChatContextBar === 'function') { updateChatContextBar(); }
+    // 桥接期：updateChatContextBar 定义于 chat-context-bar（聊天栏域收敛时改 import）
+    if (typeof window.updateChatContextBar === 'function') { window.updateChatContextBar(); }
     return true;
   } catch (error) {
     console.error('Failed to save config:', error);
@@ -1412,20 +1484,23 @@ async function saveSettingsConfig() {
   }
 }
 
-// ── window 导出 ──────────────────────────────────────────────
-// openSettings / closeSettings：app-ui 设置入口与 escape 路径调用；
-// saveSettingsPreset / refreshModelCatalog：oauth-flow 程序化调用；
-// onProviderChangeUpdateThinking / syncBaseEndpointBadge：oauth-flow 守卫调用。
-// 面板内交互已全部走 data-action="modelSettings.*" 分发，不再需要逐一导出。
-window.openSettings = openSettings;
-window.closeSettings = closeSettings;
+// ── 导出面 ──────────────────────────────────────────────────
+// 本模块是设置覆盖层的 owner：子面板不 import 本模块（保持单向静态依赖
+// 本模块 → 子面板），而是从下方注入的宿主面取用下列函数，故导出即宿主面契约：
+//   oauth-flow      ← saveSettingsPreset / refreshModelCatalog /
+//                     syncBaseEndpointBadge / onProviderChangeUpdateThinking
+//   speech-settings ← renderSettingsOverlay
+// openSettings / closeSettings / renderSettingsOverlay 另经文件末尾的
+// KernelState 受控桥服务 classic 消费方（app-ui / home-dashboard / chat-renderer）。
+// OpenCode 基址常量不可变，作为宿主面取值传入，不再作为跨模块导出。
+// 面板内交互已全部走 data-action="modelSettings.*" 分发，不再经 window。
 const switchSettingsTab = function(tab) {
   // 重渲染前先落盘输入中的 OpenCode API Key（同步捕获 DOM 值后再替换）
   flushOpenCodeKeySave();
   window.ClawFW.settingsTab = ['overview', 'custom', 'codex', 'opencode', 'speech'].includes(tab) ? tab : 'overview';
-  window.ClawFW.settingsEditing = null;
-  window.ClawFW.codexConnectionView = false;
-  if (tab === 'speech') window.ClawFW._speechEditing = null;
+  settingsEditing = null;
+  codexConnectionView = false;
+  if (tab === 'speech') setSpeechEditing(null);
   renderSettingsOverlay();
   if (tab === 'codex') {
     refreshOAuthStatus();
@@ -1434,8 +1509,6 @@ const switchSettingsTab = function(tab) {
     refreshModelCatalog('opencode');
   }
 };
-window.refreshModelCatalog = refreshModelCatalog;
-window.saveSettingsPreset = saveSettingsPreset;
 
 window.ClawFW.actions.registerMany({
   'modelSettings.applyPreset': (el, event, idx) => applySettingsPreset(idx),
@@ -1443,7 +1516,7 @@ window.ClawFW.actions.registerMany({
   'modelSettings.editPreset': (el, event, idx) => editSettingsPreset(idx),
   'modelSettings.deletePreset': (el, event, idx) => deleteSettingsPreset(idx),
   'modelSettings.switchTab': (el) => switchSettingsTab(el.dataset.tab),
-  'modelSettings.startOAuth': (el) => window.startOAuthLogin(el.dataset.mode),
+  'modelSettings.startOAuth': (el) => startOAuthLogin(el.dataset.mode),
   'modelSettings.openCodexConnections': (el, event) => {
     // 原 click + keydown 双挂：键盘路径限 Enter 且目标为卡片本身（内部按钮的 Enter 不触发）
     if (event.type === 'keydown') {
@@ -1461,20 +1534,65 @@ window.ClawFW.actions.registerMany({
   'modelSettings.refreshCatalog': (el) => refreshModelCatalog(el.dataset.provider),
   'modelSettings.cancelEdit': () => cancelSettingsEdit(),
   'modelSettings.savePreset': (el, event, idx) => saveSettingsPreset(idx),
-  'modelSettings.cancelSpeechEdit': () => window.cancelSpeechPresetEdit(),
-  'modelSettings.saveSpeechPreset': (el) => window.saveSpeechPreset(el.dataset.edit),
+  'modelSettings.cancelSpeechEdit': () => cancelSpeechPresetEdit(),
+  'modelSettings.saveSpeechPreset': (el) => saveSpeechPreset(el.dataset.edit),
   'modelSettings.addPreset': () => addSettingsPreset(),
-  'modelSettings.addSpeechPreset': () => window.addSpeechPreset(),
+  'modelSettings.addSpeechPreset': () => addSpeechPreset(),
   'modelSettings.closeCodexConnections': () => closeCodexConnectionView(),
   'modelSettings.close': () => closeSettings(),
-  'modelSettings.onProtocolChange': () => window.onProtocolChange(),
+  'modelSettings.onProtocolChange': () => onProtocolChange(),
   'modelSettings.toggleApiKeyVisibility': () => toggleApiKeyVisibility(),
-  'modelSettings.onOpenCodeTierChange': () => window.onOpenCodeTierChange(),
-  'modelSettings.onOpenCodeModelSelect': () => window.onOpenCodeModelSelect(),
-  'modelSettings.fetchOpenCodeModels': () => window.fetchOpenCodeModels(),
+  'modelSettings.onOpenCodeTierChange': () => onOpenCodeTierChange(),
+  'modelSettings.onOpenCodeModelSelect': () => onOpenCodeModelSelect(),
+  'modelSettings.fetchOpenCodeModels': () => fetchOpenCodeModels(),
   'modelSettings.onThinkingToggleChange': () => onThinkingToggleChange(),
   'modelSettings.onThinkingBudgetInput': () => onThinkingBudgetInput(),
   'modelSettings.addHeaderRow': () => addSettingsHeaderRow(),
   'modelSettings.onHeaderModeChange': (el) => onSettingsHeaderModeChange(el),
   'modelSettings.removeHeaderRow': (el) => el.closest('[data-header-row]')?.remove(),
+});
+
+// —— 子面板宿主面装配 ——
+// oauth-flow / speech-settings 与设置面板互为 UI 依赖，静态依赖方向固定为
+// 本模块 → 子面板；子面板需要的面板 owner 入口（重渲染 / 保存 / 目录刷新 /
+// 表单同步 / OpenCode 基址常量 / 设置态读取）在求值末尾注入一次。
+// getSettingsEditing / getSettingsData / isCodexConnectionView 是本模块设置态
+// （settingsEditing / settingsData / codexConnectionView）的读取面：OAuth 子面板
+// 不能静态 import 本模块（会成环），故经宿主面取活值，不复制状态。
+configureOAuthFlowHost({
+  saveSettingsPreset,
+  refreshModelCatalog,
+  syncBaseEndpointBadge,
+  onProviderChangeUpdateThinking,
+  getSettingsEditing: () => settingsEditing,
+  getSettingsData: () => settingsData,
+  isCodexConnectionView: () => codexConnectionView,
+  openCodeZenBaseUrl: OPENCODE_ZEN_BASE_URL,
+  openCodeGoBaseUrl: OPENCODE_GO_BASE_URL,
+});
+configureSpeechSettingsHost({ renderSettingsOverlay });
+
+export {
+  openSettings,
+  closeSettings,
+  renderSettingsOverlay,
+  refreshModelCatalog,
+  saveSettingsPreset,
+  syncBaseEndpointBadge,
+  onProviderChangeUpdateThinking,
+};
+
+// —— 桥接期兼容面（kernel-state 访问器桥）——
+// 三个键仍有 classic 消费方（均为事件回调内调用，classic 相无触达点）：
+//   openSettings          app-ui.js 设置入口、home-dashboard.js（悬置域）、chat-renderer.js 重配置入口
+//   closeSettings         app-ui.js 设置/工作空间入口的关闭路径
+//   renderSettingsOverlay app-ui.js 设置开关时的重渲染
+// 归档/收敛条件：上述 classic 消费方迁出后注销（app-ui / app-main 编排域批次）。
+const bridgeApi = { openSettings, closeSettings, renderSettingsOverlay };
+window.KernelState.defineKey('model-settings', 'openSettings', openSettings);
+window.KernelState.defineKey('model-settings', 'closeSettings', closeSettings);
+window.KernelState.defineKey('model-settings', 'renderSettingsOverlay', renderSettingsOverlay);
+window.KernelState.claim('model-settings', {
+  get: (key) => bridgeApi[key],
+  set: (key, value) => { bridgeApi[key] = value; },
 });

@@ -12,7 +12,8 @@ const navigation = createWorkspaceSessionNavigation({
   readOnlyMode: () => readOnlyMode,
   findWorkspace: id => allAgents.find(agent => agent.id === id && agent.source === 'prebuilt'),
   saveCache: saveCurrentRuntimeToCache,
-  loadDetail: loadAgentDetail,
+  // 静态环内惰性转调（同 session-data-loader-host）：环可能先求值本模块。
+  loadDetail: (...args) => loadAgentDetail(...args),
 });
 export const { navigateToWorkspaceSession } = navigation;
 window.KernelState.defineKey('workspace-session-navigation', 'navigateToWorkspaceSession', navigateToWorkspaceSession);

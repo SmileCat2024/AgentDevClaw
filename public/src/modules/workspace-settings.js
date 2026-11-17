@@ -12,10 +12,22 @@
  * 真相源在服务端（workspace-settings.json），保存走 PUT，前端刷新 wire
  * 后侧栏即时生效。
  *
- * 依赖（全局）：escapeHtml, currentLanguage, allAgents, loadAgents, renderAgentList
+ * 依赖（全部为 ESM 直接 import）：getCurrentLanguage（i18n 状态域）、allAgents
+ *   （agent-store 状态域）、escapeHtml（markdown-utils 域）、loadAgents
+ *   （agent-snapshot-loader 域）、enhanceAll（claw-select 域）。仅
+ *   renderAgentList 仍是 classic 顶层函数，经 window 晚绑定；
+ *   openWorkspaceSettings 经 KernelState 桥服务 classic app-ui 设置菜单。
  * 控件动作：模板声明 data-action="wsSettings.*"，处理器在文件尾部集中注册
  * （action-dispatcher.js）。
  */
+import { getCurrentLanguage } from './i18n-environment-state.js';
+import { allAgents } from './agent-store-state.js';
+import { escapeHtml } from './markdown-utils.js';
+import { loadAgents } from './agent-snapshot-loader-host.js';
+import { enhanceAll } from './claw-select.js';
+
+// 面板开合状态：本模块唯一 owner（原 window.ClawFW.workspaceSettingsOpen 的散装位）
+let workspaceSettingsOpen = false;
 
 function ensureWorkspaceSettingsHost() {
   let host = document.getElementById('workspace-settings-overlay-host');
@@ -27,25 +39,25 @@ function ensureWorkspaceSettingsHost() {
   return host;
 }
 
-function openWorkspaceSettings() {
-  window.ClawFW.workspaceSettingsOpen = true;
+export function openWorkspaceSettings() {
+  workspaceSettingsOpen = true;
   renderWorkspaceSettingsOverlay();
   loadWorkspaceSettingsPanel();
 }
 
 function closeWorkspaceSettings() {
-  window.ClawFW.workspaceSettingsOpen = false;
+  workspaceSettingsOpen = false;
   const host = document.getElementById('workspace-settings-overlay-host');
   if (host) host.innerHTML = '';
 }
 
 function renderWorkspaceSettingsOverlay() {
   const host = ensureWorkspaceSettingsHost();
-  if (!window.ClawFW.workspaceSettingsOpen) {
+  if (!workspaceSettingsOpen) {
     host.innerHTML = '';
     return;
   }
-  const isZh = currentLanguage === 'zh';
+  const isZh = getCurrentLanguage() === 'zh';
   host.innerHTML = [
     '<div class="feature-detail-overlay">',
     '<div class="feature-detail-window" style="width:min(100%,520px);max-height:min(100%,80vh);">',
@@ -65,7 +77,7 @@ function renderWorkspaceSettingsOverlay() {
 async function loadWorkspaceSettingsPanel() {
   const container = document.getElementById('workspace-settings-container');
   if (!container) return;
-  const isZh = currentLanguage === 'zh';
+  const isZh = getCurrentLanguage() === 'zh';
   container.innerHTML = '<div class="proxy-info-text">' + (isZh ? '加载中...' : 'Loading...') + '</div>';
 
   const onDemandWorkspaces = (Array.isArray(allAgents) ? allAgents : [])
@@ -145,7 +157,7 @@ async function loadWorkspaceSettingsPanel() {
     '<div id="workspace-settings-status"></div>',
   ].join('');
 
-  if (window.ClawSelect) window.ClawSelect.enhanceAll(container);
+  enhanceAll(container);
 }
 
 // ── 通知权限只读审计（ADR-0030）──────────────────────────────────────
@@ -201,7 +213,7 @@ function renderNotificationAuditSection(isZh, resourcePolicies) {
 }
 
 async function onWorkspaceVisibilityChange(agentId, policy) {
-  const isZh = currentLanguage === 'zh';
+  const isZh = getCurrentLanguage() === 'zh';
   const statusEl = document.getElementById('workspace-settings-status');
   const setStatus = (text) => {
     if (statusEl) statusEl.innerHTML = '<div class="proxy-status-row proxy-status-loading"><span class="proxy-status-text">' + escapeHtml(text) + '</span></div>';
@@ -219,7 +231,7 @@ async function onWorkspaceVisibilityChange(agentId, policy) {
     }
     // 刷新 wire（服务端合流的 sidebarVisible 随之更新），侧栏即时生效。
     await loadAgents();
-    renderAgentList();
+    window.renderAgentList(); // 桥接期：classic sidebar-render（列表渲染域收敛后改 import）
     setStatus(isZh ? '已保存' : 'Saved');
   } catch (error) {
     console.error('[workspace-settings] save failed:', error);
@@ -229,8 +241,8 @@ async function onWorkspaceVisibilityChange(agentId, policy) {
 
 // ADR-0027 修订一配额保存：空 = 清除（不限制），正整数 = 上限；其他值就地
 // 报错不提交。配额不影响侧栏显示（不刷新 wire），只影响后续建线判定。
-window.onWorkspaceQuotaChange = async function(agentId, rawValue) {
-  const isZh = currentLanguage === 'zh';
+export async function onWorkspaceQuotaChange(agentId, rawValue) {
+  const isZh = getCurrentLanguage() === 'zh';
   const statusEl = document.getElementById('workspace-settings-status');
   const setStatus = (text) => {
     if (statusEl) statusEl.innerHTML = '<div class="proxy-status-row proxy-status-loading"><span class="proxy-status-text">' + escapeHtml(text) + '</span></div>';
@@ -262,13 +274,17 @@ window.onWorkspaceQuotaChange = async function(agentId, rawValue) {
     console.error('[workspace-settings] quota save failed:', error);
     setStatus((isZh ? '保存失败：' : 'Save failed: ') + (error?.message || error));
   }
-};
+}
 
-// ── window 导出 ──────────────────────────────────────────────
-// openWorkspaceSettings：面板入口，由 app-ui.js 调用。
-// onWorkspaceQuotaChange：保留 window 导出（test/frontend-process-mode 直调），
-// 定义在其上方保持 window 赋值形态。
-window.openWorkspaceSettings = openWorkspaceSettings;
+// ── 兼容面 ──────────────────────────────────────────────────
+// openWorkspaceSettings：面板入口，app-ui.js 设置菜单显式经 window 调用
+// （桥接期 KernelState，domain: workspace-settings）；该菜单迁移到 import 后注销。
+const bridgeState = { openWorkspaceSettings };
+window.KernelState.defineKey('workspace-settings', 'openWorkspaceSettings', bridgeState.openWorkspaceSettings);
+window.KernelState.claim('workspace-settings', {
+  get: (key) => bridgeState[key],
+  set: (key, value) => { bridgeState[key] = value; },
+});
 
 // ── 动作注册（data-action="wsSettings.*"）────────────────────
 // 模板内联事件收编：面板控件声明 data-action，处理器集中在此经

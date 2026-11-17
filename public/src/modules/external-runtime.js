@@ -2,23 +2,30 @@
  * external-runtime.js — 外部 Runtime 关闭/重启
  * 从 app-main.js 拆出（Phase A-5）
  * 拆出日期：2026-07-03
+ * ESM 化：P2 W2-6（2026-11-17）
  *
- * 依赖全局状态（定义在 app-core.js）:
- *   allAgents, currentLanguage
- * 依赖全局函数:
- *   loadAgents (app-main.js)
- * 导出全局函数:
- *   getExternalRuntimeAgent, isAssemblyExternalRuntime,
- *   closeExternalRuntime, restartExternalRuntime,
- *   resolveSidebarAssemblyRuntimeTarget, closeSidebarExternalRuntime,
- *   restartSidebarExternalRuntime, refreshSidebarRuntimeAfterMutation
+ * 依赖（ESM，装载顺序由 import 图确定）：
+ *   - allAgents / loadAgentsInFlight（agent-store-state.js，live binding 引用）
+ *   - 实时语言（i18n-environment-state.js 的 getCurrentLanguage；原 currentLanguage 词法）
+ *   - loadAgents（agent-snapshot-loader-host.js）
+ *   - markSidebarAuthoritativeMutation（sidebar-operations.js）
+ *
+ * 桥接期兼容面（KernelState defineKey/claim，domain: external-runtime）：
+ *   refreshSidebarRuntimeAfterMutation——消费方仍是 classic 的 thread-store.js
+ *   （归档后刷新）。该处迁 ESM 后改 import 并注销。右键重启/关闭入口
+ *   （ctx-menu-handlers / ctx-menu-items）已直接 import，对应键已注销。
  */
 
-function getExternalRuntimeAgent(agentId) {
+import { allAgents, loadAgentsInFlight } from './agent-store-state.js';
+import { getCurrentLanguage } from './i18n-environment-state.js';
+import { loadAgents } from './agent-snapshot-loader-host.js';
+import { markSidebarAuthoritativeMutation } from './sidebar-operations.js';
+
+export function getExternalRuntimeAgent(agentId) {
   return allAgents.find((item) => item.id === agentId) || null;
 }
 
-function isAssemblyExternalRuntime(agent) {
+export function isAssemblyExternalRuntime(agent) {
   return !!(
     agent
     && agent.source === 'external'
@@ -27,7 +34,7 @@ function isAssemblyExternalRuntime(agent) {
   );
 }
 
-async function closeExternalRuntime(agent) {
+export async function closeExternalRuntime(agent) {
   if (isAssemblyExternalRuntime(agent)) {
     const sessionId = String(agent.active_workspace_session_id || '').trim();
     const response = await fetch('/protoclaw/assembly_runtime/stop', {
@@ -50,9 +57,9 @@ async function closeExternalRuntime(agent) {
   return payload;
 }
 
-async function restartExternalRuntime(agent) {
+export async function restartExternalRuntime(agent) {
   if (!isAssemblyExternalRuntime(agent)) {
-    throw new Error(currentLanguage === 'zh'
+    throw new Error(getCurrentLanguage() === 'zh'
       ? '当前外部 Agent 没有可用的重启宿主。'
       : 'This external agent does not expose a restart host.');
   }
@@ -73,7 +80,7 @@ async function restartExternalRuntime(agent) {
   return response.json().catch(() => ({}));
 }
 
-async function resolveSidebarAssemblyRuntimeTarget(agent) {
+export async function resolveSidebarAssemblyRuntimeTarget(agent) {
   if (!agent || agent.source !== 'external') return null;
 
   const explicitSessionId = String(agent.active_workspace_session_id || '').trim();
@@ -115,7 +122,7 @@ async function resolveSidebarAssemblyRuntimeTarget(agent) {
   return null;
 }
 
-async function closeSidebarExternalRuntime(agent) {
+export async function closeSidebarExternalRuntime(agent) {
   const assemblyTarget = await resolveSidebarAssemblyRuntimeTarget(agent);
   if (assemblyTarget?.sessionId) {
     const response = await fetch('/protoclaw/assembly_runtime/stop', {
@@ -145,15 +152,15 @@ async function closeSidebarExternalRuntime(agent) {
     return payload;
   }
 
-  throw new Error(currentLanguage === 'zh'
+  throw new Error(getCurrentLanguage() === 'zh'
     ? '当前这个外部 Agent 还没有可用的关闭通道。'
     : 'This external agent does not currently expose a supported stop channel.');
 }
 
-async function restartSidebarExternalRuntime(agent) {
+export async function restartSidebarExternalRuntime(agent) {
   const assemblyTarget = await resolveSidebarAssemblyRuntimeTarget(agent);
   if (!assemblyTarget?.sessionId) {
-    throw new Error(currentLanguage === 'zh'
+    throw new Error(getCurrentLanguage() === 'zh'
       ? '当前这个外部 Agent 还没有可用的重启通道。'
       : 'This external agent does not expose a restart host.');
   }
@@ -172,10 +179,24 @@ async function restartSidebarExternalRuntime(agent) {
   return response.json().catch(() => ({}));
 }
 
-async function refreshSidebarRuntimeAfterMutation() {
+export async function refreshSidebarRuntimeAfterMutation() {
   // A completed mutation invalidates reads started before its receipt. Joining
   // the old in-flight poll is not a refresh; follow it with a post-commit read.
-  if (typeof markSidebarAuthoritativeMutation === 'function') markSidebarAuthoritativeMutation();
+  markSidebarAuthoritativeMutation();
   if (loadAgentsInFlight) await loadAgentsInFlight;
   await loadAgents();
 }
+
+// —— 桥接期兼容面（kernel-state 访问器桥）——
+// 保留原因：线程承接 thread-store.js 仍是 classic 文件，在调用时点经裸标识符
+// （即 window 属性）取用。注销条件：thread-store 迁 ESM 后改 import。
+// 右键菜单的两个入口（ctx-menu-handlers / ctx-menu-items）已直接 import，
+// 对应 defineKey 已注销。
+const bridgeApi = {
+  refreshSidebarRuntimeAfterMutation,
+};
+window.KernelState.defineKey('external-runtime', 'refreshSidebarRuntimeAfterMutation', refreshSidebarRuntimeAfterMutation);
+window.KernelState.claim('external-runtime', {
+  get: (key) => bridgeApi[key],
+  set: (key, value) => { bridgeApi[key] = value; },
+});

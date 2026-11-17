@@ -307,28 +307,18 @@ describe('TrimRatioCore.computeReadout', () => {
   });
 });
 
-describe('TrimRatioCore bridge (kernel-state compatibility)', () => {
-  // 契约：classic 消费方 trim-page.js 经 window.TrimRatioCore.* 调用，
-  // ESM 化后行为不变——访问器返回模块同一函数引用，对象可经 setter 转发更新。
-  it('exposes the same api object and functions via the window accessor', async (t) => {
+describe('TrimRatioCore 公开面（桥已注销）', () => {
+  // 撤桥后契约：trim-page.js 直接 import 同一批命名导出；window 上不再有
+  // TrimRatioCore（零 window 消费方），模块内部的单值语义保持不变。
+  it('exposes the api via named exports only, no window accessor', async (t) => {
     const core = await loadCore(t);
-    assert.equal(typeof window.TrimRatioCore, 'object');
-    assert.equal(window.TrimRatioCore.ratioToCut, core.ratioToCut);
-    assert.equal(window.TrimRatioCore.computeReadout, core.computeReadout);
-    // 调用经访问器与直接 import 等价
-    const messages = [msg('user', { charCount: 10, contentCharCount: 10 })];
-    assert.deepEqual(window.TrimRatioCore.safeCutCandidates(messages), core.safeCutCandidates(messages));
-  });
-
-  it('forwards classic writes through the claimed accessor', async (t) => {
-    await loadCore(t);
-    const original = window.TrimRatioCore.keepZoneHasDialogue;
-    try {
-      const sentinel = () => true;
-      window.TrimRatioCore = { ...window.TrimRatioCore, keepZoneHasDialogue: sentinel };
-      assert.equal(window.TrimRatioCore.keepZoneHasDialogue, sentinel);
-    } finally {
-      window.TrimRatioCore = { ...window.TrimRatioCore, keepZoneHasDialogue: original };
+    for (const name of ['safeCutCandidates', 'keepZoneHasDialogue', 'estimateFoldResidue',
+      'keptCharCount', 'ratioToCut', 'cutToRatio', 'computeReadout']) {
+      assert.equal(typeof core[name], 'function', `missing export ${name}`);
     }
+    assert.equal(window.TrimRatioCore, undefined, 'bridge must be withdrawn');
+    // 直接 import 调用与既有读数语义一致
+    const messages = [msg('user', { charCount: 10, contentCharCount: 10 })];
+    assert.deepEqual(core.safeCutCandidates(messages).length >= 1, true);
   });
 });

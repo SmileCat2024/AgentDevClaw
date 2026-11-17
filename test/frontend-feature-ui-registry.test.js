@@ -12,8 +12,25 @@
 import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { createFrontendSandbox } from './helpers/frontend-vm.js';
+import { loadModuleOnce } from './helpers/esm-module-loader.js';
 
-function createRegistrySandbox(respondWith) {
+// ESM 迁移（P2 批次 2）：feature-ui-registry.js 走真实 import，宿主注册表
+// （claw-host.js）仍是 classic，装入 vm 沙箱后把沙箱 window/document 绑到
+// globalThis，模块按调用时读 window 的语义与真实宿主协作。
+let restoreGlobals = null;
+
+function bindSandboxGlobals(ctx) {
+  const prevWindow = globalThis.window;
+  const prevDocument = globalThis.document;
+  globalThis.window = ctx.window;
+  globalThis.document = ctx.document;
+  return () => {
+    if (prevWindow === undefined) delete globalThis.window; else globalThis.window = prevWindow;
+    if (prevDocument === undefined) delete globalThis.document; else globalThis.document = prevDocument;
+  };
+}
+
+async function createRegistrySandbox(respondWith) {
   const ctx = createFrontendSandbox({
     currentLanguage: 'zh',
     fetch: async () => ({
@@ -22,7 +39,12 @@ function createRegistrySandbox(respondWith) {
     }),
   });
   ctx.loadSource('public/src/modules/claw-host.js');
-  ctx.loadSource('public/src/modules/feature-ui-registry.js');
+  restoreGlobals = bindSandboxGlobals(ctx);
+  const { module } = await loadModuleOnce('public/src/modules/feature-ui-registry.js', { installGlobals: false });
+  ctx.featureUi = module;
+  // 语言属已迁移的 i18n-environment 域：经其真实 setter 置初值（模块 import 时已装载）
+  const i18n = await import('../public/src/modules/i18n-environment-state.js');
+  i18n.setCurrentLanguage('zh');
   return ctx;
 }
 
@@ -44,15 +66,17 @@ describe('feature-ui-registry', () => {
   let ctx;
   let pending;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     pending = [
       { ok: true, declarations: [decl('demo-panel', '/protoclaw/feature-assets/demo-plugin/1.0.0/index.js')] },
     ];
-    ctx = createRegistrySandbox(() => pending[pending.length - 1]);
+    ctx = await createRegistrySandbox(() => pending[pending.length - 1]);
   });
 
   afterEach(() => {
-    ctx.window.ClawFW.featureUi.stop();
+    // 停轮询并解除沙箱全局绑定（模块级状态随实例回收，不留定时器）
+    ctx.featureUi.stop();
+    if (restoreGlobals) { restoreGlobals(); restoreGlobals = null; }
   });
 
   it('声明首次异步到达后立即同步 rail 按钮与主视图', async () => {

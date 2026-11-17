@@ -23,8 +23,9 @@ Object.defineProperties(state, {
 const transaction = createRuntimeSwitch({ ...host,
   saveCache: saveCurrentRuntimeToCache,
   restoreCache: restoreRuntimeFromCache,
-  loadData: loadAgentData,
-  loadAgents,
+  // 静态环内惰性转调（同 session-data-loader-host）：环可能先求值本模块。
+  loadData: (...args) => loadAgentData(...args),
+  loadAgents: (...args) => loadAgents(...args),
   clearLoading: clearChatLoadingSession,
 });
 export const { switchAgent, requestSwitch } = transaction;

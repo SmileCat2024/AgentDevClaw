@@ -6,26 +6,57 @@
  *     v1 远程叶子不呈现自定义项。
  *
  * 夹具镜像 /api/agents 的 agent 记录（metadata ... 展开形态）。
+ *
+ * 装载路线（P2 真实 import）：session-menu-decls 已迁 ESM，依赖 agent-store-state
+ * （sessionOps 事实源）与 i18n-environment-state（label 语言）。用例按真实模块
+ * API 布夹具（setAllAgents / setCurrentLanguage），不再经 classic 沙箱注入全局；
+ * `run(expr)` 只做“按导出名求值”的薄包装，等价于原先的沙箱内调用。
  */
-import { describe, it } from 'node:test';
+import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { createFrontendSandbox } from './helpers/frontend-vm.js';
+import { installBrowserStubs, loadModuleOnce } from './helpers/esm-module-loader.js';
 
-// 沙箱内创建的对象/数组是跨 realm 原型，strict deepEqual 会因原型不同失败；
-// 统一经 JSON 归一到本地 realm 再比较。
+// 跨模块对象可能是不同 realm 原型；统一经 JSON 归一到本地 realm 再比较。
 function toPlain(value) {
   return JSON.parse(JSON.stringify(value));
 }
 
-function loadDecls({ agents, language = 'zh', remote } = {}) {
-  const ctx = createFrontendSandbox({
-    currentLanguage: language,
-    allAgents: agents,
-    isRemoteNamespaceAgentId: (id) => typeof id === 'string' && id.startsWith('remote:'),
+let env;
+
+before(async () => {
+  const cleanup = installBrowserStubs({
+    window: {
+      ClawFW: { actions: { registerMany() {} } },
+      isRemoteNamespaceAgentId: (id) => typeof id === 'string' && id.startsWith('remote:'),
+    },
   });
-  if (remote) ctx.window.RemoteConnections = remote;
-  ctx.loadSource('public/src/modules/session-menu-decls.js');
-  return ctx;
+  try {
+    await loadModuleOnce('public/src/modules/kernel-state.js', { installGlobals: false });
+    // 静态依赖按生产同源实例取（带 query 的装载会与模块图内的无 query 实例分叉）
+    const i18n = await import(new URL('../public/src/modules/i18n-environment-state.js', import.meta.url).href);
+    const store = await import(new URL('../public/src/modules/agent-store-state.js', import.meta.url).href);
+    const decls = await import(new URL('../public/src/modules/session-menu-decls.js', import.meta.url).href);
+    env = { cleanup, i18n, store, decls };
+  } catch (error) {
+    cleanup();
+    throw error;
+  }
+});
+
+after(() => { env?.cleanup?.(); });
+
+/** 按用例布事实（agent 记录 / 语言 / 远程门控），返回按导出名求值的入口。 */
+function loadDecls({ agents, language = 'zh', remote } = {}) {
+  env.i18n.setCurrentLanguage(language);
+  env.store.setAllAgents(agents || []);
+  if (remote) window.RemoteConnections = remote;
+  else delete window.RemoteConnections;
+  const names = Object.keys(env.decls).filter((name) => name !== 'default');
+  const values = names.map((name) => env.decls[name]);
+  return {
+    run: (expr) => new Function(...names, `return (${expr});`)(...values),
+    api: env.decls,
+  };
 }
 
 describe('session-menu-decls: sessionOpsAllowed（事实解析）', () => {

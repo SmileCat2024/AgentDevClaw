@@ -8,7 +8,6 @@ const mainSource = fs.readFileSync(new URL('../public/src/app-main.js', import.m
 const loaderSource = fs.readFileSync(new URL('../public/src/modules/session-data-loader.js', import.meta.url), 'utf8');
 const agentLoaderSource = fs.readFileSync(new URL('../public/src/modules/agent-loader.js', import.meta.url), 'utf8');
 const sseSource = fs.readFileSync(new URL('../public/src/modules/sse-client.js', import.meta.url), 'utf8');
-const coreSource = fs.readFileSync(new URL('../public/src/app-core.js', import.meta.url), 'utf8');
 
 function createView({ runtimeId = 'runtime-a', hostId = 'host-a', epoch = 1 } = {}) {
   const ctx = createFrontendSandbox({
@@ -128,11 +127,16 @@ test('explicit identity equal to current identity does not wipe; null identity c
 });
 
 test('direct apply callers are synchronous navigation transactions; async message producers are guarded', () => {
-  const threadStore = fs.readFileSync(new URL('../public/src/modules/thread-store.js', import.meta.url), 'utf8');
+  // 等待表面（异步读档 → SessionView 提交）已随交互域迁出 thread-store-domain：
+  // 源码契约的切片改在新文件上（引擎的刷新/对账链路不在本断言范围）。
+  const threadDomain = fs.readFileSync(new URL('../public/src/modules/thread-store-domain.js', import.meta.url), 'utf8');
   // 历史记录浏览（只读浏览唯一实现）：异步读档必须带导航代次守卫，并有
   // 请求期间目标漂移的二次校验；提交走 SessionView token。
   const readonlySource = fs.readFileSync(new URL('../public/src/modules/session-readonly-view.js', import.meta.url), 'utf8');
-  const awaitLoader = threadStore.slice(threadStore.indexOf('function _loadAwaitSurfaceMessages'), threadStore.indexOf('window.openConversationTarget'));
+  const awaitLoader = threadDomain.slice(
+    threadDomain.indexOf('function _loadAwaitSurfaceMessages'),
+    threadDomain.indexOf('export async function openConversationTarget'),
+  );
   assert.match(awaitLoader, /captureSessionViewToken\('', \{ agentId, sessionId \}\)/);
   assert.match(awaitLoader, /commitSessionViewPatch\(viewToken, \{ messages: data\.messages \}/);
   assert.match(readonlySource, /navigationEpoch !== _navigationEpoch\(\)/);
@@ -161,8 +165,17 @@ test('initial loading and polling paths guard responses and commit through Sessi
 });
 
 test('SSE focus events capture a SessionView token before metadata commits', () => {
-  assert.match(sseSource, /const token = captureSessionViewToken\(frame\.agentId\)/);
-  assert.match(sseSource, /commitMetadataUpdate\(token/);
+  // sse-client 已迁 ESM：focus 帧的元数据提交在帧到达时捕获 SessionView
+  // token，再交真实 metadata-commit。帧分发函数是模块私有（公开导出只有
+  // 连接/看门狗/排队文本面），所以这是**源码契约**（不冒充运行时行为）。
+  // 捕获点接受两种合法形态：经 classic 桥 `window.captureSessionViewToken(...)`
+  // 与迁移后的直接 import `captureSessionViewToken(...)`。
+  const captureSites = sseSource.match(/const token = (?:window\.)?captureSessionViewToken\(\s*frame\.agentId\s*\)/g) || [];
+  assert.ok(captureSites.length > 0, 'focus 帧必须捕获 SessionView token（接受桥或 import 形态）');
+  const commits = sseSource.match(/commitMetadataUpdate\(/g) || [];
+  const tokenizedCommits = sseSource.match(/commitMetadataUpdate\(token/g) || [];
+  assert.ok(commits.length > 0, 'SSE 帧确实提交元数据');
+  assert.equal(tokenizedCommits.length, commits.length, '所有元数据提交都必须携带帧到达时捕获的 token（不允许无 token 提交漏网）');
 });
 
 test('session detail uses a guarded metadata commit for the selected identity', () => {

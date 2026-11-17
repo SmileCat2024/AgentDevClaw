@@ -23,15 +23,28 @@
  *   配置聚合：
  *     - collectAssemblyProjectFeatureConfigs, buildAutoSavedAssemblyConfigs
  *
- * 外部依赖（全局作用域）：
- *   - currentLanguage, escapeHtml (app-core.js / markdown-utils.js)
- *   - getWorkspaceSessions, getAgentWorkspaceState, getWorkspaceBlockData,
- *     getWorkspaceFormStorageKey (project-data.js)
- *   - normalizeFeatureConfigMap, featureConfigKeyMatches,
- *     normalizeFeatureConfigEntry (feature-config.js)
- *   - parseWorkspaceListField (workspace-blocks.js)
- *   - getSavedAssemblyConfigs, canonicalizeAssemblyFeatureSelection (app-main.js)
+ * ESM（P2 W2-10 装配工作台批次）：语言/转义/已迁状态与 project-data 数据面
+ * 显式 import；仍为 classic 的宿主函数（app-main / app-ui）经 window 晚绑定并
+ * 注明收敛批次。仍为 classic 的消费方（app-ui / workspace-actions /
+ * project-data）经 kernel-state 兼容桥读本模块函数；已 ESM 的消费方
+ * （session-list-render / ctx-menu-items / session-ui）改为直接 import。
+ * 逐键消费证据与注销条件见文件末尾。
  */
+
+import { getCurrentLanguage } from './i18n-environment-state.js';
+import { escapeHtml } from './markdown-utils.js';
+import { setShouldAnimateWorkspaceSurface } from './render-entry-state.js';
+import { assemblyUi } from './p2-bootstrap-assembly.js';
+import { parseWorkspaceListField } from './workspace-blocks.js';
+import { getWorkspaceSessions } from './session-ui.js';
+import { normalizeFeatureConfigEntry, normalizeFeatureConfigMap, featureConfigKeyMatches } from './feature-config.js';
+import {
+  getAgentWorkspaceState,
+  getWorkspaceBlockData,
+  getWorkspaceFormStorageKey,
+  updateAgentWorkspaceState,
+} from './project-data.js';
+import { canonicalizeAssemblyFeatureSelection, getSavedAssemblyConfigs, updateWorkspaceFormDraft } from './assembly-actions.js';
 
 // ──────────────────────────────────────────────────────────────
 // Session 类型判断
@@ -50,12 +63,12 @@ function isAssemblySessionRunning(agent, session) {
 function getAssemblySessionStatus(agent, session) {
   if (isAssemblySessionRunning(agent, session)) {
     return {
-      label: currentLanguage === 'zh' ? '运行中' : 'Running',
+      label: getCurrentLanguage() === 'zh' ? '运行中' : 'Running',
       tone: 'var(--success-color)',
     };
   }
   return {
-    label: currentLanguage === 'zh' ? '已保存会话' : 'Saved Session',
+    label: getCurrentLanguage() === 'zh' ? '已保存会话' : 'Saved Session',
     tone: 'var(--text-secondary)',
   };
 }
@@ -258,17 +271,17 @@ function getAssemblyEnvironmentState(rawDraft = {}) {
 
 function getAssemblyEnvironmentStatusLabel(status) {
   const labels = {
-    'missing-name': currentLanguage === 'zh' ? '待填写名称' : 'Name Required',
-    missing: currentLanguage === 'zh' ? '未配置' : 'Not Configured',
-    stale: currentLanguage === 'zh' ? '需重新配置' : 'Needs Reconfigure',
-    creating: currentLanguage === 'zh' ? '创建目录中' : 'Creating Directory',
-    installing: currentLanguage === 'zh' ? '正在安装依赖' : 'Installing Dependencies',
-    starting: currentLanguage === 'zh' ? '启动运行时中' : 'Starting Runtime',
-    running: currentLanguage === 'zh' ? '已启动' : 'Running',
-    ready: currentLanguage === 'zh' ? '已配置' : 'Ready',
-    error: currentLanguage === 'zh' ? '配置失败' : 'Failed',
+    'missing-name': getCurrentLanguage() === 'zh' ? '待填写名称' : 'Name Required',
+    missing: getCurrentLanguage() === 'zh' ? '未配置' : 'Not Configured',
+    stale: getCurrentLanguage() === 'zh' ? '需重新配置' : 'Needs Reconfigure',
+    creating: getCurrentLanguage() === 'zh' ? '创建目录中' : 'Creating Directory',
+    installing: getCurrentLanguage() === 'zh' ? '正在安装依赖' : 'Installing Dependencies',
+    starting: getCurrentLanguage() === 'zh' ? '启动运行时中' : 'Starting Runtime',
+    running: getCurrentLanguage() === 'zh' ? '已启动' : 'Running',
+    ready: getCurrentLanguage() === 'zh' ? '已配置' : 'Ready',
+    error: getCurrentLanguage() === 'zh' ? '配置失败' : 'Failed',
   };
-  return labels[status] || (currentLanguage === 'zh' ? '未配置' : 'Not Configured');
+  return labels[status] || (getCurrentLanguage() === 'zh' ? '未配置' : 'Not Configured');
 }
 
 function getAssemblyEnvironmentStatusTone(status) {
@@ -411,7 +424,7 @@ function resetWorkspaceFormDraft(agentId) {
 }
 
 function updateAssemblyDraftWithoutRender(formId, fieldName, value) {
-  const agent = getCurrentAgentRecord();
+  const agent = window.getCurrentAgentRecord(); // 桥接期：定义于 app-main（编排域收敛）
   if (!agent?.id) return;
   const draft = getWorkspaceFormDraft(agent);
   draft[formId] = draft[formId] || {};
@@ -487,15 +500,15 @@ function restoreAssemblyFieldFocus(snapshot) {
 }
 
 function scheduleAssemblyWorkbenchRender() {
-  if (assemblyLaunchInProgress) return;
+  if (assemblyUi.assemblyLaunchInProgress) return;
   const focusSnapshot = captureAssemblyFieldFocus();
-  if (assemblyDraftRenderTimer) {
-    clearTimeout(assemblyDraftRenderTimer);
+  if (assemblyUi.assemblyDraftRenderTimer) {
+    clearTimeout(assemblyUi.assemblyDraftRenderTimer);
   }
-  assemblyDraftRenderTimer = setTimeout(() => {
-    assemblyDraftRenderTimer = null;
-    shouldAnimateWorkspaceSurface = false;
-    renderCurrentMainView();
+  assemblyUi.assemblyDraftRenderTimer = setTimeout(() => {
+    assemblyUi.assemblyDraftRenderTimer = null;
+    setShouldAnimateWorkspaceSurface(false);
+    window.renderCurrentMainView(); // 桥接期：定义于 app-ui（渲染入口域收敛）
     restoreAssemblyFieldFocus(focusSnapshot);
   }, 80);
 }
@@ -535,13 +548,13 @@ async function syncAssemblyEnvironmentDraft(agent, draft, patch = {}, options = 
     }
     await persistWorkspaceState(agent, draft, persistOptions);
   }
-  shouldAnimateWorkspaceSurface = false;
+  setShouldAnimateWorkspaceSurface(false);
   scheduleAssemblyWorkbenchRender();
   return draft['assembly-form'];
 }
 
 async function requestAssemblyEnvironmentCreate(assemblyName, options = {}) {
-  const currentAgent = getCurrentAgentRecord();
+  const currentAgent = window.getCurrentAgentRecord(); // 桥接期：定义于 app-main
   const currentDraft = currentAgent?.id ? getWorkspaceFormDraft(currentAgent)?.['assembly-form'] : null;
   const selectedFeatures = Array.isArray(options.selectedFeatures)
     ? options.selectedFeatures
@@ -575,32 +588,118 @@ async function requestAssemblyEnvironmentCreate(assemblyName, options = {}) {
   return payload || {};
 }
 
-// ── onclick handlers ──
+// ── 表单字段动作（原 window.onclick handler）──
 
-window.updateAssemblyDraftField = (formId, fieldName, value) => {
+function updateAssemblyDraftField(formId, fieldName, value) {
   updateAssemblyDraftWithoutRender(formId, fieldName, value);
   if (fieldName === 'feature_query') {
     scheduleAssemblyWorkbenchRender();
   }
-};
+}
 
-window.commitAssemblyDraftField = (formId, fieldName, value) => {
+function commitAssemblyDraftField(formId, fieldName, value) {
   updateAssemblyDraftWithoutRender(formId, fieldName, value);
-  shouldAnimateWorkspaceSurface = false;
-  renderCurrentMainView();
-  const agent = getCurrentAgentRecord();
+  setShouldAnimateWorkspaceSurface(false);
+  window.renderCurrentMainView(); // 桥接期：定义于 app-ui（渲染入口域收敛）
+  const agent = window.getCurrentAgentRecord(); // 桥接期：定义于 app-main
   if (!agent?.id) return;
   const draft = getWorkspaceFormDraft(agent);
   persistWorkspaceState(agent, draft).catch((error) => {
     console.error('Failed to persist assembly draft field:', error);
   });
-};
+}
 
-window.toggleAssemblyStage = (formId, stageKey) => {
-  const agent = getCurrentAgentRecord();
+function toggleAssemblyStage(formId, stageKey) {
+  const agent = window.getCurrentAgentRecord(); // 桥接期：定义于 app-main
   if (!agent?.id) return;
   const draft = getWorkspaceFormDraft(agent);
   const currentStage = draft?.[formId]?.assembly_stage == null ? 'goal' : String(draft?.[formId]?.assembly_stage);
   const nextStage = currentStage === stageKey ? '' : stageKey;
-  window.updateWorkspaceFormDraft(formId, 'assembly_stage', nextStage);
+  updateWorkspaceFormDraft(formId, 'assembly_stage', nextStage);
+}
+
+// ── 兼容桥（classic 消费方收敛后注销）────────────────────────────────
+// 消费面按当前树实测分类（grep public/src，排除本批文件；[classic]=仍需访问器，
+// [ESM-import]=已直接 import 本模块、不经桥）：
+//   isAssemblySession —— app-ui / workspace-actions [classic]；
+//     session-list-render / ctx-menu-items [ESM-import]（已不消费桥）
+//   isAssemblySessionRunning —— app-ui / workspace-actions [classic]
+//   getAssemblySessionStatus / getAssemblySavedConfigSummary /
+//     getAssemblyEditorMode / renderAssemblyStatusChip /
+//     getAssemblyEnvironmentStatus{Label,Tone} / getAssemblyEnvironmentState /
+//     getAssemblyDisplayName / normalizeAssemblyDraft / getWorkspaceFormDraft
+//     —— app-ui [classic]（FW 列表/详情与装配工作台渲染）
+//   buildWorkspaceProjectKey —— 已由 project-data [ESM-import] 直接 import，桥注销
+//   getWorkspaceFormDraft —— app-ui / flow-editor [classic]
+//   normalizeWorkspaceStartupDraft / saveWorkspaceFormDraft —— 消费方（assembly-actions /
+//     fw-config-panel / feature-config / workspace-actions / workspace-blocks /
+//     p2-w2-10-workspace-docset）全部 [ESM-import]，桥注销、仍作命名导出
+//   updateAssemblyDraftField / commitAssemblyDraftField / toggleAssemblyStage
+//     —— app-ui 的 assembly.* 动作注册 [classic]
+// 已改 direct import 的同批/已交付消费方：assembly-actions / feature-config /
+// fw-config-panel / workspace-blocks / p2-w2-10-workspace-docset / session-ui（反向）。
+const bridgeState = {
+  isAssemblySession,
+  isAssemblySessionRunning,
+  getAssemblySessionStatus,
+  normalizeAssemblyDraft,
+  getAssemblyDisplayName,
+  getAssemblyEnvironmentState,
+  getAssemblyEnvironmentStatusLabel,
+  getAssemblyEnvironmentStatusTone,
+  renderAssemblyStatusChip,
+  getAssemblySavedConfigSummary,
+  getAssemblyEditorMode,
+  getWorkspaceFormDraft,
+  updateAssemblyDraftField,
+  commitAssemblyDraftField,
+  toggleAssemblyStage,
+};
+for (const [key, value] of Object.entries(bridgeState)) {
+  window.KernelState.defineKey('assembly-data', key, value);
+}
+window.KernelState.claim('assembly-data', {
+  get: (key) => bridgeState[key],
+  set: (key, value) => { bridgeState[key] = value; },
+});
+
+export {
+  isAssemblySession,
+  isAssemblySessionRunning,
+  getAssemblySessionStatus,
+  buildWorkspaceProjectKey,
+  sanitizeWorkspacePathFragment,
+  isValidFeatureCreatorName,
+  isValidAgentCreatorName,
+  normalizeAssemblyDirectoryToken,
+  findAssemblyConfigConflict,
+  getFeatureCreatorOutputDirectory,
+  getAgentCreatorOutputDirectory,
+  normalizeFeatureCreatorStartupDraft,
+  normalizeProgrammingHelperStartupDraft,
+  normalizeWorkspaceStartupDraft,
+  getExpectedAssemblyEnvDir,
+  normalizeAssemblyDraft,
+  getAssemblyDisplayName,
+  getAssemblyEnvironmentState,
+  getAssemblyEnvironmentStatusLabel,
+  getAssemblyEnvironmentStatusTone,
+  renderAssemblyStatusChip,
+  getAssemblySavedConfigSummary,
+  getAssemblyEditorMode,
+  collectAssemblyProjectFeatureConfigs,
+  buildAutoSavedAssemblyConfigs,
+  getWorkspaceFormDraft,
+  saveWorkspaceFormDraft,
+  resetWorkspaceFormDraft,
+  updateAssemblyDraftWithoutRender,
+  persistWorkspaceState,
+  captureAssemblyFieldFocus,
+  restoreAssemblyFieldFocus,
+  scheduleAssemblyWorkbenchRender,
+  syncAssemblyEnvironmentDraft,
+  requestAssemblyEnvironmentCreate,
+  updateAssemblyDraftField,
+  commitAssemblyDraftField,
+  toggleAssemblyStage,
 };

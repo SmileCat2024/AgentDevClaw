@@ -1,7 +1,54 @@
-import { describe, it } from 'node:test';
+/**
+ * generative-ui-renderer（生成式 UI 规范 → DOM）单测。
+ *
+ * 真实 import 路线（P2 ESM 化）：模块走 esm-module-loader 的真实动态 import，
+ * document 由 dom-harness 提供（保留子树、属性与事件监听），不再经 vm 沙箱
+ * 的 window 全局取函数——断言直接调用命名导出。
+ *
+ * 覆盖：提交值收集（未改动的 initialValues 也提交）、扩展组件批、确认门控、
+ * 轮播 / 页签 / 栅格布局、图表与迷你趋势的 SVG 输出、退化数据、容器宽度
+ * 重绘、刻度格式化，以及既有 window 命名空间面的兼容断言。
+ */
+import { describe, it, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { createFrontendSandbox } from './helpers/frontend-vm.js';
 import { createDomHarness } from './helpers/dom-harness.js';
+import { installBrowserStubs, loadModuleOnce } from './helpers/esm-module-loader.js';
+
+const MODULE_PATH = 'public/src/modules/generative-ui-renderer.js';
+
+/** 未安装全局桩的用例集合，file 级 after 统一还原。 */
+const pendingCleanups = [];
+after(() => {
+  while (pendingCleanups.length > 0) pendingCleanups.pop()();
+});
+
+/**
+ * 装 dom-harness 的 document 桩并加载一份全新模块实例。
+ * @returns {Promise<{ dom: object, module: object }>}
+ */
+async function loadRenderer({ window: windowOverrides = {}, globals = {} } = {}) {
+  const dom = createDomHarness();
+  const cleanupStubs = installBrowserStubs({ window: windowOverrides, document: dom.document });
+  const restoreGlobals = [];
+  for (const [key, value] of Object.entries(globals)) {
+    const had = Object.hasOwn(globalThis, key);
+    const prev = globalThis[key];
+    globalThis[key] = value;
+    restoreGlobals.push(() => { if (had) globalThis[key] = prev; else delete globalThis[key]; });
+  }
+  try {
+    // 兼容桥落到 KernelState：classic 消费方（generative-ui-panel）经 window 访问器
+    // 取到同一实现。桩面需先有真实内核，模块装载期才能注册桥键。
+    await loadModuleOnce('public/src/modules/kernel-state.js', { installGlobals: false });
+    const { module } = await loadModuleOnce(MODULE_PATH, { installGlobals: false });
+    pendingCleanups.push(() => { restoreGlobals.forEach((restore) => restore()); cleanupStubs(); });
+    return { dom, module };
+  } catch (error) {
+    restoreGlobals.forEach((restore) => restore());
+    cleanupStubs();
+    throw error;
+  }
+}
 
 function makeSpec() {
   return {
@@ -36,18 +83,14 @@ function makeSpec() {
 }
 
 describe('Generative UI renderer submission values', () => {
-  it('submits untouched initialValues and current control values, not only dirty overrides', () => {
-    const dom = createDomHarness();
+  it('submits untouched initialValues and current control values, not only dirty overrides', async () => {
+    const { dom, module } = await loadRenderer();
     const submissions = [];
-    const ctx = createFrontendSandbox({
-      document: dom.document,
-      captureSubmit: (actionId, fields) => submissions.push({ actionId, fields }),
+    const spec = makeSpec();
+    const viewState = {};
+    const root = module.renderGenUISpec(spec, viewState, {
+      onSubmit: (actionId, _action, fields) => submissions.push({ actionId, fields }),
     });
-    ctx.loadSource('public/src/modules/generative-ui-renderer.js');
-    const spec = JSON.stringify(makeSpec());
-    const root = ctx.run(`window.renderGenUISpec(${spec}, window.__viewState = {}, {
-      onSubmit: (actionId, _action, fields) => captureSubmit(actionId, fields)
-    })`);
 
     const buttons = dom.findAll(root, '.gen-ui-button');
     const nativeSelect = dom.findAll(root, '.gen-ui-select')[0];
@@ -55,11 +98,11 @@ describe('Generative UI renderer submission values', () => {
     assert.equal(nativeSelect.dataset.genUiSelect, 'true');
     assert.equal(nativeSelect.dataset.clawSelect, 'true');
     buttons[0].dispatch('click');
-    assert.deepEqual(JSON.parse(JSON.stringify(submissions[0])), {
+    assert.deepEqual(submissions[0], {
       actionId: 'filtered',
       fields: { title: 'Initial title', enabled: true, mode: 'safe' },
     });
-    assert.deepEqual(JSON.parse(JSON.stringify(ctx.run('window.__viewState'))), {});
+    assert.deepEqual(viewState, {});
 
     const textInput = dom.findAll(root, '.gen-ui-input').find((element) => element.type === 'text');
     const numberInput = dom.findAll(root, '.gen-ui-input').find((element) => element.type === 'number');
@@ -69,7 +112,7 @@ describe('Generative UI renderer submission values', () => {
     numberInput.dispatch('input');
     buttons[1].dispatch('click');
 
-    assert.deepEqual(JSON.parse(JSON.stringify(submissions[1])), {
+    assert.deepEqual(submissions[1], {
       actionId: 'all',
       fields: {
         title: 'Edited title',
@@ -82,16 +125,10 @@ describe('Generative UI renderer submission values', () => {
     });
   });
 
-  it('renders the first extension batch, preserves its value types, and gates confirmed actions', () => {
-    const dom = createDomHarness();
+  it('renders the first extension batch, preserves its value types, and gates confirmed actions', async () => {
+    const { dom, module } = await loadRenderer();
     const submissions = [];
     const confirmations = [];
-    const ctx = createFrontendSandbox({
-      document: dom.document,
-      captureSubmit: (actionId, fields) => submissions.push({ actionId, fields }),
-      captureConfirmation: (actionId, action, fields, execute) => confirmations.push({ actionId, action, fields, execute }),
-    });
-    ctx.loadSource('public/src/modules/generative-ui-renderer.js');
     const spec = {
       schemaVersion: 1,
       catalogVersion: 'v1',
@@ -121,10 +158,10 @@ describe('Generative UI renderer submission values', () => {
         },
       },
     };
-    const root = ctx.run(`window.renderGenUISpec(${JSON.stringify(spec)}, window.__expandedViewState = {}, {
-      onSubmit: (actionId, _action, fields) => captureSubmit(actionId, fields),
-      onConfirm: (actionId, action, fields, execute) => captureConfirmation(actionId, action, fields, execute)
-    })`);
+    const root = module.renderGenUISpec(spec, {}, {
+      onSubmit: (actionId, _action, fields) => submissions.push({ actionId, fields }),
+      onConfirm: (actionId, action, fields, execute) => confirmations.push({ actionId, action, fields, execute }),
+    });
 
     assert.equal(dom.findAll(root, '.gen-ui-alert').length, 1);
     assert.equal(dom.findAll(root, '.gen-ui-progress-indicator')[0].style.width, '65%');
@@ -148,14 +185,14 @@ describe('Generative UI renderer submission values', () => {
 
     assert.equal(submissions.length, 0, 'confirmation must run before dispatch');
     assert.equal(confirmations.length, 1);
-    assert.deepEqual(JSON.parse(JSON.stringify(confirmations[0].fields)), {
+    assert.deepEqual(confirmations[0].fields, {
       releaseDate: '2026-09-01',
       rollout: 40,
       notify: false,
       density: 'compact',
     });
     confirmations[0].execute();
-    assert.deepEqual(JSON.parse(JSON.stringify(submissions[0])), {
+    assert.deepEqual(submissions[0], {
       actionId: 'apply',
       fields: {
         releaseDate: '2026-09-01',
@@ -166,10 +203,8 @@ describe('Generative UI renderer submission values', () => {
     });
   });
 
-  it('places carousel navigation below the viewport instead of overlaying slide content', () => {
-    const dom = createDomHarness();
-    const ctx = createFrontendSandbox({ document: dom.document });
-    ctx.loadSource('public/src/modules/generative-ui-renderer.js');
+  it('places carousel navigation below the viewport instead of overlaying slide content', async () => {
+    const { dom, module } = await loadRenderer();
     const spec = {
       schemaVersion: 1,
       catalogVersion: 'v1',
@@ -182,7 +217,7 @@ describe('Generative UI renderer submission values', () => {
       },
     };
 
-    const carousel = ctx.run(`window.renderGenUISpec(${JSON.stringify(spec)}, {}, {})`);
+    const carousel = module.renderGenUISpec(spec, {}, {});
     const viewport = dom.findAll(carousel, '.gen-ui-carousel-viewport')[0];
     const navigation = dom.findAll(carousel, '.gen-ui-carousel-navigation')[0];
     const buttons = dom.findAll(carousel, '.gen-ui-carousel-btn');
@@ -195,10 +230,8 @@ describe('Generative UI renderer submission values', () => {
     assert.equal(buttons[1].disabled, false);
   });
 
-  it('hides inactive tab panels even when they are layout containers', () => {
-    const dom = createDomHarness();
-    const ctx = createFrontendSandbox({ document: dom.document });
-    ctx.loadSource('public/src/modules/generative-ui-renderer.js');
+  it('hides inactive tab panels even when they are layout containers', async () => {
+    const { dom, module } = await loadRenderer();
     const spec = {
       schemaVersion: 1,
       catalogVersion: 'v1',
@@ -213,7 +246,7 @@ describe('Generative UI renderer submission values', () => {
       },
     };
 
-    const tabs = ctx.run(`window.renderGenUISpec(${JSON.stringify(spec)}, {}, {})`);
+    const tabs = module.renderGenUISpec(spec, {}, {});
     const panels = dom.findAll(tabs, '.gen-ui-tab-panel');
     assert.equal(panels[0].hidden, false);
     assert.equal(panels[1].hidden, true);
@@ -222,10 +255,8 @@ describe('Generative UI renderer submission values', () => {
     assert.equal(panels[1].hidden, false);
   });
 
-  it('wraps rows by default and gives grids an overflow-safe column template for the narrow side panel', () => {
-    const dom = createDomHarness();
-    const ctx = createFrontendSandbox({ document: dom.document });
-    ctx.loadSource('public/src/modules/generative-ui-renderer.js');
+  it('wraps rows by default and gives grids an overflow-safe column template for the narrow side panel', async () => {
+    const { dom, module } = await loadRenderer();
     const spec = {
       schemaVersion: 1,
       catalogVersion: 'v1',
@@ -242,17 +273,15 @@ describe('Generative UI renderer submission values', () => {
       },
     };
 
-    const root = ctx.run(`window.renderGenUISpec(${JSON.stringify(spec)}, {}, {})`);
+    const root = module.renderGenUISpec(spec, {}, {});
     const row = dom.findAll(root, '.gen-ui-row')[0];
     const grid = dom.findAll(root, '.gen-ui-grid')[0];
     assert.equal(row.style.flexWrap, 'wrap');
     assert.equal(grid.style.gridTemplateColumns, 'repeat(2, minmax(0, 1fr))');
   });
 
-  it('renders chart and sparkline as inline svg with palette colors, legend, and hover titles', () => {
-    const dom = createDomHarness();
-    const ctx = createFrontendSandbox({ document: dom.document });
-    ctx.loadSource('public/src/modules/generative-ui-renderer.js');
+  it('renders chart and sparkline as inline svg with palette colors, legend, and hover titles', async () => {
+    const { dom, module } = await loadRenderer();
     const spec = {
       schemaVersion: 1,
       catalogVersion: 'v1',
@@ -282,7 +311,7 @@ describe('Generative UI renderer submission values', () => {
       },
     };
 
-    const root = ctx.run(`window.renderGenUISpec(${JSON.stringify(spec)}, {}, {})`);
+    const root = module.renderGenUISpec(spec, {}, {});
 
     // Bar chart: legend reflects both series; one rect per data point.
     const barChart = dom.findAll(root, '.gen-ui-chart')[0];
@@ -329,10 +358,8 @@ describe('Generative UI renderer submission values', () => {
     assert.equal(sparkDot.children[0].textContent, 'min 1 / max 5 / last 5');
   });
 
-  it('degrades chart and sparkline rendering gracefully on missing or degenerate data', () => {
-    const dom = createDomHarness();
-    const ctx = createFrontendSandbox({ document: dom.document });
-    ctx.loadSource('public/src/modules/generative-ui-renderer.js');
+  it('degrades chart and sparkline rendering gracefully on missing or degenerate data', async () => {
+    const { dom, module } = await loadRenderer();
     const spec = {
       schemaVersion: 1,
       catalogVersion: 'v1',
@@ -350,7 +377,7 @@ describe('Generative UI renderer submission values', () => {
       },
     };
 
-    const root = ctx.run(`window.renderGenUISpec(${JSON.stringify(spec)}, {}, {})`);
+    const root = module.renderGenUISpec(spec, {}, {});
 
     const empty = dom.findAll(root, '.gen-ui-chart')[0];
     assert.equal(empty.classList.contains('gen-ui-error'), true);
@@ -368,8 +395,7 @@ describe('Generative UI renderer submission values', () => {
     assert.equal(tinySvg.attributes.height, '32');
   });
 
-  it('redraws the chart at the real container width so svg text stays at pixel size', () => {
-    const dom = createDomHarness();
+  it('redraws the chart at the real container width so svg text stays at pixel size', async () => {
     class FakeResizeObserver {
       constructor(cb) { FakeResizeObserver.instances.push(this); this.cb = cb; }
       observe() {}
@@ -377,8 +403,7 @@ describe('Generative UI renderer submission values', () => {
       trigger(width) { this.cb([{ contentRect: { width } }]); }
     }
     FakeResizeObserver.instances = [];
-    const ctx = createFrontendSandbox({ document: dom.document, ResizeObserver: FakeResizeObserver });
-    ctx.loadSource('public/src/modules/generative-ui-renderer.js');
+    const { dom, module } = await loadRenderer({ globals: { ResizeObserver: FakeResizeObserver } });
     const spec = {
       schemaVersion: 1,
       catalogVersion: 'v1',
@@ -395,7 +420,7 @@ describe('Generative UI renderer submission values', () => {
       },
     };
 
-    const root = ctx.run(`window.renderGenUISpec(${JSON.stringify(spec)}, {}, {})`);
+    const root = module.renderGenUISpec(spec, {}, {});
     const chart = dom.findAll(root, '.gen-ui-chart')[0];
 
     // 首版以 400 兜底宽度绘制。
@@ -415,10 +440,8 @@ describe('Generative UI renderer submission values', () => {
     assert.equal(dom.findAll(head, '.gen-ui-chart-unit')[0].textContent, 'commits');
   });
 
-  it('formats y-axis ticks with thousands separators for large values', () => {
-    const dom = createDomHarness();
-    const ctx = createFrontendSandbox({ document: dom.document });
-    ctx.loadSource('public/src/modules/generative-ui-renderer.js');
+  it('formats y-axis ticks with thousands separators for large values', async () => {
+    const { dom, module } = await loadRenderer();
     const spec = {
       schemaVersion: 1,
       catalogVersion: 'v1',
@@ -433,9 +456,36 @@ describe('Generative UI renderer submission values', () => {
       },
     };
 
-    const root = ctx.run(`window.renderGenUISpec(${JSON.stringify(spec)}, {}, {})`);
+    const root = module.renderGenUISpec(spec, {}, {});
     const tickTexts = dom.findAll(root, '.gen-ui-chart-tick').map((t) => t.textContent);
     assert.equal(tickTexts.includes('20,000'), true, `ticks: ${tickTexts.join(', ')}`);
     assert.equal(tickTexts.includes('10,000'), true, `ticks: ${tickTexts.join(', ')}`);
+  });
+});
+
+describe('Generative UI renderer 兼容面（ESM 后的 window 命名空间）', () => {
+  it('keeps the classic call surface pointing at the same exported functions', async () => {
+    const { module } = await loadRenderer();
+    assert.equal(typeof module.renderGenUISpec, 'function');
+    assert.equal(typeof module.createGenUIViewState, 'function');
+    // 桥接期：generative-ui-panel.js 仍以裸标识符调用，经 window 解析（访问器形态：
+    // 成对 get/set、非枚举，桥债可计量）
+    assert.equal(globalThis.window.renderGenUISpec, module.renderGenUISpec);
+    assert.equal(globalThis.window.createGenUIViewState, module.createGenUIViewState);
+    for (const key of ['renderGenUISpec', 'createGenUIViewState']) {
+      const descriptor = Object.getOwnPropertyDescriptor(globalThis.window, key);
+      assert.equal(typeof descriptor.get, 'function');
+      assert.equal(typeof descriptor.set, 'function');
+      assert.equal(descriptor.enumerable, false);
+    }
+    assert.deepEqual(module.createGenUIViewState(), {});
+  });
+
+  it('returns a self-describing error element when the spec root is missing', async () => {
+    const { dom, module } = await loadRenderer();
+    const fallback = module.renderGenUISpec({ root: 'absent', elements: {} }, {}, {});
+    assert.equal(fallback.className, 'gen-ui-error');
+    assert.equal(dom.findAll(fallback, '.gen-ui-error').length, 1);
+    assert.equal(fallback.textContent, 'Spec root element not found');
   });
 });

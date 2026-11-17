@@ -160,12 +160,13 @@ test('submit success clears the live textarea, not a detached reference', () => 
     'submitQueuedInput should resolve the live textarea after await',
   );
 
-  const inputHelpersSource = fs.readFileSync(
-    new URL('../public/src/modules/input-helpers.js', import.meta.url),
+  // 动作提交实现已迁 input-actions.js；退役的 /input 文本编排在两个文件里都不许回来。
+  const inputActionsSource = fs.readFileSync(
+    new URL('../public/src/modules/input-actions.js', import.meta.url),
     'utf8',
   );
   assert.equal(
-    /async function submitInput\b|_submitInputInner/.test(inputHelpersSource),
+    /async function submitInput\b|_submitInputInner/.test(inputActionsSource),
     false,
     'the retired /input text orchestration must not come back (ADR-0035)',
   );
@@ -489,8 +490,10 @@ test('lease action responses stay bound to the runtime that rendered the lease',
   // 端点。唯一残留的 requestId 端点消费方是 rollback / compact 的 action 应答。
   // 该应答必须携带渲染时绑定的 runtimeId——lease 与运行态正交，用户可能在
   // 应答前切走选中态，改用 currentRuntimeAgentId 会把动作投到错误会话。
+  // 对话框与运行期编排已迁 rollback-dialog-runtime.js（rollback-dialog.js 只剩
+  // classic 相状态键注册壳）；契约断言的落点随之迁移。
   const rollbackSource = fs.readFileSync(
-    new URL('../public/src/modules/rollback-dialog.js', import.meta.url),
+    new URL('../public/src/modules/rollback-dialog-runtime.js', import.meta.url),
     'utf8',
   );
   assert.match(

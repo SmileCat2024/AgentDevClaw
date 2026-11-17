@@ -13,29 +13,84 @@
  *   - ctxTodoSession: 设置/取消待办
  *   - dispatchCtxAction: 菜单动作分发器
  *
- * 依赖全局状态（定义在 app-core.js）:
- *   allAgents, currentLanguage, currentRuntimeAgentId, restartingRuntimeIds,
- *   suppressSidebarRerender, lastRenderedWorkspaceHtml
- * 依赖 app-ui.js:
- *   getWorkspaceSessionById, getWorkspaceSessions, updateAgentRecord,
- *   renderCurrentMainView, selectWorkspaceSurface, resolveWorkspaceFallbackAgentId
- * 依赖 app-main.js:
- *   renderAgentList, requestSwitch, loadAgents, runWorkspaceAction (via window),
- *   switchAgent (via window), getCurrentAgentRecord
- * 依赖 session-menu-decls.js:
- *   sessionOpsAllowed, getDeclaredSessionMenuItems (会话操作事实与
- *   APP 声明项，ADR-0049 声明驱动)
- * 依赖 external-runtime.js:
- *   getExternalRuntimeAgent, restartSidebarExternalRuntime,
- *   closeSidebarExternalRuntime, refreshSidebarRuntimeAfterMutation,
- *   clearAgentRuntimeCache
- * 依赖 context-menu.js:
- *   closeCtxMenu (via window), showCtxMenu (via window)
- * 依赖 session-dialogs.js:
- *   openTrimPage (via window), openBranchDialog (via window)
- * 依赖 assembly-data.js:
- *   isAssemblySession
+ * ESM 化：P2 W2-7（2026-11-17）。原位转换，菜单结构与动作语义零变化。
+ *
+ * 依赖（ESM，装载顺序由 import 图确定）：
+ *   agent-store-state（allAgents）/ i18n-environment-state（实时语言）/
+ *   orchestration-state（currentRuntimeAgentId、_navigationGuardEpoch）/
+ *   render-entry-state（setLastRenderedWorkspaceHtml）/
+ *   p2-bootstrap-sidebar（restartingRuntimeIds、suppressSidebarRerender）/
+ *   session-ui / workspace-surface-host / runtime-switch-host /
+ *   agent-snapshot-loader-host / runtime-view-cache-host /
+ *   navigation-core / external-runtime / session-mutation / sidebar-operations /
+ *   session-menu-decls / session-list-render / session-dialogs / trim-page /
+ *   ph-thread-history / assembly-data / sidebar-pin-color / toast-notify /
+ *   markdown-utils / project-data（updateAgentRecord、getPathLeaf）。
+ *
+ * 仍 classic（调用时点显式 window 晚绑定，各域收敛时改 import）：
+ *   - app-core：resolveWorkspaceFallbackAgentId、getRuntimeId、bumpNavigationGuard、
+ *     invoke、t（i18n.js）
+ *   - app-ui / app-main：renderCurrentMainView、closeCtxMenu、getCurrentAgentRecord
+ *   - sidebar-render：renderAgentList；workspace-actions：runWorkspaceAction
+ *   - thread-store：getThreadById / getThreadForSession / refreshThreads
+ *   - ph-session-move：phOpenSessionMoveDialog
+ *   - remote-connections：window.RemoteConnections（远程能力位与 runtime 定位）
+ *
+ * 桥接期兼容面（KernelState defineKey/claim，domain: ctx-menu-items）：
+ *   getCtxMenuItems     ← classic sidebar-render / ph-session-list / ctx-menu-handlers
+ *   dispatchCtxAction   ← classic sidebar-render（pin 点击）/ ctx-menu-handlers
+ *   ctxArchiveSession 已改 import（workspace-actions），桥已注销；
+ *   ctxTodoSession 同（sidebar-pin-color）。
+ *   ctxRestartAgent / ctxStopAgent / ctxRenameSession / ctxGenerateTitle /
+ *   ctxArchiveAndStopRuntime 迁移后零 production 消费面（仅 dev .mjs 检查脚本
+ *   调用，已列入移交清单），只作命名导出，不上桥。
  */
+
+import { allAgents } from './agent-store-state.js';
+import { getCurrentLanguage } from './i18n-environment-state.js';
+import { currentRuntimeAgentId, _navigationGuardEpoch } from './orchestration-state.js';
+import { setLastRenderedWorkspaceHtml } from './render-entry-state.js';
+import { sidebarUi } from './p2-bootstrap-sidebar.js';
+import { getWorkspaceSessions, getWorkspaceSessionById } from './session-ui.js';
+import { selectWorkspaceSurface } from './workspace-surface-host.js';
+import { requestSwitch, switchAgent } from './runtime-switch-host.js';
+import { loadAgents } from './agent-snapshot-loader-host.js';
+import { clearAgentRuntimeCache } from './runtime-view-cache-host.js';
+import { resolveHostAgentId, extractRuntimeId, resolveStoppedRuntimeFallback } from './navigation-core.js';
+import {
+  getExternalRuntimeAgent,
+  restartSidebarExternalRuntime,
+  closeSidebarExternalRuntime,
+  refreshSidebarRuntimeAfterMutation,
+} from './external-runtime.js';
+import { navigateToSessionMutationTarget } from './session-mutation.js';
+import {
+  beginSidebarOperation,
+  finishSidebarOperation,
+  createSidebarOperationId,
+  applySessionMutationDelta,
+  markPendingRuntimeStop,
+  releasePendingRuntimeStop,
+  invalidateSidebarProjection,
+} from './sidebar-operations.js';
+import { sessionOpsAllowed, getDeclaredSessionMenuItems } from './session-menu-decls.js';
+import { phThreadArchiveCount } from './session-list-render.js';
+import { phOpenSessionMoveDialog } from './ph-session-move.js';
+import { openBranchDialog, phOpenRenameDialog } from './session-dialogs.js';
+import { openTrimPage } from './trim-page.js';
+import { openThreadHistory } from './ph-thread-history.js';
+import { isAssemblySession } from './assembly-data.js';
+import { SIDEBAR_TODO_COLORS } from './sidebar-pin-color.js';
+import { ClawToast } from './toast-notify.js';
+import { escapeHtml } from './markdown-utils.js';
+// project-data 已是 ESM：updateAgentRecord / getPathLeaf 为 export function
+// （函数声明，装载即初始化），直调不再经 window 桥晚绑定。
+import { updateAgentRecord, getPathLeaf } from './project-data.js';
+
+// 桥接期：t 仍定义于 classic public/src/i18n.js（i18n 域收敛时改 import）。
+// 经 window 晚绑定，不取加载期快照。
+const t = (...args) => window.t(...args);
+
 /* ══════════════════════════════════════
    Generic ctx-menu: declaration table + dispatcher
    ══════════════════════════════════════ */
@@ -71,7 +126,7 @@ function getCtxMenuItems(role, ns, variant, id, sessionId = '', threadId = '') {
   if (role === 'workspace') {
     const policy = resolveSidebarSessionsPolicy(ns);
     if (!policy) return [];
-    const isZh = currentLanguage === 'zh';
+    const isZh = getCurrentLanguage() === 'zh';
     return [
       {
         label: policy === 'visible'
@@ -94,7 +149,7 @@ function getCtxMenuItems(role, ns, variant, id, sessionId = '', threadId = '') {
   if (role === 'runtime' && threadId && !sessionOpsAllowed(ns)) {
     const thread = typeof window.getThreadById === 'function' ? window.getThreadById(threadId) : null;
     if (thread) {
-      const isZh = currentLanguage === 'zh';
+      const isZh = getCurrentLanguage() === 'zh';
       const busy = thread.lifeState === 'executing' || thread.lifeState === 'pending-commands';
       return [
         { label: isZh ? '复制 Thread ID' : 'Copy Thread ID', action: 'copy-thread-id' },
@@ -118,7 +173,7 @@ function getCtxMenuItems(role, ns, variant, id, sessionId = '', threadId = '') {
     //   - 删除：head 上删除即整链删除（服务端重定向），文案只说「对话」。
     // 变换项（总结/精简/分支）直达执行，不再提供「并归档原会话」子项——
     // 线程化后精简是对话内接续，列表本来只有一行，该选项无对应物。
-    const isZh = currentLanguage === 'zh';
+    const isZh = getCurrentLanguage() === 'zh';
     const agent = allAgents.find((item) => item.id === ns) || null;
     const targetSessionId = String(sessionId || agent?.workspace_sessions?.activeSessionId || '').trim();
     const targetSession = targetSessionId ? getWorkspaceSessionById(agent, targetSessionId) : null;
@@ -135,8 +190,7 @@ function getCtxMenuItems(role, ns, variant, id, sessionId = '', threadId = '') {
     const threadBusy = Boolean(thread)
       && (thread.lifeState === 'executing' || thread.lifeState === 'pending-commands');
     const threadArchived = thread?.lifeState === 'archived';
-    const historyCount = typeof window.phThreadArchiveCount === 'function'
-      ? window.phThreadArchiveCount(ns, targetSessionId) : 0;
+    const historyCount = phThreadArchiveCount(ns, targetSessionId);
     // 归档状态线程优先：有线程的行以线程 lifeState 为准（服务端线程归档
     // 不写 session index 的 archived 位）；无线程会话才读 session 标志。
     const conversationArchived = thread ? threadArchived : isArchived;
@@ -214,14 +268,13 @@ function getCtxMenuItems(role, ns, variant, id, sessionId = '', threadId = '') {
     const sType = variant || 'main';
     // Assembly sessions (agent-studio test-runtime) are excluded from summary/trim/branch.
     const isOpsExcluded = sType === 'assembly';
-    const isZh = currentLanguage === 'zh';
+    const isZh = getCurrentLanguage() === 'zh';
     // 线程解析与 runtime 角色同源；远程命名空间无本地线程数据，无线程项
     // 自然退化，不伪造。
     const thread = typeof window.getThreadForSession === 'function'
       ? window.getThreadForSession(ns, id) : null;
     const threadArchived = thread?.lifeState === 'archived';
-    const historyCount = typeof window.phThreadArchiveCount === 'function'
-      ? window.phThreadArchiveCount(ns, id) : 0;
+    const historyCount = phThreadArchiveCount(ns, id);
     // 归档状态线程优先（服务端线程归档不写 session index 的 archived 位，
     // 迁移遗留的 head archived=true 也以线程 lifeState 为准）。
     const conversationArchived = thread
@@ -308,7 +361,8 @@ function getCtxMenuItems(role, ns, variant, id, sessionId = '', threadId = '') {
 async function ctxRestartAgent(target) {
   const { ns, id, sessionId, variant } = target;
 
-  bumpNavigationGuard();
+  // 桥接期：bumpNavigationGuard 仍定义于 classic app-core（编排域收敛时改 import）
+  window.bumpNavigationGuard();
   const _navGuard = _navigationGuardEpoch;
 
   try {
@@ -323,24 +377,24 @@ async function ctxRestartAgent(target) {
 
     // Track the restarting state in a Set so that any sidebar re-render
     // (e.g. from switching agents during restart) preserves the yellow dot.
-    restartingRuntimeIds.add(domId);
-    suppressSidebarRerender = true;
-    renderAgentList();
+    sidebarUi.restartingRuntimeIds.add(domId);
+    sidebarUi.suppressSidebarRerender = true;
+    window.renderAgentList();
 
     let result = null;
     if (variant === 'remote') {
       // 远程运行时：agentId 用宿主命名空间 id，服务端按 ADR-0011 转发到远程
       // 同名路由。重启保留会话、更换 runtime，刷新 catalog 后按会话定位新
       // runtime 再切换。
-      restartingRuntimeIds.add(domId);
-      suppressSidebarRerender = true;
-      renderAgentList();
+      sidebarUi.restartingRuntimeIds.add(domId);
+      sidebarUi.suppressSidebarRerender = true;
+      window.renderAgentList();
       try {
-        await invoke('restart_agent', { agentId: ns, sessionId: sessionId || null });
+        await window.invoke('restart_agent', { agentId: ns, sessionId: sessionId || null });
         await window.RemoteConnections?.refresh?.();
       } finally {
-        restartingRuntimeIds.delete(domId);
-        suppressSidebarRerender = false;
+        sidebarUi.restartingRuntimeIds.delete(domId);
+        sidebarUi.suppressSidebarRerender = false;
       }
       await loadAgents();
       const nextRuntimeRef = window.RemoteConnections?.waitForRuntimeForSession && sessionId
@@ -354,29 +408,29 @@ async function ctxRestartAgent(target) {
     if (variant === 'external') {
       result = await restartSidebarExternalRuntime(agent);
     } else if (variant === 'child') {
-      const hostId = window.NavigationCore.resolveHostAgentId(agent, serverAgentId);
+      const hostId = resolveHostAgentId(agent, serverAgentId);
       const sId = sessionId || agent?.active_workspace_session_id || null;
-      result = await invoke('restart_agent', { agentId: hostId, sessionId: sId });
+      result = await window.invoke('restart_agent', { agentId: hostId, sessionId: sId });
     } else {
       // managed-runtime / prebuilt
       const sId = sessionId || agent?.active_workspace_session_id || agent?.workspace_sessions?.activeSessionId || null;
-      result = await invoke('restart_agent', { agentId: serverAgentId, sessionId: sId });
+      result = await window.invoke('restart_agent', { agentId: serverAgentId, sessionId: sId });
     }
 
     // Server already waits for runtime readiness (up to 10s), so the
     // returned result contains the connected agent. No extra polling needed.
-    const nextRuntimeId = window.NavigationCore.extractRuntimeId(result) || null;
+    const nextRuntimeId = extractRuntimeId(result) || null;
 
-    restartingRuntimeIds.delete(domId);
-    suppressSidebarRerender = false;
+    sidebarUi.restartingRuntimeIds.delete(domId);
+    sidebarUi.suppressSidebarRerender = false;
     await loadAgents();
     if (nextRuntimeId && _navGuard === _navigationGuardEpoch) {
       await requestSwitch(nextRuntimeId, 'ctx-restart');
     }
   } catch (e) {
-    restartingRuntimeIds.delete(id);
-    suppressSidebarRerender = false;
-    renderAgentList();
+    sidebarUi.restartingRuntimeIds.delete(id);
+    sidebarUi.suppressSidebarRerender = false;
+    window.renderAgentList();
     window.alert(t('restart_failed') + (e && e.message ? e.message : e));
   }
 }
@@ -393,12 +447,12 @@ async function ctxStopAgent(target) {
   try {
     const serverAgentId = (variant === 'managed-runtime') ? ns : id;
     const agent = getExternalRuntimeAgent(serverAgentId);
-    const affectedRuntimeId = id || getRuntimeId(agent) || null;
+    const affectedRuntimeId = id || window.getRuntimeId(agent) || null;
     // Clear cached data — runtime is being stopped
     if (affectedRuntimeId) clearAgentRuntimeCache(affectedRuntimeId);
-    if (variant !== 'remote' && typeof markPendingRuntimeStop === 'function') {
+    if (variant !== 'remote') {
       if (variant === 'child') {
-        const hostId = window.NavigationCore.resolveHostAgentId(agent, serverAgentId);
+        const hostId = resolveHostAgentId(agent, serverAgentId);
         const sId = sessionId || agent?.active_workspace_session_id || null;
         if (hostId && sId) stopRegistry = { agentId: hostId, sessionId: sId };
       } else if (variant === 'external') {
@@ -419,7 +473,7 @@ async function ctxStopAgent(target) {
           stopRegistry.sessionId || '',
           stopRegistry.runtimeId,
         );
-        if (typeof invalidateSidebarProjection === 'function') invalidateSidebarProjection();
+        invalidateSidebarProjection();
       } else {
         stopRegistry = null;
       }
@@ -428,18 +482,18 @@ async function ctxStopAgent(target) {
       await closeSidebarExternalRuntime(agent);
     } else if (variant === 'remote') {
       // 远程运行时：agentId 用宿主命名空间 id，服务端按 ADR-0011 转发。
-      await invoke('stop_agent', { agentId: ns, sessionId: sessionId || null });
+      await window.invoke('stop_agent', { agentId: ns, sessionId: sessionId || null });
     } else if (variant === 'child') {
       // 侧栏统一投影的 child 叶子：id 是 runtime id，服务端 stop_agent 按
       // (宿主 agentId, sessionId) 寻址——必须经 resolveHostAgentId 解析宿主，
       // 直接用 runtime id 会被服务端静默 no-op（找不到 runtime 也不报错）。
-      const hostId = window.NavigationCore.resolveHostAgentId(agent, serverAgentId);
+      const hostId = resolveHostAgentId(agent, serverAgentId);
       const sId = sessionId || agent?.active_workspace_session_id || null;
-      await invoke('stop_agent', { agentId: hostId, sessionId: sId });
+      await window.invoke('stop_agent', { agentId: hostId, sessionId: sId });
     } else {
       // managed-runtime / prebuilt: pass sessionId to stop only the targeted runtime
       const sId = sessionId || agent?.active_workspace_session_id || null;
-      await invoke('stop_agent', { agentId: serverAgentId, sessionId: sId });
+      await window.invoke('stop_agent', { agentId: serverAgentId, sessionId: sId });
     }
     stopConfirmed = true;
     await refreshSidebarRuntimeAfterMutation();
@@ -447,8 +501,8 @@ async function ctxStopAgent(target) {
       const fallbackTarget = variant === 'remote'
         ? (window.RemoteConnections?.getEntryHostAgentId?.(id) || null)
         : ((variant === 'external' || variant === 'child')
-          ? window.NavigationCore.resolveStoppedRuntimeFallback(agent, resolveWorkspaceFallbackAgentId)
-          : resolveWorkspaceFallbackAgentId(agent));
+          ? resolveStoppedRuntimeFallback(agent, window.resolveWorkspaceFallbackAgentId)
+          : window.resolveWorkspaceFallbackAgentId(agent));
       if (fallbackTarget) {
         selectWorkspaceSurface(fallbackTarget);
       }
@@ -467,7 +521,7 @@ async function ctxStopAgent(target) {
         stopRegistry.agentId || '',
         stopRegistry.sessionId || '',
       );
-      if (typeof invalidateSidebarProjection === 'function') invalidateSidebarProjection();
+      invalidateSidebarProjection();
     }
     window.alert(t('close_failed') + (e && e.message ? e.message : e));
   }
@@ -492,8 +546,8 @@ async function ctxArchiveAndStopRuntime(target) {
       updateAgentRecord(agentId, {
         workspace_sessions: { ...(agent?.workspace_sessions || {}), sessions: updatedSessions, activeSessionId: agent?.workspace_sessions?.activeSessionId },
       });
-      lastRenderedWorkspaceHtml = '';
-      renderCurrentMainView();
+      setLastRenderedWorkspaceHtml('');
+      window.renderCurrentMainView();
     }
     try {
       const response = await fetch('/protoclaw/prebuilt_sessions/archive', {
@@ -511,14 +565,14 @@ async function ctxArchiveAndStopRuntime(target) {
         throw new Error(await response.text().catch(() => 'unarchive session failed'));
       }
       const result = await response.json();
-      if (typeof applySessionMutationDelta === 'function') applySessionMutationDelta(agentId, result);
+      applySessionMutationDelta(agentId, result);
       if (result?.sessions) {
         updateAgentRecord(agentId, {
           workspace_sessions: result.sessions,
           active_workspace_session_id: result.activeSessionId || null,
         });
-        lastRenderedWorkspaceHtml = '';
-        renderCurrentMainView();
+        setLastRenderedWorkspaceHtml('');
+        window.renderCurrentMainView();
       }
     } catch (e) {
       // Revert optimistic unarchive on failure
@@ -530,10 +584,10 @@ async function ctxArchiveAndStopRuntime(target) {
         updateAgentRecord(agentId, {
           workspace_sessions: { ...(agent?.workspace_sessions || {}), sessions: revertedSessions, activeSessionId: agent?.workspace_sessions?.activeSessionId },
         });
-        lastRenderedWorkspaceHtml = '';
-        renderCurrentMainView();
+        setLastRenderedWorkspaceHtml('');
+        window.renderCurrentMainView();
       }
-      window.alert((currentLanguage === 'zh' ? '取消归档失败：' : 'Failed to unarchive session: ') + (e?.message || e));
+      window.alert((getCurrentLanguage() === 'zh' ? '取消归档失败：' : 'Failed to unarchive session: ') + (e?.message || e));
     }
     return;
   }
@@ -560,8 +614,8 @@ async function ctxArchiveAndStopRuntime(target) {
     updateAgentRecord(agentId, {
       workspace_sessions: { ...(agent?.workspace_sessions || {}), sessions: updatedSessions, activeSessionId: agent?.workspace_sessions?.activeSessionId },
     });
-    lastRenderedWorkspaceHtml = '';
-    renderCurrentMainView();
+    setLastRenderedWorkspaceHtml('');
+    window.renderCurrentMainView();
   }
 
   let result = null;
@@ -581,14 +635,14 @@ async function ctxArchiveAndStopRuntime(target) {
       throw new Error(await response.text().catch(() => 'archive session failed'));
     }
     result = await response.json();
-    if (typeof applySessionMutationDelta === 'function') applySessionMutationDelta(agentId, result);
+    applySessionMutationDelta(agentId, result);
     if (result?.sessions) {
       updateAgentRecord(agentId, {
         workspace_sessions: result.sessions,
         active_workspace_session_id: result.activeSessionId || null,
       });
-      lastRenderedWorkspaceHtml = '';
-      renderCurrentMainView();
+      setLastRenderedWorkspaceHtml('');
+      window.renderCurrentMainView();
     }
     finishSidebarOperation(archiveOperation.operationId, 'settled', {
       serverRevision: result?.revision ?? null,
@@ -596,9 +650,9 @@ async function ctxArchiveAndStopRuntime(target) {
     // 乐观退场：归档已提交，源 runtime 的侧栏条目立即消失，不再等导航与
     // 关停链路走完。stop 仍按原有顺序执行（先导航后关停），轮询快照确认
     // runtime 消失后抑制自动解除；关停失败时下方 catch 会解除并恢复呈现。
-    if (variant !== 'remote' && typeof markPendingRuntimeStop === 'function') {
+    if (variant !== 'remote') {
       markPendingRuntimeStop(agentId, sessionId, runtimeId);
-      if (typeof invalidateSidebarProjection === 'function') invalidateSidebarProjection();
+      invalidateSidebarProjection();
     }
     const targetSessionId = String(result?.targetSessionId || '').trim();
     if (targetSessionId) {
@@ -614,32 +668,32 @@ async function ctxArchiveAndStopRuntime(target) {
       updateAgentRecord(agentId, {
       workspace_sessions: { ...(agent?.workspace_sessions || {}), sessions: revertedSessions, activeSessionId: agent?.workspace_sessions?.activeSessionId },
       });
-      lastRenderedWorkspaceHtml = '';
-      renderCurrentMainView();
+      setLastRenderedWorkspaceHtml('');
+      window.renderCurrentMainView();
     }
     finishSidebarOperation(archiveOperation.operationId, 'failed', { errorCode: 'archive_failed' });
-    window.alert((currentLanguage === 'zh' ? '归档会话失败：' : 'Failed to archive session: ') + (e?.message || e));
+    window.alert((getCurrentLanguage() === 'zh' ? '归档会话失败：' : 'Failed to archive session: ') + (e?.message || e));
     return;
   }
 
   // 2. Stop the agent runtime (same logic as ctxStopAgent)
   const serverAgentId = (variant === 'managed-runtime') ? agentId : runtimeId;
   const externalAgent = getExternalRuntimeAgent(serverAgentId);
-  const affectedRuntimeId = runtimeId || getRuntimeId(externalAgent) || null;
+  const affectedRuntimeId = runtimeId || window.getRuntimeId(externalAgent) || null;
   try {
     if (affectedRuntimeId) clearAgentRuntimeCache(affectedRuntimeId);
     if (variant === 'external') {
       await closeSidebarExternalRuntime(externalAgent);
     } else if (variant === 'remote') {
       // 远程运行时：关停经宿主命名空间 id 转发（与归档转发同套路）。
-      await invoke('stop_agent', { agentId, sessionId: sessionId || null });
+      await window.invoke('stop_agent', { agentId, sessionId: sessionId || null });
     } else if (variant === 'child') {
-      const hostId = window.NavigationCore.resolveHostAgentId(externalAgent, serverAgentId);
+      const hostId = resolveHostAgentId(externalAgent, serverAgentId);
       const sId = sessionId || externalAgent?.active_workspace_session_id || null;
-      await invoke('stop_agent', { agentId: hostId, sessionId: sId });
+      await window.invoke('stop_agent', { agentId: hostId, sessionId: sId });
     } else {
       const sId = sessionId || externalAgent?.active_workspace_session_id || null;
-      await invoke('stop_agent', { agentId: serverAgentId, sessionId: sId });
+      await window.invoke('stop_agent', { agentId: serverAgentId, sessionId: sId });
     }
     // The archive response has already switched to the replacement session when
     // available. Only fall back to the workspace surface when no replacement
@@ -653,7 +707,7 @@ async function ctxArchiveAndStopRuntime(target) {
     // and must not retroactively mark that session mutation as failed.
     if (variant !== 'remote' && typeof releasePendingRuntimeStop === 'function') {
       releasePendingRuntimeStop(runtimeId, agentId, sessionId);
-      if (typeof invalidateSidebarProjection === 'function') invalidateSidebarProjection();
+      invalidateSidebarProjection();
     }
     refreshSidebarRuntimeAfterMutation().catch(e => console.warn(e));
     window.alert(t('close_failed') + (e && e.message ? e.message : e));
@@ -662,7 +716,7 @@ async function ctxArchiveAndStopRuntime(target) {
 
 async function ctxGenerateTitle(target) {
   const { ns, sessionId } = target;
-  const isZh = currentLanguage === 'zh';
+  const isZh = getCurrentLanguage() === 'zh';
   const toastId = 'title-gen-' + sessionId;
   ClawToast.show({
     id: toastId,
@@ -679,9 +733,7 @@ async function ctxGenerateTitle(target) {
       throw new Error(await response.text().catch(() => 'Failed to generate title'));
     }
     const result = await response.json();
-    if (typeof applySessionMutationDelta === 'function') {
-      applySessionMutationDelta(ns, result);
-    }
+    applySessionMutationDelta(ns, result);
     if (result.ok && result.title) {
       const agent = allAgents.find((item) => item.id === ns);
       if (agent) {
@@ -692,7 +744,7 @@ async function ctxGenerateTitle(target) {
           updateAgentRecord(ns, { active_workspace_session_title: result.title });
         }
       }
-      renderAgentList();
+      window.renderAgentList();
       ClawToast.update(toastId, {
         status: 'success',
         title: isZh ? '标题已生成' : 'Title generated',
@@ -717,7 +769,7 @@ async function ctxGenerateTitle(target) {
 
 /** 剪贴板写入 + 结果 toast（secure clipboard 优先，非安全上下文降级 execCommand） */
 async function _copyTextWithToast(text, { okTitle, failTitle }) {
-  const isZh = currentLanguage === 'zh';
+  const isZh = getCurrentLanguage() === 'zh';
   let ok = false;
   if (typeof navigator !== 'undefined' && navigator.clipboard && window.isSecureContext) {
     try { await navigator.clipboard.writeText(text); ok = true; } catch { ok = false; }
@@ -760,7 +812,7 @@ async function ctxThreadRequest(threadId, path) {
 
 async function afterThreadMutation() {
   if (typeof window.refreshThreads === 'function') await window.refreshThreads(true).catch(() => {});
-  if (typeof renderAgentList === 'function') renderAgentList();
+  if (typeof window.renderAgentList === 'function') window.renderAgentList();
 }
 
 function ctxRenameSession(target) {
@@ -778,7 +830,7 @@ function ctxRenameSession(target) {
   const agent = allAgents.find((item) => item.id === agentId);
   const session = agent ? getWorkspaceSessionById(agent, sessionId) : null;
   const currentTitle = session?.title || nameEl.textContent.trim();
-  const isZh = currentLanguage === 'zh';
+  const isZh = getCurrentLanguage() === 'zh';
 
   // Mark item as editing so click/contextmenu handlers skip it
   itemEl.classList.add('editing');
@@ -805,7 +857,7 @@ function ctxRenameSession(target) {
   const restore = () => {
     nameEl.textContent = currentTitle;
     finishEditing();
-    renderAgentList();
+    window.renderAgentList();
   };
 
   const saveTitle = async () => {
@@ -827,7 +879,7 @@ function ctxRenameSession(target) {
         nameEl.textContent = result.title || newTitle;
         finishEditing();
         applySessionMutationDelta(agentId, result);
-        renderAgentList();
+        window.renderAgentList();
       } else {
         restore();
         console.error('Failed to update session title:', result.error);
@@ -879,7 +931,7 @@ async function ctxArchiveSession(target) {
     updateAgentRecord(agentId, {
       workspace_sessions: { ...(agent?.workspace_sessions || {}), sessions: updatedSessions, activeSessionId: agent?.active_workspace_session_id },
     });
-    renderCurrentMainView();
+    window.renderCurrentMainView();
   }
 
   try {
@@ -898,7 +950,7 @@ async function ctxArchiveSession(target) {
       throw new Error(await response.text().catch(() => 'archive session failed'));
     }
     const result = await response.json();
-    if (typeof applySessionMutationDelta === 'function') applySessionMutationDelta(agentId, result);
+    applySessionMutationDelta(agentId, result);
     if (result?.sessions) {
       updateAgentRecord(agentId, {
         workspace_sessions: result.sessions,
@@ -909,8 +961,8 @@ async function ctxArchiveSession(target) {
     if (targetSessionId) {
       await navigateToSessionMutationTarget(agentId, result, sourceRuntimeId);
     }
-    lastRenderedWorkspaceHtml = '';
-    renderCurrentMainView();
+    setLastRenderedWorkspaceHtml('');
+    window.renderCurrentMainView();
     finishSidebarOperation(archiveOperation.operationId, 'settled');
   } catch (e) {
     // Revert on failure
@@ -923,10 +975,10 @@ async function ctxArchiveSession(target) {
       workspace_sessions: { ...(agent?.workspace_sessions || {}), sessions: revertedSessions, activeSessionId: agent?.active_workspace_session_id },
       });
     }
-    lastRenderedWorkspaceHtml = '';
-    renderCurrentMainView();
+    setLastRenderedWorkspaceHtml('');
+    window.renderCurrentMainView();
     finishSidebarOperation(archiveOperation.operationId, 'failed', { errorCode: nextArchived ? 'archive_failed' : 'unarchive_failed' });
-    window.alert((currentLanguage === 'zh' ? '归档会话失败：' : 'Failed to archive session: ') + (e?.message || e));
+    window.alert((getCurrentLanguage() === 'zh' ? '归档会话失败：' : 'Failed to archive session: ') + (e?.message || e));
   }
 }
 
@@ -937,7 +989,7 @@ async function ctxTodoSession(target, explicit = {}) {
   const agent = allAgents.find((item) => item.id === agentId) || null;
   const session = getWorkspaceSessionById(agent, sessionId);
   const nextTodo = typeof explicit.todo === 'boolean' ? explicit.todo : !(session?.todo === true);
-  const nextColor = typeof explicit.color === 'string' && window.SIDEBAR_TODO_COLORS.has(explicit.color)
+  const nextColor = typeof explicit.color === 'string' && SIDEBAR_TODO_COLORS.has(explicit.color)
     ? explicit.color : 'white';
 
   // Optimistic update
@@ -949,8 +1001,8 @@ async function ctxTodoSession(target, explicit = {}) {
     updateAgentRecord(agentId, {
       workspace_sessions: { ...(agent?.workspace_sessions || {}), sessions: updatedSessions, activeSessionId: agent?.active_workspace_session_id },
     });
-    lastRenderedWorkspaceHtml = '';
-    renderCurrentMainView();
+    setLastRenderedWorkspaceHtml('');
+    window.renderCurrentMainView();
   }
 
   try {
@@ -963,23 +1015,21 @@ async function ctxTodoSession(target, explicit = {}) {
       throw new Error(await response.text().catch(() => 'todo session failed'));
     }
     const result = await response.json();
-    if (typeof applySessionMutationDelta === 'function') {
-      applySessionMutationDelta(agentId, result);
-    }
+    applySessionMutationDelta(agentId, result);
     if (result?.sessions) {
       updateAgentRecord(agentId, {
         workspace_sessions: result.sessions,
         active_workspace_session_id: result.activeSessionId || null,
       });
     }
-    lastRenderedWorkspaceHtml = '';
-    renderCurrentMainView();
+    setLastRenderedWorkspaceHtml('');
+    window.renderCurrentMainView();
   } catch (e) {
     // Revert on failure（恢复请求前的真实状态，而非简单取反——颜色要一并还原）
     if (agent) {
       const previousTodo = session?.todo === true;
       const previousColor = previousTodo
-        ? (window.SIDEBAR_TODO_COLORS.has(session?.todoColor) ? session.todoColor : 'white')
+        ? (SIDEBAR_TODO_COLORS.has(session?.todoColor) ? session.todoColor : 'white')
         : null;
       const currentSessions = getWorkspaceSessions(agent);
       const revertedSessions = currentSessions.map((s) =>
@@ -989,9 +1039,9 @@ async function ctxTodoSession(target, explicit = {}) {
         workspace_sessions: { ...(agent?.workspace_sessions || {}), sessions: revertedSessions, activeSessionId: agent?.active_workspace_session_id },
       });
     }
-    lastRenderedWorkspaceHtml = '';
-    renderCurrentMainView();
-    window.alert((currentLanguage === 'zh' ? '设置待办失败：' : 'Failed to set todo: ') + (e?.message || e));
+    setLastRenderedWorkspaceHtml('');
+    window.renderCurrentMainView();
+    window.alert((getCurrentLanguage() === 'zh' ? '设置待办失败：' : 'Failed to set todo: ') + (e?.message || e));
   }
 }
 
@@ -1016,7 +1066,7 @@ function dispatchCtxAction(action, target) {
 
   switch (action) {
     case 'activate':
-      window.switchAgent(id);
+      switchAgent(id);
       break;
 
     case 'rename':
@@ -1041,13 +1091,13 @@ function dispatchCtxAction(action, target) {
 
     case 'trim':
       if (ns && sid) {
-        window.openTrimPage(ns, sid);
+        openTrimPage(ns, sid);
       }
       break;
 
     case 'branch':
       if (ns && sid) {
-        window.openBranchDialog(ns, sid);
+        openBranchDialog(ns, sid);
       }
       break;
 
@@ -1085,9 +1135,7 @@ function dispatchCtxAction(action, target) {
       window.closeCtxMenu();
       // 本地单条移动入口（批量入口在会话列表工具条多选）。动作经 ADR-0049
       // 声明绑定（claw:move-session）触达，处理器能力存在性仍在此校验。
-      if (sid && typeof window.phOpenSessionMoveDialog === 'function') {
-        window.phOpenSessionMoveDialog([sid]);
-      }
+      if (sid) phOpenSessionMoveDialog([sid]);
       break;
     }
 
@@ -1111,12 +1159,12 @@ function dispatchCtxAction(action, target) {
             throw new Error(data?.error || ('HTTP ' + res.status));
           }
           await loadAgents();
-          renderAgentList();
+          window.renderAgentList();
         } catch (e) {
           ClawToast.show({
             id: 'ctx-sidebar-sessions-' + ns,
             status: 'error',
-            title: currentLanguage === 'zh' ? '切换失败' : 'Toggle failed',
+            title: getCurrentLanguage() === 'zh' ? '切换失败' : 'Toggle failed',
             description: e?.message || String(e),
           });
         }
@@ -1140,7 +1188,7 @@ function dispatchCtxAction(action, target) {
         ? window.getThreadForSession(ns, sid) : null;
       const valueToCopy = String(threadForId?.threadId || sid || id || '').trim();
       if (!valueToCopy) break;
-      const isZh = currentLanguage === 'zh';
+      const isZh = getCurrentLanguage() === 'zh';
       _copyTextWithToast(valueToCopy, {
         okTitle: isZh ? 'ID 已复制' : 'ID copied',
         failTitle: isZh ? '复制 ID 失败' : 'Failed to copy ID',
@@ -1153,8 +1201,8 @@ function dispatchCtxAction(action, target) {
       window.closeCtxMenu();
       const threadForHistory = (sid && typeof window.getThreadForSession === 'function')
         ? window.getThreadForSession(ns, sid) : null;
-      if (threadForHistory?.threadId && typeof window.phOpenThreadHistory === 'function') {
-        window.phOpenThreadHistory(ns, threadForHistory.threadId);
+      if (threadForHistory?.threadId) {
+        openThreadHistory(ns, threadForHistory.threadId);
       }
       break;
     }
@@ -1162,8 +1210,8 @@ function dispatchCtxAction(action, target) {
     // 主列表行「重命名」对话框（侧栏叶子保持内联编辑 'rename'）
     case 'rename-session':
       window.closeCtxMenu();
-      if (ns && sid && typeof window.phOpenRenameDialog === 'function') {
-        window.phOpenRenameDialog(ns, sid);
+      if (ns && sid) {
+        phOpenRenameDialog(ns, sid);
       }
       break;
 
@@ -1175,7 +1223,7 @@ function dispatchCtxAction(action, target) {
       window.closeCtxMenu();
       const tid = String(threadId || '').trim();
       if (!tid) break;
-      const isZh = currentLanguage === 'zh';
+      const isZh = getCurrentLanguage() === 'zh';
       _copyTextWithToast(tid, {
         okTitle: isZh ? 'Thread ID 已复制' : 'Thread ID copied',
         failTitle: isZh ? '复制 Thread ID 失败' : 'Failed to copy Thread ID',
@@ -1186,7 +1234,7 @@ function dispatchCtxAction(action, target) {
     // 「停止」（PH 统一菜单）/「中断线程」（coder 线程菜单）同一端点
     case 'thread-interrupt': {
       window.closeCtxMenu();
-      const isZh = currentLanguage === 'zh';
+      const isZh = getCurrentLanguage() === 'zh';
       const threadToInterrupt = resolveCtxThread();
       (async () => {
         try {
@@ -1208,7 +1256,7 @@ function dispatchCtxAction(action, target) {
 
     case 'thread-archive': {
       window.closeCtxMenu();
-      const isZh = currentLanguage === 'zh';
+      const isZh = getCurrentLanguage() === 'zh';
       const threadToArchive = resolveCtxThread();
       if (!threadToArchive?.threadId) break;
       (async () => {
@@ -1246,7 +1294,7 @@ function dispatchCtxAction(action, target) {
 
     case 'thread-unarchive': {
       window.closeCtxMenu();
-      const isZh = currentLanguage === 'zh';
+      const isZh = getCurrentLanguage() === 'zh';
       const threadToRestore = resolveCtxThread();
       if (!threadToRestore?.threadId) break;
       (async () => {
@@ -1267,7 +1315,7 @@ function dispatchCtxAction(action, target) {
 
     case 'thread-delete': {
       window.closeCtxMenu();
-      const isZh = currentLanguage === 'zh';
+      const isZh = getCurrentLanguage() === 'zh';
       const confirmed = window.confirm(isZh
         ? '确定要删除该线程吗？其全部成员会话、交接记录与执行记录将一并删除，不可撤销。'
         : 'Delete this thread? All member sessions, handoff and execution records will be removed. This cannot be undone.');
@@ -1292,3 +1340,43 @@ function dispatchCtxAction(action, target) {
       console.warn('Unknown ctx-menu action:', action, target);
   }
 }
+
+export {
+  getCtxMenuItems,
+  ctxRestartAgent,
+  ctxStopAgent,
+  ctxArchiveAndStopRuntime,
+  ctxGenerateTitle,
+  ctxRenameSession,
+  ctxArchiveSession,
+  ctxTodoSession,
+  dispatchCtxAction,
+};
+
+// —— 桥接期兼容面（kernel-state 访问器桥）——
+// 保留原因：classic 消费方在调用时点以裸标识符 / window.* 取用；逐键证据
+// （相邻 ESM 消费方都已改直接 import，不再是保桥依据）：
+//   getCtxMenuItems    ← classic sidebar-render.js:96/361/844（会话行卡片、
+//     工作空间菜单、侧栏预构建条目）。ESM 侧的 ph-session-list.js:32 与
+//     ctx-menu-handlers.js:58 都直接 import 本模块。
+//   dispatchCtxAction  ← classic sidebar-render.js:137（pin 点击 todo 切换）。
+//     ESM 侧的 ctx-menu-handlers.js:58 直接 import。
+// 已注销（消费方改直引即触发，只保留命名导出）：
+//   ctxTodoSession   ← sidebar-pin-color 直接 import（两侧互为静态依赖，顶层不读
+//     对方绑定：本模块只在函数体内读它的色板 let）；
+//   ctxArchiveSession ← workspace-actions.js:148 具名 import（工作空间管理菜单
+//     归档），全树无 window 消费者。
+// 零 production 消费面、只作命名导出（不上桥）：ctxRestartAgent / ctxStopAgent /
+//   ctxRenameSession / ctxGenerateTitle / ctxArchiveAndStopRuntime（仅 dev .mjs
+//   检查脚本与 test 助手引用，已列入本批移交清单）。
+// 注销条件：上列消费方迁移后改 import，删除对应 defineKey 并下调桥债基线。
+const bridgeApi = {
+  getCtxMenuItems,
+  dispatchCtxAction,
+};
+window.KernelState.defineKey('ctx-menu-items', 'getCtxMenuItems', getCtxMenuItems);
+window.KernelState.defineKey('ctx-menu-items', 'dispatchCtxAction', dispatchCtxAction);
+window.KernelState.claim('ctx-menu-items', {
+  get: (key) => bridgeApi[key],
+  set: (key, value) => { bridgeApi[key] = value; },
+});

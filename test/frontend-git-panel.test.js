@@ -12,6 +12,23 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createFrontendSandbox } from './helpers/frontend-vm.js';
 import { loadEsmPluginInSandbox } from './helpers/load-esm-plugin.js';
+import { loadModuleOnce } from './helpers/esm-module-loader.js';
+// git-graph.js 已 ESM 化（P2 批次 2）：真实 import 后把它的 window.GitGraph
+// 挂载点落在沙箱宿主上（模块导入期读 globalThis.window），插件仍按既有协议消费。
+
+async function loadGitGraphInto(ctx) {
+  const prevWindow = globalThis.window;
+  const prevDocument = globalThis.document;
+  globalThis.window = ctx.window;
+  globalThis.document = ctx.document;
+  try {
+    await loadModuleOnce('public/src/modules/git-graph.js', { installGlobals: false });
+  } finally {
+    if (prevWindow === undefined) delete globalThis.window; else globalThis.window = prevWindow;
+    if (prevDocument === undefined) delete globalThis.document; else globalThis.document = prevDocument;
+  }
+}
+
 
 const okStatus = (dir) => ({
   ok: true, isRepo: true, root: dir,
@@ -21,7 +38,7 @@ const okGraph = { ok: true, commits: [{ hash: 'a1b2c3d4e5f6', parents: [], autho
 const okBranches = { ok: true, locals: [], remotes: [], current: 'main' };
 const record = { workspace_sessions: { sessions: [{ id: 'sess-1', openDirectory: '/repo' }] } };
 
-function makeSandbox({ fetchImpl, agentRecord = record } = {}) {
+async function makeSandbox({ fetchImpl, agentRecord = record } = {}) {
   const timers = new Set();
   const bodyListeners = {};
   const docBodyListeners = {};
@@ -69,8 +86,8 @@ function makeSandbox({ fetchImpl, agentRecord = record } = {}) {
   ctx.__autoTick = () => { if (autoTickFn) autoTickFn(); };
   ctx.__fireBody = (type, event) => (bodyListeners[type] || []).forEach((fn) => fn(event));
   ctx.__fireDocBody = (type, event) => (docBodyListeners[type] || []).forEach((fn) => fn(event));
-  ctx.loadSource('public/src/modules/git-graph.js');
   ctx.loadSource('public/src/modules/claw-host.js');
+  await loadGitGraphInto(ctx);
   const mod = loadEsmPluginInSandbox(ctx, 'public/src/panel-plugins/git.js');
   ctx.__gitPanel = mod; // render / onOpen / refresh 命名导出面（原 window.GitPanel）
   mod.__pluginDefault.mount({ effect() {} }); // 常驻监听随插件挂载（ADR-0044 P4；沙箱用例不卸载）
@@ -87,7 +104,7 @@ const tick = () => new Promise((r) => setTimeout(r, 40));
 
 describe('git-panel 刷新链路稳定性', () => {
   it('目录暂态丢失时保留已加载面板，不清空', async () => {
-    const ctx = makeSandbox({ fetchImpl: goodFetch() });
+    const ctx = await makeSandbox({ fetchImpl: goodFetch() });
     try {
       ctx.__gitPanel.onOpen();
       await tick(); await tick();
@@ -115,7 +132,7 @@ describe('git-panel 刷新链路稳定性', () => {
       if (op === 'discover') { discoverCalls++; return { ok: true, json: async () => ({ ok: true, repos: [] }) }; }
       return { ok: true, json: async () => ({ graph: okGraph, branches: okBranches }[op]) };
     };
-    const ctx = makeSandbox({ fetchImpl });
+    const ctx = await makeSandbox({ fetchImpl });
     try {
       ctx.__gitPanel.onOpen();
       await tick(); await tick();
@@ -154,7 +171,7 @@ describe('git-panel 刷新链路稳定性', () => {
       dirByOp.push([op, body.dir]);
       return { ok: true, json: async () => ({ graph: okGraph, branches: okBranches }[op]) };
     };
-    const ctx = makeSandbox({ fetchImpl });
+    const ctx = await makeSandbox({ fetchImpl });
     try {
       ctx.__gitPanel.onOpen();
       await tick(); await tick();
@@ -203,7 +220,7 @@ describe('git-panel 刷新链路稳定性', () => {
       dirByOp.push([op, body.dir]);
       return { ok: true, json: async () => ({ graph: okGraph, branches: okBranches }[op]) };
     };
-    const ctx = makeSandbox({ fetchImpl });
+    const ctx = await makeSandbox({ fetchImpl });
     // 菜单项挂在 body 弹层上（#git-repo-menu），经 document.body 级委托命中
     const clickMenuItem = (root) => ctx.__fireDocBody('click', {
       preventDefault() {},
@@ -258,7 +275,7 @@ describe('git-panel 刷新链路稳定性', () => {
       dirByOp.push([op, body.dir]);
       return { ok: true, json: async () => ({ graph: okGraph, branches: okBranches }[op]) };
     };
-    const ctx = makeSandbox({ fetchImpl });
+    const ctx = await makeSandbox({ fetchImpl });
     try {
       ctx.__gitPanel.onOpen();
       await tick(); await tick();
@@ -301,7 +318,7 @@ describe('git-panel 刷新链路稳定性', () => {
       }
       return { ok: true, json: async () => ({ graph: okGraph, branches: okBranches }[op]) };
     };
-    const ctx = makeSandbox({ fetchImpl });
+    const ctx = await makeSandbox({ fetchImpl });
     try {
       ctx.__gitPanel.onOpen();
       await tick(); await tick();
@@ -345,7 +362,7 @@ describe('git-panel 刷新链路稳定性', () => {
       if (op === 'default_repo') return { ok: true, json: async () => ({ ok: true }) };
       return { ok: true, json: async () => ({ graph: okGraph, branches: okBranches }[op]) };
     };
-    const ctx = makeSandbox({ fetchImpl });
+    const ctx = await makeSandbox({ fetchImpl });
     try {
       ctx.__gitPanel.onOpen();
       await tick(); await tick();
@@ -387,7 +404,7 @@ describe('git-panel 刷新链路稳定性', () => {
       }
       return { ok: true, json: async () => ({ graph: okGraph, branches: okBranches }[op]) };
     };
-    const ctx = makeSandbox({ fetchImpl });
+    const ctx = await makeSandbox({ fetchImpl });
     const clickAction = (action) => ctx.__fireBody('click', {
       target: { closest: (sel) => (sel === '[data-gp-action]' ? { dataset: { gpAction: action } } : null) },
     });
@@ -420,7 +437,7 @@ describe('git-panel 刷新链路稳定性', () => {
       await new Promise((r) => setTimeout(r, 60));
       return { ok: true, json: async () => ({ status: okStatus('/repo'), graph: okGraph, branches: okBranches }[op]) };
     };
-    const ctx = makeSandbox({ fetchImpl });
+    const ctx = await makeSandbox({ fetchImpl });
     try {
       ctx.__gitPanel.onOpen();
       await tick();
@@ -435,7 +452,7 @@ describe('git-panel 刷新链路稳定性', () => {
   });
 
   it('render 周期不形成 loadAll 自激励循环（git 命令风暴根因）', async () => {
-    const ctx = makeSandbox({ fetchImpl: goodFetch() });
+    const ctx = await makeSandbox({ fetchImpl: goodFetch() });
     try {
       ctx.__gitPanel.onOpen();
       await tick(); await tick();
@@ -460,7 +477,7 @@ describe('git-panel 刷新链路稳定性', () => {
       if (op === 'graph' && graphFail) return { ok: false, status: 500, json: async () => ({ error: 'boom' }) };
       return { ok: true, json: async () => ({ status: okStatus('/repo'), graph: okGraph, branches: okBranches }[op]) };
     };
-    const ctx = makeSandbox({ fetchImpl });
+    const ctx = await makeSandbox({ fetchImpl });
     try {
       ctx.__gitPanel.onOpen();
       await tick(); await tick();
@@ -484,7 +501,7 @@ describe('git-panel 刷新链路稳定性', () => {
       if (op === 'status' && statusFail) return { ok: false, status: 500, json: async () => ({ error: 'git rev-parse returned empty output' }) };
       return { ok: true, json: async () => ({ status: okStatus('/repo'), graph: okGraph, branches: okBranches }[op]) };
     };
-    const ctx = makeSandbox({ fetchImpl });
+    const ctx = await makeSandbox({ fetchImpl });
     try {
       ctx.__gitPanel.onOpen();
       await tick(); await tick();
@@ -519,7 +536,7 @@ describe('git-panel 刷新链路稳定性', () => {
       body.status = { ...body.status, ahead: 0 };
       return { ok: true, json: async () => ({ status: body, branches: okBranches }[op]) };
     };
-    const ctx = makeSandbox({ fetchImpl });
+    const ctx = await makeSandbox({ fetchImpl });
     try {
       ctx.__gitPanel.onOpen();
       await tick(); await tick();
@@ -554,7 +571,7 @@ describe('git-panel 刷新链路稳定性', () => {
       }
       return { ok: true, json: async () => ({ status: okStatus('/repo'), branches: okBranches }[op]) };
     };
-    const ctx = makeSandbox({ fetchImpl });
+    const ctx = await makeSandbox({ fetchImpl });
     try {
       ctx.__gitPanel.onOpen();
       await tick(); await tick();

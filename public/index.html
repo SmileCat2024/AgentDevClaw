@@ -409,27 +409,18 @@
   <script type="module" src="./src/modules/agent-store-state.js"></script>
   <script type="module" src="./src/modules/render-entry-state.js"></script>
   <script type="module" src="./src/modules/orchestration-state.js"></script>
+  <!-- ESM 内核入口：P2 已迁消费方批次的装载收口在这里（kernel-entry → p2-entry），
+       这些文件原先各自的 classic 标签已删除；新增 module 入口须登记
+       frontend-script-tags-gate 的 MODULE_ENTRIES。 -->
   <script type="module" src="./src/modules/kernel-entry.js"></script>
-  <script src="./src/modules/model-preset-cache.js"></script>
-  <script src="./src/modules/speech-config-cache.js"></script>
-  <script src="./src/modules/claw-select.js"></script>
   <script src="./src/modules/session-view-state.js"></script>
-  <script src="./src/modules/navigation-core.js"></script>
-  <script src="./src/modules/sidebar-operations.js"></script>
   <script src="./src/modules/sidebar-layout.js"></script>
   <script src="./src/modules/sidebar-render.js"></script>
-  <script src="./src/modules/sidebar-pin-color.js"></script>
-  <script src="./src/modules/app-info.js"></script>
    <script type="module" src="./src/modules/toast-notify.js"></script>
   <script src="./src/modules/dispatch-ui.js"></script>
   <script src="./src/modules/dispatch-actions.js"></script>
   <script src="./src/modules/im-ui.js"></script>
   <script src="./src/modules/im-actions.js"></script>
-  <script src="./src/modules/session-dialogs.js"></script>
-  <script src="./src/modules/trim-page.js"></script>
-  <script src="./src/modules/feature-setup-core.js"></script>
-  <script src="./src/modules/feature-config-editor.js"></script>
-  <script src="./src/modules/dir-config-dialog.js"></script>
   <script src="./src/modules/wg-state.js"></script>
   <script src="./src/modules/wg-voice-input.js"></script>
   <script src="./src/modules/wg-annotations.js"></script>
@@ -438,117 +429,62 @@
   <script src="./src/modules/wg-threads-panel.js"></script>
   <script src="./src/modules/wg-popover.js"></script>
   <script src="./src/modules/wg-core.js"></script>
-  <script src="./src/modules/usage-info-overlay.js"></script>
-  <script src="./src/modules/speech-settings.js"></script>
-  <script src="./src/modules/oauth-flow.js"></script>
-  <script src="./src/modules/proxy-overlay.js"></script>
-  <script src="./src/modules/container-images.js"></script>
-  <script src="./src/modules/workspace-settings.js"></script>
-  <script src="./src/modules/model-settings.js"></script>
-  <script src="./src/modules/mcp-gateway-ui.js"></script>
-  <script src="./src/modules/remote-claw-settings.js"></script>
   <script src="./src/modules/remote-connections.js"></script>
-  <script src="./src/modules/feature-config.js"></script>
-  <script src="./src/modules/context-guard-toggle.js"></script>
   <script src="./src/modules/chat-context-bar.js"></script>
-  <script src="./src/modules/conversation-export-dialog.js"></script>
-  <script src="./src/modules/ph-settings.js"></script>
-  <script src="./src/modules/feature-store.js"></script>
-  <script src="./src/modules/project-data.js"></script>
   <script src="./src/modules/workspace-docset.js"></script>
-  <script src="./src/modules/context-menu.js"></script>
   <script src="./src/modules/markdown-bootstrap.js"></script>
   <script type="module" src="./src/modules/markdown-utils.js"></script>
-  <script src="./src/modules/template-engine.js"></script>
   <script src="./src/modules/theme-lang.js"></script>
-  <script src="./src/modules/overview-data.js"></script>
   <script src="./src/modules/chat-viewport.js"></script>
-  <script src="./src/modules/debug-overview.js"></script>
+  <!-- debug-overview / debug-preflight / debug-mcp 已迁 ESM：classic 标签删除，
+       由 p2-entry 的 p2-w2-11-debug-deep-bootstrap / p2-debug-small-bootstrap 装载。
+       debug-logs 与 debug-features-hooks 仍是 classic 唯一实现（render / onOpen
+       入口由 app-ui 的面板注册闭包持有，rail 按钮在 classic 相就可点），标签保留。 -->
   <script src="./src/modules/debug-logs.js"></script>
-  <script src="./src/modules/debug-preflight.js"></script>
-  <script src="./src/modules/debug-mcp.js"></script>
-  <script src="./src/modules/feature-catalog.js"></script>
   <script src="./src/modules/debug-features-hooks.js"></script>
-  <script src="./src/modules/debug-summary-upload.js"></script>
-    <script src="./src/modules/generative-ui-renderer.js"></script>
     <script src="./src/modules/generative-ui-panel.js"></script>
   <script src="./src/modules/debug-panel-host.js"></script>
   <script src="./src/modules/panel-plugins.js"></script>
-  <!-- 动态插件面板声明（ADR-0045 P1）：从 server 声明 API 拉取外部插件包
-       的面板声明（素材 × 装配事实合成），与上方静态清单互补 -->
-  <script src="./src/modules/feature-ui-registry.js"></script>
-  <script src="./src/modules/workspace-blocks.js"></script>
+  <!-- 动态插件面板声明（ADR-0045 P1）：feature-ui-registry 从 server 声明 API
+       拉取外部插件包的面板声明（素材 × 装配事实合成），与上方静态清单互补。
+       该模块已迁 ESM，由 p2-w1-2-panel-bootstrap 装载。 -->
   <!-- coder APP 界面改为按需动态装载（src/plugins/coder/index.js），
        不再静态挂载，卸载后无残留 -->
   <!-- memo APP 界面改为按需动态装载（src/plugins/memo/index.js），
        不再静态挂载，卸载后无残留 -->
-  <script src="./src/modules/app-chat-input.js"></script>
   <!-- memo 设置弹窗随 memo 插件装载（plugins/memo/settings.js），不再静态挂载 -->
-  <script src="./src/modules/assembly-data.js"></script>
   <script src="./src/modules/home-dashboard.js"></script>
-  <script src="./src/modules/fw-config-panel.js"></script>
   <script src="./src/modules/todo-plan.js"></script>
-  <script src="./src/modules/git-graph.js"></script>
   <script src="./src/modules/bg-panel.js"></script>
-  <script src="./src/modules/annotations.js"></script>
   <script src="./src/modules/right-panel-registry.js"></script>
   <script src="./src/app-ui.js"></script>
   <script src="./src/modules/resources-viewer.js"></script>
   <script src="./src/modules/rail-customize.js"></script>
-  <script src="./src/modules/session-ui.js"></script>
-  <script src="./src/modules/session-list-render.js"></script>
   <script src="./src/modules/desktop-notify.js"></script>
   <!-- ↓↓↓ Phase A: 零风险子系统（自包含，无被 app-ui.js 调用的函数） ↓↓↓ -->
   <!-- 工单 036：常驻 composer（草稿缓存 + 模式判定 + 组件本体）。必须先于
        voice-input.js（消费其草稿符号）与 input-render.js/persistent-input.js
        （依赖其组件函数）加载。 -->
   <script src="./src/modules/input-composer.js"></script>
-  <!-- 会话引用（+ 菜单弹窗 / 侧栏拖拽 / pill 状态）；消费方（persistent-input
-       的 _renderAttachmentPreview、input-composer 的 + 菜单）均为运行时解析 -->
-  <script src="./src/modules/session-reference-picker.js"></script>
   <script src="./src/modules/voice-input.js"></script>
-  <script src="./src/modules/choice-input.js"></script>
-  <script src="./src/modules/auto-title.js"></script>
-  <script src="./src/modules/ph-project-actions.js"></script>
-  <script src="./src/modules/ph-session-move.js"></script>
-  <script src="./src/modules/ph-thread-history.js"></script>
-  <script src="./src/modules/external-runtime.js"></script>
+  <!-- choice-input 已迁 ESM（选择卡谓词 / 交互 / 提交，含草稿状态）：classic 标签
+       删除，由 p2-w2-3b-input-bootstrap → p2-entry 装载。草稿状态已是该模块私有，
+       classic 侧零读取，原 p2-bootstrap-choice-input 引用宿主已删除。 -->
   <script src="./src/modules/rollback-dialog.js"></script>
-  <script src="./src/modules/recap-hint.js"></script>
   <!-- ↓↓↓ Phase B: 中风险子系统 ↓↓↓ -->
   <script src="./src/modules/chat-scroll.js"></script>
-  <script src="./src/modules/session-mutation.js"></script>
-  <script src="./src/modules/session-menu-decls.js"></script>
-  <script src="./src/modules/ctx-menu-items.js"></script>
   <script src="./src/modules/runtime-status.js"></script>
-  <script src="./src/modules/tool-progress.js"></script>
   <script src="./src/modules/input-helpers.js"></script>
   <script src="./src/modules/input-render.js"></script>
-  <script src="./src/modules/input-model-switcher.js"></script>
+  <!-- input-model-switcher 已迁 ESM（模型 / 思考强度两个切换器）：classic 标签
+       删除，由 p2-entry 显式 import；四个兼容桥键供下方仍 classic 的
+       persistent-input / input-composer 调用。 -->
   <script src="./src/modules/persistent-input.js"></script>
-  <script src="./src/modules/slash-menu.js"></script>
-  <script src="./src/modules/slash-commands.js"></script>
-  <!-- ↓↓↓ Phase C: assembly 生命周期操作 ↓↓↓ -->
-  <script src="./src/modules/assembly-actions.js"></script>
   <!-- ↓↓↓ Phase D: 聊天消息渲染（被 app-ui.js renderCurrentMainView 反向调用） ↓↓↓ -->
-  <script src="./src/modules/chat-row-visibility.js"></script>
-  <script src="./src/modules/lazy-tool-content.js"></script>
-  <script src="./src/modules/message-timeline.js"></script>
   <script src="./src/modules/chat-renderer.js"></script>
-  <script src="./src/modules/ph-session-list.js"></script>
-  <script src="./src/modules/ph-search-locate.js"></script>
-  <script src="./src/modules/workspace-agents.js"></script>
-  <script src="./src/modules/runtime-mode-menu.js"></script>
-  <script src="./src/modules/workspace-actions.js"></script>
-  <script src="./src/modules/agent-data-loader.js"></script>
-  <script src="./src/modules/ctx-menu-handlers.js"></script>
-  <script src="./src/modules/chat-nav-timeline.js"></script>
+  <!-- workspace-actions 已迁 ESM：classic 标签删除，由 p2-entry 装载。
+       thread-store 仍保留 classic 刷新引擎（三条同步调度必须原位注册），标签不动。 -->
   <script src="./src/modules/thread-store.js"></script>
-  <!-- 会话只读浏览（归档对话 / 线程历史存档 / 工作群记录的唯一入口）：
-       依赖 thread-store 的线程索引，须在其后加载。 -->
-  <script src="./src/modules/session-readonly-view.js"></script>
-  <script src="./src/modules/sse-client.js"></script>
-  <script src="./src/modules/feature-communication.js"></script>
   <!-- 桌面右键唤起（冷启动 URL query / webview eval 统一消费），app-main.js boot 引用 -->
   <script src="./src/modules/desktop-open.js"></script>
   <script src="./src/app-main.js"></script>

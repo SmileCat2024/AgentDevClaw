@@ -1,14 +1,22 @@
 /**
  * PH 项目投影前端往返（ticket 044）
  *
- * 用真实 server 投影产物驱动真实前端投影代码（vm 沙箱）：
+ * 用真实 server 投影产物驱动真实前端投影代码：
  *   轮询链：Session 索引记录 → sessionRecordToWorkspaceMeta →
  *          buildChildRuntimeAgent（真实 wire child，含 project_id）→
  *          collectRuntimeEntriesForPrebuilt（runtime-status.js）→
  *          resolveSidebarChildProjectGroup（project-data.js）→
  *          renderSidebarChildItems（sidebar-render.js 分组渲染）
- *   乐观链：beginSidebarOperation（projectId 身份）→ normalize 清空
- *          projectDir → operation-pending 合成条目进项目身份组
+ *   乐观链：SidebarOperations.beginSidebarOperation（projectId 身份）→ normalize
+ *          清空 projectDir → operation-pending 合成条目进项目身份组
+ *          （操作登记走真实 ESM 命名导出：classic 消费面归零后桥已注销，用例经
+ *          `c.expose` 注入模块命名空间，不以顶层 window 同名桥迁就旧裸调用）
+ *
+ * 装载路线（P2 测试改造）：sidebar-operations 已迁 ESM → withP2EsmCase
+ * 真实 import（每 case 一张图，跨用例不残留操作/快照状态）；project-data 同样
+ * 走真实 import（其 KernelState 桥继续服务 classic 消费方）；runtime-status /
+ * sidebar-render 仍 classic → 按真实加载序 loadSource，它们的 classic 依赖面
+ * 经 window 注入（与原夹具同源）。
  *
  * 验收锚（044 工单）：
  *   - 同目录 D 下的 A/B/D 运行中会话渲染为三个互不混入的组
@@ -16,11 +24,13 @@
  *   - 乐观条目与轮询条目同一归属规则；无身份的操作不合成条目
  */
 
-import { test, describe, before, after } from 'node:test';
+import { test, describe, after } from 'node:test';
+import { marked } from 'marked';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { withP2EsmCase } from './helpers/p2-esm-case.js';
 
 const DATA_ROOT = mkdtempSync(join(tmpdir(), 'claw-ph-fe-projection-'));
 process.env.AGENTDEV_DATA_DIR = DATA_ROOT;
@@ -37,11 +47,38 @@ const {
   buildChildRuntimeAgent,
 } = await import('../server/routes/session-helpers-pure.js');
 
-const { createFrontendSandbox } = await import('./helpers/frontend-vm.js');
 const { installAgentCallStates } = await import('./helpers/agent-call-states.js');
 const { writeSessionIndex } = await import('../server/shared/session-access.js');
 const { createAgentDiscoveryModule } = await import('../server/routes/agent-discovery.js');
 const { createConnectedAgentsQuery } = await import('../server/routes/agent-connected.js');
+
+const SIDEBAR_OPERATIONS = 'public/src/modules/sidebar-operations.js';
+
+/**
+ * sidebar-operations / project-data / agent-data-loader 的 ESM 图在装载期经
+ * window 上的 classic 宿主工厂取适配面，因此 classic 侧跑整条壳层 bootstrap
+ * （生产装载顺序）。
+ */
+const CLASSIC_STACK = [
+  'public/src/modules/action-dispatcher.js',
+  'public/src/modules/claw-host.js',
+  'public/src/modules/right-panel-registry.js',
+  'public/src/modules/markdown-bootstrap.js',
+  'public/src/app-core.js',
+  'public/src/i18n.js',
+  'public/src/modules/session-view-state.js',
+  'public/src/modules/runtime-status.js',
+  'public/src/modules/sidebar-render.js',
+  'public/src/app-ui.js',
+  'public/src/app-main.js',
+];
+
+/** app-ui / app-main 布局监听与首屏入口依赖的浏览器全局（沙箱无此能力）。 */
+class ResizeObserverStub {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+}
 
 const DIR_D = 'D:/code/shared-dir';
 const PROJECT_A = 'prj_aaaaaaaa01';
@@ -91,6 +128,22 @@ function serverWireChild(sessionRecord, runtimeId) {
   });
 }
 
+function hostFixture() {
+  return {
+    id: 'programming-helper',
+    source: 'prebuilt',
+    workspace_sessions: {
+      sessions: [
+        buildLightPrebuiltSessionRecord('programming-helper', SESSIONS_D1),
+        buildLightPrebuiltSessionRecord('programming-helper', SESSIONS_A1),
+        buildLightPrebuiltSessionRecord('programming-helper', SESSIONS_B1),
+      ],
+      activeSessionId: '',
+    },
+    workspace_state: { phProjects: [] },
+  };
+}
+
 function attachSidebarRenderer(ctx, agents) {
   let html = '';
   Object.assign(ctx, {
@@ -120,44 +173,81 @@ function assertRuntimeGroup(html, runtimeId, expectedKey) {
   assert.ok(containing[0].includes('data-project-key="' + expectedKey + '"'), '运行对话必须位于其归属分组');
 }
 
-function loadFrontend({ realSidebarRenderer = false, onSidebarClickListener } = {}) {
-  const ctx = createFrontendSandbox({
-    t: (key) => key,
-    currentLanguage: 'zh',
-    currentMessages: [],
-    normalizeAgentIdentity: (x) => String(x || '').trim(),
-    getPathLeaf: (value) => String(value || '').replace(/\\/g, '/').split('/').filter(Boolean).pop() || '',
-    toEpochMs: (value) => Date.parse(value || '') || 0,
-    escapeHtml: (value) => String(value ?? '').replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch])),
-    isRuntimeItemActive: () => false,
-    isSidebarRuntimeDisconnected: (entry) => entry?.status === 'disconnected',
-    isRuntimeSuspended: () => false,
-    restartingRuntimeIds: new Set(),
-    _recentlyFinishedRuntimes: new Set(),
-    _agentCallActive: new Map(),
-    _interruptSuppression: new Map(),
-    getActiveSessionId: () => '',
-    getRuntimeId: (agent) => String(agent?.id || '').trim(),
-    getParentAgentId: (agent) => String(agent?.parent_id || '').trim(),
-    // sidebar-render.js 底部的全局事件挂载（app-ui.js 持有元素；沙箱给哑件）
-    agentList: { addEventListener(type, listener) { if (type === 'click') onSidebarClickListener?.(listener); }, classList: { add() {}, remove() {}, toggle() {} }, style: {} },
+/**
+ * 一次用例：真实 classic 装载序 + 真实 sidebar-operations ESM 图。
+ * `probe` 收到沙箱（= 页面 window，含 run/loadSource）与 case 句柄。
+ */
+async function withFrontend({ realSidebarRenderer = false, onSidebarClickListener } = {}, probe) {
+  // fetch 经可变夹具注入：ESM 模块裸引用跑在主 realm，测试内的 window.fetch
+  // 赋值到不了它们（classic 与 ESM 共用同一 impl）
+  const fetchBox = { impl: async () => ({ ok: false, status: 0, json: async () => ({}) }) };
+  return withP2EsmCase({
+    globals: { fetch: (...args) => fetchBox.impl(...args) },
+    classic: (sandbox) => {
+      sandbox.ResizeObserver = ResizeObserverStub;
+      sandbox.marked = marked;
+      sandbox.setInterval = () => 0;
+      sandbox.currentLanguage = 'zh';
+      sandbox.run(`
+        window.__clawAuthReady = new Promise(() => {});
+        applyLanguage = () => {};
+        applyTheme = () => {};
+      `);
+      sandbox.normalizeAgentIdentity = (x) => String(x || '').trim();
+      sandbox.getPathLeaf = (value) => String(value || '').replace(/\\/g, '/').split('/').filter(Boolean).pop() || '';
+      sandbox.toEpochMs = (value) => Date.parse(value || '') || 0;
+      sandbox.escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+      sandbox.isRuntimeItemActive = () => false;
+      sandbox.isSidebarRuntimeDisconnected = (entry) => entry?.status === 'disconnected';
+      sandbox.isRuntimeSuspended = () => false;
+      sandbox.restartingRuntimeIds = new Set();
+      sandbox._recentlyFinishedRuntimes = new Set();
+      sandbox._agentCallActive = new Map();
+      sandbox._interruptSuppression = new Map();
+      sandbox.getActiveSessionId = () => '';
+      sandbox.getRuntimeId = (agent) => String(agent?.id || '').trim();
+      sandbox.getParentAgentId = (agent) => String(agent?.parent_id || '').trim();
+      // sidebar-render.js 底部的全局事件挂载：app-core 在加载期把 #agent-list
+      // 元素取成 classic 词法绑定（`const agentList = document.getElementById(...)`），
+      // 因此桩元素必须经 DOM 查询面在 app-core 之前就位，而不是挂 window 同名属性。
+      const agentListStub = {
+        addEventListener(type, listener) { if (type === 'click') onSidebarClickListener?.(listener); },
+        classList: { add() {}, remove() {}, toggle() {} },
+        style: {},
+      };
+      const realGetElementById = sandbox.document.getElementById.bind(sandbox.document);
+      sandbox.document.getElementById = (id) => (id === 'agent-list' ? agentListStub : realGetElementById(id));
+      for (const file of CLASSIC_STACK) sandbox.loadSource(file);
+      // 轮询协调器宿主（classic app-main 工厂）：ESM 图经 agent-data-loader →
+      // input-actions 触达 poll-coordinator-host，后者在模块求值期取该工厂。
+      sandbox.createPollCoordinatorHost = () => ({
+        run: async () => {}, fastInterval: () => 1000, setTimeout: () => 0, clearTimeout: () => {},
+      });
+      sandbox.window.SIDEBAR_TODO_COLORS = new Set(['white']);
+    },
+  }, async (c) => {
+    // project-data / agent-data-loader 已迁 ESM：前者经 KernelState 桥继续服务
+    // classic 消费方（runtime-status 的项目分组、sidebar-render），后者提供
+    // 下游 loader host 模块求值期取用的工厂。装载顺序即依赖顺序。
+    await c.load('public/src/modules/agent-data-loader.js');
+    await c.load('public/src/modules/project-data.js');
+    // sidebar-operations 的操作生命周期键已撤桥：把真实命名空间注入沙箱，
+    // 用例脚本经 `SidebarOperations.<export>` 调用（窗口上不留同名键）。
+    const ops = await c.load(SIDEBAR_OPERATIONS);
+    c.expose('SidebarOperations', ops);
+    const ctx = c.sandbox;
+    installAgentCallStates(ctx);
+    // 全量 renderAgentList 依赖 app-core 全局；本测试只驱动投影函数，
+    // 操作登记触发的侧栏失效重渲染替换为哑件（不参与断言）。
+    if (!realSidebarRenderer) ctx.run('renderAgentList = () => {};');
+    return probe(ctx, c, {
+      projectData: await c.load('public/src/modules/project-data.js'),
+      setFetch: (impl) => { fetchBox.impl = impl; },
+    });
   });
-  ctx.window.setInterval = () => 0;
-  ctx.window.SIDEBAR_TODO_COLORS = new Set(['white']);
-  ctx.loadSource('public/src/modules/sidebar-operations.js');
-  ctx.loadSource('public/src/modules/project-data.js');
-  ctx.loadSource('public/src/modules/runtime-status.js');
-  ctx.loadSource('public/src/modules/sidebar-render.js');
-  installAgentCallStates(ctx);
-  // 全量 renderAgentList 依赖 app-core 全局；本测试只驱动投影函数，
-  // 操作登记触发的侧栏失效重渲染替换为哑件（不参与断言）。
-  if (!realSidebarRenderer) ctx.run('renderAgentList = () => {};');
-  return ctx;
 }
 
 describe('044 前端投影往返（真实 server 输出 → 真实前端投影）', () => {
-  const ctx = loadFrontend();
-
   // server 侧一次算好 wire children（真实链），前端沙箱内只做投影
   const wireChildren = [
     serverWireChild(SESSIONS_D1, 'rt-d1'),
@@ -165,189 +255,179 @@ describe('044 前端投影往返（真实 server 输出 → 真实前端投影�
     serverWireChild(SESSIONS_B1, 'rt-b1'),
   ];
 
-  const hostFixture = () => ({
-    id: 'programming-helper',
-    source: 'prebuilt',
-    workspace_sessions: {
-      sessions: [
-        buildLightPrebuiltSessionRecord('programming-helper', SESSIONS_D1),
-        buildLightPrebuiltSessionRecord('programming-helper', SESSIONS_A1),
-        buildLightPrebuiltSessionRecord('programming-helper', SESSIONS_B1),
-      ],
-      activeSessionId: '',
-    },
-    workspace_state: { phProjects: [] },
+  test('轮询 child：A/B/D 三会话三个独立组，A/B 不落入目录组', async () => {
+    await withFrontend({}, async (ctx) => {
+      const entries = ctx.run(`(() => {
+        const host = ${JSON.stringify(hostFixture())};
+        const children = ${JSON.stringify(wireChildren)};
+        return collectRuntimeEntriesForPrebuilt(host, children);
+      })()`);
+      assert.equal(entries.length, 3);
+      const bySession = new Map(entries.map((e) => [e.sessionId, e]));
+      // 项目会话：projectKey 身份组，无目录分组
+      assert.equal(bySession.get('a1').projectKey, 'prj:' + PROJECT_A);
+      assert.equal(bySession.get('b1').projectKey, 'prj:' + PROJECT_B);
+      assert.equal(bySession.get('a1').projectDir || '', '');
+      assert.equal(bySession.get('b1').projectDir || '', '');
+      // 目录会话：目录分组（无 projectKey）
+      assert.equal(bySession.get('d1').projectKey || '', '');
+      assert.equal(bySession.get('d1').projectDir, DIR_D);
+      // 归属身份从 wire 透传（真实 buildChildRuntimeAgent 输出）
+      assert.equal(bySession.get('a1').projectId, PROJECT_A);
+      assert.equal(bySession.get('d1').projectId, '');
+    });
   });
 
-  test('轮询 child：A/B/D 三会话三个独立组，A/B 不落入目录组', () => {
-    const entries = ctx.run(`(() => {
-      const host = ${JSON.stringify(hostFixture())};
-      const children = ${JSON.stringify(wireChildren)};
-      return collectRuntimeEntriesForPrebuilt(host, children);
-    })()`);
-    assert.equal(entries.length, 3);
-    const bySession = new Map(entries.map((e) => [e.sessionId, e]));
-    // 项目会话：projectKey 身份组，无目录分组
-    assert.equal(bySession.get('a1').projectKey, 'prj:' + PROJECT_A);
-    assert.equal(bySession.get('b1').projectKey, 'prj:' + PROJECT_B);
-    assert.equal(bySession.get('a1').projectDir || '', '');
-    assert.equal(bySession.get('b1').projectDir || '', '');
-    // 目录会话：目录分组（无 projectKey）
-    assert.equal(bySession.get('d1').projectKey || '', '');
-    assert.equal(bySession.get('d1').projectDir, DIR_D);
-    // 归属身份从 wire 透传（真实 buildChildRuntimeAgent 输出）
-    assert.equal(bySession.get('a1').projectId, PROJECT_A);
-    assert.equal(bySession.get('d1').projectId, '');
-  });
-
-  test('渲染：项目组与目录组分别提供正确身份的「进入」按钮', () => {
-    const html = ctx.run(`(() => {
-      const host = ${JSON.stringify(hostFixture())};
-      const children = ${JSON.stringify(wireChildren)};
-      const entries = collectRuntimeEntriesForPrebuilt(host, children);
-      return renderSidebarChildItems(entries, 'programming-helper');
-    })()`);
-    const groups = html.split('agent-runtime-project-group').slice(1);
-    assert.equal(groups.length, 3, 'three project groups rendered');
-    const parsed = groups.map((chunk) => ({
-      key: /data-project-key="([^"]*)"/.exec(chunk)?.[1] || '',
-      enterBtn: /<button class="project-enter-btn" data-enter-type="([^"]*)" data-enter-target="([^"]*)"/.exec(chunk),
-      runtimeIds: [...chunk.matchAll(/data-agent-id="([^"]*)"/g)].map((m) => m[1]),
-    }));
-    const projectGroups = parsed.filter((g) => g.key.startsWith('prj:'));
-    const dirGroup = parsed.find((g) => !g.key.startsWith('prj:'));
-    assert.equal(projectGroups.length, 2);
-    // 项目身份组以 prj_* 稳定 ID 作为目标，不能退化为名称或目录路径。
-    for (const group of projectGroups) {
-      const [, enterType, enterTarget] = group.enterBtn || [];
-      const projectId = group.key.slice('prj:'.length);
-      assert.equal(enterType, 'ph-project', group.key);
-      assert.equal(enterTarget, projectId, group.key);
-      assert.equal(group.runtimeIds.length, 1, group.key);
-    }
-    assert.deepEqual(
-      projectGroups.map((g) => g.runtimeIds[0]).sort(),
-      ['rt-a1', 'rt-b1'],
-      'project runtimes live in their own identity groups',
-    );
-    // 目录组：唯一持有 d1，进入按钮在（本地目录操作入口不变）
-    assert.ok(dirGroup, 'directory group exists');
-    const [, dirEnterType, dirEnterTarget] = dirGroup.enterBtn || [];
-    assert.equal(dirEnterType, 'ph');
-    assert.equal(dirEnterTarget, DIR_D);
-    assert.deepEqual(dirGroup.runtimeIds, ['rt-d1']);
+  test('渲染：项目组与目录组分别提供正确身份的「进入」按钮', async () => {
+    await withFrontend({}, async (ctx) => {
+      const html = ctx.run(`(() => {
+        const host = ${JSON.stringify(hostFixture())};
+        const children = ${JSON.stringify(wireChildren)};
+        const entries = collectRuntimeEntriesForPrebuilt(host, children);
+        return renderSidebarChildItems(entries, 'programming-helper');
+      })()`);
+      const groups = html.split('agent-runtime-project-group').slice(1);
+      assert.equal(groups.length, 3, 'three project groups rendered');
+      const parsed = groups.map((chunk) => ({
+        key: /data-project-key="([^"]*)"/.exec(chunk)?.[1] || '',
+        enterBtn: /<button class="project-enter-btn" data-enter-type="([^"]*)" data-enter-target="([^"]*)"/.exec(chunk),
+        runtimeIds: [...chunk.matchAll(/data-agent-id="([^"]*)"/g)].map((m) => m[1]),
+      }));
+      const projectGroups = parsed.filter((g) => g.key.startsWith('prj:'));
+      const dirGroup = parsed.find((g) => !g.key.startsWith('prj:'));
+      assert.equal(projectGroups.length, 2);
+      // 项目身份组以 prj_* 稳定 ID 作为目标，不能退化为名称或目录路径。
+      for (const group of projectGroups) {
+        const [, enterType, enterTarget] = group.enterBtn || [];
+        const projectId = group.key.slice('prj:'.length);
+        assert.equal(enterType, 'ph-project', group.key);
+        assert.equal(enterTarget, projectId, group.key);
+        assert.equal(group.runtimeIds.length, 1, group.key);
+      }
+      assert.deepEqual(
+        projectGroups.map((g) => g.runtimeIds[0]).sort(),
+        ['rt-a1', 'rt-b1'],
+        'project runtimes live in their own identity groups',
+      );
+      // 目录组：唯一持有 d1，进入按钮在（本地目录操作入口不变）
+      assert.ok(dirGroup, 'directory group exists');
+      const [, dirEnterType, dirEnterTarget] = dirGroup.enterBtn || [];
+      assert.equal(dirEnterType, 'ph');
+      assert.equal(dirEnterTarget, DIR_D);
+      assert.deepEqual(dirGroup.runtimeIds, ['rt-d1']);
+    });
   });
 
   test('重新点击编程小助手：恢复已保存的项目会话切片', async () => {
     let clickListener = null;
-    const clickCtx = loadFrontend({
-      onSidebarClickListener: (listener) => { clickListener = listener; },
-    });
-    const calls = [];
-    clickCtx.allAgents = [{ id: 'programming-helper', source: 'prebuilt' }];
-    clickCtx.window.handlePrebuiltAgentClick = async (agentId) => calls.push(['workspace', agentId]);
-    clickCtx.ensurePhProjectEntitiesLoaded = async () => calls.push(['projects-loaded']);
-    clickCtx.getPhBrowsingTarget = () => ({ type: 'project', id: PROJECT_A });
-    clickCtx.phLoadProjectSessions = async (target) => calls.push(['sessions', target]);
+    await withFrontend({ onSidebarClickListener: (listener) => { clickListener = listener; } }, async (clickCtx, c, fx) => {
+      const calls = [];
+      clickCtx.allAgents = [{ id: 'programming-helper', source: 'prebuilt' }];
+      clickCtx.window.handlePrebuiltAgentClick = async (agentId) => calls.push(['workspace', agentId]);
+      clickCtx.ensurePhProjectEntitiesLoaded = async () => calls.push(['projects-loaded']);
+      // 浏览目标经真实数据面写入（project-data 的 ESM 导出）
+      fx.projectData.setPhBrowsingTarget('programming-helper', { type: 'project', id: PROJECT_A });
+      clickCtx.phLoadProjectSessions = async (target) => calls.push(['sessions', target]);
 
-    const item = { dataset: { agentPrebuilt: 'true', agentId: 'programming-helper' }, classList: { contains: () => false } };
-    const event = { target: { closest(selector) { return selector === '.agent-item' ? item : null; } } };
-    await clickListener(event);
-    assert.deepEqual(JSON.parse(JSON.stringify(calls)), [
-      ['workspace', 'programming-helper'],
-      ['projects-loaded'],
-      ['sessions', { projectId: PROJECT_A }],
-    ]);
+      const item = { dataset: { agentPrebuilt: 'true', agentId: 'programming-helper' }, classList: { contains: () => false } };
+      const event = { target: { closest(selector) { return selector === '.agent-item' ? item : null; } } };
+      await clickListener(event);
+      assert.deepEqual(JSON.parse(JSON.stringify(calls)), [
+        ['workspace', 'programming-helper'],
+        ['projects-loaded'],
+        ['sessions', { projectId: PROJECT_A }],
+      ]);
+    });
   });
 
   test('重新点击编程小助手：恢复默认目录会话切片', async () => {
     let clickListener = null;
-    const clickCtx = loadFrontend({
-      onSidebarClickListener: (listener) => { clickListener = listener; },
-    });
-    const calls = [];
-    clickCtx.allAgents = [{ id: 'programming-helper', source: 'prebuilt' }];
-    clickCtx.getAgentWorkspaceState = () => ({ openDirectory: DIR_D });
-    clickCtx.window.handlePrebuiltAgentClick = async (agentId) => calls.push(['workspace', agentId]);
-    clickCtx.ensurePhProjectEntitiesLoaded = async () => calls.push(['projects-loaded']);
-    clickCtx.getPhBrowsingTarget = () => ({ type: 'dir', id: 'dir:' + DIR_D.toLowerCase(), openDirectory: DIR_D });
-    clickCtx.phLoadProjectSessions = async (target) => calls.push(['sessions', target]);
+    await withFrontend({ onSidebarClickListener: (listener) => { clickListener = listener; } }, async (clickCtx, c, fx) => {
+      const calls = [];
+      clickCtx.allAgents = [{ id: 'programming-helper', source: 'prebuilt' }];
+      clickCtx.getAgentWorkspaceState = () => ({ openDirectory: DIR_D });
+      clickCtx.window.handlePrebuiltAgentClick = async (agentId) => calls.push(['workspace', agentId]);
+      clickCtx.ensurePhProjectEntitiesLoaded = async () => calls.push(['projects-loaded']);
+      fx.projectData.setPhBrowsingTarget('programming-helper', { type: 'dir', id: 'dir:' + DIR_D.toLowerCase(), openDirectory: DIR_D });
+      clickCtx.phLoadProjectSessions = async (target) => calls.push(['sessions', target]);
 
-    const item = { dataset: { agentPrebuilt: 'true', agentId: 'programming-helper' }, classList: { contains: () => false } };
-    const event = { target: { closest(selector) { return selector === '.agent-item' ? item : null; } } };
-    await clickListener(event);
-    assert.deepEqual(JSON.parse(JSON.stringify(calls)), [
-      ['workspace', 'programming-helper'],
-      ['projects-loaded'],
-      ['sessions', { projectDir: DIR_D }],
-    ]);
+      const item = { dataset: { agentPrebuilt: 'true', agentId: 'programming-helper' }, classList: { contains: () => false } };
+      const event = { target: { closest(selector) { return selector === '.agent-item' ? item : null; } } };
+      await clickListener(event);
+      assert.deepEqual(JSON.parse(JSON.stringify(calls)), [
+        ['workspace', 'programming-helper'],
+        ['projects-loaded'],
+        ['sessions', { projectDir: DIR_D }],
+      ]);
+    });
   });
 
   test('点击项目进入按钮：先进入编程小助手，再按项目 ID 切换', async () => {
     let clickListener = null;
-    const clickCtx = loadFrontend({
-      onSidebarClickListener: (listener) => { clickListener = listener; },
-    });
-    const calls = [];
-    clickCtx.window.handlePrebuiltAgentClick = async (agentId) => calls.push(['workspace', agentId]);
-    clickCtx.window.phSwitchProject = async (targetId) => calls.push(['target', targetId]);
-    assert.equal(typeof clickListener, 'function', 'sidebar click handler is registered');
+    await withFrontend({ onSidebarClickListener: (listener) => { clickListener = listener; } }, async (clickCtx) => {
+      const calls = [];
+      clickCtx.window.handlePrebuiltAgentClick = async (agentId) => calls.push(['workspace', agentId]);
+      clickCtx.window.phSwitchProject = async (targetId) => calls.push(['target', targetId]);
+      assert.equal(typeof clickListener, 'function', 'sidebar click handler is registered');
 
-    const button = { dataset: { enterType: 'ph-project', enterTarget: PROJECT_A } };
-    const event = {
-      target: {
-        closest(selector) {
-          if (selector === '.project-enter-btn') return button;
-          return null;
+      const button = { dataset: { enterType: 'ph-project', enterTarget: PROJECT_A } };
+      const event = {
+        target: {
+          closest(selector) {
+            if (selector === '.project-enter-btn') return button;
+            return null;
+          },
         },
-      },
-    };
-    await clickListener(event);
-    assert.deepEqual(calls, [
-      ['workspace', 'programming-helper'],
-      ['target', PROJECT_A],
-    ]);
+      };
+      await clickListener(event);
+      assert.deepEqual(calls, [
+        ['workspace', 'programming-helper'],
+        ['target', PROJECT_A],
+      ]);
+    });
   });
 
-  test('侧栏项目标签使用实体名称，同名项目仍按 ID 独立分组', () => {
-    const named = loadFrontend();
-    named.window.ClawFW.phProjectEntities.projects = [
-      { id: PROJECT_A, name: '发布整理 <A>' },
-      { id: PROJECT_B, name: '发布整理 <A>' },
-    ];
-    const html = named.run(`renderSidebarChildItems(
-      collectRuntimeEntriesForPrebuilt(${JSON.stringify(hostFixture())}, ${JSON.stringify(wireChildren)}),
-      'programming-helper'
-    )`);
-    const labels = [...html.matchAll(/class="project-collapse-label">([^<]*)</g)].map((m) => m[1]);
-    assert.equal(labels.filter((label) => label === '发布整理 &lt;A&gt;').length, 2);
-    assert.match(html, new RegExp('data-project-key="prj:' + PROJECT_A + '"'));
-    assert.match(html, new RegExp('data-project-key="prj:' + PROJECT_B + '"'));
-    assert.ok(!labels.some((label) => /^项目 [a-f0-9]+$/.test(label)));
+  test('侧栏项目标签使用实体名称，同名项目仍按 ID 独立分组', async () => {
+    await withFrontend({}, async (named) => {
+      named.window.ClawFW.phProjectEntities.projects = [
+        { id: PROJECT_A, name: '发布整理 <A>' },
+        { id: PROJECT_B, name: '发布整理 <A>' },
+      ];
+      const html = named.run(`renderSidebarChildItems(
+        collectRuntimeEntriesForPrebuilt(${JSON.stringify(hostFixture())}, ${JSON.stringify(wireChildren)}),
+        'programming-helper'
+      )`);
+      const labels = [...html.matchAll(/class="project-collapse-label">([^<]*)</g)].map((m) => m[1]);
+      assert.equal(labels.filter((label) => label === '发布整理 &lt;A&gt;').length, 2);
+      assert.match(html, new RegExp('data-project-key="prj:' + PROJECT_A + '"'));
+      assert.match(html, new RegExp('data-project-key="prj:' + PROJECT_B + '"'));
+      assert.ok(!labels.some((label) => /^项目 [a-f0-9]+$/.test(label)));
+    });
   });
 
   test('首次侧栏加载即显示项目名，无须先开首页；改名后实际重绘', async () => {
-    const named = loadFrontend({ realSidebarRenderer: true });
-    const agents = [hostFixture(), ...wireChildren];
-    let html = '';
-    let requests = 0;
-    named.window.ClawSidebarLayout = {
-      load: async () => {}, isInteracting: () => false, signature: () => '',
-      render() {
-        html = named.run('renderSidebarChildItems(collectRuntimeEntriesForPrebuilt(allAgents[0], allAgents), "programming-helper")');
-      },
-    };
-    Object.assign(named, {
-      performance: { now: () => 0 }, loadAgentsInFlight: null,
-      loadedAgentDetailIds: new Set(), suppressSidebarRerender: false,
-      pendingPrebuiltAgentIds: new Set(), focusedAgentId: 'programming-helper',
-      groupConnectedAgents: () => ({ external: [] }),
-      externalAgentList: {}, externalGroup: { style: {} }, externalCount: {},
-      updateCurrentAgentChrome() {}, renderFeaturePanel() {},
-      refreshAgentCallStates: async () => {}, isRemoteNamespaceAgentId: () => false,
-      getAgentRuntimeId: (agent) => agent.runtime_session_id || '',
-      invoke: async () => agents,
-      fetch: async (url) => {
+    await withFrontend({ realSidebarRenderer: true }, async (named, c, fx) => {
+      const agents = [hostFixture(), ...wireChildren];
+      let html = '';
+      let requests = 0;
+      named.window.ClawSidebarLayout = {
+        load: async () => {}, isInteracting: () => false, signature: () => '',
+        render() {
+          html = named.run('renderSidebarChildItems(collectRuntimeEntriesForPrebuilt(allAgents[0], allAgents), "programming-helper")');
+        },
+      };
+      Object.assign(named, {
+        performance: { now: () => 0 }, loadAgentsInFlight: null,
+        loadedAgentDetailIds: new Set(), suppressSidebarRerender: false,
+        pendingPrebuiltAgentIds: new Set(), focusedAgentId: 'programming-helper',
+        groupConnectedAgents: () => ({ external: [] }),
+        externalAgentList: {}, externalGroup: { style: {} }, externalCount: {},
+        updateCurrentAgentChrome() {}, renderFeaturePanel() {},
+        refreshAgentCallStates: async () => {}, isRemoteNamespaceAgentId: () => false,
+        getAgentRuntimeId: (agent) => agent.runtime_session_id || '',
+        invoke: async () => agents,
+      });
+      fx.setFetch(async (url) => {
         if (url === '/api/agents') return { ok: true, json: async () => ({ agents: [] }) };
         assert.equal(url, '/protoclaw/ph_project/projects?agentId=programming-helper');
         requests += 1;
@@ -355,104 +435,107 @@ describe('044 前端投影往返（真实 server 输出 → 真实前端投影�
           { id: PROJECT_A, name: requests === 1 ? '发布整理' : '前端体验', workDirectory: DIR_D },
           { id: PROJECT_B, name: '另一个项目', workDirectory: DIR_D },
         ] }) };
-      },
+      });
+      await named.run('loadAgents()');
+      assert.match(html, /class="project-collapse-label">发布整理</);
+      assert.match(html, /class="project-collapse-label">另一个项目</);
+      await named.run('loadAgents()');
+      assert.equal(requests, 1, '普通侧栏轮询复用已加载清单');
+      await named.run('ensurePhProjectEntitiesLoaded(true)');
+      named.run('renderAgentList()');
+      assert.match(html, /class="project-collapse-label">前端体验</);
+      assert.doesNotMatch(html, /class="project-collapse-label">发布整理</);
     });
-    await named.run('loadAgents()');
-    assert.match(html, /class="project-collapse-label">发布整理</);
-    assert.match(html, /class="project-collapse-label">另一个项目</);
-    await named.run('loadAgents()');
-    assert.equal(requests, 1, '普通侧栏轮询复用已加载清单');
-    await named.run('ensurePhProjectEntitiesLoaded(true)');
-    named.run('renderAgentList()');
-    assert.match(html, /class="project-collapse-label">前端体验</);
-    assert.doesNotMatch(html, /class="project-collapse-label">发布整理</);
   });
 
-  test('侧栏渲染去重在同一运行时项目归属变化后重新投影', () => {
-    const live = loadFrontend({ realSidebarRenderer: true });
-    const host = hostFixture();
-    const runtime = { ...wireChildren[1] };
-    const html = attachSidebarRenderer(live, [host, runtime]);
-    live.run('renderAgentList()');
-    assertRuntimeGroup(html(), 'rt-a1', 'prj:' + PROJECT_A);
+  test('侧栏渲染去重在同一运行时项目归属变化后重新投影', async () => {
+    await withFrontend({ realSidebarRenderer: true }, async (live) => {
+      const host = hostFixture();
+      const runtime = { ...wireChildren[1] };
+      const html = attachSidebarRenderer(live, [host, runtime]);
+      live.run('renderAgentList()');
+      assertRuntimeGroup(html(), 'rt-a1', 'prj:' + PROJECT_A);
 
-    runtime.project_id = '';
-    live.run('renderAgentList()');
-    assertRuntimeGroup(html(), 'rt-a1', DIR_D);
+      runtime.project_id = '';
+      live.run('renderAgentList()');
+      assertRuntimeGroup(html(), 'rt-a1', DIR_D);
+    });
   });
 
   test('线程轮询纠正旧目录分组，重启、项目改名和归属转移不再被缓存覆盖', async () => {
-    const live = loadFrontend({ realSidebarRenderer: true });
-    const thread = {
-      threadId: 'thread-a1', agentId: 'programming-helper',
-      headSessionId: 'a1', sessionIds: ['a1'], status: 'open',
-      headRuntimeRunning: true,
-    };
-    live.window.ClawThreads = { threads: [thread] };
-    const host = hostFixture();
-    const runtime = { ...wireChildren[1], project_id: '' };
-    let agents = [host, runtime];
-    const html = attachSidebarRenderer(live, []);
-    const projects = live.window.ClawFW.phProjectEntities;
-    projects.loaded = true;
-    projects.projects = [{ id: PROJECT_A, name: '项目 A' }, { id: PROJECT_B, name: '项目 B' }];
-    Object.assign(live, {
-      performance: { now: () => 0 }, loadAgentsInFlight: null,
-      loadedAgentDetailIds: new Set(), suppressSidebarRerender: false,
-      invoke: async () => agents,
-      fetch: async () => ({ ok: true, json: async () => ({ agents: [] }) }),
-      refreshAgentCallStates: async () => {},
+    await withFrontend({ realSidebarRenderer: true }, async (live, c, fx) => {
+      fx.setFetch(async () => ({ ok: true, json: async () => ({ agents: [] }) }));
+      const thread = {
+        threadId: 'thread-a1', agentId: 'programming-helper',
+        headSessionId: 'a1', sessionIds: ['a1'], status: 'open',
+        headRuntimeRunning: true,
+      };
+      live.window.ClawThreads = { threads: [thread] };
+      const host = hostFixture();
+      const runtime = { ...wireChildren[1], project_id: '' };
+      let agents = [host, runtime];
+      const html = attachSidebarRenderer(live, []);
+      const projects = live.window.ClawFW.phProjectEntities;
+      projects.loaded = true;
+      projects.projects = [{ id: PROJECT_A, name: '项目 A' }, { id: PROJECT_B, name: '项目 B' }];
+      Object.assign(live, {
+        performance: { now: () => 0 }, loadAgentsInFlight: null,
+        loadedAgentDetailIds: new Set(), suppressSidebarRerender: false,
+        invoke: async () => agents,
+        refreshAgentCallStates: async () => {},
+      });
+      const refresh = () => live.run('loadAgents()');
+      await refresh();
+      assertRuntimeGroup(html(), 'rt-a1', DIR_D);
+
+      runtime.project_id = PROJECT_A;
+      await refresh();
+      assertRuntimeGroup(html(), 'rt-a1', 'prj:' + PROJECT_A);
+      assert.match(html(), /class="project-collapse-label">项目 A</);
+
+      projects.projects[0].name = '项目 A 改名';
+      await refresh();
+      assert.match(html(), /class="project-collapse-label">项目 A 改名</);
+      assertRuntimeGroup(html(), 'rt-a1', 'prj:' + PROJECT_A);
+
+      // 无 runtime 且无明确接续事务时，旧线程快照不能维持一个虚态叶子。
+      agents = [host];
+      await refresh();
+      assert.ok(!html().includes('data-agent-id="rt-a1"'));
+
+      const restarted = { ...wireChildren[1], id: 'rt-a1-restarted', runtime_session_id: 'rt-a1-restarted' };
+      agents = [host, restarted];
+      await refresh();
+      assertRuntimeGroup(html(), restarted.id, 'prj:' + PROJECT_A);
+      assert.ok(!html().includes('data-agent-id="rt-a1"'), '旧运行时条目已被替换');
+
+      restarted.project_id = PROJECT_B;
+      await refresh();
+      assertRuntimeGroup(html(), restarted.id, 'prj:' + PROJECT_B);
+      restarted.project_id = '';
+      await refresh();
+      assertRuntimeGroup(html(), restarted.id, DIR_D);
     });
-    const refresh = () => live.run('loadAgents()');
-    await refresh();
-    assertRuntimeGroup(html(), 'rt-a1', DIR_D);
-
-    runtime.project_id = PROJECT_A;
-    await refresh();
-    assertRuntimeGroup(html(), 'rt-a1', 'prj:' + PROJECT_A);
-    assert.match(html(), /class="project-collapse-label">项目 A</);
-
-    projects.projects[0].name = '项目 A 改名';
-    await refresh();
-    assert.match(html(), /class="project-collapse-label">项目 A 改名</);
-    assertRuntimeGroup(html(), 'rt-a1', 'prj:' + PROJECT_A);
-
-    // 无 runtime 且无明确接续事务时，旧线程快照不能维持一个虚态叶子。
-    agents = [host];
-    await refresh();
-    assert.ok(!html().includes('data-agent-id="rt-a1"'));
-
-    const restarted = { ...wireChildren[1], id: 'rt-a1-restarted', runtime_session_id: 'rt-a1-restarted' };
-    agents = [host, restarted];
-    await refresh();
-    assertRuntimeGroup(html(), restarted.id, 'prj:' + PROJECT_A);
-    assert.ok(!html().includes('data-agent-id="rt-a1"'), '旧运行时条目已被替换');
-
-    restarted.project_id = PROJECT_B;
-    await refresh();
-    assertRuntimeGroup(html(), restarted.id, 'prj:' + PROJECT_B);
-    restarted.project_id = '';
-    await refresh();
-    assertRuntimeGroup(html(), restarted.id, DIR_D);
   });
 
-  test('重启期间只有宿主运行时快照且项目会话不在目录分页中，仍按项目分组', () => {
-    const live = loadFrontend();
-    const host = hostFixture();
-    host.workspace_sessions.sessions = [];
-    Object.assign(host, {
-      connected: true, runtime_session_id: 'rt-a1-restarted',
-      active_workspace_session_id: 'a1',
-      active_workspace_session_dir: DIR_D,
-      active_workspace_session_project_id: PROJECT_A,
+  test('重启期间只有宿主运行时快照且项目会话不在目录分页中，仍按项目分组', async () => {
+    await withFrontend({}, async (live) => {
+      const host = hostFixture();
+      host.workspace_sessions.sessions = [];
+      Object.assign(host, {
+        connected: true, runtime_session_id: 'rt-a1-restarted',
+        active_workspace_session_id: 'a1',
+        active_workspace_session_dir: DIR_D,
+        active_workspace_session_project_id: PROJECT_A,
+      });
+      host.sidebar_threads = live.window.ClawThreads?.threads || [];
+      live.host = host;
+      const entries = live.run('collectRuntimeEntriesForPrebuilt(host, [])');
+      assert.equal(entries.length, 1);
+      assert.equal(entries[0].projectId, PROJECT_A);
+      assert.equal(entries[0].projectKey, 'prj:' + PROJECT_A);
+      assert.equal(entries[0].projectDir || '', '');
     });
-    host.sidebar_threads = live.window.ClawThreads?.threads || [];
-    live.host = host;
-    const entries = live.run('collectRuntimeEntriesForPrebuilt(host, [])');
-    assert.equal(entries.length, 1);
-    assert.equal(entries[0].projectId, PROJECT_A);
-    assert.equal(entries[0].projectKey, 'prj:' + PROJECT_A);
-    assert.equal(entries[0].projectDir || '', '');
   });
 
   test('索引落盘后重新发现的运行时仍属于项目：真实 discovery → connected → 侧栏渲染', async () => {
@@ -476,44 +559,47 @@ describe('044 前端投影往返（真实 server 输出 → 真实前端投影�
     });
     const agents = await query.getConnectedAgents();
     assert.equal(agents.find((agent) => agent.id === 'rt-recovered').project_id, PROJECT_A);
-    const live = loadFrontend({ realSidebarRenderer: true });
-    const html = attachSidebarRenderer(live, agents);
-    live.run('renderAgentList()');
-    assertRuntimeGroup(html(), 'rt-recovered', 'prj:' + PROJECT_A);
+    await withFrontend({ realSidebarRenderer: true }, async (live) => {
+      const html = attachSidebarRenderer(live, agents);
+      live.run('renderAgentList()');
+      assertRuntimeGroup(html(), 'rt-recovered', 'prj:' + PROJECT_A);
+    });
   });
 
-  test('线程宿主快照已含 head runtime 而 child 未到时只呈现一条项目对话', () => {
-    const live = loadFrontend({ realSidebarRenderer: true });
-    const host = hostFixture();
-    host.workspace_sessions.sessions = [];
-    Object.assign(host, { connected: true, runtime_session_id: 'rt-head', active_workspace_session_id: 'a1',
-      active_workspace_session_project_id: PROJECT_A, active_workspace_session_dir: DIR_D });
-    live.window.ClawThreads = { threads: [{ threadId: 'wt-host', agentId: 'programming-helper',
-      headSessionId: 'a1', sessionIds: ['a1'], headRuntimeRunning: true, headProjectId: PROJECT_A,
-      headProjectDir: DIR_D, status: 'open', title: '项目对话',
-    }] };
-    host.sidebar_threads = live.window.ClawThreads?.threads || [];
-    live.host = host;
-    const entries = live.run('collectRuntimeEntriesForPrebuilt(host, [])');
-    assert.equal(entries.length, 1, '宿主合成 head 与线程占位不能各占一行');
-    assert.equal(entries[0].runtimeId, 'rt-head');
-    assert.equal(entries[0].threadId, 'wt-host');
-    assert.equal(entries[0].projectKey, 'prj:' + PROJECT_A);
+  test('线程宿主快照已含 head runtime 而 child 未到时只呈现一条项目对话', async () => {
+    await withFrontend({ realSidebarRenderer: true }, async (live) => {
+      const host = hostFixture();
+      host.workspace_sessions.sessions = [];
+      Object.assign(host, { connected: true, runtime_session_id: 'rt-head', active_workspace_session_id: 'a1',
+        active_workspace_session_project_id: PROJECT_A, active_workspace_session_dir: DIR_D });
+      live.window.ClawThreads = { threads: [{ threadId: 'wt-host', agentId: 'programming-helper',
+        headSessionId: 'a1', sessionIds: ['a1'], headRuntimeRunning: true, headProjectId: PROJECT_A,
+        headProjectDir: DIR_D, status: 'open', title: '项目对话',
+      }] };
+      host.sidebar_threads = live.window.ClawThreads?.threads || [];
+      live.host = host;
+      const entries = live.run('collectRuntimeEntriesForPrebuilt(host, [])');
+      assert.equal(entries.length, 1, '宿主合成 head 与线程占位不能各占一行');
+      assert.equal(entries[0].runtimeId, 'rt-head');
+      assert.equal(entries[0].threadId, 'wt-host');
+      assert.equal(entries[0].projectKey, 'prj:' + PROJECT_A);
+    });
   });
 
-  test('接续中途首次打开页面时，线程占位也保留项目归属', () => {
-    const live = loadFrontend({ realSidebarRenderer: true });
-    const host = hostFixture();
-    host.workspace_sessions.sessions = [];
-    live.window.ClawThreads = { threads: [{
-      threadId: 'wt-cold', agentId: 'programming-helper', headSessionId: 'a1', sessionIds: ['a1'],
-      title: '项目对话', headProjectId: PROJECT_A, headProjectDir: DIR_D,
-      status: 'rotating', handoffStartedAt: Date.now(),
-    }] };
-    host.sidebar_threads = live.window.ClawThreads.threads;
-    const html = attachSidebarRenderer(live, [host]);
-    live.run('renderAgentList()');
-    assertRuntimeGroup(html(), 'thread:wt-cold', 'prj:' + PROJECT_A);
+  test('接续中途首次打开页面时，线程占位也保留项目归属', async () => {
+    await withFrontend({ realSidebarRenderer: true }, async (live) => {
+      const host = hostFixture();
+      host.workspace_sessions.sessions = [];
+      live.window.ClawThreads = { threads: [{
+        threadId: 'wt-cold', agentId: 'programming-helper', headSessionId: 'a1', sessionIds: ['a1'],
+        title: '项目对话', headProjectId: PROJECT_A, headProjectDir: DIR_D,
+        status: 'rotating', handoffStartedAt: Date.now(),
+      }] };
+      host.sidebar_threads = live.window.ClawThreads.threads;
+      const html = attachSidebarRenderer(live, [host]);
+      live.run('renderAgentList()');
+      assertRuntimeGroup(html(), 'thread:wt-cold', 'prj:' + PROJECT_A);
+    });
   });
 
   test('接续血缘由索引经 discovery 与 wire 投影后只关联来源线程', async () => {
@@ -525,94 +611,99 @@ describe('044 前端投影往返（真实 server 输出 → 真实前端投影�
       agentId: 'programming-helper', sessionId: 'successor', sessionMeta: meta,
     });
     assert.equal(wire.source_session_id, 'a1');
-    const live = loadFrontend();
-    live.window.ClawThreads = { threads: [{
-      threadId: 'wt-a', agentId: 'programming-helper', headSessionId: 'a1', sessionIds: ['a1'],
-      title: '来源线程', status: 'rotating', handoffStartedAt: Date.now(),
-    }] };
-    live.wire = wire;
-    live.host = { ...hostFixture(), sidebar_threads: live.window.ClawThreads.threads };
-    const entries = live.run('collectRuntimeEntriesForPrebuilt(host, [wire])');
-    assert.equal(entries.some(e => e.runtimeId === 'rt-successor'), false, 'commit 前 successor 不应作为另一条对话');
-    assert.equal(entries.filter(e => e.threadId === 'wt-a').length, 1);
+    await withFrontend({}, async (live) => {
+      live.window.ClawThreads = { threads: [{
+        threadId: 'wt-a', agentId: 'programming-helper', headSessionId: 'a1', sessionIds: ['a1'],
+        title: '来源线程', status: 'rotating', handoffStartedAt: Date.now(),
+      }] };
+      live.wire = wire;
+      live.host = { ...hostFixture(), sidebar_threads: live.window.ClawThreads.threads };
+      const entries = live.run('collectRuntimeEntriesForPrebuilt(host, [wire])');
+      assert.equal(entries.some(e => e.runtimeId === 'rt-successor'), false, 'commit 前 successor 不应作为另一条对话');
+      assert.equal(entries.filter(e => e.threadId === 'wt-a').length, 1);
+    });
   });
 
-  test('宿主快照补齐项目身份或目录后实际重绘，不依赖 session 分页或 runtime 变化', () => {
-    const live = loadFrontend({ realSidebarRenderer: true });
-    const host = hostFixture();
-    host.workspace_sessions.sessions = [];
-    Object.assign(host, {
-      connected: true, runtime_session_id: 'rt-host', active_workspace_session_id: 'a1',
-      active_workspace_session_dir: DIR_D, active_workspace_session_project_id: '',
+  test('宿主快照补齐项目身份或目录后实际重绘，不依赖 session 分页或 runtime 变化', async () => {
+    await withFrontend({ realSidebarRenderer: true }, async (live) => {
+      const host = hostFixture();
+      host.workspace_sessions.sessions = [];
+      Object.assign(host, {
+        connected: true, runtime_session_id: 'rt-host', active_workspace_session_id: 'a1',
+        active_workspace_session_dir: DIR_D, active_workspace_session_project_id: '',
+      });
+      const html = attachSidebarRenderer(live, [host]);
+      live.run('renderAgentList()');
+      assertRuntimeGroup(html(), 'rt-host', DIR_D);
+      host.active_workspace_session_project_id = PROJECT_A;
+      live.run('renderAgentList()');
+      assertRuntimeGroup(html(), 'rt-host', 'prj:' + PROJECT_A);
+      host.active_workspace_session_project_id = '';
+      host.active_workspace_session_dir = 'D:/other-dir';
+      live.run('renderAgentList()');
+      assertRuntimeGroup(html(), 'rt-host', 'D:/other-dir');
     });
-    const html = attachSidebarRenderer(live, [host]);
-    live.run('renderAgentList()');
-    assertRuntimeGroup(html(), 'rt-host', DIR_D);
-    host.active_workspace_session_project_id = PROJECT_A;
-    live.run('renderAgentList()');
-    assertRuntimeGroup(html(), 'rt-host', 'prj:' + PROJECT_A);
-    host.active_workspace_session_project_id = '';
-    host.active_workspace_session_dir = 'D:/other-dir';
-    live.run('renderAgentList()');
-    assertRuntimeGroup(html(), 'rt-host', 'D:/other-dir');
   });
 
   test('项目名称请求失败保留旧清单，下次侧栏加载可以重试', async () => {
-    const named = loadFrontend();
-    const store = named.window.ClawFW.phProjectEntities;
-    store.projects = [{ id: PROJECT_A, name: '已有名称' }];
-    named.fetch = async () => ({ ok: false, status: 503 });
-    await named.run('ensurePhProjectEntitiesLoaded()');
-    assert.equal(store.loaded, false);
-    assert.equal(store.projects[0].name, '已有名称');
-    named.fetch = async () => ({ ok: true, json: async () => ({ projects: [
-      { id: PROJECT_A, name: '恢复后的名称', workDirectory: DIR_D },
-    ] }) });
-    await named.run('ensurePhProjectEntitiesLoaded()');
-    assert.equal(store.loaded, true);
-    assert.equal(store.projects[0].name, '恢复后的名称');
+    await withFrontend({}, async (named, c, fx) => {
+      const store = named.window.ClawFW.phProjectEntities;
+      store.projects = [{ id: PROJECT_A, name: '已有名称' }];
+      fx.setFetch(async () => ({ ok: false, status: 503 }));
+      await named.run('ensurePhProjectEntitiesLoaded()');
+      assert.equal(store.loaded, false);
+      assert.equal(store.projects[0].name, '已有名称');
+      fx.setFetch(async () => ({ ok: true, json: async () => ({ projects: [
+        { id: PROJECT_A, name: '恢复后的名称', workDirectory: DIR_D },
+      ] }) }));
+      await named.run('ensurePhProjectEntitiesLoaded()');
+      assert.equal(store.loaded, true);
+      assert.equal(store.projects[0].name, '恢复后的名称');
+    });
   });
 
-  test('乐观 child：项目操作（projectId）合成条目进项目身份组；目录身份不丢', () => {
-    const result = ctx.run(`(() => {
-      // 归一化契约：projectId 优先，projectDir 清空（文件环境不作分组）
-      const projectOp = beginSidebarOperation({
-        type: 'create', kind: 'summary', phase: 'generating',
-        agentId: 'programming-helper', sourceSessionId: 'a1',
-        projectId: '${PROJECT_A}', projectDir: '${DIR_D}',
-      });
-      const normalized = getSidebarOperation(projectOp.operationId);
-      const dirOp = beginSidebarOperation({
-        type: 'create', kind: 'summary', phase: 'generating',
-        agentId: 'programming-helper', sourceSessionId: 'd1',
-        projectDir: '${DIR_D}',
-      });
-      const noIdentityOp = beginSidebarOperation({
-        type: 'create', kind: 'summary', phase: 'generating',
-        agentId: 'programming-helper', sourceSessionId: 'x1',
-      });
-      const host = ${JSON.stringify(hostFixture())};
-      const entries = collectRuntimeEntriesForPrebuilt(host, []);
-      return {
-        normalized: { projectId: normalized.projectId, projectDir: normalized.projectDir },
-        entries: entries.map((e) => ({
-          sessionId: e.sessionId, source: e.source,
-          projectKey: e.projectKey || '', projectDir: e.projectDir || '',
-        })),
-        opIds: { projectOp: projectOp.operationId, dirOp: dirOp.operationId, noIdentityOp: noIdentityOp.operationId },
-      };
-    })()`);
-    // 归一：projectId 保留，projectDir 被清空
-    assert.equal(result.normalized.projectId, PROJECT_A);
-    assert.equal(result.normalized.projectDir, '');
-    // 两条带身份的操作合成乐观条目；无身份操作被 PH 守卫拒绝
-    const optimistic = result.entries.filter((e) => e.source === 'operation-pending');
-    assert.equal(optimistic.length, 2);
-    const bySession = new Map(optimistic.map((e) => [e.sessionId, e]));
-    assert.equal(bySession.get('a1').projectKey, 'prj:' + PROJECT_A);
-    assert.equal(bySession.get('a1').projectDir, '');
-    assert.equal(bySession.get('d1').projectKey, '');
-    assert.equal(bySession.get('d1').projectDir, DIR_D);
-    assert.equal(bySession.has('x1'), false, 'identity-less operation yields no synthetic entry');
+  test('乐观 child：项目操作（projectId）合成条目进项目身份组；目录身份不丢', async () => {
+    await withFrontend({}, async (ctx) => {
+      const result = ctx.run(`(() => {
+        // 归一化契约：projectId 优先，projectDir 清空（文件环境不作分组）
+        const projectOp = SidebarOperations.beginSidebarOperation({
+          type: 'create', kind: 'summary', phase: 'generating',
+          agentId: 'programming-helper', sourceSessionId: 'a1',
+          projectId: '${PROJECT_A}', projectDir: '${DIR_D}',
+        });
+        const normalized = SidebarOperations.getSidebarOperation(projectOp.operationId);
+        const dirOp = SidebarOperations.beginSidebarOperation({
+          type: 'create', kind: 'summary', phase: 'generating',
+          agentId: 'programming-helper', sourceSessionId: 'd1',
+          projectDir: '${DIR_D}',
+        });
+        const noIdentityOp = SidebarOperations.beginSidebarOperation({
+          type: 'create', kind: 'summary', phase: 'generating',
+          agentId: 'programming-helper', sourceSessionId: 'x1',
+        });
+        const host = ${JSON.stringify(hostFixture())};
+        const entries = collectRuntimeEntriesForPrebuilt(host, []);
+        return {
+          normalized: { projectId: normalized.projectId, projectDir: normalized.projectDir },
+          entries: entries.map((e) => ({
+            sessionId: e.sessionId, source: e.source,
+            projectKey: e.projectKey || '', projectDir: e.projectDir || '',
+          })),
+          opIds: { projectOp: projectOp.operationId, dirOp: dirOp.operationId, noIdentityOp: noIdentityOp.operationId },
+        };
+      })()`);
+      // 归一：projectId 保留，projectDir 被清空
+      assert.equal(result.normalized.projectId, PROJECT_A);
+      assert.equal(result.normalized.projectDir, '');
+      // 两条带身份的操作合成乐观条目；无身份操作被 PH 守卫拒绝
+      const optimistic = result.entries.filter((e) => e.source === 'operation-pending');
+      assert.equal(optimistic.length, 2);
+      const bySession = new Map(optimistic.map((e) => [e.sessionId, e]));
+      assert.equal(bySession.get('a1').projectKey, 'prj:' + PROJECT_A);
+      assert.equal(bySession.get('a1').projectDir, '');
+      assert.equal(bySession.get('d1').projectKey, '');
+      assert.equal(bySession.get('d1').projectDir, DIR_D);
+      assert.equal(bySession.has('x1'), false, 'identity-less operation yields no synthetic entry');
+    });
   });
 });

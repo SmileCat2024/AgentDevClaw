@@ -7,8 +7,13 @@
  *
  * 视图模式：list / detail / edit
  *
- * 依赖（全局）：escapeHtml, currentLanguage
+ * ESM 化（P2 消费方批次 7）：命名导出 openMcpGateway（app-ui 设置菜单入口，
+ * 事件回调内调用，经 KernelState 受控桥暴露）；原 window._gateway* 动作
+ * 全部收敛为模块私有，只由覆盖层宿主的事件委托调用。
  */
+
+import { escapeHtml } from './markdown-utils.js';
+import { getCurrentLanguage } from './i18n-environment-state.js';
 
 // ── State ─────────────────────────────────────────────────────────
 
@@ -23,7 +28,7 @@ let _refreshTimer = null;
 let _loading = false;
 const _expandedSchemas = new Set();   // MCP 工具 schema 展开状态
 
-window._toggleGatewaySchema = function(toolKey) {
+const _toggleGatewaySchema = function(toolKey) {
   if (_expandedSchemas.has(toolKey)) {
     _expandedSchemas.delete(toolKey);
   } else {
@@ -59,31 +64,31 @@ function _ensureGatewayHost() {
       if (!target || !host.contains(target)) return;
       const action = target.dataset.gatewayAction;
       const serverId = target.dataset.serverId;
-      if (action === 'view-detail') return window._gatewayViewDetail(serverId);
-      if (action === 'restart') return window._gatewayRestart(serverId);
+      if (action === 'view-detail') return _gatewayViewDetail(serverId);
+      if (action === 'restart') return _gatewayRestart(serverId);
       if (action === 'restart-detail') {
-        window._gatewayRestart(serverId).then(() => window._gatewayRefreshDetail());
+        _gatewayRestart(serverId).then(() => _gatewayRefreshDetail());
         return;
       }
-      if (action === 'edit') return window._gatewayEdit(serverId);
-      if (action === 'delete') return window._gatewayDelete(serverId);
-      if (action === 'add') return window._gatewayAdd();
-      if (action === 'cancel-edit') return window._gatewayCancelEdit();
-      if (action === 'save-edit') return window._gatewaySaveEdit();
-      if (action === 'refresh') return window._loadGatewayData();
-      if (action === 'refresh-detail') return window._gatewayRefreshDetail();
-      if (action === 'back') return window._gatewayBackToList();
-      if (action === 'close') return window.closeMcpGateway();
-      if (action === 'toggle-schema') return window._toggleGatewaySchema(target.dataset.toolKey);
-      if (action === 'transport-change') return window._gatewayTransportChange();
+      if (action === 'edit') return _gatewayEdit(serverId);
+      if (action === 'delete') return _gatewayDelete(serverId);
+      if (action === 'add') return _gatewayAdd();
+      if (action === 'cancel-edit') return _gatewayCancelEdit();
+      if (action === 'save-edit') return _gatewaySaveEdit();
+      if (action === 'refresh') return _loadGatewayData();
+      if (action === 'refresh-detail') return _gatewayRefreshDetail();
+      if (action === 'back') return _gatewayBackToList();
+      if (action === 'close') return closeMcpGateway();
+      if (action === 'toggle-schema') return _toggleGatewaySchema(target.dataset.toolKey);
+      if (action === 'transport-change') return _gatewayTransportChange();
     });
     host.addEventListener('change', (event) => {
       const target = event.target.closest('[data-gateway-action]');
       if (!target || !host.contains(target)) return;
       if (target.dataset.gatewayAction === 'toggle-system') {
-        window._gatewayToggleSystem(target.dataset.serverId, target);
+        _gatewayToggleSystem(target.dataset.serverId, target);
       } else if (target.dataset.gatewayAction === 'toggle-custom') {
-        window._gatewayToggleCustom(target.dataset.serverId, target);
+        _gatewayToggleCustom(target.dataset.serverId, target);
       }
     });
   }
@@ -115,9 +120,6 @@ function closeMcpGateway() {
   const host = document.getElementById('mcp-gateway-overlay-host');
   if (host) host.innerHTML = '';
 }
-
-window.openMcpGateway = openMcpGateway;
-window.closeMcpGateway = closeMcpGateway;
 
 // ── Auto refresh ──────────────────────────────────────────────────
 
@@ -159,11 +161,9 @@ async function _loadGatewayData() {
   renderGatewayOverlay();
 }
 
-window._loadGatewayData = _loadGatewayData;
-
 // ── Actions ───────────────────────────────────────────────────────
 
-window._gatewayRestart = async function(serverId) {
+const _gatewayRestart = async function(serverId) {
   if (_gatewayData?.servers) {
     const s = _gatewayData.servers.find(x => x.id === serverId);
     if (s) { s.status = 'connecting'; s.lastError = null; }
@@ -178,8 +178,8 @@ window._gatewayRestart = async function(serverId) {
   }
 };
 
-window._gatewayDelete = async function(serverId) {
-  const isZh = currentLanguage === 'zh';
+const _gatewayDelete = async function(serverId) {
+  const isZh = getCurrentLanguage() === 'zh';
   if (!confirm(isZh ? `确定删除服务器 "${serverId}"？` : `Delete server "${serverId}"?`)) return;
   const config = JSON.parse(JSON.stringify(_gatewayConfig || { servers: {} }));
   delete config.servers[serverId];
@@ -203,7 +203,7 @@ window._gatewayDelete = async function(serverId) {
   }
 };
 
-window._gatewayEdit = function(serverId) {
+const _gatewayEdit = function(serverId) {
   const config = _gatewayConfig?.servers?.[serverId];
   if (!config) return;
   _editing = { id: serverId, isNew: false, config: JSON.parse(JSON.stringify(config)) };
@@ -211,7 +211,7 @@ window._gatewayEdit = function(serverId) {
   renderGatewayOverlay();
 };
 
-window._gatewayAdd = function() {
+const _gatewayAdd = function() {
   _editing = {
     id: '',
     isNew: true,
@@ -221,14 +221,14 @@ window._gatewayAdd = function() {
   renderGatewayOverlay();
 };
 
-window._gatewayCancelEdit = function() {
+const _gatewayCancelEdit = function() {
   _editing = null;
   _view = 'list';
   renderGatewayOverlay();
 };
 
-window._gatewaySaveEdit = async function() {
-  const isZh = currentLanguage === 'zh';
+const _gatewaySaveEdit = async function() {
+  const isZh = getCurrentLanguage() === 'zh';
   const id = (document.getElementById('gateway-edit-id')?.value || '').trim();
   if (!id) { alert(isZh ? '服务器 ID 不能为空' : 'Server ID is required'); return; }
 
@@ -283,7 +283,7 @@ window._gatewaySaveEdit = async function() {
   }
 };
 
-window._gatewayTransportChange = function() {
+const _gatewayTransportChange = function() {
   const transport = document.getElementById('gateway-edit-transport')?.value || 'stdio';
   const dynamicFields = document.getElementById('gateway-edit-dynamic');
   if (!dynamicFields) return;
@@ -322,7 +322,7 @@ async function _toggleGatewayServer(serverId, checkbox) {
   }
 }
 
-window._gatewayToggleSystem = async function(serverId, checkbox) {
+const _gatewayToggleSystem = async function(serverId, checkbox) {
   try {
     await fetch(`/protoclaw/mcp-gateway/system/${encodeURIComponent(serverId)}/toggle`, {
       method: 'POST',
@@ -339,11 +339,11 @@ window._gatewayToggleSystem = async function(serverId, checkbox) {
   }
 };
 
-window._gatewayToggleCustom = _toggleGatewayServer;
+const _gatewayToggleCustom = _toggleGatewayServer;
 
 // ── Detail view ───────────────────────────────────────────────────
 
-window._gatewayViewDetail = async function(serverId) {
+const _gatewayViewDetail = async function(serverId) {
   _view = 'detail';
   _detail = null;
   _detailLoading = true;
@@ -359,13 +359,13 @@ window._gatewayViewDetail = async function(serverId) {
   renderGatewayOverlay();
 };
 
-window._gatewayBackToList = function() {
+const _gatewayBackToList = function() {
   _view = 'list';
   _detail = null;
   renderGatewayOverlay();
 };
 
-window._gatewayRefreshDetail = async function() {
+const _gatewayRefreshDetail = async function() {
   if (!_detail) return;
   _detailLoading = true;
   renderGatewayOverlay();
@@ -634,7 +634,7 @@ function _renderDetailView(isZh) {
 // ── Edit form rendering ───────────────────────────────────────────
 
 function _renderEditFields(transport, existing) {
-  const isZh = currentLanguage === 'zh';
+  const isZh = getCurrentLanguage() === 'zh';
   if (transport === 'stdio') {
     return [
       '<div class="settings-field">',
@@ -692,7 +692,7 @@ function renderGatewayOverlay() {
   const host = _ensureGatewayHost();
   if (!_gatewayOpen) { host.innerHTML = ''; return; }
 
-  const isZh = currentLanguage === 'zh';
+  const isZh = getCurrentLanguage() === 'zh';
   const systemServers = _gatewayData?.systemServers || [];
   const servers = _gatewayData?.servers || [];
 
@@ -781,3 +781,16 @@ function renderGatewayOverlay() {
     '</div>',
   ].join('');
 }
+
+export { openMcpGateway };
+
+// —— 桥接期兼容面（kernel-state 访问器桥）——
+// classic 消费方 app-ui.js 的设置菜单条目（settings-flyout-mcp-gateway 的 click
+// 回调内 `typeof openMcpGateway === 'function'` 后调用，classic 相无触达点）。
+// 收敛条件：app-ui 迁移后改 import 并注销本键。
+const bridgeApi = { openMcpGateway };
+window.KernelState.defineKey('mcp-gateway-ui', 'openMcpGateway', openMcpGateway);
+window.KernelState.claim('mcp-gateway-ui', {
+  get: (key) => bridgeApi[key],
+  set: (key, value) => { bridgeApi[key] = value; },
+});

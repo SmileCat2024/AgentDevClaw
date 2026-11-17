@@ -31,6 +31,23 @@ import { setupGitRoutes } from '../server/routes/git.js';
 import { setProxyConnectionLookup } from '../server/shared/proxy.js';
 import { createFrontendSandbox } from './helpers/frontend-vm.js';
 import { loadEsmPluginInSandbox } from './helpers/load-esm-plugin.js';
+import { loadModuleOnce } from './helpers/esm-module-loader.js';
+// git-graph.js 已 ESM 化（P2 批次 2）：真实 import 后把它的 window.GitGraph
+// 挂载点落在沙箱宿主上（模块导入期读 globalThis.window），插件仍按既有协议消费。
+
+async function loadGitGraphInto(ctx) {
+  const prevWindow = globalThis.window;
+  const prevDocument = globalThis.document;
+  globalThis.window = ctx.window;
+  globalThis.document = ctx.document;
+  try {
+    await loadModuleOnce('public/src/modules/git-graph.js', { installGlobals: false });
+  } finally {
+    if (prevWindow === undefined) delete globalThis.window; else globalThis.window = prevWindow;
+    if (prevDocument === undefined) delete globalThis.document; else globalThis.document = prevDocument;
+  }
+}
+
 
 const CONNECTIONS = [
   { id: 'server-a', name: 'Server A', enabled: true, mode: 'manual', localPort: 22101 },
@@ -288,7 +305,7 @@ const okGraph = { ok: true, commits: [], aheadHashes: [] };
 const okBranches = { ok: true, locals: [], remotes: [], current: 'main' };
 const localRecord = { workspace_sessions: { sessions: [{ id: 'sess-1', openDirectory: '/repo' }] } };
 
-function makePanelSandbox({ focusedAgentId = null, sessionId = 'sess-1', remoteMeta = '', capabilityFor = null } = {}) {
+async function makePanelSandbox({ focusedAgentId = null, sessionId = 'sess-1', remoteMeta = '', capabilityFor = null } = {}) {
   const timers = new Set();
   const trackedSetTimeout = (fn, ms) => { const t = setTimeout(() => { timers.delete(t); fn(); }, ms); timers.add(t); return t; };
   const trackedSetInterval = (fn, ms) => { const t = setInterval(fn, ms); timers.add(t); return t; };
@@ -328,8 +345,8 @@ function makePanelSandbox({ focusedAgentId = null, sessionId = 'sess-1', remoteM
     ctx.window.RemoteConnections = { capabilityFor };
   }
   ctx.__disposeTimers = () => { for (const t of timers) trackedClear(t); timers.clear(); };
-  ctx.loadSource('public/src/modules/git-graph.js');
   ctx.loadSource('public/src/modules/claw-host.js');
+  await loadGitGraphInto(ctx);
   const mod = loadEsmPluginInSandbox(ctx, 'public/src/panel-plugins/git.js');
   ctx.__gitPanel = mod;
   mod.__pluginDefault.mount({ effect() {} }); // 事件委托随插件挂载（ctx.__click 驱动）
@@ -350,7 +367,7 @@ const payloadOf = (init) => JSON.parse(init.body);
 
 describe('git-panel remote adaptation (R2-06)', () => {
   it('local requests carry the plain host agentId; reads stay keyless', async () => {
-    const ctx = makePanelSandbox({ focusedAgentId: 'programming-helper' });
+    const ctx = await makePanelSandbox({ focusedAgentId: 'programming-helper' });
     try {
       ctx.__gitPanel.onOpen();
       await tick(); await tick();
@@ -368,7 +385,7 @@ describe('git-panel remote adaptation (R2-06)', () => {
   it('remote session dir comes from sessionMeta (catalog-sourced remote path) with the namespaced identity', async () => {
     // 远程条目不在 allAgents（record 链落空），dir 取 agent_detail 经命名空间
     // 转发返回的富元数据留档；身份 = 宿主级命名空间 id
-    const ctx = makePanelSandbox({
+    const ctx = await makePanelSandbox({
       focusedAgentId: HOST_NS,
       sessionId: '',
       remoteMeta: REMOTE_DIR,
@@ -388,7 +405,7 @@ describe('git-panel remote adaptation (R2-06)', () => {
   });
 
   it('write ops carry an idempotency key header (local sessions included)', async () => {
-    const ctx = makePanelSandbox({ focusedAgentId: 'programming-helper' });
+    const ctx = await makePanelSandbox({ focusedAgentId: 'programming-helper' });
     try {
       ctx.__gitPanel.onOpen();
       await tick(); await tick();
@@ -411,7 +428,7 @@ describe('git-panel remote adaptation (R2-06)', () => {
   });
 
   it('capabilityFor write=false disables write controls and blocks the write before fetch', async () => {
-    const ctx = makePanelSandbox({
+    const ctx = await makePanelSandbox({
       focusedAgentId: HOST_NS,
       sessionId: '',
       remoteMeta: REMOTE_DIR,
@@ -442,7 +459,7 @@ describe('git-panel remote adaptation (R2-06)', () => {
   });
 
   it('write-capable remote sessions render identical to local (no remote marker) and forward writes', async () => {
-    const ctx = makePanelSandbox({
+    const ctx = await makePanelSandbox({
       focusedAgentId: HOST_NS,
       sessionId: '',
       remoteMeta: REMOTE_DIR,

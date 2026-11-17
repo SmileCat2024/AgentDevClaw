@@ -1,28 +1,7 @@
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
 import { describe, it } from 'node:test';
 import { createFrontendSandbox } from './helpers/frontend-vm.js';
-import { installAgentCallStates } from './helpers/agent-call-states.js';
-
-// 行尾归一化：提取标记不能依赖 CRLF（跨平台可移植）
-function toLf(source) {
-  return source.replace(/\r\n/g, '\n');
-}
-
-// 真实源码提取：isRuntimeCalling 是 calling 状态的唯一读取口（按原始字符串
-// key 读 Map），测试必须用真实实现 + 真实 Map 验证 key 形态契约。
-const runtimeStatusSource = toLf(fs.readFileSync(
-  new URL('../public/src/modules/runtime-status.js', import.meta.url),
-  'utf8',
-));
-
-function extractFunction(source, signature, nextMarker) {
-  const start = source.indexOf(signature);
-  const end = source.indexOf(nextMarker, start);
-  assert.notEqual(start, -1, `missing function: ${signature}`);
-  assert.notEqual(end, -1, `missing function end marker: ${nextMarker}`);
-  return source.slice(start, end);
-}
+import { prepareClassicSandbox } from './p2-classic-hosts.js';
 
 // ── Catalog fixtures ────────────────────────────────────────────────────────
 
@@ -83,36 +62,12 @@ function notificationUrl(runtimeId) {
  * 按最小契约 stub。
  */
 function createCallStateSandbox({ catalogResponses, notifications = {}, agents = [] }) {
-  const agentCallActive = new Map();
   const fetchedUrls = [];
   const renderCalls = [];
   let catalogCall = 0;
 
   const ctx = createFrontendSandbox({
-    // app-core.js 全局状态
-    allAgents: agents,
-    focusedAgentId: null,
-    currentRuntimeAgentId: null,
-    currentLanguage: 'zh',
-    _agentCallActive: agentCallActive,
-    _interruptSuppression: new Map(),
-    _recentlyFinishedRuntimes: new Set(),
-    restartingRuntimeIds: new Set(),
-    pendingPrebuiltAgentIds: new Set(),
-    lastCallStateRefreshAt: 0,
-    // 跨模块依赖 stub（与真实实现语义一致，见各源文件）
-    normalizeAgentIdentity: (value) => String(value || '').trim(),
-    getAgentRuntimeId: (agent) => agent?.runtimeId || agent?.id || '',
-    getParentAgentId: () => '',
-    getActiveSessionId: () => '',
-    resolveNotificationCallingState: (payload) => payload?.callActive === true,
-    getNotificationCallStartedAt: () => 0,
-    isInterruptSuppressed: () => false,
     _markAgentCallStartedForNotify: () => {},
-    clearInterruptSuppression: () => {},
-    _tryNotifyAgentFinished: () => {},
-    renderAgentList: () => { renderCalls.push(agentCallActive.size); },
-    agentList: { addEventListener() {} },
     fetch: async (url) => {
       const target = String(url);
       fetchedUrls.push(target);
@@ -127,27 +82,18 @@ function createCallStateSandbox({ catalogResponses, notifications = {}, agents =
     },
   });
 
+  // 真实 classic owner：prepareClassicSandbox 装载 app-core/runtime-status/
+  // sidebar-render/app-main，app-main IIFE 创建唯一引擎；本文件只补 remote
+  // 目录实现与下游渲染 sink。
+  prepareClassicSandbox(ctx);
   ctx.loadSource('public/src/modules/remote-connections.js');
-  ctx.loadSource('public/src/modules/sidebar-render.js');
-  // sidebar-render.js 的函数声明会覆盖 sandbox 预注入的同名 stub：加载完成后
-  // 重新注入 renderAgentList 测试替身（只关心渲染是否被触发，不关心渲染产物）。
+  const agentCallActive = ctx.run('_agentCallActive');
+  ctx.run('_agentCallActive.clear(); _agentSuspended.clear(); _interruptSuppression.clear(); _recentlyFinishedRuntimes.clear();');
   ctx.renderAgentList = () => { renderCalls.push(agentCallActive.size); };
-  // 注入真实 isRuntimeCalling（runtime-status.js 依赖过多无法整体加载）；
-  // 其提取区间顺带含 ADR-0019 挂起聚合（_agentSuspended / isSuspendedNotificationPayload /
-  // isRuntimeSuspended），其中 isSuspendedNotificationPayload 依赖 isSuspendedCallOutcome，
-  // 一并注入。
-  ctx.run(extractFunction(
-    runtimeStatusSource,
-    'function isRuntimeCalling(',
-    '\nfunction isSidebarRuntimeDisconnected(',
-  ));
-  ctx.run(extractFunction(
-    runtimeStatusSource,
-    'function isSuspendedCallOutcome(',
-    '\nfunction getDerivedStageFromState(',
-  ));
-
-  installAgentCallStates(ctx);
+  ctx.allAgents = agents;
+  ctx.currentRuntimeAgentId = null;
+  ctx._syncPersistentActionButton = () => {};
+  ctx._syncPersistentInputUi = () => {};
   return {
     ctx,
     agentCallActive,

@@ -7,7 +7,14 @@
  * 渲染层按"与上一条带时间锚的用户消息间隔 > 阈值，或首条用户消息"出线。
  *
  * 无时间锚（旧 runtime / 旧会话数据 / 乐观回显）静默不显示。
+ *
+ * ESM（P2 迁移）：纯函数模块。唯一外部依赖是转义（markdown-utils 具名导出）。
+ * 渲染方（chat-renderer）与会话装载（app-main / session-readonly-view /
+ * agent-data-loader）仍 classic，入口经 KernelState 桥键（message-timeline 域）
+ * 提供，文件尾部统一注册。
  */
+
+import { escapeHtml } from './markdown-utils.js';
 
 // 分隔线触发阈值：与上一条用户消息的最小时间间隔
 var TIME_SEPARATOR_GAP_MS = 5 * 60 * 1000;
@@ -26,7 +33,7 @@ var ECHO_SEPARATOR_SLACK_MS = 30 * 1000;
  * 渲染层按"无时间锚"降级（不显示时间线）。已在位的相同 _ts 不重拷贝，
  * 保持消息对象引用稳定（供各处浅比较 / 缓存使用）。
  */
-function attachMessagesTimestamps(messages, timestamps) {
+export function attachMessagesTimestamps(messages, timestamps) {
   if (!Array.isArray(messages) || !Array.isArray(timestamps)
     || timestamps.length !== messages.length) {
     return messages;
@@ -70,7 +77,7 @@ function resolveUserTimeSeparator(messages, index, gapMs) {
  * 返回应显示的时间戳（nowMs），不应显示时返回 null。真实消息回流后由
  * 正常渲染路径的分隔线接管，预渲染元素随回显气泡一并移除。
  */
-function resolveEchoTimeSeparator(messages, nowMs) {
+export function resolveEchoTimeSeparator(messages, nowMs) {
   if (typeof nowMs !== 'number' || !Number.isFinite(nowMs)) return null;
   var msgs = Array.isArray(messages) ? messages : [];
   return resolveUserTimeSeparator(
@@ -86,7 +93,7 @@ function resolveEchoTimeSeparator(messages, nowMs) {
  * 时段：凌晨 0–6 / 上午 6–12 / 下午 12–18 / 晚上 18–24。时钟：凌晨用
  * 24 小时数字（"凌晨 0:05"），其余用 12 小时制（"下午 3:24"、"晚上 11:00"）。
  */
-function formatChatTimestamp(ts) {
+export function formatChatTimestamp(ts) {
   var d = new Date(ts);
   if (isNaN(d.getTime())) return '';
   var now = new Date();
@@ -109,7 +116,7 @@ function formatChatTimestamp(ts) {
  * 分隔线 html（两侧横线 + 低对比度文字）。时间格式化失败时返回空串。
  * extraClass 可选（如乐观回显预渲染的标记类），追加到基础类后。
  */
-function renderTimeSeparatorHtml(ts, extraClass) {
+export function renderTimeSeparatorHtml(ts, extraClass) {
   var text = formatChatTimestamp(ts);
   if (!text) return '';
   var cls = 'time-separator'
@@ -121,8 +128,35 @@ function renderTimeSeparatorHtml(ts, extraClass) {
  * 渲染包装：index 处消息应出线时在行 html 前插入分隔线，否则原样返回。
  * 非用户消息直接透传，调用方无需预判角色。
  */
-function prependTimeSeparatorHtml(messages, index, rowHtml) {
+export function prependTimeSeparatorHtml(messages, index, rowHtml) {
   var ts = resolveUserTimeSeparator(messages, index);
   if (ts === null) return rowHtml;
   return renderTimeSeparatorHtml(ts) + rowHtml;
 }
+
+// ── 兼容桥（KernelState，message-timeline 域）─────────────────────────────────
+// 仍有 classic 消费方的入口：渲染方 chat-renderer（消息行与乐观回显）与会话装载侧。
+//   attachMessagesTimestamps  ← app-main.js（消息 probe host.attachTimestamps）
+//                               / session-readonly-view.js（window.attachMessagesTimestamps）
+//                               / agent-data-loader.js（host.attachTimestamps）
+//   resolveEchoTimeSeparator  ← chat-renderer.js（乐观回显分隔线预判）
+//   formatChatTimestamp       ← chat-renderer.js（错误分组时间戳）
+//   renderTimeSeparatorHtml   ← chat-renderer.js（乐观回显预渲染）
+//   prependTimeSeparatorHtml  ← chat-renderer.js（消息行与只读渲染）
+// resolveUserTimeSeparator / 两个常量只在本文件与测试内使用，不上桥。
+const compatibility = {
+  attachMessagesTimestamps,
+  resolveEchoTimeSeparator,
+  formatChatTimestamp,
+  renderTimeSeparatorHtml,
+  prependTimeSeparatorHtml,
+};
+window.KernelState.defineKey('message-timeline', 'attachMessagesTimestamps', attachMessagesTimestamps);
+window.KernelState.defineKey('message-timeline', 'resolveEchoTimeSeparator', resolveEchoTimeSeparator);
+window.KernelState.defineKey('message-timeline', 'formatChatTimestamp', formatChatTimestamp);
+window.KernelState.defineKey('message-timeline', 'renderTimeSeparatorHtml', renderTimeSeparatorHtml);
+window.KernelState.defineKey('message-timeline', 'prependTimeSeparatorHtml', prependTimeSeparatorHtml);
+window.KernelState.claim('message-timeline', {
+  get: (key) => compatibility[key],
+  set: (key, value) => { compatibility[key] = value; },
+});

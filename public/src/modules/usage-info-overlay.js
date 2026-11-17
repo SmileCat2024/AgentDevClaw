@@ -2,14 +2,17 @@
  * usage-info-overlay.js — 用量信息覆盖层模块（从 settings-overlay.js 拆分）
  *
  * 包含：用量仪表盘（趋势图、柱状图、日历热力、分组排行、事件列表）。
- * 依赖（全局）：escapeHtml, currentLanguage
+ * 依赖（ESM 直接 import）：getCurrentLanguage（i18n 状态域）、escapeHtml
+ *   （markdown-utils 域）。
  *
  * 事件接线：模板经 data-action="usageInfo.*" 声明，处理器集中在文件尾部注册。
  * 菜单触发钮把自身元素传给处理器作为弹层锚点（委托层 event.currentTarget 恒为
  * document）。搜索框失焦提交走渲染后的元素级 blur 监听——分发器未绑定 focusout
  * 事件类型（见 bindEventType 清单），冒泡委托拿不到失焦时机。
- * window 导出只剩 openUsageInfo（app-ui.js 设置菜单与 home-dashboard 调用）。
+ * window 兼容桥只剩 openUsageInfo（KernelState；classic app-ui.js 设置菜单裸调用）。
  */
+import { getCurrentLanguage } from './i18n-environment-state.js';
+import { escapeHtml } from './markdown-utils.js';
 
 function ensureUsageInfoHost() {
   let host = document.getElementById('usage-info-overlay-host');
@@ -21,7 +24,7 @@ function ensureUsageInfoHost() {
   return host;
 }
 
-function usageInfoLocalDateString(date) {
+export function usageInfoLocalDateString(date) {
   const d = date instanceof Date ? date : new Date(date);
   if (Number.isNaN(d.getTime())) return '';
   const year = d.getFullYear();
@@ -30,23 +33,23 @@ function usageInfoLocalDateString(date) {
   return year + '-' + month + '-' + day;
 }
 
-function usageInfoParseLocalDate(value) {
+export function usageInfoParseLocalDate(value) {
   const match = String(value || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (!match) return new Date(value);
   return new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
 }
 
-function usageInfoToday() {
+export function usageInfoToday() {
   return usageInfoLocalDateString(new Date());
 }
 
-function usageInfoDateDaysAgo(days) {
+export function usageInfoDateDaysAgo(days) {
   const date = new Date();
   date.setDate(date.getDate() - days);
   return usageInfoLocalDateString(date);
 }
 
-function usageInfoDefaults() {
+export function usageInfoDefaults() {
   const today = usageInfoToday();
   return {
     open: false,
@@ -64,12 +67,14 @@ function usageInfoDefaults() {
   };
 }
 
+// 覆盖层状态：本模块唯一 owner（原 window.ClawFW.usageInfo 的散装存储位）
+let usageInfoState = usageInfoDefaults();
+
 function getUsageInfoState() {
-  window.ClawFW.usageInfo = window.ClawFW.usageInfo || usageInfoDefaults();
-  return window.ClawFW.usageInfo;
+  return usageInfoState;
 }
 
-function usageInfoRangeDates(range) {
+export function usageInfoRangeDates(range) {
   const today = usageInfoToday();
   if (range === '7d') return { from: usageInfoDateDaysAgo(6), to: today };
   if (range === '30d') return { from: usageInfoDateDaysAgo(29), to: today };
@@ -94,7 +99,7 @@ async function loadUsageInfoCalendarData() {
   renderUsageInfoOverlay();
 }
 
-async function openUsageInfo() {
+export async function openUsageInfo() {
   const state = getUsageInfoState();
   Object.assign(state, usageInfoDefaults(), { open: true });
   renderUsageInfoOverlay();
@@ -108,7 +113,7 @@ function closeUsageInfo() {
   closeUsageInfoMenu();
   const host = document.getElementById('usage-info-overlay-host');
   if (host) host.innerHTML = '';
-  window.ClawFW.usageInfo = usageInfoDefaults();
+  usageInfoState = usageInfoDefaults();
 }
 
 async function loadUsageInfoData() {
@@ -137,7 +142,7 @@ async function loadUsageInfoData() {
   }
 }
 
-function usageInfoNumber(value) {
+export function usageInfoNumber(value) {
   const n = Number.isFinite(value) ? value : 0;
   if (n >= 1000000000) return (n / 1000000000).toFixed(2) + 'B';
   if (n >= 1000000) return (n / 1000000).toFixed(2) + 'M';
@@ -145,16 +150,16 @@ function usageInfoNumber(value) {
   return String(n);
 }
 
-function usageInfoFullNumber(value) {
+export function usageInfoFullNumber(value) {
   return (Number.isFinite(value) ? value : 0).toLocaleString();
 }
 
-function usageInfoPct(part, total) {
+export function usageInfoPct(part, total) {
   return total > 0 ? Math.round((part / total) * 100) : 0;
 }
 
-function usageInfoLabel(key) {
-  const isZh = currentLanguage === 'zh';
+export function usageInfoLabel(key) {
+  const isZh = getCurrentLanguage() === 'zh';
   const zh = {
     model: '模型',
     preset: '预设',
@@ -172,7 +177,7 @@ function usageInfoLabel(key) {
   return (isZh ? zh : en)[key] || key;
 }
 
-function renderUsageMetric(label, value, detail) {
+export function renderUsageMetric(label, value, detail) {
   return [
     '<div class="usage-info-metric">',
     '<div class="usage-info-metric-label">' + escapeHtml(label) + '</div>',
@@ -182,7 +187,7 @@ function renderUsageMetric(label, value, detail) {
   ].join('');
 }
 
-function usageInfoDateRange(from, to) {
+export function usageInfoDateRange(from, to) {
   const result = [];
   const start = usageInfoParseLocalDate(from || usageInfoToday());
   const end = usageInfoParseLocalDate(to || from || usageInfoToday());
@@ -193,24 +198,24 @@ function usageInfoDateRange(from, to) {
   return result;
 }
 
-function usageInfoEventDate(event) {
+export function usageInfoEventDate(event) {
   if (event?.date) return String(event.date);
   const value = event?.timestamp || event?.createdAt;
   const date = new Date(Number.isFinite(value) ? value : String(value || ''));
   return Number.isNaN(date.getTime()) ? '' : usageInfoLocalDateString(date);
 }
 
-function usageInfoEventHour(event) {
+export function usageInfoEventHour(event) {
   const value = event?.timestamp || event?.createdAt;
   const date = new Date(Number.isFinite(value) ? value : String(value || ''));
   return Number.isNaN(date.getTime()) ? NaN : date.getHours();
 }
 
-function usageInfoEmptyBreakdown() {
+export function usageInfoEmptyBreakdown() {
   return { total: 0, input: 0, output: 0, cache: 0, requests: 0 };
 }
 
-function usageInfoAddBreakdown(target, usage) {
+export function usageInfoAddBreakdown(target, usage) {
   target.total += usage?.totalTokens || 0;
   target.input += usage?.inputTokens || 0;
   target.output += usage?.outputTokens || 0;
@@ -218,7 +223,7 @@ function usageInfoAddBreakdown(target, usage) {
   target.requests += usage?.requests || 1;
 }
 
-function usageInfoSmoothPath(points) {
+export function usageInfoSmoothPath(points) {
   if (!Array.isArray(points) || !points.length) return '';
   if (points.length < 3) {
     return 'M ' + points.map((point) => point.map((value) => value.toFixed(2)).join(' ')).join(' L ');
@@ -333,7 +338,7 @@ function usageInfoModelOptions(events) {
 }
 
 function renderUsageInfoTrend(daily, from, to, events) {
-  const isZh = currentLanguage === 'zh';
+  const isZh = getCurrentLanguage() === 'zh';
   const { rows, buckets, isSingleDay } = usageInfoBucketRows(daily, from, to, events);
   const max = rows.reduce((acc, item) => Math.max(acc, item?.totals?.totalTokens || 0), 0);
   if (!rows.length) {
@@ -417,7 +422,7 @@ function renderUsageInfoTrend(daily, from, to, events) {
 }
 
 function renderUsageInfoBars(daily, from, to, events) {
-  const isZh = currentLanguage === 'zh';
+  const isZh = getCurrentLanguage() === 'zh';
   const { buckets, isSingleDay } = usageInfoBucketRows(daily, from, to, events);
   const state = getUsageInfoState();
   const selectedModel = state.chartModel || '__all__';
@@ -499,7 +504,7 @@ function renderUsageInfoBars(daily, from, to, events) {
 
 // 全年日历热力：固定渲染近一年，独立于上方时间范围选择器（数据由 loadUsageInfoCalendarData 单独加载）
 function renderUsageInfoCalendar() {
-  const isZh = currentLanguage === 'zh';
+  const isZh = getCurrentLanguage() === 'zh';
   const state = getUsageInfoState();
   const end = usageInfoParseLocalDate(usageInfoToday());
   const start = new Date(end.getTime() - 364 * 86400000);
@@ -545,7 +550,7 @@ function renderUsageInfoMainChart(daily, from, to, events) {
 }
 
 function renderUsageInfoChartControls(events) {
-  const isZh = currentLanguage === 'zh';
+  const isZh = getCurrentLanguage() === 'zh';
   const state = getUsageInfoState();
   const selectedLabel = state.chartModel === '__all__' ? (isZh ? '全部模型' : 'All models') : state.chartModel;
   // 全部模型时仅有趋势视图；选中具体模型后可切换到构成详情柱状图
@@ -567,7 +572,7 @@ function renderUsageInfoChartControls(events) {
 }
 
 function renderUsageInfoGroups(groups, totals) {
-  const isZh = currentLanguage === 'zh';
+  const isZh = getCurrentLanguage() === 'zh';
   const rows = Array.isArray(groups) ? groups : [];
   const max = rows.reduce((acc, item) => Math.max(acc, item?.totals?.totalTokens || 0), 0);
   if (!rows.length) {
@@ -582,7 +587,8 @@ function renderUsageInfoGroups(groups, totals) {
       const width = max > 0 ? Math.max(2, Math.round((total / max) * 100)) : 2;
       const metaParts = [];
       if (item.presetName && item.presetName !== item.label) {
-        metaParts.push(typeof formatPresetDisplayName === 'function' ? formatPresetDisplayName(item.presetName) : item.presetName);
+        // 桥接期：定义于 app-core（模型预设域收敛后改 import）
+        metaParts.push(typeof window.formatPresetDisplayName === 'function' ? window.formatPresetDisplayName(item.presetName) : item.presetName);
       }
       if (item.provider) metaParts.push(item.provider);
       if (item.source && item.source !== item.label) metaParts.push(item.source);
@@ -605,7 +611,7 @@ function renderUsageInfoGroups(groups, totals) {
 }
 
 function renderUsageInfoEvents(events) {
-  const isZh = currentLanguage === 'zh';
+  const isZh = getCurrentLanguage() === 'zh';
   const rows = Array.isArray(events) ? events.slice(0, 30) : [];
   if (!rows.length) {
     return '<div class="usage-info-empty">' + (isZh ? '暂无最近事件。' : 'No recent events.') + '</div>';
@@ -659,7 +665,7 @@ function renderUsageInfoOverlay() {
     return;
   }
   closeUsageInfoMenu();
-  const isZh = currentLanguage === 'zh';
+  const isZh = getCurrentLanguage() === 'zh';
   const data = state.data || {};
   const totals = data.totals || {};
   const cacheRate = usageInfoPct(totals.cacheHitRequests || 0, totals.requests || 0);
@@ -806,7 +812,7 @@ function toggleUsageInfoChartModelMenu(anchor) {
   }
   if (!anchor) return;
   const state = getUsageInfoState();
-  const isZh = currentLanguage === 'zh';
+  const isZh = getCurrentLanguage() === 'zh';
   const models = usageInfoModelOptions(state.data?.events).slice(0, 12);
   const items = [{ value: '__all__', label: isZh ? '全部模型' : 'All models', active: state.chartModel === '__all__' }]
     .concat(models.map(([model]) => ({ value: model, label: model, active: state.chartModel === model })));
@@ -903,10 +909,16 @@ function setUsageInfoChartView(chartView) {
   renderUsageInfoOverlay();
 }
 
-// ── window 导出 ──────────────────────────────────────────────
-// openUsageInfo：app-ui.js 设置菜单与 home-dashboard 首页入口调用。
+// ── 兼容面 ──────────────────────────────────────────────────
+// openUsageInfo：classic app-ui.js 设置菜单裸调用（桥接期 KernelState，domain:
+// usage-info-overlay）；两处消费方迁移到 import 后注销。
 // 其余动作的消费面仅本模块模板，收敛为模块级函数。
-window.openUsageInfo = openUsageInfo;
+const bridgeState = { openUsageInfo };
+window.KernelState.defineKey('usage-info-overlay', 'openUsageInfo', bridgeState.openUsageInfo);
+window.KernelState.claim('usage-info-overlay', {
+  get: (key) => bridgeState[key],
+  set: (key, value) => { bridgeState[key] = value; },
+});
 
 // ── 事件接线（data-action="usageInfo.*"）─────────────────────────
 

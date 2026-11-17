@@ -13,31 +13,14 @@
 
 import { describe, it, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { createFrontendSandbox } from './helpers/frontend-vm.js';
-import { installAgentCallStates } from './helpers/agent-call-states.js';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const SIDEBAR_SOURCE = fs.readFileSync(
-  path.join(__dirname, '..', 'public', 'src', 'modules', 'sidebar-render.js'),
-  'utf8',
-);
-
-function sourceBetween(source, startMarker, endMarker) {
-  const start = source.indexOf(startMarker);
-  const end = source.indexOf(endMarker, start);
-  if (start === -1) throw new Error(`Missing start marker: ${startMarker}`);
-  if (end === -1) throw new Error(`Missing end marker: ${endMarker}`);
-  return source.slice(start, end);
-}
+import { prepareClassicSandbox } from './p2-classic-hosts.js';
 
 /**
- * 构建加载了提取函数的沙箱。sseActive 由用例即时翻转（模块闭包读全局）。
- * isSuspendedNotificationPayload 采用与 runtime-status.js 相同的判定语义
- * （state.call.finish 的 data 与 runtime.lastOutcome 双路径），用例以真实
- * 快照形态驱动判定，不依赖外部 flag 时序。
+ * 真实 classic owner：prepareClassicSandbox 按生产先行脚本序装载
+ * app-core/runtime-status/sidebar-render/app-main；app-main 的 bootstrap IIFE
+ * 创建唯一 agent-call-states 引擎。本文件只注入平台 fetch、SSE 判定与下游 UI
+ * sink，不复制 host、不切片、不建第二实例。
  */
 function loadCallStates() {
   const fetched = [];
@@ -51,39 +34,18 @@ function loadCallStates() {
       const calling = match && match[1].startsWith('remote%3A') ? 'remote-calling' : 'local-calling';
       return { ok: true, status: 200, json: async () => ({ callActive: calling === 'will-idle' }) };
     },
-    isSseActive: () => sseActive,
-    isRemoteNamespaceAgentId: (id) => String(id || '').startsWith('remote:'),
-    getVisibleRemoteEntries: () => [],
-    getAgentRuntimeId: (agent) => agent?.runtime_session_id || agent?.runtimeSessionId || null,
-    normalizeAgentIdentity: (v) => String(v || '').trim(),
-    resolveNotificationCallingState: (payload) => payload?.callActive === true,
-    isSuspendedNotificationPayload: (payload) => {
-      const isSuspendedOutcome = (d) => !!(d && typeof d === 'object'
-        && String(d.status || '').trim() === 'continued'
-        && String(d.reason || '').trim() === 'suspended');
-      const stateType = String(payload?.state?.type || '').trim();
-      if (stateType === 'call.finish') return isSuspendedOutcome(payload.state?.data);
-      if (stateType === 'call.start') return false;
-      return isSuspendedOutcome(payload?.runtime?.lastOutcome);
-    },
-    getNotificationCallStartedAt: (payload) => payload?.callStartedAt || 0,
-    isInterruptSuppressed: () => false,
-    clearInterruptSuppression: () => {},
     _markAgentCallStartedForNotify: () => {},
     _presentAppNotification: (frame) => finishedNotified.push(frame),
-    renderAgentList: () => renders.push(1),
-    currentRuntimeAgentId: 'rt-focus',
   });
-  // 函数内部状态（提取片段中直接引用）
-  ctx.run(`
-    const _agentCallActive = new Map();
-    const _agentSuspended = new Map();
-    const _interruptSuppression = new Map();
-    const _recentlyFinishedRuntimes = new Set();
-    let lastCallStateRefreshAt = 0;
-  `);
-  ctx.run(sourceBetween(SIDEBAR_SOURCE, 'function createAgentCallStatesHost', 'let lastAgentListRenderSignature'));
-  installAgentCallStates(ctx);
+  prepareClassicSandbox(ctx);
+  // remote 命名空间 / getVisibleRemoteEntries 的生产实现（不在先行脚本序内）。
+  ctx.loadSource('public/src/modules/remote-connections.js');
+  ctx.renderAgentList = () => renders.push(1);
+  ctx._syncPersistentActionButton = () => {};
+  ctx._syncPersistentInputUi = () => {};
+  ctx.isSseActive = () => sseActive;
+  ctx.currentRuntimeAgentId = 'rt-focus';
+  ctx.run('_agentCallActive.clear(); _agentSuspended.clear(); _interruptSuppression.clear(); _recentlyFinishedRuntimes.clear();');
   return {
     ctx,
     fetched,
@@ -103,7 +65,7 @@ describe('refreshAgentCallStates: SSE 语义切换（S3）', () => {
   it('SSE 激活 + 仅本地条目：零 fetch 且状态保留', async () => {
     env.setSseActive(true);
     env.ctx.allAgents = LOCAL_AGENTS;
-    env.run('applyAgentCallStateFromNotification("rt-local-1", { callActive: true })');
+    env.run('ClawFW.CallStates.applyAgentCallStateFromNotification("rt-local-1", { callActive: true })');
     await env.run('refreshAgentCallStates([{ connected: true, runtime_session_id: "rt-local-1", name: "L1" }])');
     assert.equal(env.fetched.length, 0, '本地条目不 fetch');
     const active = env.run('Array.from(_agentCallActive.keys())');
@@ -149,7 +111,7 @@ describe('refreshAgentCallStates: SSE 语义切换（S3）', () => {
   it('F2b：SSE 激活 + 无远程条目时断连条目仍被孤儿回收（提前返回分支）', async () => {
     env.setSseActive(true);
     // rt-dead 曾在调用中，现已断连（不在 agents 的 connected 集）
-    env.run('applyAgentCallStateFromNotification("rt-dead", { callActive: true })');
+    env.run('ClawFW.CallStates.applyAgentCallStateFromNotification("rt-dead", { callActive: true })');
     await env.run('refreshAgentCallStates([{ connected: true, runtime_session_id: "rt-alive" }])');
     const active = env.run('Array.from(_agentCallActive.keys())');
     assert.deepEqual(JSON.parse(JSON.stringify(active)), [], '断连条目被回收');
@@ -186,29 +148,29 @@ describe('applyAgentCallStateFromNotification: 事件路径共用消费（S3）'
   beforeEach(() => { env = loadCallStates(); });
 
   it('非焦点 true→false：记录完成蓝灯；桌面通知不在此路径触发（ADR-0030 上移 server）', () => {
-    env.run('applyAgentCallStateFromNotification("rt-other", { callActive: true })');
-    env.run('applyAgentCallStateFromNotification("rt-other", { callActive: false })');
+    env.run('ClawFW.CallStates.applyAgentCallStateFromNotification("rt-other", { callActive: true })');
+    env.run('ClawFW.CallStates.applyAgentCallStateFromNotification("rt-other", { callActive: false })');
     assert.equal(env.finishedNotified.length, 0);
     const finished = env.run('Array.from(_recentlyFinishedRuntimes)');
     assert.deepEqual(JSON.parse(JSON.stringify(finished)), ['rt-other']);
   });
 
   it('焦点 true→false：不进 recentlyFinished（避免自我标记）', () => {
-    env.run('applyAgentCallStateFromNotification("rt-focus", { callActive: true })');
-    env.run('applyAgentCallStateFromNotification("rt-focus", { callActive: false })');
+    env.run('ClawFW.CallStates.applyAgentCallStateFromNotification("rt-focus", { callActive: true })');
+    env.run('ClawFW.CallStates.applyAgentCallStateFromNotification("rt-focus", { callActive: false })');
     assert.equal(env.finishedNotified.length, 0);
     const finished = env.run('Array.from(_recentlyFinishedRuntimes)');
     assert.deepEqual(JSON.parse(JSON.stringify(finished)), []);
   });
 
   it('false→false 幂等：不触发完成通知', () => {
-    env.run('applyAgentCallStateFromNotification("rt-other", { callActive: false })');
+    env.run('ClawFW.CallStates.applyAgentCallStateFromNotification("rt-other", { callActive: false })');
     assert.equal(env.finishedNotified.length, 0);
   });
 
   it('ADR-0019 非焦点挂起落定：_agentSuspended 置位（recentlyFinished 同步记录但由渲染优先级掩盖）', () => {
-    env.run('applyAgentCallStateFromNotification("rt-other", { callActive: true })');
-    env.run('applyAgentCallStateFromNotification("rt-other", { runtime: { callActive: false, lastOutcome: { status: "continued", reason: "suspended" } }, callActive: false })');
+    env.run('ClawFW.CallStates.applyAgentCallStateFromNotification("rt-other", { callActive: true })');
+    env.run('ClawFW.CallStates.applyAgentCallStateFromNotification("rt-other", { runtime: { callActive: false, lastOutcome: { status: "continued", reason: "suspended" } }, callActive: false })');
     const suspended = env.run('Array.from(_agentSuspended.keys())');
     assert.deepEqual(JSON.parse(JSON.stringify(suspended)), ['rt-other'], '挂起聚合置位（侧栏静止绿灯数据源）');
     // recentlyFinished 也记录（挂起也是 call 结束边沿），渲染端 suspended 优先级掩盖
@@ -217,9 +179,9 @@ describe('applyAgentCallStateFromNotification: 事件路径共用消费（S3）'
   });
 
   it('ADR-0019 唤醒轮 call.start：挂起聚合清除（calling 转圈接管）', () => {
-    env.run('applyAgentCallStateFromNotification("rt-other", { callActive: true })');
-    env.run('applyAgentCallStateFromNotification("rt-other", { runtime: { callActive: false, lastOutcome: { status: "continued", reason: "suspended" } }, callActive: false })');
-    env.run('applyAgentCallStateFromNotification("rt-other", { callActive: true })');
+    env.run('ClawFW.CallStates.applyAgentCallStateFromNotification("rt-other", { callActive: true })');
+    env.run('ClawFW.CallStates.applyAgentCallStateFromNotification("rt-other", { runtime: { callActive: false, lastOutcome: { status: "continued", reason: "suspended" } }, callActive: false })');
+    env.run('ClawFW.CallStates.applyAgentCallStateFromNotification("rt-other", { callActive: true })');
     const suspended = env.run('Array.from(_agentSuspended.keys())');
     assert.deepEqual(JSON.parse(JSON.stringify(suspended)), [], '新 call 开始即清挂起');
   });
@@ -227,40 +189,40 @@ describe('applyAgentCallStateFromNotification: 事件路径共用消费（S3）'
   it('聚焦会话 calling 边沿：触发发送按钮三态同步（远程轮询路径补齐）', () => {
     const syncs = [];
     env.ctx._syncPersistentActionButton = () => { syncs.push(1); };
-    env.run('applyAgentCallStateFromNotification("rt-focus", { callActive: true })');
+    env.run('ClawFW.CallStates.applyAgentCallStateFromNotification("rt-focus", { callActive: true })');
     assert.equal(syncs.length, 1, 'false→true 边沿触发按钮同步（call 开始 → stop 态）');
-    env.run('applyAgentCallStateFromNotification("rt-focus", { callActive: true })');
+    env.run('ClawFW.CallStates.applyAgentCallStateFromNotification("rt-focus", { callActive: true })');
     assert.equal(syncs.length, 1, '无 calling 边沿不重复触发');
-    env.run('applyAgentCallStateFromNotification("rt-focus", { callActive: false })');
+    env.run('ClawFW.CallStates.applyAgentCallStateFromNotification("rt-focus", { callActive: false })');
     assert.equal(syncs.length, 2, 'true→false 边沿触发按钮同步（call 结束 → send 态）');
   });
 
   it('非聚焦会话 calling 边沿：不触发发送按钮同步', () => {
     const syncs = [];
     env.ctx._syncPersistentActionButton = () => { syncs.push(1); };
-    env.run('applyAgentCallStateFromNotification("rt-other", { callActive: true })');
-    env.run('applyAgentCallStateFromNotification("rt-other", { callActive: false })');
+    env.run('ClawFW.CallStates.applyAgentCallStateFromNotification("rt-other", { callActive: true })');
+    env.run('ClawFW.CallStates.applyAgentCallStateFromNotification("rt-other", { callActive: false })');
     assert.equal(syncs.length, 0, '非聚焦 runtime 的边沿不碰聚焦会话的按钮');
   });
 
   it('挂起边沿（calling 无变化）不触发按钮同步', () => {
     const syncs = [];
     env.ctx._syncPersistentActionButton = () => { syncs.push(1); };
-    env.run('applyAgentCallStateFromNotification("rt-focus", { runtime: { callActive: false, lastOutcome: { status: "continued", reason: "suspended" } }, callActive: false })');
+    env.run('ClawFW.CallStates.applyAgentCallStateFromNotification("rt-focus", { runtime: { callActive: false, lastOutcome: { status: "continued", reason: "suspended" } }, callActive: false })');
     assert.equal(syncs.length, 0, 'idle→挂起的落定不触发按钮（按钮只读 calling）');
   });
 
   it('ADR-0019 非挂起落定：聚合清除', () => {
-    env.run('applyAgentCallStateFromNotification("rt-other", { callActive: true })');
-    env.run('applyAgentCallStateFromNotification("rt-other", { runtime: { callActive: false, lastOutcome: { status: "continued", reason: "suspended" } }, callActive: false })');
-    env.run('applyAgentCallStateFromNotification("rt-other", { callActive: false })');
+    env.run('ClawFW.CallStates.applyAgentCallStateFromNotification("rt-other", { callActive: true })');
+    env.run('ClawFW.CallStates.applyAgentCallStateFromNotification("rt-other", { runtime: { callActive: false, lastOutcome: { status: "continued", reason: "suspended" } }, callActive: false })');
+    env.run('ClawFW.CallStates.applyAgentCallStateFromNotification("rt-other", { callActive: false })');
     const suspended = env.run('Array.from(_agentSuspended.keys())');
     assert.deepEqual(JSON.parse(JSON.stringify(suspended)), []);
   });
 
   it('ADR-0019 poll 全清分支：_agentSuspended 随 _agentCallActive 对称清空', async () => {
-    env.run('applyAgentCallStateFromNotification("rt-lone", { callActive: true })');
-    env.run('applyAgentCallStateFromNotification("rt-lone", { runtime: { callActive: false, lastOutcome: { status: "continued", reason: "suspended" } }, callActive: false })');
+    env.run('ClawFW.CallStates.applyAgentCallStateFromNotification("rt-lone", { callActive: true })');
+    env.run('ClawFW.CallStates.applyAgentCallStateFromNotification("rt-lone", { runtime: { callActive: false, lastOutcome: { status: "continued", reason: "suspended" } }, callActive: false })');
     // 无任何存活条目（polledIds 空 + 非 SSE）→ 全清
     await env.run('refreshAgentCallStates([])');
     const suspended = env.run('Array.from(_agentSuspended.keys())');
@@ -269,8 +231,8 @@ describe('applyAgentCallStateFromNotification: 事件路径共用消费（S3）'
 
   it('ADR-0019 断连孤儿回收：挂起键随存活集回收（SSE 激活提前返回分支）', async () => {
     env.setSseActive(true);
-    env.run('applyAgentCallStateFromNotification("rt-dead", { callActive: true })');
-    env.run('applyAgentCallStateFromNotification("rt-dead", { runtime: { callActive: false, lastOutcome: { status: "continued", reason: "suspended" } }, callActive: false })');
+    env.run('ClawFW.CallStates.applyAgentCallStateFromNotification("rt-dead", { callActive: true })');
+    env.run('ClawFW.CallStates.applyAgentCallStateFromNotification("rt-dead", { runtime: { callActive: false, lastOutcome: { status: "continued", reason: "suspended" } }, callActive: false })');
     // rt-dead 已断连（不在存活集），孤儿清理应回收挂起键
     await env.run('refreshAgentCallStates([{ connected: true, runtime_session_id: "rt-alive" }])');
     const suspended = env.run('Array.from(_agentSuspended.keys())');
@@ -279,27 +241,27 @@ describe('applyAgentCallStateFromNotification: 事件路径共用消费（S3）'
 
   it('ADR-0019 唤醒轮完整循环：挂起→转圈→再挂起（绿灯恢复）', () => {
     // T0 初始挂起轮结束（真实快照形态）
-    env.run('applyAgentCallStateFromNotification("rt-loop", { callActive: true })');
-    env.run('applyAgentCallStateFromNotification("rt-loop", { runtime: { callActive: false, lastOutcome: { status: "continued", reason: "suspended" } }, callActive: false })');
+    env.run('ClawFW.CallStates.applyAgentCallStateFromNotification("rt-loop", { callActive: true })');
+    env.run('ClawFW.CallStates.applyAgentCallStateFromNotification("rt-loop", { runtime: { callActive: false, lastOutcome: { status: "continued", reason: "suspended" } }, callActive: false })');
     assert.deepEqual(JSON.parse(JSON.stringify(env.run('Array.from(_agentSuspended.keys())'))), ['rt-loop'], 'T0 挂起：绿灯数据源');
 
     // T2 唤醒轮开始（真实 SSE 快照形态：state=call.start，判定显式排除挂起）
-    env.run('applyAgentCallStateFromNotification("rt-loop", { state: { type: "call.start", data: {} }, runtime: { callActive: true }, callActive: true })');
+    env.run('ClawFW.CallStates.applyAgentCallStateFromNotification("rt-loop", { state: { type: "call.start", data: {} }, runtime: { callActive: true }, callActive: true })');
     assert.deepEqual(JSON.parse(JSON.stringify(env.run('Array.from(_agentCallActive.keys())'))), ['rt-loop'], 'T2 唤醒：转圈数据源');
     assert.deepEqual(JSON.parse(JSON.stringify(env.run('Array.from(_agentSuspended.keys())'))), [], 'T2 唤醒：挂起清除');
 
     // T4 唤醒轮结束、再次挂起（连续挂起；state.data 与 runtime.lastOutcome 双路径均带完整 outcome）
-    env.run('applyAgentCallStateFromNotification("rt-loop", { state: { type: "call.finish", data: { status: "continued", reason: "suspended" } }, runtime: { callActive: false, lastOutcome: { status: "continued", reason: "suspended" } }, callActive: false })');
+    env.run('ClawFW.CallStates.applyAgentCallStateFromNotification("rt-loop", { state: { type: "call.finish", data: { status: "continued", reason: "suspended" } }, runtime: { callActive: false, lastOutcome: { status: "continued", reason: "suspended" } }, callActive: false })');
     assert.deepEqual(JSON.parse(JSON.stringify(env.run('Array.from(_agentSuspended.keys())'))), ['rt-loop'], 'T4 再挂起：绿灯恢复（suspended 复位）');
     assert.deepEqual(JSON.parse(JSON.stringify(env.run('Array.from(_agentCallActive.keys())'))), [], 'T4 再挂起：转圈结束');
   });
 
   it('ADR-0019 唤醒轮完整循环：挂起→转圈→真完成（蓝灯窗口）', () => {
-    env.run('applyAgentCallStateFromNotification("rt-loop2", { callActive: true })');
-    env.run('applyAgentCallStateFromNotification("rt-loop2", { runtime: { callActive: false, lastOutcome: { status: "continued", reason: "suspended" } }, callActive: false })');
+    env.run('ClawFW.CallStates.applyAgentCallStateFromNotification("rt-loop2", { callActive: true })');
+    env.run('ClawFW.CallStates.applyAgentCallStateFromNotification("rt-loop2", { runtime: { callActive: false, lastOutcome: { status: "continued", reason: "suspended" } }, callActive: false })');
     // 唤醒轮 → 真完成（completed outcome）
-    env.run('applyAgentCallStateFromNotification("rt-loop2", { state: { type: "call.start", data: {} }, runtime: { callActive: true }, callActive: true })');
-    env.run('applyAgentCallStateFromNotification("rt-loop2", { state: { type: "call.finish", data: { status: "completed", reason: "completed" } }, runtime: { callActive: false, lastOutcome: { status: "completed", reason: "completed" } }, callActive: false })');
+    env.run('ClawFW.CallStates.applyAgentCallStateFromNotification("rt-loop2", { state: { type: "call.start", data: {} }, runtime: { callActive: true }, callActive: true })');
+    env.run('ClawFW.CallStates.applyAgentCallStateFromNotification("rt-loop2", { state: { type: "call.finish", data: { status: "completed", reason: "completed" } }, runtime: { callActive: false, lastOutcome: { status: "completed", reason: "completed" } }, callActive: false })');
     assert.deepEqual(JSON.parse(JSON.stringify(env.run('Array.from(_agentSuspended.keys())'))), [], '真完成：挂起清除');
     assert.deepEqual(JSON.parse(JSON.stringify(env.run('Array.from(_recentlyFinishedRuntimes)'))), ['rt-loop2'], '真完成：蓝灯窗口开启');
   });
@@ -316,13 +278,13 @@ describe('applyCallStateToAgentRecords: 记录写入', () => {
       { source: 'prebuilt', runtime_session_id: 'rt-a' },
       { runtime_session_id: 'rt-b' },
     ];
-    const first = env.run('applyCallStateToAgentRecords("rt-a", true)');
+    const first = env.run('ClawFW.CallStates.applyCallStateToAgentRecords("rt-a", true)');
     assert.equal(first, true);
     assert.equal(env.ctx.allAgents[0].callActive, true);
     assert.equal(env.ctx.allAgents[1].callActive, true);
     assert.equal(env.ctx.allAgents[2].callActive, undefined, 'prebuilt 跳过');
     assert.equal(env.ctx.allAgents[3].callActive, undefined, '非匹配不动');
-    const second = env.run('applyCallStateToAgentRecords("rt-a", true)');
+    const second = env.run('ClawFW.CallStates.applyCallStateToAgentRecords("rt-a", true)');
     assert.equal(second, false, '值不变返回 false');
   });
 });
@@ -365,8 +327,17 @@ describe('getAgentListRenderSignature: 接续窗口事实进签名', () => {
       const _agentSuspended = new Map();
       const _interruptSuppression = new Map();
       let lastCallStateRefreshAt = 0;
+      const agentList = { innerHTML: '', style: {}, classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } }, addEventListener() {}, appendChild() {}, querySelector() { return null; }, querySelectorAll() { return []; } };
       `);
-    ctx.run(sourceBetween(SIDEBAR_SOURCE, 'function getAgentListRenderSignature', 'function renderAgentList'));
+    // 真实 sidebar-render（签名函数与渲染同文件）；本用例只调用签名函数，
+    // 不触发渲染链。顶层容器委托需要 agent-list 元素存在。
+    const agentListStub = {
+      innerHTML: '', style: {},
+      classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
+      addEventListener() {}, appendChild() {}, querySelector() { return null; }, querySelectorAll() { return []; },
+    };
+    ctx.document.getElementById = (id) => (id === 'agent-list' ? agentListStub : null);
+    ctx.loadSource('public/src/modules/sidebar-render.js');
     return ctx;
   }
 

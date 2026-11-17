@@ -8,16 +8,28 @@
  *   - 会话列表项渲染线程徽标（无数据时输出空串，零视觉影响）；
  *   - 顶栏指示器：当前会话属于线程时显示承接状态；非 head 会话
  *     提供显式「前往当前承接会话」入口（浏览历史时不自动跳转）；
- *   - 提供线程寻址提交（submitThreadInput → 线程输入网关）与
- *     head 推进（threadAdvanceHead）入口。输入走哪条端点在服务端判定：
- *     前端只回答「我在哪个对话里发言」，不接受性、不挑端点。
+ *   - 线程寻址输入（submitThreadInput → 线程输入网关）由交互域提供：输入走
+ *     哪条端点在服务端判定，前端只回答「我在哪个对话里发言」，不接受性、
+ *     不挑端点。
  *
  * 当前消费方：声明 threadHost 的 APP（coder、memo，宿主判定由服务端发现
  * 派生）。其他工作空间无线程数据，本模块所有入口均为 no-op / 空输出。
  *
+ * ESM 拆分（P2 · thread-store 交互域批次）：交互入口与暂存文本查询已迁
+ * `thread-store-domain.js`（openConversationTarget / enterThreadAwaitView /
+ * registerSessionActivateTarget / submitThreadInput / getThreadPendingTexts）。
+ * 拆分时随迁的 `getActiveConversationTarget` / `threadAdvanceHead` 在收尾复审中
+ * 确认生产零消费，已连同实现删除（不再有 window 面，也没有私有死代码）。
+ * 本文件保留唯一的 classic 刷新引擎（状态 + 索引 + 周期拉取 + 接续重绑 +
+ * 顶栏指示器）：三条同步调度必须在 index.html 的 classic 标签原位注册，且首屏
+ * 同步渲染链与 refreshThreads 收尾直接读用它。R4 残留，不计作已迁。
+ *
+ * 交互域经 `createThreadStoreHost()` 取用状态与内部操作：唯一实时引用、
+ * 无副本、无 ready 队列。本文件的引擎与各入口闭包不调用交互域任何函数。
+ *
  * 依赖全局（均在运行时调用，加载顺序无关）：
  *   - escapeHtml, currentLanguage (app-core.js)
- *   - getCurrentHostAgentRecord, switchAgent (app-main.js)
+ *   - getCurrentHostAgentRecord, switchAgent (app-main.js / ESM runtime-switch 桥)
  *   - window.runWorkspaceAction (workspace-actions.js)
  */
 
@@ -41,6 +53,21 @@ window.ClawThreads = {
 };
 
 const THREADS_REFRESH_INTERVAL_MS = 20000;
+
+// ── 交互域窄宿主（thread-store-domain.js 的唯一入口）───────────────
+//
+// 只暴露交互域真正需要的东西：状态唯一实时引用 + 三个引擎内部操作。不做
+// 状态镜像、不做 ready 队列、不在交互域里重写任何实现——`getState()` 每次
+// 现读 window.ClawThreads（整对象被替换也生效），内部操作就是下面这几份
+// 函数本身。ESM 交互域在 deferred 相取用，classic 相已有全部实现。
+function createThreadStoreHost() {
+  return Object.freeze({
+    getState: () => window.ClawThreads,
+    getCurrentActiveSession: _currentActiveSession,
+    isHandoffActive: _handoffActive,
+    syncActiveThreadSubscription: _syncActiveThreadSubscription,
+  });
+}
 
 // ── 内部工具 ──────────────────────────────────────────────────────
 
@@ -154,8 +181,6 @@ window.getThreadForSession = (agentId, sessionId) => {
   return window.ClawThreads.sessionIndex[`${agentId}::${sessionId}`] || null;
 };
 
-window.getActiveConversationTarget = () => window.ClawThreads.activeConversation;
-
 /**
  * 输入目标一致性校验（会话绝对隔离）：全局线程指向（activeConversation）
  * 只在与当前视图一致时才可作为输入目标。不一致（用户已切到别的会话 /
@@ -191,144 +216,6 @@ window.getActiveThreadInputTarget = () => {
     return selected;
   }
   return null;
-};
-
-/**
- * 接续等待表面（挡板窗口唯一入口）：视图身份挂线程 + 聊天表面挂等待
- * 会话 + 拉取上一棒消息渲染。消息源是服务端会话文件只读出口
- * （/protoclaw/prebuilt_sessions/session_messages：runtime.context.messages
- * 与 viewer /messages 同源同形），挡板期间两代 runtime 都不可用也不影响
- * 上一棒对话可见。挡板结束由 head-advanced 重绑接管（loadAgentData 拉新
- * head，消息自然切换）；挡板失败收敛由 _reconcileConversationWithThreadHead
- * 的挡板死分支终结等待态。输入走线程 inbox 暂存（等待重绑态是
- * getActiveThreadInputTarget 的合法形态），新 head 上线后投递。
- */
-async function enterThreadAwaitSurface(agentId, thread, sessionId) {
-  if (typeof window.switchAgent === 'function') {
-    await window.switchAgent(agentId, { awaitSessionId: sessionId });
-  }
-  window.ClawThreads.activeConversation = {
-    agentId,
-    threadId: thread.threadId,
-    sessionId,
-    runtimeId: '',
-    wasHead: true,
-    awaitSurface: true,
-  };
-  applySessionViewPatch({ identity: { agentId, sessionId } });
-  // 选中态收口：switchAgent 内部的侧栏渲染发生在 activeConversation 落定
-  // 之前——那一刻宿主节点被判选中、占位条目判非。等待身份挂载后立即重渲
-  // 侧栏纠正高亮（签名含等待目标事实，见 getAgentListRenderSignature）。
-  if (typeof renderAgentList === 'function') renderAgentList();
-  window.updateThreadHeaderIndicator();
-  _syncActiveThreadSubscription();
-  _loadAwaitSurfaceMessages(agentId, sessionId);
-  return { ok: true, target: window.ClawThreads.activeConversation };
-}
-
-/**
- * 按 threadId 进入等待表面（供「服务端已判定接续中」的调用方使用）。
- *
- * 与 openConversationTarget 的区别：本入口不做前置判定、不再发起 activate
- * 请求。调用方（如 open_session 的 409 分支）已经拿到服务端权威结论，再走
- * openConversationTarget 会先读本地线程缓存判断挡板，构成「请求 → 409 →
- * 再请求」的可循环路径。此处只负责挂视图。
- *
- * 命名必须区别于内部 enterThreadAwaitSurface：classic script 的顶层函数
- * 声明本身是 window 属性，同名赋值会把这个函数覆盖成包装器，内部调用点
- * （openConversationTarget / 本包装器自身）随之变成自递归——实参按 target
- * 解析得到空 threadId，表现为点击线程后 thread_missing。
- */
-window.enterThreadAwaitView = async (target) => {
-  const threadId = String(target?.threadId || '').trim();
-  const thread = threadId ? window.getThreadById(threadId) : null;
-  if (!thread) return { ok: false, reason: 'thread_missing' };
-  const agentId = String(target?.agentId || thread.agentId || '').trim();
-  if (!agentId) return { ok: false, reason: 'agent_missing' };
-  const sessionId = String(thread.headSessionId || target?.sessionId || '').trim();
-  if (!sessionId) return { ok: false, reason: 'session_missing' };
-  return enterThreadAwaitSurface(agentId, thread, sessionId);
-};
-
-function _loadAwaitSurfaceMessages(agentId, sessionId) {
-  // This read is Session-owned and remains valid while no runtime is bound during rotation.
-  const viewToken = captureSessionViewToken('', { agentId, sessionId });
-  fetch(`/protoclaw/prebuilt_sessions/session_messages?agentId=${encodeURIComponent(agentId)}&sessionId=${encodeURIComponent(sessionId)}`)
-    .then((response) => (response.ok ? response.json() : null))
-    .then((data) => {
-      // 竞态守卫：只允许仍属于该 SessionView 的响应提交。
-      const selected = window.ClawThreads.activeConversation;
-      if (!selected?.awaitSurface || selected.agentId !== agentId || selected.sessionId !== sessionId) return;
-      if (!Array.isArray(data?.messages)) return;
-      commitSessionViewPatch(viewToken, { messages: data.messages }, () => {
-        _lastRenderedChatSig = '';
-        clearChatLoadingSession();
-        if (typeof renderCurrentMainView === 'function') renderCurrentMainView();
-      });
-    })
-    .catch(() => {});
-}
-
-window.openConversationTarget = async (target) => {  const threadId = String(target?.threadId || '').trim();
-  const thread = threadId ? window.getThreadById(threadId) : null;
-  // threadId 已足自解析宿主：接续退役窗口的占位条目点击时 runtimeId 已不在
-  // allAgents，调用方只能提供 threadId——宿主从线程事实回退，点击不得静默
-  // agent_missing（否则接续中切走后切不回来）。
-  const agentId = String(target?.agentId || thread?.agentId || '').trim();
-  if (!agentId) return { ok: false, reason: 'agent_missing' };
-  if (threadId && !thread) return { ok: false, reason: 'thread_missing' };
-  const sessionId = String(thread?.headSessionId || target?.sessionId || '').trim();
-  if (!sessionId) return { ok: false, reason: 'session_missing' };
-
-  // 接力挡板窗口：head runtime 的生命周期由接续流程管理（退役 → compact
-  // → successor），open_session 会无条件 startManagedAgent 给退役中的 head
-  // 启动 runtime，与 rotation 直接打架（历史事故：点击接力条目触发 runtime
-  // 竞态、视图混乱闪烁）。本地挂线程等待表面：视图身份挂到线程，接力徽标
-  // 即时可见，head-advanced 事件原地重绑后自动接上。awaitSessionId 让
-  // 切换落在该会话的聊天加载表面（等待视图）而不是工作空间首页——用户
-  // 点的导航目标是这条线程，不是首页。
-  if (thread && _handoffActive(thread)) {
-    return enterThreadAwaitSurface(agentId, thread, sessionId);
-  }
-
-  // Leave the previous conversation selected while navigation saves its draft.
-  if (_currentActiveSession()?.agentId !== agentId && typeof window.switchAgent === 'function') {
-    await window.switchAgent(agentId);
-  }
-
-  const runtime = (Array.isArray(allAgents) ? allAgents : []).find((entry) => (
-    entry?.source === 'child'
-    && entry?.parent_id === agentId
-    && String(entry?.active_workspace_session_id || '') === sessionId
-  ));
-  const runtimeId = String(runtime?.runtime_session_id || runtime?.runtimeSessionId || runtime?.id || '').trim();
-  if (runtimeId && typeof setViewerSessionBinding === 'function') {
-    setViewerSessionBinding(runtimeId, sessionId);
-  }
-  if (runtimeId && typeof window.switchAgent === 'function') {
-    await window.switchAgent(runtimeId);
-  } else if (typeof window.runWorkspaceAction === 'function') {
-    await window.runWorkspaceAction(JSON.stringify({ type: 'open_session', sessionId }));
-  } else {
-    return { ok: false, reason: 'runtime_missing' };
-  }
-
-  const active = _currentActiveSession();
-  const resolvedRuntimeId = String(currentRuntimeAgentId || runtimeId || '').trim();
-  if (active?.agentId !== agentId || active?.sessionId !== sessionId || !resolvedRuntimeId) {
-    return { ok: false, reason: 'navigation_failed' };
-  }
-  window.ClawThreads.activeConversation = {
-    agentId,
-    threadId: thread?.threadId || '',
-    sessionId,
-    runtimeId: resolvedRuntimeId,
-    // 冻结事实：视图身份挂在 head 上才有资格进入「等待重绑」豁免（app-main
-    // 404 处理）；历史成员浏览冻结时即非 head，不占用接续窗口语义。
-    wasHead: sessionId === thread?.headSessionId,
-  };
-  _syncActiveThreadSubscription();
-  return { ok: true, target: window.ClawThreads.activeConversation };
 };
 
 /**
@@ -402,36 +289,6 @@ function _handoffActive(thread) {
   return String(thread?.status || '') === 'rotating';
 }
 
-/**
- * 登记 activate 响应中的目标事实（T006 / T003 响应 shape）。
- *
- * 服务端 activate 已按 Thread 成员关系解析目标：历史成员返回
- * `browseOnly:true` + `target`（实际生效对象 = Thread）。前端据此：
- *   - 历史成员 → ClawThreads.browseOnly 置位（顶栏只读横幅 + 输入守卫）；
- *   - 任何成员 → 刷新线程（Thread 是真实对象，不能只刷 Session）。
- *
- * @param {object} [activateResult] activate 路由的响应 JSON
- */
-window.registerSessionActivateTarget = (activateResult) => {
-  const state = window.ClawThreads;
-  const target = activateResult?.target?.actual || activateResult?.target;
-  if (activateResult?.browseOnly === true) {
-    state.browseOnly = true;
-    state.browseOnlyThreadId = String(activateResult?.target?.threadId || target?.threadId || '').trim();
-  } else {
-    // 非 browse-only 的打开/创建：清除历史残留的只读事实
-    state.browseOnly = false;
-    state.browseOnlyThreadId = '';
-  }
-  // 兼容 Session 入口返回实际 Thread 结果时（T003 target shape）：
-  // UI 刷新 Thread 而不是只刷新 Session——head 推进 / 成员变化立即可见。
-  if (target?.type === 'thread' || activateResult?.browseOnly === true) {
-    void window.refreshThreads(true);
-  }
-  window.updateThreadHeaderIndicator();
-  _syncActiveThreadSubscription();
-};
-
 // ── 顶栏指示器 ────────────────────────────────────────────────────
 
 window.updateThreadHeaderIndicator = () => {
@@ -485,22 +342,6 @@ window.updateThreadHeaderIndicator = () => {
   }
 };
 
-// ── 输入路由守卫 ──────────────────────────────────────────────────
-
-/**
- * 当前激活会话所属线程的 pending 指令文本（暂存气泡数据源）。
- * 无线程 / 无 pending 返回空数组。
- */
-window.getThreadPendingTexts = () => {
-  const active = _currentActiveSession();
-  if (!active || !active.agentId || !active.sessionId) return [];
-  const thread = window.getThreadForSession(active.agentId, active.sessionId);
-  if (!thread || Array.isArray(thread.pendingTexts)) {
-    return Array.isArray(thread?.pendingTexts) ? thread.pendingTexts : [];
-  }
-  return [];
-};
-
 // ── 接力分隔条（聊天区顶部：非 root 棒显示来源与方式）──────────────
 
 /**
@@ -528,52 +369,6 @@ window.jumpToThreadHead = async (threadId) => {
   }
   window.updateThreadHeaderIndicator();
   return { ok: true };
-};
-
-window.submitThreadInput = async (threadId, payload = {}) => {
-  const res = await fetch(`/protoclaw/threads/${encodeURIComponent(threadId)}/input`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      text: typeof payload.text === 'string' ? payload.text : '',
-      ...(Array.isArray(payload.images) ? { images: payload.images } : {}),
-      ...(typeof payload.source === 'string' ? { source: payload.source } : {}),
-      ...(typeof payload.sourceRef === 'string' ? { sourceRef: payload.sourceRef } : {}),
-      ...(payload.kind ? { kind: payload.kind } : {}),
-      ...(Array.isArray(payload.capabilityActivations)
-        ? { capabilityActivations: payload.capabilityActivations } : {}),
-      ...(payload.metadata && typeof payload.metadata === 'object' && !Array.isArray(payload.metadata)
-        ? { metadata: payload.metadata } : {}),
-    }),
-  });
-  const data = await res.json().catch(() => null);
-  if (!res.ok || data?.ok !== true) {
-    throw Object.assign(new Error(data?.message || `thread input failed (${res.status})`), {
-      code: data?.code || 'thread_input_failed',
-      status: res.status,
-    });
-  }
-  void window.refreshThreads?.(true);
-  return data;
-};
-
-window.threadAdvanceHead = async (threadId, toSessionId, options = {}) => {
-  const res = await fetch(`/protoclaw/threads/${encodeURIComponent(threadId)}/head`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      toSessionId,
-      fromSessionId: options.fromSessionId,
-      expectedRevision: options.expectedRevision,
-      endKind: options.endKind,
-    }),
-  });
-  const data = await res.json().catch(() => null);
-  if (!res.ok || !data?.ok) {
-    throw new Error(data?.message || `threadAdvanceHead failed (${res.status})`);
-  }
-  await window.refreshThreads(true);
-  return data;
 };
 
 // ── 接续换头：保持同一会话视图身份，只更换 runtime 绑定与消息数据源 ──

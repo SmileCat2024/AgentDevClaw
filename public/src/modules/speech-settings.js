@@ -2,13 +2,55 @@
  * speech-settings.js — 语音模型预设管理模块（从 settings-overlay.js 拆分）
  *
  * 包含：语音模型预设的渲染、增删改、应用、持久化。
- * 依赖（全局）：escapeHtml, currentLanguage, renderSettingsOverlay
+ *
+ * ESM 化（P2 消费方批次 7）：命名导出 + 显式 import（语音配置缓存、转义）。
+ * 与 model-settings 互为 UI 依赖（本模块取设置面板重渲染，设置面板取本模块的
+ * 语音区渲染与文案标签）：静态依赖方向为 model-settings → 本模块，反向经
+ * configureSpeechSettingsHost 注入的宿主面。
+ * 预设编辑态由本模块持有（getSpeechEditing / setSpeechEditing），设置面板
+ * owner 经命名导出读写，不再借宿 window.ClawFW._speechEditing。
  *
  * 事件接线：模板经 data-action="speech.*" 声明，处理器集中在文件尾部注册。
- * window 导出只剩 addSpeechPreset / cancelSpeechPresetEdit / saveSpeechPreset
- * （model-settings.js 注册块经 window 转调）；applySpeechPreset 另被保存流程
- * 模块内直调，消费面仅本模块，随本批次收敛。
  */
+import { escapeHtml } from './markdown-utils.js';
+import {
+  getClawSpeechModelConfig,
+  getClawSpeechPresets,
+  setClawSpeechModelConfig,
+  setClawSpeechPresets,
+} from './speech-config-cache.js';
+// —— 设置覆盖层宿主面（由 model-settings.js 求值末尾装配）——
+// 本模块是设置覆盖层的语音子面板，增删改后需要面板 owner 重渲染；与 model-settings
+// 互为 UI 依赖，依赖方向仍固定为单向：覆盖层由面板 owner（model-settings）装配，
+// 子面板不反向 import 面板，需要的面板能力只经本宿主面注入——这是职责约定，
+// 不宣称「互 import 必然出错」：真实 ESM 图里同一文件只有一个 URL，环不会复制
+// 模块实例（早期「环会产生两份实例」的说法来自旧 unique-query 装载器的缓存切图）。
+let overlayHost = null;
+
+// 语音预设的编辑态：null = 未编辑、'new' = 新建、number = 编辑既有预设。
+// owner 在本模块（预设列表与编辑表单都在这里渲染）；设置覆盖层 owner
+// （model-settings）经 getSpeechEditing / setSpeechEditing 读写，不再借宿
+// window.ClawFW。
+let speechEditing = null;
+
+export function getSpeechEditing() {
+  return speechEditing;
+}
+
+export function setSpeechEditing(value) {
+  speechEditing = value;
+}
+
+export function configureSpeechSettingsHost(host) {
+  overlayHost = host;
+}
+
+function speechSettingsHost() {
+  if (!overlayHost) {
+    throw new Error('[speech-settings] 设置覆盖层宿主未装配（应由 model-settings 装载时注入）');
+  }
+  return overlayHost;
+}
 
 function speechApiTypeLabel(apiType) {
   if (apiType === 'audio') return 'Audio';
@@ -24,7 +66,6 @@ function normalizeSpeechApiTypeValue(value) {
 function renderSpeechModelSection(isZh) {
   const sc = getClawSpeechModelConfig() || {};
   const presets = getClawSpeechPresets();
-  const speechEditing = window.ClawFW._speechEditing; // null = not editing, 'new' = new preset, number = edit existing
   const configured = !!(sc.baseUrl && sc.apiKey);
 
   // Find active preset (apiType participates: presets differing only in
@@ -54,6 +95,7 @@ function renderSpeechModelSection(isZh) {
   ].join('');
 
   // If editing a preset, show edit form (without active banner for focus)
+  // （speechEditing：null = 未编辑、'new' = 新建、number = 编辑既有预设）
   if (speechEditing != null) {
     const editPreset = speechEditing === 'new'
       ? { name: '', baseUrl: '', apiKey: '', model: '', language: 'auto', apiType: 'chat' }
@@ -165,26 +207,26 @@ function toggleSpeechApiKeyVisibility() {
   }
 }
 
-window.addSpeechPreset = function() {
-  window.ClawFW._speechEditing = 'new';
-  renderSettingsOverlay();
-};
-
-function editSpeechPreset(idx) {
-  window.ClawFW._speechEditing = idx;
-  renderSettingsOverlay();
+export function addSpeechPreset() {
+  speechEditing = 'new';
+  speechSettingsHost().renderSettingsOverlay();
 }
 
-window.cancelSpeechPresetEdit = function() {
-  window.ClawFW._speechEditing = null;
-  renderSettingsOverlay();
-};
+function editSpeechPreset(idx) {
+  speechEditing = idx;
+  speechSettingsHost().renderSettingsOverlay();
+}
+
+export function cancelSpeechPresetEdit() {
+  speechEditing = null;
+  speechSettingsHost().renderSettingsOverlay();
+}
 
 async function deleteSpeechPreset(idx) {
   const presets = getClawSpeechPresets();
   presets.splice(idx, 1);
   setClawSpeechPresets(presets);
-  window.ClawFW._speechEditing = null;
+  speechEditing = null;
   await saveSpeechFullConfig();
 }
 
@@ -203,7 +245,7 @@ async function applySpeechPreset(idx) {
   await saveSpeechFullConfig();
 }
 
-window.saveSpeechPreset = async function(editIdx) {
+export async function saveSpeechPreset(editIdx) {
   const el = (id) => document.getElementById(id);
   const preset = {
     name: (el('speech-preset-name')?.value || '').trim(),
@@ -224,12 +266,12 @@ window.saveSpeechPreset = async function(editIdx) {
     presets[editIdx] = preset;
   }
   setClawSpeechPresets(presets);
-  window.ClawFW._speechEditing = null;
+  speechEditing = null;
   await saveSpeechFullConfig();
   if (!wasActive) {
     await applySpeechPreset(editIdx);
   }
-};
+}
 
 async function saveSpeechFullConfig() {
   const speechModel = getClawSpeechModelConfig() || { baseUrl: '', apiKey: '', model: '', language: 'auto', apiType: 'chat' };
@@ -243,11 +285,14 @@ async function saveSpeechFullConfig() {
     const result = await resp.json();
     setClawSpeechModelConfig(result.speechModel);
     setClawSpeechPresets(Array.isArray(result.speechPresets) ? result.speechPresets : []);
-    renderSettingsOverlay();
+    speechSettingsHost().renderSettingsOverlay();
   } catch (error) {
     console.error('Failed to save speech model config:', error);
   }
 }
+
+// ── 导出面（model-settings 消费）─────────────────────────────────
+export { renderSpeechModelSection, speechApiTypeLabel };
 
 // ── 事件接线（data-action="speech.*"）─────────────────────────────
 

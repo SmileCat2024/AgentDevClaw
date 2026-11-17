@@ -22,17 +22,30 @@
  *   - New assistant rows get their pre-hidden process children revealed
  *     (display:none removal), keeping fold-at-birth measurable.
  *
- * Loads the real chat-viewport.js / input-helpers.js / lazy-tool-content.js /
- * chat-renderer.js / chat-row-visibility.js into a vm sandbox with a
- * layout-model DOM stub (mirroring frontend-tool-collapse-windowing.test.js).
+ * 装载路线（P2）：lazy-tool-content / chat-row-visibility 已迁 ESM，经
+ * withP2EsmCase 的 `c.load` 真实 import（refreshMeasuredChatRows /
+ * applyProcessDistance / setProcessWindowingDisabled 就是生产入口）；
+ * classic 侧按 index.html 真实加载序跑 action-dispatcher → i18n → app-core →
+ * chat-viewport → input-helpers → chat-renderer，两个 ESM 域的 classic 消费面
+ * 由生产兼容桥 p2-w2-1-chat-windowing-host 提供。原用例对 `_rowCache` /
+ * `_cachedRows` 的内部身份断言改写为同一语义的公开观测：旧行零重扫 = 缓存
+ * 复用，DOM 重建后每行重扫 = 全量回退。
+ *
+ * 可接受边界（审核 #4）：缓存身份是模块私有，公开面只能观测「旧行是否被
+ * 重扫」。这个双层 gate（增量路径复用缓存 / 全量路径因其他原因提前返回）无法
+ * 区分「缓存确实复用」与「增量分支错误地零工作量返回」这类内部回归；补齐它
+ * 需要为测试新增私有导出/内省面，因此有意不做。本文件改为同时钉住可观测的
+ * 窗口结果（新旧行 cv 状态、第二次增量调用仍零重扫、回退结果与干净全量 pass
+ * 逐行一致），内部短路类回归由这些结果间接兜住。
  */
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import vm from 'node:vm';
+import { withP2EsmCase } from './helpers/p2-esm-case.js';
 
-const src = (p) => fs.readFileSync(new URL('../public/src/' + p, import.meta.url), 'utf8');
+const LAZY_TOOL_CONTENT = 'public/src/modules/lazy-tool-content.js';
+const ROW_VISIBILITY = 'public/src/modules/chat-row-visibility.js';
+const WINDOWING_HOST = 'public/src/modules/p2-w2-1-chat-windowing-host.js';
 
 const VIEW_H = 800;
 
@@ -152,7 +165,7 @@ function installLayout(container) {
   return layout;
 }
 
-function createHarness({ messages } = {}) {
+function createRig() {
   const container = {
     clientHeight: VIEW_H,
     clientWidth: 1000,
@@ -176,46 +189,136 @@ function createHarness({ messages } = {}) {
   const rafOrder = [];
   let seq = 1;
 
-  const sandbox = {
-    console, Date, JSON, Math, Promise, Map, Set, Number, Object, Array, Boolean, String, isNaN, parseInt,
-    CSS: { supports: () => true }, // chat-row-visibility capability probe
-    window: {},
+  const elements = new Map();
+  const elementStub = (id) => ({
+    id, innerHTML: '', textContent: '', style: {},
+    classList: makeClassList(), dataset: {},
+    clientHeight: 0, clientWidth: 0, scrollHeight: 0, scrollTop: 0, parentElement: null,
+    addEventListener() {}, removeEventListener() {},
+    querySelector() { return null; }, querySelectorAll() { return []; },
+    getBoundingClientRect() { return { top: 0, left: 0, width: 0, height: 0 }; },
+  });
+  // app-core 的 container 引用 = document.getElementById('chat-container')。
+  const document = {
+    activeElement: null,
+    readyState: 'complete',
+    getElementById(id) {
+      if (id === 'chat-container') return container;
+      if (!elements.has(id)) elements.set(id, elementStub(id));
+      return elements.get(id);
+    },
+    querySelector() { return null; },
+    querySelectorAll() { return []; },
+    createElement: () => elementStub('created'),
+    createTextNode: (text) => ({ textContent: text }),
+    addEventListener() {}, removeEventListener() {},
+    body: elementStub('body'), head: elementStub('head'), documentElement: elementStub('html'),
+  };
+
+  const fakeTimers = {
     setTimeout(callback) { const id = seq++; timers.set(id, callback); return id; },
     clearTimeout(id) { timers.delete(id); },
+    setInterval(callback) { const id = seq++; timers.set(id, callback); return id; },
+    clearInterval(id) { timers.delete(id); },
     requestAnimationFrame(callback) { const id = seq++; rafCallbacks.set(id, callback); rafOrder.push(id); return id; },
     cancelAnimationFrame(id) { rafCallbacks.delete(id); const i = rafOrder.indexOf(id); if (i >= 0) rafOrder.splice(i, 1); },
-    MutationObserver: class { observe() {} disconnect() {} },
-    ResizeObserver: class { observe() {} disconnect() {} },
-    document: {
-      getElementById: () => null,
-      querySelector: () => null,
-      querySelectorAll: () => [],
-      createElement: () => ({ style: {}, classList: makeClassList(), dataset: {}, setAttribute() {} }),
-      addEventListener() {}, // action-dispatcher 装载时绑定委托监听
-      body: { contains: () => true },
-      activeElement: null,
+  };
+
+  return {
+    container, document, fakeTimers,
+    addRow(entry) {
+      container._entries.push(entry);
+      container._markDirty();
+      Object.defineProperty(entry.row, 'offsetTop', {
+        get: () => {
+          entry._topReads = (entry._topReads || 0) + 1;
+          const rec = container._layout().tops.get(entry.row);
+          return rec ? rec.top : 0;
+        },
+      });
+      Object.defineProperty(entry.row, 'offsetHeight', {
+        get: () => {
+          const rec = container._layout().tops.get(entry.row);
+          return rec ? rec.h : 0;
+        },
+      });
+      Object.defineProperty(entry.row, 'getBoundingClientRect', {
+        get: () => () => {
+          const rec = container._layout().tops.get(entry.row);
+          return { top: rec ? rec.top : 0, height: rec ? rec.h : 0 };
+        },
+      });
+      // Route classList mutations through layout invalidation.
+      for (const target of [entry.row, entry.content, ...(entry.row._processChildren || [])]) {
+        const list = target.classList;
+        if (!list.__wired) {
+          list.__wired = true;
+          const add = list.add.bind(list);
+          const remove = list.remove.bind(list);
+          const toggle = list.toggle.bind(list);
+          list.add = (...n) => { add(...n); container._markDirty(); };
+          list.remove = (...n) => { remove(...n); container._markDirty(); };
+          list.toggle = (name, force) => { const r = toggle(name, force); container._markDirty(); return r; };
+        }
+      }
+      return entry;
     },
-    localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
+    flushTimers() {
+      const pending = [...timers.values()];
+      timers.clear();
+      pending.forEach((cb) => cb());
+    },
+    pumpFrame() {
+      const ids = rafOrder.splice(0);
+      ids.forEach((id) => {
+        const cb = rafCallbacks.get(id);
+        rafCallbacks.delete(id);
+        if (cb) cb();
+      });
+    },
+    makeToolEntries({ realH = 600, from, to }) {
+      const out = [];
+      for (let i = from; i < to; i++) {
+        out.push(this.addRow(makeRow({ role: 'tool', realH, msgId: `msg-${i}` })));
+      }
+      return out;
+    },
+    makeAssistantEntries({ realH = 200, from, to }) {
+      // Assistant rows carrying one tool-call-container process child, the
+      // shape _buildRowCache caches.
+      const out = [];
+      for (let i = from; i < to; i++) {
+        const e = makeRow({ role: 'assistant', realH, msgId: `msg-${i}` });
+        const callCard = {
+          classList: makeClassList(),
+          style: { _props: {}, setProperty(k, v) { this._props[k] = String(v); }, removeProperty(k) { delete this._props[k]; } },
+        };
+        callCard.classList.add('tool-call-container');
+        e.row._processChildren = [callCard];
+        out.push(this.addRow(e));
+      }
+      return out;
+    },
+  };
+}
 
-    container,
-    followLatestButton: { classList: { toggle() {}, add() {}, remove() {} }, innerHTML: '' },
-    workspaceTabsBar: null,
-    currentMessages: messages || [],
-    allAgents: [],
-    toolRenderConfigs: {},
-    _lastRenderedChatSig: '',
-    _userExpandedReasoning: new Set(),
-    _userExpandedMsgs: new Set(),
-    _userCollapsedMsgs: new Set(),
-    currentInputRequests: [],
-    currentRuntimeAgentId: 'rt-1',
-    _agentCallActive: new Map(),
-    lastRenderedInputSignature: '',
-    chatProcessToggle: null,
-    CHAT_PROCESS_VISIBILITY_KEY: 'k',
-    readCurrentSessionViewState: () => ({ messages: sandbox.currentMessages, inputRequests: [] }),
-    saveChatProcessVisibility() {},
-
+/** classic 真实 bootstrap + ESM 真实 import 的一次用例环境。 */
+async function withHarness(options, fn) {
+  const rig = createRig();
+  // currentMessages 的唯一真源是 app-core 装载期注册的桥键；会话视图读取面
+  // 必须在装载后绑定到同一 owner（不能读一份初始数组的副本）。
+  const live = { readMessages: () => [] };
+  const globals = {
+    document: rig.document,
+    // input-actions 已 import 真实 poll 模块（poll-coordinator-host）：按生产
+    // 宿主 seam 提供最小面，本文件不驱动轮询、不再保留 window.poll 桩。
+    createPollCoordinatorHost: () => ({
+      run: () => Promise.resolve(),
+      fastInterval: () => 2000,
+      setTimeout: (callback, delay) => setTimeout(callback, delay),
+      clearTimeout: (id) => clearTimeout(id),
+    }),
+    CSS: { supports: () => true }, // chat-row-visibility 能力探测
     isChatSurfaceActive: () => true,
     shouldRenderWorkspaceSurface: () => false,
     escapeHtml: (v) => String(v ?? ''),
@@ -225,342 +328,273 @@ function createHarness({ messages } = {}) {
     renderJsonHighlight: (d) => '<pre>' + String(d).slice(0, 20) + '</pre>',
     applyTemplate: () => '<div>args</div>',
     enhanceMathInElement() {},
+    enhanceMarkdownTables() {},
     clearTruncatedHighlightData() {},
     getToolDisplayName: (n) => n || 'Tool',
     getToolRenderTemplate: () => ({}),
     resolveToolProgressForCall: () => null,
-    canRollbackMessage: () => false,
     requestRollbackEdit() {},
     switchAgent() {},
     ensureChatRuntimeIndicator() {},
     getEmptyStateHtml: () => '<div class="empty-state">empty</div>',
     renderCurrentMainView() {},
     getCurrentHostAgentRecord: () => null,
-
-    // chat-viewport.js module state (app-core.js declarations)
-    followLatestEnabled: false,
-    suppressFollowScrollEvent: false,
-    lastManualScrollIntentAt: 0,
-    _progScrollCooldownUntil: 0,
-    followLatestEntryUntil: 0,
-    chatViewportObserversReady: true,
-    chatViewportObserverSuppressDepth: 0,
-    chatViewportObserverQuietUntil: 0,
-    chatViewportMutationObserver: null,
-    chatViewportResizeObserver: null,
-    chatViewportSettlementToken: 0,
-    chatViewportSettlementRaf: 0,
-    chatViewportSettlementTimer: null,
-    chatViewportSettlementContext: null,
-    chatViewportFollowRaf: 0,
-    chatViewportFollowToken: 0,
-    chatViewportFollowTransition: 'locked',
-    assemblySideRailRevealTimer: null,
+    readCurrentSessionViewState: () => ({ messages: live.readMessages(), inputRequests: [] }),
+    prependTimeSeparatorHtml: (_messages, _index, rowHtml) => rowHtml,
   };
-  sandbox.window = sandbox;
-
-  vm.createContext(sandbox);
-  // 真实生产加载顺序第一位：分发器先于一切声明 data-action 的模块装载
-  vm.runInContext(src('modules/action-dispatcher.js'), sandbox, { filename: 'action-dispatcher.js' });
-  vm.runInContext(src('modules/chat-viewport.js'), sandbox, { filename: 'chat-viewport.js' });
-  vm.runInContext(src('modules/input-helpers.js'), sandbox, { filename: 'input-helpers.js' });
-  vm.runInContext(src('modules/lazy-tool-content.js'), sandbox, { filename: 'lazy-tool-content.js' });
-  vm.runInContext(src('modules/chat-renderer.js'), sandbox, { filename: 'chat-renderer.js' });
-  vm.runInContext(src('modules/chat-row-visibility.js'), sandbox, { filename: 'chat-row-visibility.js' });
-
-  function flushTimers() {
-    const pending = [...timers.values()];
-    timers.clear();
-    pending.forEach((cb) => cb());
-  }
-  function pumpFrame() {
-    const ids = rafOrder.splice(0);
-    ids.forEach((id) => {
-      const cb = rafCallbacks.get(id);
-      rafCallbacks.delete(id);
-      if (cb) cb();
-    });
-  }
-
-  function addRow(entry) {
-    container._entries.push(entry);
-    container._markDirty();
-    Object.defineProperty(entry.row, 'offsetTop', {
-      get: () => {
-        entry._topReads = (entry._topReads || 0) + 1;
-        const rec = container._layout().tops.get(entry.row);
-        return rec ? rec.top : 0;
-      },
-    });
-    Object.defineProperty(entry.row, 'offsetHeight', {
-      get: () => {
-        const rec = container._layout().tops.get(entry.row);
-        return rec ? rec.h : 0;
-      },
-    });
-    Object.defineProperty(entry.row, 'getBoundingClientRect', {
-      get: () => () => {
-        const rec = container._layout().tops.get(entry.row);
-        return { top: rec ? rec.top : 0, height: rec ? rec.h : 0 };
-      },
-    });
-    // Route classList mutations through layout invalidation.
-    for (const target of [entry.row, entry.content, ...(entry.row._processChildren || [])]) {
-      const list = target.classList;
-      if (!list.__wired) {
-        list.__wired = true;
-        const add = list.add.bind(list);
-        const remove = list.remove.bind(list);
-        const toggle = list.toggle.bind(list);
-        list.add = (...n) => { add(...n); container._markDirty(); };
-        list.remove = (...n) => { remove(...n); container._markDirty(); };
-        list.toggle = (name, force) => { const r = toggle(name, force); container._markDirty(); return r; };
-      }
-    }
-    return entry;
-  }
-
-  function makeToolEntries({ realH = 600, from, to }) {
-    const out = [];
-    for (let i = from; i < to; i++) {
-      out.push(addRow(makeRow({ role: 'tool', realH, msgId: `msg-${i}` })));
-    }
-    return out;
-  }
-
-  function makeAssistantEntries({ realH = 200, from, to }) {
-    // Assistant rows carrying one tool-call-container process child, the
-    // shape _buildRowCache caches.
-    const out = [];
-    for (let i = from; i < to; i++) {
-      const e = makeRow({ role: 'assistant', realH, msgId: `msg-${i}` });
-      const callCard = {
-        classList: makeClassList(),
-        style: { _props: {}, setProperty(k, v) { this._props[k] = String(v); }, removeProperty(k) { delete this._props[k]; } },
-      };
-      callCard.classList.add('tool-call-container');
-      e.row._processChildren = [callCard];
-      out.push(addRow(e));
-    }
-    return out;
-  }
-
-  return {
-    sandbox, container, layout, flushTimers, pumpFrame, addRow,
-    makeToolEntries, makeAssistantEntries,
-  };
+  return withP2EsmCase({
+    classic: (sandbox) => {
+      Object.assign(sandbox, rig.fakeTimers);
+      // index.html 真实加载序：分发器先于一切声明 data-action 的模块装载，
+      // 随后 i18n、app-core，最后是各业务 classic 模块。
+      sandbox.loadSource('public/src/modules/action-dispatcher.js');
+      sandbox.loadSource('public/src/i18n.js');
+      sandbox.loadSource('public/src/app-core.js');
+      sandbox.loadSource('public/src/modules/chat-viewport.js');
+      sandbox.loadSource('public/src/modules/input-helpers.js');
+      // 会话视图同步实现：input-actions 的 token/提交策略经宿主要求它（生产加载序）
+      sandbox.loadSource('public/src/modules/session-view-state.js');
+      sandbox.loadSource('public/src/modules/chat-renderer.js');
+    },
+    globals,
+  }, async (c) => {
+    const surface = c.window.createP2BootstrapChatSurfaceHost();
+    surface.showChatProcess = true;
+    surface.followLatestEnabled = false;
+    // app-core 装载期注册的桥键 / 会话视图状态（初始值不是用例现场值）。
+    c.window.currentMessages = options?.messages || [];
+    live.readMessages = () => c.window.currentMessages;
+    c.window.allAgents = [];
+    c.window.toolRenderConfigs = {};
+    c.window.currentInputRequests = [];
+    c.window._lastRenderedChatSig = '';
+    // 生产兼容桥 + ESM 域（窗口函数与整行实测窗口）。
+    await c.load(WINDOWING_HOST);
+    // 输入面域（本批迁 ESM）：回退按钮可见性与过程显隐的真实实现
+    await c.load('public/src/modules/input-actions.js');
+    await c.load('public/src/modules/chat-process-visibility.js');
+    const mod = await c.load(LAZY_TOOL_CONTENT);
+    const rowVisibility = await c.load(ROW_VISIBILITY);
+    mod.setProcessWindowingDisabled(true);
+    return fn(Object.assign(rig, {
+      c,
+      refresh: (reason) => rowVisibility.refreshMeasuredChatRows(reason),
+      apply: (fromIndex) => mod.applyProcessDistance(rig.container, fromIndex),
+      setCurrentMessages: (messages) => { c.window.currentMessages = messages; },
+    }));
+  });
 }
 
-test('refreshMeasuredChatRows(append) measures only appended rows', () => {
-  const h = createHarness();
-  h.sandbox.showChatProcess = true;
-  h.sandbox.followLatestEnabled = false;
-  vm.runInContext('setProcessWindowingDisabled(true)', h.sandbox);
+test('refreshMeasuredChatRows(append) measures only appended rows', async () => {
+  await withHarness({}, (h) => {
+    const old = h.makeToolEntries({ realH: 600, from: 0, to: 205 });
+    h.refresh('render-full');
 
-  const old = h.makeToolEntries({ realH: 600, from: 0, to: 205 });
-  vm.runInContext('refreshMeasuredChatRows("render-full")', h.sandbox);
+    const baseline = old.map((e) => e._topReads || 0);
+    const hiddenBefore = old.map((e) => e.row.classList.contains('chat-row-distant'));
 
-  const baseline = old.map((e) => e._topReads || 0);
-  const hiddenBefore = old.map((e) => e.row.classList.contains('chat-row-distant'));
+    const fresh = h.makeToolEntries({ realH: 600, from: 205, to: 210 });
+    h.refresh('append');
+    h.flushTimers();
+    h.pumpFrame();
+    h.flushTimers();
 
-  const fresh = h.makeToolEntries({ realH: 600, from: 205, to: 210 });
-  vm.runInContext('refreshMeasuredChatRows("append")', h.sandbox);
-  h.flushTimers();
-  h.pumpFrame();
-  h.flushTimers();
-
-  // Old rows: no re-measure, no state churn.
-  old.forEach((e, i) => {
-    assert.equal(e._topReads || 0, baseline[i],
-      `old row ${i} must not be re-measured by the incremental append path`);
-    assert.equal(e.row.classList.contains('chat-row-distant'), hiddenBefore[i],
-      `old row ${i} window state must be unchanged`);
-  });
-  // New rows: measured (entry present) and windowed (viewport sits at the
-  // top, so tail rows fall outside the [0, top+4h] window → hidden).
-  fresh.forEach((e) => {
-    assert.ok((e._topReads || 0) >= 1, 'appended row must be measured');
-    assert.equal(e.row.classList.contains('chat-row-distant'), true,
-      'appended far row must rejoin the hidden window');
-    assert.ok(e.row.style._props['--chat-row-height'], 'hidden row keeps its measured height');
+    // Old rows: no re-measure, no state churn.
+    old.forEach((e, i) => {
+      assert.equal(e._topReads || 0, baseline[i],
+        `old row ${i} must not be re-measured by the incremental append path`);
+      assert.equal(e.row.classList.contains('chat-row-distant'), hiddenBefore[i],
+        `old row ${i} window state must be unchanged`);
+    });
+    // New rows: measured (entry present) and windowed (viewport sits at the
+    // top, so tail rows fall outside the [0, top+4h] window → hidden).
+    fresh.forEach((e) => {
+      assert.ok((e._topReads || 0) >= 1, 'appended row must be measured');
+      assert.equal(e.row.classList.contains('chat-row-distant'), true,
+        'appended far row must rejoin the hidden window');
+      assert.ok(e.row.style._props['--chat-row-height'], 'hidden row keeps its measured height');
+    });
   });
 });
 
-test('refreshMeasuredChatRows(append) matches the full rebuild row-for-row', () => {
-  const build = () => {
-    const h = createHarness();
-    h.sandbox.showChatProcess = true;
-    h.sandbox.followLatestEnabled = false;
-    vm.runInContext('setProcessWindowingDisabled(true)', h.sandbox);
+test('refreshMeasuredChatRows(append) matches the full rebuild row-for-row', async () => {
+  const inc = await withHarness({}, (h) => {
     h.makeToolEntries({ realH: 600, from: 0, to: 205 });
-    return h;
-  };
-  const hInc = build();
-  vm.runInContext('refreshMeasuredChatRows("render-full")', hInc.sandbox);
-  hInc.makeToolEntries({ realH: 600, from: 205, to: 210 });
-  vm.runInContext('refreshMeasuredChatRows("append")', hInc.sandbox);
-  hInc.flushTimers(); hInc.pumpFrame(); hInc.flushTimers();
-
-  const hFull = build();
-  vm.runInContext('refreshMeasuredChatRows("render-full")', hFull.sandbox);
-  hFull.makeToolEntries({ realH: 600, from: 205, to: 210 });
-  vm.runInContext('refreshMeasuredChatRows("force-full")', hFull.sandbox); // non-whitelisted → full path
-  hFull.flushTimers(); hFull.pumpFrame(); hFull.flushTimers();
-
-  hInc.container._entries.forEach((e, i) => {
-    assert.equal(
-      e.row.classList.contains('chat-row-distant'),
-      hFull.container._entries[i].row.classList.contains('chat-row-distant'),
-      `row ${i} window state diverged between incremental and full refresh`,
-    );
+    h.refresh('render-full');
+    h.makeToolEntries({ realH: 600, from: 205, to: 210 });
+    h.refresh('append');
+    h.flushTimers(); h.pumpFrame(); h.flushTimers();
+    return h.container._entries.map((e) => e.row.classList.contains('chat-row-distant'));
+  });
+  const full = await withHarness({}, (h) => {
+    h.makeToolEntries({ realH: 600, from: 0, to: 205 });
+    h.refresh('render-full');
+    h.makeToolEntries({ realH: 600, from: 205, to: 210 });
+    h.refresh('force-full'); // non-whitelisted → full path
+    h.flushTimers(); h.pumpFrame(); h.flushTimers();
+    return h.container._entries.map((e) => e.row.classList.contains('chat-row-distant'));
+  });
+  inc.forEach((hidden, i) => {
+    assert.equal(hidden, full[i],
+      `row ${i} window state diverged between incremental and full refresh`);
   });
 });
 
-test('refreshMeasuredChatRows(patch-last) re-measures only the tail row', () => {
-  const h = createHarness();
-  h.sandbox.showChatProcess = true;
-  h.sandbox.followLatestEnabled = false;
-  vm.runInContext('setProcessWindowingDisabled(true)', h.sandbox);
+test('refreshMeasuredChatRows(patch-last) re-measures only the tail row', async () => {
+  await withHarness({}, (h) => {
+    const rows = h.makeToolEntries({ realH: 600, from: 0, to: 205 });
+    h.refresh('render-full');
 
-  const rows = h.makeToolEntries({ realH: 600, from: 0, to: 205 });
-  vm.runInContext('refreshMeasuredChatRows("render-full")', h.sandbox);
+    const baseline = rows.map((e) => e._topReads || 0);
+    // Tail patch: content grows (realH 600 → 900), layout invalidated.
+    const tail = rows[rows.length - 1];
+    tail.row.realH = 900;
+    h.container._markDirty();
 
-  const baseline = rows.map((e) => e._topReads || 0);
-  // Tail patch: content grows (realH 600 → 900), layout invalidated.
-  const tail = rows[rows.length - 1];
-  tail.row.realH = 900;
-  h.container._markDirty();
+    h.refresh('patch-last');
+    h.flushTimers(); h.pumpFrame(); h.flushTimers();
 
-  vm.runInContext('refreshMeasuredChatRows("patch-last")', h.sandbox);
-  h.flushTimers(); h.pumpFrame(); h.flushTimers();
-
-  rows.slice(0, -1).forEach((e, i) => {
-    assert.equal(e._topReads || 0, baseline[i],
-      `non-tail row ${i} must not be re-measured by patch-last`);
+    rows.slice(0, -1).forEach((e, i) => {
+      assert.equal(e._topReads || 0, baseline[i],
+        `non-tail row ${i} must not be re-measured by patch-last`);
+    });
+    assert.ok((tail._topReads || 0) > baseline[baseline.length - 1],
+      'the patched tail row must be re-measured');
   });
-  assert.ok((tail._topReads || 0) > baseline[baseline.length - 1],
-    'the patched tail row must be re-measured');
 });
 
-test('applyProcessDistance(root, fromIndex) scans only tail rows and keeps the rowCache alive', () => {
-  const h = createHarness();
-  h.sandbox.showChatProcess = true;
-  h.sandbox.followLatestEnabled = false;
-  vm.runInContext('setProcessWindowingDisabled(true)', h.sandbox);
+test('applyProcessDistance(root, fromIndex) scans only tail rows and keeps the row cache alive', async () => {
+  await withHarness({}, (h) => {
+    const old = h.makeAssistantEntries({ realH: 200, from: 0, to: 205 });
+    h.apply(); // landing → full pass
+    const landedScans = old.map((e) => e.row._qsaCalls());
+    assert.ok(landedScans.every((n) => n >= 1), 'landing builds the full row cache');
 
-  const old = h.makeAssistantEntries({ realH: 200, from: 0, to: 205 });
-  vm.runInContext('applyProcessDistance(container)', h.sandbox); // landing → full pass
-  const cacheBefore = vm.runInContext('_rowCache', h.sandbox);
-  assert.ok(cacheBefore && cacheBefore.size === 205, 'landing builds the full rowCache');
+    const baseline = old.map((e) => e.row._qsaCalls());
 
-  const baseline = old.map((e) => e.row._qsaCalls());
-
-  // Append: assistant row with a pre-hidden call card (appendNewMessages
-  // pre-hides fresh rows) plus a pre-hidden tool row.
-  const appendedAssistant = makeRow({ role: 'assistant', realH: 200, msgId: 'msg-205' });
-  const callCard = {
-    classList: makeClassList(),
-    style: { _props: {}, setProperty(k, v) { this._props[k] = String(v); }, removeProperty(k) { delete this._props[k]; } },
-  };
-  callCard.classList.add('tool-call-container');
-  callCard.classList.add('process-hidden'); // append pre-hide
-  appendedAssistant.row._processChildren = [callCard];
-  h.addRow(appendedAssistant);
-  const appendedTool = makeRow({ role: 'tool', realH: 600, msgId: 'msg-206' });
-  appendedTool.row.classList.add('process-hidden'); // append pre-hide
-  h.addRow(appendedTool);
-
-  vm.runInContext('applyProcessDistance(container, 205)', h.sandbox);
-
-  // Old rows untouched: no subtree queries, cache Map not rebuilt.
-  old.forEach((e, i) => {
-    assert.equal(e.row._qsaCalls(), baseline[i],
-      `old assistant row ${i} must not be rescanned`);
-  });
-  const cacheAfter = vm.runInContext('_rowCache', h.sandbox);
-  assert.equal(cacheAfter, cacheBefore, 'incremental append must reuse the same rowCache Map');
-  assert.equal(cacheAfter.size, 206, 'appended assistant row joins the cache in place');
-
-  // New rows revealed: pre-hidden elements visible again, cv state clear.
-  assert.equal(appendedAssistant.row._processChildren[0].classList.contains('process-hidden'), false,
-    'the pre-hidden call card must be revealed (fold-at-birth measurability)');
-  assert.equal(appendedAssistant.row._processChildren[0].classList.contains('process-cv-hidden'), false,
-    'full-render tier keeps appended process children out of cv-hidden');
-  assert.equal(appendedTool.row.classList.contains('process-hidden'), false,
-    'the pre-hidden tool row must be revealed');
-
-  const cachedRows = vm.runInContext('_cachedRows', h.sandbox);
-  assert.equal(cachedRows.length, 207, 'cached row list extends to the new tail');
-});
-
-test('applyProcessDistance(root, fromIndex) falls back to the full path after a DOM rebuild', () => {
-  const h = createHarness();
-  h.sandbox.showChatProcess = true;
-  h.sandbox.followLatestEnabled = false;
-  vm.runInContext('setProcessWindowingDisabled(true)', h.sandbox);
-
-  h.makeAssistantEntries({ realH: 200, from: 0, to: 205 });
-  vm.runInContext('applyProcessDistance(container)', h.sandbox);
-  const cacheBefore = vm.runInContext('_rowCache', h.sandbox);
-
-  // Simulate a full re-render: every row object replaced.
-  h.container._entries = [];
-  const rebuilt = [];
-  for (let i = 0; i < 210; i++) {
-    const e = makeRow({ role: 'assistant', realH: 200, msgId: `msg-r${i}` });
-    const callCard = { classList: makeClassList(), style: { _props: {}, setProperty() {}, removeProperty() {} } };
+    // Append: assistant row with a pre-hidden call card (appendNewMessages
+    // pre-hides fresh rows) plus a pre-hidden tool row.
+    const appendedAssistant = makeRow({ role: 'assistant', realH: 200, msgId: 'msg-205' });
+    const callCard = {
+      classList: makeClassList(),
+      style: { _props: {}, setProperty(k, v) { this._props[k] = String(v); }, removeProperty(k) { delete this._props[k]; } },
+    };
     callCard.classList.add('tool-call-container');
-    e.row._processChildren = [callCard];
-    h.addRow(e);
-    rebuilt.push(e);
-  }
-  h.container._markDirty();
+    callCard.classList.add('process-hidden'); // append pre-hide
+    appendedAssistant.row._processChildren = [callCard];
+    h.addRow(appendedAssistant);
+    const appendedTool = makeRow({ role: 'tool', realH: 600, msgId: 'msg-206' });
+    appendedTool.row.classList.add('process-hidden'); // append pre-hide
+    h.addRow(appendedTool);
 
-  // A stale incremental call must detect the first-row mismatch and rerun
-  // the full pass (new Map, correct coverage).
-  vm.runInContext('applyProcessDistance(container, 205)', h.sandbox);
+    h.apply(205);
 
-  const cacheAfter = vm.runInContext('_rowCache', h.sandbox);
-  assert.notEqual(cacheAfter, cacheBefore, 'the guard must rebuild the cache after a DOM swap');
-  assert.equal(cacheAfter.size, 210, 'the full pass covers every rebuilt row');
+    // Old rows untouched: no subtree queries (the cached Map is reused
+    // instead of being rebuilt by a full pass).
+    old.forEach((e, i) => {
+      assert.equal(e.row._qsaCalls(), baseline[i],
+        `old assistant row ${i} must not be rescanned`);
+    });
+
+    // New rows revealed: pre-hidden elements visible again, cv state clear.
+    assert.equal(appendedAssistant.row._processChildren[0].classList.contains('process-hidden'), false,
+      'the pre-hidden call card must be revealed (fold-at-birth measurability)');
+    assert.equal(appendedAssistant.row._processChildren[0].classList.contains('process-cv-hidden'), false,
+      'full-render tier keeps appended process children out of cv-hidden');
+    assert.equal(appendedTool.row.classList.contains('process-hidden'), false,
+      'the pre-hidden tool row must be revealed');
+
+    // The cache still describes the extended tail: another incremental patch
+    // from the new tail index reuses it (old rows stay unscanned).
+    h.apply(206);
+    old.forEach((e, i) => {
+      assert.equal(e.row._qsaCalls(), baseline[i],
+        `old assistant row ${i} must stay cached after a second incremental patch`);
+    });
+    assert.equal(appendedAssistant.row._qsaCalls(), 1,
+      'the appended assistant row is scanned exactly once by its own incremental pass');
+  });
 });
 
-test('appendNewMessages forwards the DOM row start to the incremental process-state sync', () => {
-  const h = createHarness();
-  h.sandbox.showChatProcess = true;
-  h.sandbox.followLatestEnabled = false;
-  h.addRow(makeRow({ role: 'user', realH: 80, msgId: 'msg-0' }));
+test('applyProcessDistance(root, fromIndex) falls back to the full path after a DOM rebuild', async () => {
+  const staleStates = await withHarness({}, (h) => {
+    h.makeAssistantEntries({ realH: 200, from: 0, to: 205 });
+    h.apply();
 
-  const stubQueue = [];
-  const inserted = [];
-  h.container.insertAdjacentHTML = () => { inserted.push(stubQueue.shift() || null); };
-  Object.defineProperty(h.container, 'lastElementChild', {
-    configurable: true,
-    get: () => inserted[inserted.length - 1] || null,
+    // Simulate a full re-render: every row object replaced.
+    h.container._entries = [];
+    const rebuilt = [];
+    for (let i = 0; i < 210; i++) {
+      const e = makeRow({ role: 'assistant', realH: 200, msgId: `msg-r${i}` });
+      const callCard = { classList: makeClassList(), style: { _props: {}, setProperty() {}, removeProperty() {} } };
+      callCard.classList.add('tool-call-container');
+      e.row._processChildren = [callCard];
+      h.addRow(e);
+      rebuilt.push(e);
+    }
+    h.container._markDirty();
+
+    // A stale incremental call must detect the first-row mismatch and rerun
+    // the full pass (every rebuilt row scanned).
+    h.apply(205);
+    rebuilt.forEach((e, i) => {
+      assert.ok(e.row._qsaCalls() >= 1, `rebuilt row ${i} must be covered by the fallback full pass`);
+    });
+    return h.container._entries.map((e) => e.row.classList.contains('process-cv-hidden'));
   });
-  const toolStub = makeRow({ role: 'tool', realH: 600, msgId: 'msg-2' });
-  toolStub.row.matches = () => true;
-  stubQueue.push(toolStub.row);
 
-  h.sandbox.currentMessages = [
-    { role: 'user', content: 'hi' },
-    { role: 'assistant', content: '', toolCalls: [{ id: 'c1', name: 'Grep', arguments: { q: 'x' } }] },
-    { role: 'tool', toolCallId: 'c1', content: '{"ok":true}' },
-  ];
+  // The fallback result must equal a clean full pass over the same DOM shape.
+  const cleanStates = await withHarness({}, (h) => {
+    for (let i = 0; i < 210; i++) {
+      const e = makeRow({ role: 'assistant', realH: 200, msgId: `msg-r${i}` });
+      const callCard = { classList: makeClassList(), style: { _props: {}, setProperty() {}, removeProperty() {} } };
+      callCard.classList.add('tool-call-container');
+      e.row._processChildren = [callCard];
+      h.addRow(e);
+    }
+    h.container._markDirty();
+    h.apply();
+    return h.container._entries.map((e) => e.row.classList.contains('process-cv-hidden'));
+  });
+  assert.deepEqual(staleStates, cleanStates,
+    'the stale-incremental fallback must produce the same window as a clean full pass');
+});
 
-  vm.runInContext(`
-    var __calls = [];
-    applyConversationProcessState = function (root, fromIndex) { __calls.push(fromIndex); };
-    applyCollapseLogic = function () {};
-    updateRollbackActionVisibility = function () {};
-    updateFollowLatestButton = function () {};
-    enhanceMarkdownTables = function () {};
-  `, h.sandbox);
-  vm.runInContext('appendNewMessages([currentMessages[2]], 2)', h.sandbox);
+test('appendNewMessages forwards the DOM row start to the incremental process-state sync', async () => {
+  await withHarness({}, (h) => {
+    h.addRow(makeRow({ role: 'user', realH: 80, msgId: 'msg-0' }));
 
-  const calls = [...vm.runInContext('__calls', h.sandbox)];
-  assert.deepEqual(calls, [1],
-    'process sync starts after the existing DOM rows, independently of the message start index');
-  assert.equal(toolStub.row.classList.contains('process-hidden'), true,
-    'the append pre-hide itself must stay (display:none before any layout)');
+    const stubQueue = [];
+    const inserted = [];
+    h.container.insertAdjacentHTML = () => { inserted.push(stubQueue.shift() || null); };
+    Object.defineProperty(h.container, 'lastElementChild', {
+      configurable: true,
+      get: () => inserted[inserted.length - 1] || null,
+    });
+    const toolStub = makeRow({ role: 'tool', realH: 600, msgId: 'msg-2' });
+    toolStub.row.matches = () => true;
+    stubQueue.push(toolStub.row);
+
+    h.setCurrentMessages([
+      { role: 'user', content: 'hi' },
+      { role: 'assistant', content: '', toolCalls: [{ id: 'c1', name: 'Grep', arguments: { q: 'x' } }] },
+      { role: 'tool', toolCallId: 'c1', content: '{"ok":true}' },
+    ]);
+
+    // 生产装配点：appendNewMessages 的增量过程同步是 classic 全局调用，
+    // 这里用同名全局包装记录它收到的 DOM 行起点（原用例同样做法）。
+    const processCalls = [];
+    h.c.window.applyConversationProcessState = (root, fromIndex) => { processCalls.push(fromIndex); };
+    h.c.window.applyCollapseLogic = () => {};
+    h.c.window.updateRollbackActionVisibility = () => {};
+    h.c.window.updateFollowLatestButton = () => {};
+    h.c.window.enhanceMarkdownTables = () => {};
+
+    h.c.read('appendNewMessages([currentMessages[2]], 2)');
+
+    assert.deepEqual(processCalls, [1],
+      'process sync starts after the existing DOM rows, independently of the message start index');
+    assert.equal(toolStub.row.classList.contains('process-hidden'), true,
+      'the append pre-hide itself must stay (display:none before any layout)');
+  });
 });

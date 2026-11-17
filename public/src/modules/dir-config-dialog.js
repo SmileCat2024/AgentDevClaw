@@ -9,17 +9,27 @@
  *
  * 配置队列位置：出厂默认 → 全局层 → agent 层 → 目录层（默认项目层）。
  *
- * 外部依赖（通过全局作用域）：
- *   - escapeHtml (app-ui.js)
- *   - currentLanguage (app-core.js)
- *   - createFeatureConfigEditor (feature-setup-core / editor)
+ * 外部依赖：
+ *   - escapeHtml（markdown-utils.js 命名导出）
+ *   - currentLanguage（i18n-environment-state.js 命名导出）
+ *   - createFeatureConfigEditor（feature-config-editor.js，静态 import）
+ *   - phProjectEntities / ensurePhProjectEntitiesLoaded（project-data.js 命名导出）
+ *   - getCurrentAgentRecord（app-main.js classic 顶层函数，经 window 晚绑定）
  *
  * 入口：归属菜单行内齿轮（session-list-render.js 渲染按钮 + ph-project-actions.js
  * 捕获阶段委托调用）。
  *
  * 事件接线：弹窗骨架的关闭钮经 data-action="dirConfig.*" 声明（调用方传入动作名，
- * 原先靠字符串拼 window 函数名）；window 导出只剩三个打开入口。
+ * 原先靠字符串拼 window 函数名）；window 导出只剩两个打开入口。
+ *
+ * ESM 化（P2 迁移批次 6）：两个打开入口仍有 classic 消费方（ph-project-actions.js
+ * 经 window 调用），各保留一个桥键；关闭入口只服务本模块模板，收敛为模块私有。
  */
+
+import { createFeatureConfigEditor } from './feature-config-editor.js';
+import { getCurrentLanguage } from './i18n-environment-state.js';
+import { escapeHtml } from './markdown-utils.js';
+import { ensurePhProjectEntitiesLoaded, phProjectEntities } from './project-data.js';
 
 let _dirConfigEditor = null;
 
@@ -35,7 +45,8 @@ function _dirConfigHost() {
 
 /** 当前项目目录（编程小助手 workspace_state；无目录返回空串）。 */
 function _dirConfigCurrentDir() {
-  const rec = (typeof getCurrentAgentRecord === 'function') ? getCurrentAgentRecord() : null;
+  // 桥接期：getCurrentAgentRecord 定义于 app-main.js（classic 顶层函数，编排域收敛时移除）
+  const rec = (typeof window.getCurrentAgentRecord === 'function') ? window.getCurrentAgentRecord() : null;
   const dir = rec?.workspace_state?.openDirectory;
   return typeof dir === 'string' && dir.trim() ? dir.trim() : '';
 }
@@ -61,15 +72,14 @@ function _featureConfigDialogShell(hostId, titleHtml, subtitleHtml, closeAction)
 // ── 默认项目层配置入口（dir:<path> scope）────────────────────────
 // 归属菜单「默认项目」行的设置齿轮。目录桶的会话配置层在用户面统一呈现为
 // 项目设置（「项目设置 · 默认项目」）——目录是内部 scope 概念，不进界面命名。
-window.phOpenDirConfig = function (dir) {
+export function phOpenDirConfig(dir) {
   dir = (typeof dir === 'string' && dir.trim()) ? dir.trim() : _dirConfigCurrentDir();
   if (!dir) return;
-  if (typeof createFeatureConfigEditor !== 'function') return;
   if (_dirConfigEditor) {
     _dirConfigEditor.close();
     _dirConfigEditor = null;
   }
-  const isZh = currentLanguage === 'zh';
+  const isZh = getCurrentLanguage() === 'zh';
   _dirConfigHost().innerHTML = _featureConfigDialogShell(
     'ph-dir-config-mount',
     escapeHtml(isZh ? '项目设置 · 默认项目' : 'Project Settings · Default Project'),
@@ -81,7 +91,7 @@ window.phOpenDirConfig = function (dir) {
     scopeId: 'dir:' + dir,
   });
   _dirConfigEditor.open();
-};
+}
 
 function phCloseDirConfig() {
   if (_dirConfigEditor) {
@@ -97,24 +107,21 @@ function phCloseDirConfig() {
 // 标题呈现项目名与真实工作目录（managed/外部指定）。编辑器复用共享三态
 // 配置编辑器；保存走 PUT feature_config/layer（layerId=project:<id>，043
 // 服务端已支持）。
-window.phOpenProjectConfig = function (projectId) {
+export function phOpenProjectConfig(projectId) {
   projectId = String(projectId || '').trim();
   if (!projectId.startsWith('prj_')) return;
-  if (typeof createFeatureConfigEditor !== 'function') return;
-  const entity = ((window.ClawFW?.phProjectEntities?.projects) || [])
+  const entity = (phProjectEntities?.projects || [])
     .find((p) => p.id === projectId) || null;
   if (!entity) {
     // 元数据未就绪：补拉后重开（不退回默认项目设置）
-    if (typeof ensurePhProjectEntitiesLoaded === 'function') {
-      ensurePhProjectEntitiesLoaded(true).then(() => window.phOpenProjectConfig(projectId));
-    }
+    ensurePhProjectEntitiesLoaded(true).then(() => phOpenProjectConfig(projectId));
     return;
   }
   if (_dirConfigEditor) {
     _dirConfigEditor.close();
     _dirConfigEditor = null;
   }
-  const isZh = currentLanguage === 'zh';
+  const isZh = getCurrentLanguage() === 'zh';
   _dirConfigHost().innerHTML = _featureConfigDialogShell(
     'ph-dir-config-mount',
     escapeHtml(isZh ? '项目设置 · ' : 'Project Settings · ') + escapeHtml(entity.name),
@@ -126,11 +133,13 @@ window.phOpenProjectConfig = function (projectId) {
     scopeId: 'project:' + projectId,
   });
   _dirConfigEditor.open();
-};
+}
 
 // ── 事件接线（data-action="dirConfig.*"）──────────────────────────
-// 关闭动作的消费面只有弹窗骨架按钮，window 导出随本批次收敛。
+// 关闭动作的消费面只有弹窗骨架按钮，不再导出。
 
 window.ClawFW.actions.registerMany({
   'dirConfig.close': () => phCloseDirConfig(),
 });
+
+// 桥已注销：两个打开入口的唯一消费方 ph-project-actions.js 已直接 import。

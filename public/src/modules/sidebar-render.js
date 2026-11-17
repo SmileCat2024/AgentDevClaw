@@ -560,7 +560,8 @@ function createAgentSnapshotLoaderHost() {
 // 远程 key 不入集会被每轮 poll 当孤儿清掉，与聚焦会话的 chat 轮询写键形成
 // 拉锯（远程会话发送按钮横跳、侧栏缺转圈动画的根因）。
 // Shared lexical containers retain their classic initialization and const
-// identity. Reconciliation and request coalescing live in the ESM implementation.
+// identity. Reconciliation and request coalescing live in the classic sync
+// owner composed in app-main; the ESM host is a late-bound thin adapter.
 function createAgentCallStatesHost() {
   return {
     calling: _agentCallActive,

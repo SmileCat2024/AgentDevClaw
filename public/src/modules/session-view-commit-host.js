@@ -13,7 +13,6 @@ const policy = createSessionViewCommit({
 });
 export const { isSessionViewMessagesCurrent, isSessionViewInputRequestsCurrent,
   isSessionViewTokenCurrent, commitSessionViewState, commitSessionViewPatch } = policy;
-window.KernelState.defineKey('session-view-commit', 'isSessionViewMessagesCurrent', isSessionViewMessagesCurrent);
 window.KernelState.defineKey('session-view-commit', 'isSessionViewInputRequestsCurrent', isSessionViewInputRequestsCurrent);
 window.KernelState.defineKey('session-view-commit', 'isSessionViewTokenCurrent', isSessionViewTokenCurrent);
 window.KernelState.defineKey('session-view-commit', 'commitSessionViewState', commitSessionViewState);

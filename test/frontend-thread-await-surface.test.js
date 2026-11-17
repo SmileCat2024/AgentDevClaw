@@ -6,54 +6,20 @@
 //   3. 挡板死收敛（_reconcileConversationWithThreadHead）：等待表面挂着、
 //      挡板过新鲜窗、head 未推进、无 runtime → 终结等待态 + 失败提示；
 //      挡板仍在新鲜窗 → 继续等待（不误杀慢接续）。
+//
+// 装载路线（P2 配方第三节 + thread-store 交互域拆分）：交互入口
+// （openConversationTarget / enterThreadAwaitView）已迁 thread-store-domain，
+// 经 withP2EsmCase 的 `c.load` 真实 import；刷新引擎与事实对账仍是 classic，
+// 用 `prepareThreadClassicSandbox` 装同一沙箱（真实先行脚本序提供宿主工厂）。
+// 等待表面用到的会话视图原语（captureSessionViewToken / commitSessionViewPatch）
+// 因此是**真实实现**：断言打在 currentMessages / SessionView identity /
+// 聊天加载态这些公开状态上，不再对桩计数。
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
 import test from 'node:test';
-import { createFrontendSandbox } from './helpers/frontend-vm.js';
+import { prepareThreadClassicSandbox, withThreadCaseEnv } from './p2-thread-case.js';
 
-const threadStoreSource = fs.readFileSync(new URL('../public/src/modules/thread-store.js', import.meta.url), 'utf8');
-
-function loadThreadStore({ threads = [], fetchImpl = async () => ({ ok: false }) } = {}) {
-  const calls = { clearChatLoading: 0, reRender: 0, renderAgentList: 0, toasts: [] };
-  let ctx;
-  ctx = createFrontendSandbox({
-    setTimeout: () => 0,
-    setInterval: () => 0,
-    clearInterval: () => {},
-    clearTimeout: () => {},
-    fetch: fetchImpl,
-    getCurrentHostAgentRecord: () => ({ id: 'coder', source: 'prebuilt' }),
-    applySessionViewPatch: (patch) => {
-      if (patch?.identity) ctx.run(`globalThis.__viewIdentity = ${JSON.stringify(patch.identity)};`);
-    },
-    captureSessionViewToken: (_runtimeId, identity) => ({ identity }),
-    commitSessionViewPatch: (token, patch, afterCommit) => {
-      const current = ctx.run('globalThis.__viewIdentity');
-      if (!current || current.agentId !== token.identity?.agentId || current.sessionId !== token.identity?.sessionId) return false;
-      ctx.__pendingMessages = patch.messages;
-      ctx.run('currentMessages = globalThis.__pendingMessages;');
-      afterCommit?.();
-      return true;
-    },
-    getRuntimeWorkspaceSessionId: () => '',
-    setViewerSessionBinding: () => {},
-    findSidebarOperation: () => null,
-    renderAgentList: () => { calls.renderAgentList += 1; },
-    updateQueueIndicator: () => {},
-    clearChatLoadingSession: () => { calls.clearChatLoading += 1; },
-    renderCurrentMainView: () => { calls.reRender += 1; },
-    lastRenderedWorkspaceHtml: '',
-  });
-  ctx.run('globalThis.__toasts = [];');
-  ctx.__toastsRef = ctx.run('globalThis.__toasts');
-  ctx.window.ClawToast = { show: (t) => { ctx.__toastsRef.push(t); } };
-  ctx.window.switchAgent = () => Promise.resolve();
-  ctx.window.updateThreadHeaderIndicator = () => {};
-  ctx.run(threadStoreSource);
-  ctx.run(`window.ClawThreads.threads = ${JSON.stringify(threads)}; (function(){ const s = window.ClawThreads; s.byId = {}; s.sessionIndex = {}; for (const t of s.threads) { s.byId[t.threadId] = t; for (const sid of (t.sessionIds || [])) { s.sessionIndex[t.agentId + '::' + sid] = t; } } })();`);
-  ctx.__calls = calls;
-  return ctx;
-}
+const DOMAIN = 'public/src/modules/thread-store-domain.js';
+const VIEW_STORAGE = 'public/src/modules/session-view-storage.js';
 
 const HANDOFF_MSGS = [
   { role: 'system', content: 'sys' },
@@ -61,10 +27,54 @@ const HANDOFF_MSGS = [
 ];
 
 function okJson(payload) {
-  return {
-    ok: true,
-    json: async () => payload,
-  };
+  return { ok: true, json: async () => payload };
+}
+
+/** 用例观察面：真实宿主能力的夹具（谁被调了多少次 / 身份提交了什么）。 */
+function createObservers() {
+  return { renderAgentList: 0, reRender: 0, toasts: [], identities: [] };
+}
+
+/**
+ * 一个用例 = 一份沙箱 + 一张 ESM 图。
+ * @param {object} options
+ * @param {Array} [options.threads] 线程事实（写入 ClawThreads 索引）
+ * @param {Function} [options.fetchImpl] 网络夹具（session_messages / threads）
+ */
+async function withThreadCase({ threads = [], fetchImpl = async () => ({ ok: false }) } = {}, fn) {
+  const calls = createObservers();
+  return withThreadCaseEnv({
+    label: 'frontend-thread-await-surface',
+    fetch: fetchImpl,
+    classic: (sandbox) => {
+      const thread = String(threads[0]?.threadId || '');
+      prepareThreadClassicSandbox(sandbox, {
+        currentLanguage: 'zh',
+        allAgents: [{ id: 'coder', source: 'prebuilt', kind: 'workspace', active_workspace_session_id: '' }],
+        getCurrentHostAgentRecord: () => ({ id: 'coder', source: 'prebuilt' }),
+        getRuntimeWorkspaceSessionId: () => '',
+        setViewerSessionBinding: () => {},
+        findSidebarOperation: () => null,
+        renderAgentList: () => { calls.renderAgentList += 1; },
+        renderCurrentMainView: () => { calls.reRender += 1; },
+        updateQueueIndicator: () => {},
+        updateThreadHeaderIndicator: () => {},
+        lastRenderedWorkspaceHtml: '',
+      });
+      sandbox.run(`window.ClawThreads.threads = ${JSON.stringify(threads)}; (function(){ const s = window.ClawThreads; s.byId = {}; s.sessionIndex = {}; for (const t of s.threads) { s.byId[t.threadId] = t; for (const sid of (t.sessionIds || [])) { s.sessionIndex[t.agentId + '::' + sid] = t; } } })();`);
+      sandbox.__threadId = thread;
+    },
+  }, async ({ c }) => {
+    const domain = await c.load(DOMAIN);
+    const view = await c.load(VIEW_STORAGE);
+    // ESM 图求值期 toast-notify 会装自己的 window.ClawToast；观察记录必须在其后
+    // 覆盖，否则接续失败提示记不到用例观察面。
+    c.window.ClawToast = {
+      show: (toast) => { calls.toasts.push(toast); },
+      dismiss: () => {},
+    };
+    return fn({ c, domain, view, calls });
+  });
 }
 
 test('等待分支：挂 awaitSurface 身份并拉上一棒消息渲染（与 viewer 同形注入）', async () => {
@@ -73,27 +83,30 @@ test('等待分支：挂 awaitSurface 身份并拉上一棒消息渲染（与 vi
     threadId: 'wt-1', agentId: 'coder', headSessionId: 'sess-head', status: 'rotating',
     handoffStartedAt: now, sessionIds: ['sess-head'],
   };
-  const ctx = loadThreadStore({
+  await withThreadCase({
     threads: [thread],
     fetchImpl: async () => okJson({ ok: true, messages: HANDOFF_MSGS, messageCount: HANDOFF_MSGS.length }),
+  }, async ({ c, domain, calls }) => {
+    const result = await domain.openConversationTarget({ threadId: 'wt-1' });
+    assert.equal(result.ok, true);
+
+    const selected = c.window.ClawThreads.activeConversation;
+    assert.equal(selected.awaitSurface, true, '等待表面身份标记');
+    assert.equal(selected.wasHead, true);
+    assert.equal(selected.sessionId, 'sess-head');
+    assert.equal(c.read('currentWorkspaceTab'), 'chat',
+      '等待表面落在聊天表面（工作空间首页会显示 home）');
+    assert.equal(c.read('_chatLoadingSession'), true, '等待表面进入聊天加载态（不落工作空间首页）');
+
+    // fetch 异步链 flush 后注入
+    await new Promise((resolve) => setImmediate(resolve));
+    const injected = c.read('currentMessages');
+    assert.equal(injected.length, 2, '上一棒消息注入 currentMessages');
+    assert.equal(injected[1].content, '上一棒指令');
+    assert.equal(c.read('readCurrentSessionViewState().identity.sessionId'), 'sess-head');
+    assert.equal(c.read('_chatLoadingSession'), false, '有消息时解除加载 spinner');
+    assert.ok(calls.reRender >= 1, '触发重渲');
   });
-
-  const result = await ctx.run('window.openConversationTarget({ threadId: "wt-1" })');
-  assert.equal(result.ok, true);
-
-  const selected = ctx.run('window.ClawThreads.activeConversation');
-  assert.equal(selected.awaitSurface, true, '等待表面身份标记');
-  assert.equal(selected.wasHead, true);
-  assert.equal(selected.sessionId, 'sess-head');
-
-  // fetch 异步链 flush 后注入
-  await new Promise((resolve) => setImmediate(resolve));
-  const injected = ctx.run('currentMessages');
-  assert.equal(injected.length, 2, '上一棒消息注入 currentMessages');
-  assert.equal(injected[1].content, '上一棒指令');
-  assert.equal(ctx.run('globalThis.__viewIdentity.sessionId'), 'sess-head');
-  assert.ok(ctx.__calls.clearChatLoading >= 1, '有消息时解除加载 spinner');
-  assert.ok(ctx.__calls.reRender >= 1, '触发重渲');
 });
 
 test('等待分支：挂 awaitSurface 身份后立即重渲侧栏（选中态收口）', async () => {
@@ -106,15 +119,15 @@ test('等待分支：挂 awaitSurface 身份后立即重渲侧栏（选中态收
     threadId: 'wt-1', agentId: 'coder', headSessionId: 'sess-head', status: 'rotating',
     handoffStartedAt: Date.now(), sessionIds: ['sess-head'],
   };
-  const ctx = loadThreadStore({
+  await withThreadCase({
     threads: [thread],
     fetchImpl: async () => okJson({ ok: true, messages: [], messageCount: 0 }),
+  }, async ({ domain, calls }) => {
+    const before = calls.renderAgentList;
+    await domain.openConversationTarget({ threadId: 'wt-1' });
+    assert.ok(calls.renderAgentList > before,
+      'enterThreadAwaitSurface 落定 activeConversation 后必须触发侧栏重渲');
   });
-
-  const before = ctx.__calls.renderAgentList;
-  await ctx.run('window.openConversationTarget({ threadId: "wt-1" })');
-  assert.ok(ctx.__calls.renderAgentList > before,
-    'enterThreadAwaitSurface 落定 activeConversation 后必须触发侧栏重渲');
 });
 
 test('竞态守卫：fetch 回来时等待表面已换目标 → 不注入', async () => {
@@ -123,18 +136,18 @@ test('竞态守卫：fetch 回来时等待表面已换目标 → 不注入', asy
     handoffStartedAt: Date.now(), sessionIds: ['sess-head'],
   };
   let resolveFetch;
-  const ctx = loadThreadStore({
+  await withThreadCase({
     threads: [thread],
     fetchImpl: () => new Promise((resolve) => { resolveFetch = resolve; }),
+  }, async ({ c, domain }) => {
+    await domain.openConversationTarget({ threadId: 'wt-1' });
+    // 模拟重绑已发生：等待表面切到新 head 会话
+    c.sandbox.run('window.ClawThreads.activeConversation.sessionId = "sess-next-head";');
+    resolveFetch(okJson({ ok: true, messages: HANDOFF_MSGS }));
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.equal(c.read('currentMessages.length'), 0, '过期响应不得注入');
   });
-
-  await ctx.run('window.openConversationTarget({ threadId: "wt-1" })');
-  // 模拟重绑已发生：等待表面切到新 head 会话
-  ctx.run('window.ClawThreads.activeConversation.sessionId = "sess-next-head";');
-  resolveFetch(okJson({ ok: true, messages: HANDOFF_MSGS }));
-  await new Promise((resolve) => setImmediate(resolve));
-
-  assert.equal(ctx.run('currentMessages.length'), 0, '过期响应不得注入');
 });
 
 test('SessionView 身份已切换时拒绝旧等待会话的迟到消息', async () => {
@@ -143,17 +156,17 @@ test('SessionView 身份已切换时拒绝旧等待会话的迟到消息', async
     threadId: 'wt-1', agentId: 'coder', headSessionId: 'sess-head', status: 'rotating',
     handoffStartedAt: Date.now(), sessionIds: ['sess-head'],
   };
-  const ctx = loadThreadStore({
+  await withThreadCase({
     threads: [thread],
     fetchImpl: () => new Promise((resolve) => { resolveFetch = resolve; }),
+  }, async ({ c, domain }) => {
+    await domain.openConversationTarget({ threadId: 'wt-1' });
+    c.sandbox.run('applySessionViewPatch({ identity: { agentId: "coder", sessionId: "sess-other" } })');
+    resolveFetch(okJson({ ok: true, messages: HANDOFF_MSGS }));
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.equal(c.read('currentMessages.length'), 0, '身份已变更后不得提交旧 Session 的内容');
   });
-
-  await ctx.run('window.openConversationTarget({ threadId: "wt-1" })');
-  ctx.run('globalThis.__viewIdentity = { agentId: "coder", sessionId: "sess-other" };');
-  resolveFetch(okJson({ ok: true, messages: HANDOFF_MSGS }));
-  await new Promise((resolve) => setImmediate(resolve));
-
-  assert.equal(ctx.run('currentMessages.length'), 0, '身份已变更后不得提交旧 Session 的内容');
 });
 
 test('挡板死收敛：等待表面 + head 未推进 + 挡板过窗 + 无 runtime → 终结等待 + 失败提示', async () => {
@@ -162,18 +175,20 @@ test('挡板死收敛：等待表面 + head 未推进 + 挡板过窗 + 无 runti
     threadId: 'wt-1', agentId: 'coder', headSessionId: 'sess-head', status: 'open',
     handoffStartedAt: Date.now() - 6 * 60 * 1000, sessionIds: ['sess-head'],
   };
-  const ctx = loadThreadStore({
+  await withThreadCase({
     threads: [deadThread],
-    fetchImpl: async () => okJson({ threads: [deadThread], contentHash: 'h2' }),  });
-  ctx.run(`window.ClawThreads.activeConversation = ${JSON.stringify({ agentId: 'coder', threadId: 'wt-1', sessionId: 'sess-head', runtimeId: '', wasHead: true, awaitSurface: true })};`);
-  ctx.run('currentRuntimeAgentId = ""; focusedAgentId = "coder";');
+    fetchImpl: async () => okJson({ threads: [deadThread], contentHash: 'h2' }),
+  }, async ({ c, calls }) => {
+    c.sandbox.run(`window.ClawThreads.activeConversation = ${JSON.stringify({ agentId: 'coder', threadId: 'wt-1', sessionId: 'sess-head', runtimeId: '', wasHead: true, awaitSurface: true })};`);
+    c.sandbox.run('currentRuntimeAgentId = ""; focusedAgentId = "coder";');
 
-  await ctx.run('window.refreshThreads(true)');
-  await new Promise((resolve) => setImmediate(resolve));
+    await c.sandbox.run('window.refreshThreads(true)');
+    await new Promise((resolve) => setImmediate(resolve));
 
-  assert.equal(ctx.run('window.ClawThreads.activeConversation'), null, '等待态终结');
-  assert.equal(ctx.__toastsRef.length, 1, '接续失败提示');
-  assert.equal(ctx.__toastsRef[0].status, 'error');
+    assert.equal(c.read('window.ClawThreads.activeConversation'), null, '等待态终结');
+    assert.equal(calls.toasts.length, 1, '接续失败提示');
+    assert.equal(calls.toasts[0].status, 'error');
+  });
 });
 
 test('挡板仍在新鲜窗（慢接续）→ 不误杀，继续等待', async () => {
@@ -181,19 +196,20 @@ test('挡板仍在新鲜窗（慢接续）→ 不误杀，继续等待', async (
     threadId: 'wt-1', agentId: 'coder', headSessionId: 'sess-head', status: 'rotating',
     handoffStartedAt: Date.now() - 60 * 1000, sessionIds: ['sess-head'],
   };
-  const ctx = loadThreadStore({
+  await withThreadCase({
     threads: [slowThread],
     fetchImpl: async () => okJson({ threads: [slowThread], contentHash: 'h2' }),
+  }, async ({ c, calls }) => {
+    c.sandbox.run(`window.ClawThreads.activeConversation = ${JSON.stringify({ agentId: 'coder', threadId: 'wt-1', sessionId: 'sess-head', runtimeId: '', wasHead: true, awaitSurface: true })};`);
+    c.sandbox.run('currentRuntimeAgentId = ""; focusedAgentId = "coder";');
+
+    await c.sandbox.run('window.refreshThreads(true)');
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const selected = c.read('window.ClawThreads.activeConversation');
+    assert.ok(selected && selected.awaitSurface === true, '新鲜窗内等待保持');
+    assert.equal(calls.toasts.length, 0);
   });
-  ctx.run(`window.ClawThreads.activeConversation = ${JSON.stringify({ agentId: 'coder', threadId: 'wt-1', sessionId: 'sess-head', runtimeId: '', wasHead: true, awaitSurface: true })};`);
-  ctx.run('currentRuntimeAgentId = ""; focusedAgentId = "coder";');
-
-  await ctx.run('window.refreshThreads(true)');
-  await new Promise((resolve) => setImmediate(resolve));
-
-  const selected = ctx.run('window.ClawThreads.activeConversation');
-  assert.ok(selected && selected.awaitSurface === true, '新鲜窗内等待保持');
-  assert.equal(ctx.__toastsRef.length, 0);
 });
 
 test('挡板长时间未收敛（status 仍 rotating）→ 继续等待，不得判成失败', async () => {
@@ -206,19 +222,20 @@ test('挡板长时间未收敛（status 仍 rotating）→ 继续等待，不得
     threadId: 'wt-1', agentId: 'coder', headSessionId: 'sess-head', status: 'rotating',
     handoffStartedAt: Date.now() - 45 * 60 * 1000, sessionIds: ['sess-head'],
   };
-  const ctx = loadThreadStore({
+  await withThreadCase({
     threads: [stuckThread],
     fetchImpl: async () => okJson({ threads: [stuckThread], contentHash: 'h2' }),
+  }, async ({ c, calls }) => {
+    c.sandbox.run(`window.ClawThreads.activeConversation = ${JSON.stringify({ agentId: 'coder', threadId: 'wt-1', sessionId: 'sess-head', runtimeId: '', wasHead: true, awaitSurface: true })};`);
+    c.sandbox.run('currentRuntimeAgentId = ""; focusedAgentId = "coder";');
+
+    await c.sandbox.run('window.refreshThreads(true)');
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const selected = c.read('window.ClawThreads.activeConversation');
+    assert.ok(selected && selected.awaitSurface === true, '挡板未收敛时等待表面保持');
+    assert.equal(calls.toasts.length, 0, '不得因本地时间窗误报接续失败');
   });
-  ctx.run(`window.ClawThreads.activeConversation = ${JSON.stringify({ agentId: 'coder', threadId: 'wt-1', sessionId: 'sess-head', runtimeId: '', wasHead: true, awaitSurface: true })};`);
-  ctx.run('currentRuntimeAgentId = ""; focusedAgentId = "coder";');
-
-  await ctx.run('window.refreshThreads(true)');
-  await new Promise((resolve) => setImmediate(resolve));
-
-  const selected = ctx.run('window.ClawThreads.activeConversation');
-  assert.ok(selected && selected.awaitSurface === true, '挡板未收敛时等待表面保持');
-  assert.equal(ctx.__toastsRef.length, 0, '不得因本地时间窗误报接续失败');
 });
 
 test('enterThreadAwaitView：按 threadId 直接挂等待表面，不发起 activate 请求', async () => {
@@ -229,19 +246,25 @@ test('enterThreadAwaitView：按 threadId 直接挂等待表面，不发起 acti
     threadId: 'wt-1', agentId: 'coder', headSessionId: 'sess-head', status: 'rotating',
     handoffStartedAt: Date.now(), sessionIds: ['sess-head'],
   };
-  const ctx = loadThreadStore({
+  const requests = [];
+  await withThreadCase({
     threads: [thread],
-    fetchImpl: async () => okJson({ ok: true, messages: HANDOFF_MSGS }),
+    fetchImpl: async (url) => {
+      requests.push(String(url));
+      return okJson({ ok: true, messages: HANDOFF_MSGS });
+    },
+  }, async ({ c, domain }) => {
+    const result = await domain.enterThreadAwaitView({ threadId: 'wt-1' });
+    assert.equal(result.ok, true);
+
+    const selected = c.window.ClawThreads.activeConversation;
+    assert.equal(selected.awaitSurface, true, '进入等待表面');
+    assert.equal(selected.threadId, 'wt-1');
+    assert.equal(selected.sessionId, 'sess-head');
+    assert.deepEqual(
+      requests.filter((url) => url.includes('/activate')),
+      [],
+      '不得触发 open_session / activate（再次请求会与 409 循环）',
+    );
   });
-  let runWorkspaceActionCalls = 0;
-  ctx.window.runWorkspaceAction = () => { runWorkspaceActionCalls += 1; return Promise.resolve(); };
-
-  const result = await ctx.run('window.enterThreadAwaitView({ threadId: "wt-1" })');
-  assert.equal(result.ok, true);
-
-  const selected = ctx.run('window.ClawThreads.activeConversation');
-  assert.equal(selected.awaitSurface, true, '进入等待表面');
-  assert.equal(selected.threadId, 'wt-1');
-  assert.equal(selected.sessionId, 'sess-head');
-  assert.equal(runWorkspaceActionCalls, 0, '不得触发 open_session（再次请求会与 409 循环）');
 });

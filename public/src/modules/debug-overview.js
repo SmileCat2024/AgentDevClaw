@@ -1,30 +1,63 @@
 /**
  * debug-overview.js — Overview / Monitor 渲染 + lifecycleDocs + 选择器 + Structure/Monitor 面板
  *
- * 从 debug-panels.js 拆出。包含：
+ * 原位 ESM（P2 批次「调试总览与功能深面板」）。从 debug-panels.js 拆出，包含：
  *   - Usage/Token 渲染: formatMetricNumber, formatRate, getLatestCallSummary,
  *     getUsageBreakdown, renderTokenBar, renderRateRing, renderUsageCard,
- *     renderCacheCard, renderContextChip
- *   - lifecycleDocs 常量（生命周期文档）
+ *     renderCacheCard, renderContextChip（本文件私有 helper）
+ *   - lifecycleDocs 常量（生命周期文档，本文件私有）
  *   - 选择器函数: selectOverviewLifecycle（模板经 data-action="debugOverview.selectLifecycle"）、
  *     openFeatureDetails, closeFeatureDetails,
  *     openRepositoryPackageDetails, closeRepositoryPackageDetails
  *   - 面板渲染: renderStructurePanel, renderMonitorPanel
  *
- * 依赖（全局变量，声明于 app-core.js）：
- *   - selectedOverviewLifecycle, selectedFeatureName, selectedRepositoryPackageId
- *   - activeFeaturePanel, currentLanguage, currentMessages
- *   - currentHookInspector, currentOverviewSnapshot
+ * ESM 依赖（直接 import）：escapeHtml / renderMarkdown（markdown-utils.js）、
+ *   activeFeaturePanel（render-entry-state.js）、currentHookInspector /
+ *   currentOverviewSnapshot / currentMessages（session-view-storage.js）、
+ *   getCurrentLanguage（i18n-environment-state.js）、getEmptyOverviewSnapshot
+ *   （overview-data.js）、debugPanel（p2-bootstrap-debug-panel.js：debug 面板
+ *   三个选择状态的 classic owner 读写面，成对 get/set，不持副本）。
  *
- * 依赖（全局函数）：
- *   - escapeHtml, renderMarkdown, enhanceMathInElement (markdown-utils.js)
- *   - t (app-core.js)
- *   - getRuntimeAwareAgentRecord, getRuntimeAwareAgentName (app-ui.js)
- *   - getFeatureStatus (app-ui.js / overview-data.js)
- *   - getEmptyOverviewSnapshot (overview-data.js)
- *   - renderFeaturePanel (debug-panel-host.js, 运行时调用)
- *   - renderCurrentMainView (app-ui.js)
+ * 仍为 classic 的跨域函数按既有 window 可达性晚绑定（调用时取，见下方封装的
+ * 定义域注释）：t (i18n.js)、getRuntimeAwareAgentRecord / getRuntimeAwareAgentName /
+ * renderCurrentMainView (app-ui.js)、getFeatureStatus (app-core.js)、
+ * renderFeaturePanel (debug-panel-host.js)。
+ *
+ * 跨文件消费面（逐键证据见文件尾兼容桥注释）：
+ *   - renderStructurePanel / renderMonitorPanel：app-ui.js 的 ClawPanels 注册
+ *     元数据仍是 classic（render: () => renderXxxPanel()）→ 桥键。两者所属面板
+ *     （workspace / monitor）注册元数据没有 `order`，rail-customize 强制隐藏按钮，
+ *     首屏不可点击；入口只在面板被打开时由 renderFeaturePanel 调用（boot 之后）。
+ *   - openFeatureDetails / closeFeatureDetails：debug-features-hooks.js 按 R4 保持
+ *     classic 唯一实现（hooks / inspector rail 按钮首屏可点，见该文件头注），其
+ *     data-action 处理器经 window 转调 → 桥键。
+ *   - openRepositoryPackageDetails：app-ui.js（classic）→ 桥键；
+ *     workspace-blocks.js 的 repo 详情动作已改命名导出 import。
+ *   - closeRepositoryPackageDetails：消费方已全部 import（workspace-blocks），
+ *     桥键已注销。
+ *
+ * 时序审计（R4）：本文件没有「首屏可点」的入口。hooks / inspector 的可点入口住
+ * classic 的 debug-features-hooks（不在本文件）；本文件的入口分别被 rail-customize
+ * 隐藏（无 order 的 workspace / monitor）或只由 boot 之后的用户动作触达（repo /
+ * feature 详情）。不能以「面板体尚未渲染」论证不可点击，也不能以「注册发生在
+ * DOMContentLoaded 之前」论证任何点击都更晚——真实早期入口按文件逐个核对。
  */
+import { escapeHtml, renderMarkdown } from './markdown-utils.js';
+import { activeFeaturePanel } from './render-entry-state.js';
+import { currentHookInspector, currentOverviewSnapshot, currentMessages } from './session-view-storage.js';
+import { getCurrentLanguage } from './i18n-environment-state.js';
+import { getEmptyOverviewSnapshot } from './overview-data.js';
+import { debugPanel } from './p2-bootstrap-debug-panel.js';
+
+// ── classic 侧实现的晚绑定封装 ─────────────────────────────────────
+// 定义域在 classic 文件（见各行注释），实现随其自身批次迁移；调用时经 window
+// 取当前值，与迁移前的全局裸调用同义（不复制实现、不持引用快照）。
+const t = (...args) => window.t(...args);                                     // i18n.js
+const getRuntimeAwareAgentRecord = () => window.getRuntimeAwareAgentRecord(); // app-ui.js
+const getRuntimeAwareAgentName = () => window.getRuntimeAwareAgentName();     // app-ui.js
+const getFeatureStatus = (feature) => window.getFeatureStatus(feature);       // app-core.js
+const renderFeaturePanel = (...args) => window.renderFeaturePanel(...args);   // debug-panel-host.js
+const renderCurrentMainView = () => window.renderCurrentMainView();           // app-ui.js
 
 // ═══════════════════════════════════════════════════════════════
 // Usage / Token 渲染
@@ -419,47 +452,41 @@ const lifecycleDocs = {
 // ═══════════════════════════════════════════════════════════════
 
 function selectOverviewLifecycle(lifecycle) {
-  selectedOverviewLifecycle = lifecycle;
+  debugPanel.selectedOverviewLifecycle = lifecycle;
   if (activeFeaturePanel === 'workspace') {
     renderFeaturePanel();
   }
 }
 
-function openFeatureDetails(featureName) {
-  selectedFeatureName = featureName;
+export function openFeatureDetails(featureName) {
+  debugPanel.selectedFeatureName = featureName;
   if (activeFeaturePanel === 'hooks') {
     renderFeaturePanel();
   }
 }
 
-function closeFeatureDetails() {
-  selectedFeatureName = null;
+export function closeFeatureDetails() {
+  debugPanel.selectedFeatureName = null;
   if (activeFeaturePanel === 'hooks') {
     renderFeaturePanel();
   }
 }
 
-window.openFeatureDetails = openFeatureDetails;
-window.closeFeatureDetails = closeFeatureDetails;
-
-function openRepositoryPackageDetails(packageId) {
-  selectedRepositoryPackageId = packageId;
+export function openRepositoryPackageDetails(packageId) {
+  debugPanel.selectedRepositoryPackageId = packageId;
   renderCurrentMainView();
 }
 
-function closeRepositoryPackageDetails() {
-  selectedRepositoryPackageId = null;
+export function closeRepositoryPackageDetails() {
+  debugPanel.selectedRepositoryPackageId = null;
   renderCurrentMainView();
 }
-
-window.openRepositoryPackageDetails = openRepositoryPackageDetails;
-window.closeRepositoryPackageDetails = closeRepositoryPackageDetails;
 
 // ═══════════════════════════════════════════════════════════════
 // 结构/监控 面板
 // ═══════════════════════════════════════════════════════════════
 
-function renderStructurePanel() {
+export function renderStructurePanel() {
   const activeAgent = getRuntimeAwareAgentRecord();
   const connected = activeAgent ? (activeAgent.connected !== false ? t('status_connected') : t('status_disconnected')) : t('status_no_agent');
   const totalHooks = currentHookInspector.hooks.reduce((sum, group) => sum + group.entries.length, 0);
@@ -472,9 +499,10 @@ function renderStructurePanel() {
     acc[status] = (acc[status] || 0) + 1;
     return acc;
   }, { enabled: 0, partial: 0, disabled: 0, removed: 0 });
-  const selectedDoc = lifecycleDocs[selectedOverviewLifecycle] || lifecycleDocs.StepFinish;
+  const selectedLifecycle = debugPanel.selectedOverviewLifecycle;
+  const selectedDoc = lifecycleDocs[selectedLifecycle] || lifecycleDocs.StepFinish;
   const flowChips = currentHookInspector.lifecycleOrder
-    .map(name => '<button class="hooks-chip' + (name === selectedOverviewLifecycle ? ' active' : '') + '" type="button" data-action="debugOverview.selectLifecycle" data-lifecycle="' + escapeHtml(name) + '"><strong>' + escapeHtml(name) + '</strong></button>')
+    .map(name => '<button class="hooks-chip' + (name === selectedLifecycle ? ' active' : '') + '" type="button" data-action="debugOverview.selectLifecycle" data-lifecycle="' + escapeHtml(name) + '"><strong>' + escapeHtml(name) + '</strong></button>')
     .join('');
   return [
     '<div class="hooks-panel">',
@@ -501,14 +529,14 @@ function renderStructurePanel() {
     '<div class="hooks-strip">' + flowChips + '</div>',
     '</section>',
     '<section class="hooks-section">',
-    '<div class="hooks-section-header"><div class="hooks-section-title">' + escapeHtml(selectedOverviewLifecycle) + '</div><div class="hooks-section-meta">' + escapeHtml(selectedDoc.title[currentLanguage] || selectedDoc.title.zh) + '</div></div>',
-    '<div class="feature-panel-section overview-doc"><div class="markdown-body">' + renderMarkdown(selectedDoc.body[currentLanguage] || selectedDoc.body.zh) + '</div></div>',
+    '<div class="hooks-section-header"><div class="hooks-section-title">' + escapeHtml(selectedLifecycle) + '</div><div class="hooks-section-meta">' + escapeHtml(selectedDoc.title[getCurrentLanguage()] || selectedDoc.title.zh) + '</div></div>',
+    '<div class="feature-panel-section overview-doc"><div class="markdown-body">' + renderMarkdown(selectedDoc.body[getCurrentLanguage()] || selectedDoc.body.zh) + '</div></div>',
     '</section>',
     '</div>',
   ].join('');
 }
 
-function renderMonitorPanel() {
+export function renderMonitorPanel() {
   const activeAgent = getRuntimeAwareAgentRecord();
   const connected = activeAgent ? (activeAgent.connected !== false ? t('status_connected') : t('status_disconnected')) : t('status_no_agent');
   const overview = currentOverviewSnapshot || getEmptyOverviewSnapshot();
@@ -558,11 +586,38 @@ function renderMonitorPanel() {
 }
 
 // ── 事件接线（data-action="debugOverview.*"）──────────────────────
-// selectOverviewLifecycle 的 window 导出随本批次收敛（模板是唯一消费面）；
-// openFeatureDetails / closeFeatureDetails / openRepositoryPackageDetails /
-// closeRepositoryPackageDetails 另被 debug-features-hooks.js 与
-// workspace-blocks.js / app-ui.js 经 window 调用，导出保留。
-
+// selectOverviewLifecycle 零窗口消费面（模板动作是唯一入口），模块私有，
+// 原 window 导出随本批次收敛。
 window.ClawFW.actions.registerMany({
   'debugOverview.selectLifecycle': (el) => selectOverviewLifecycle(el.dataset.lifecycle),
+});
+
+// ── 兼容桥（仍有未迁移消费方的入口）────────────────────────────────
+// 注册相位：模块顶层（deferred ESM 相）。剩余五个键的消费点全部在函数体内、且都在
+// boot 之后：app-ui 的 ClawPanels render 箭头（workspace / monitor 面板被
+// rail-customize 隐藏，只在面板打开时调用）、classic debug-features-hooks 的
+// feature 详情动作（features.openDetails / features.closeDetails）、app-ui 的
+// repo 详情关闭动作。classic 相（加载期顶层与首屏同步链）对这些键零读写，故
+// deferred 注册安全。
+// closeRepositoryPackageDetails 已注销桥键：唯一消费方 workspace-blocks 的 repo
+// 详情动作改为命名导出 import（消费方归零 → 删 defineKey）。
+const bridged = {
+  renderStructurePanel,
+  renderMonitorPanel,
+  openFeatureDetails,
+  closeFeatureDetails,
+  openRepositoryPackageDetails,
+};
+window.KernelState.defineKey('debug-overview', 'renderStructurePanel', renderStructurePanel);
+window.KernelState.defineKey('debug-overview', 'renderMonitorPanel', renderMonitorPanel);
+window.KernelState.defineKey('debug-overview', 'openFeatureDetails', openFeatureDetails);
+window.KernelState.defineKey('debug-overview', 'closeFeatureDetails', closeFeatureDetails);
+window.KernelState.defineKey('debug-overview', 'openRepositoryPackageDetails', openRepositoryPackageDetails);
+// claim 后 classic 写方（window.X = ...）经 impl.set 落回 bridged，setter 语义不变。
+// 注销条件：app-ui 的 ClawPanels 注册转 ESM（renderXxxPanel 改 import）；
+// app-ui 的 repo 详情打开动作改 import；debug-features-hooks 整体
+// 转 ESM（openFeatureDetails / closeFeatureDetails 改命名导出 import）。
+window.KernelState.claim('debug-overview', {
+  get: (key) => bridged[key],
+  set: (key, value) => { bridged[key] = value; },
 });

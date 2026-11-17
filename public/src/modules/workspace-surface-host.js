@@ -12,7 +12,12 @@ const navigation = createWorkspaceSurface({
   runtimeId: () => currentRuntimeAgentId,
   readOnlyMode: () => readOnlyMode,
   saveCache: saveCurrentRuntimeToCache,
-  loadDetail: loadAgentDetail,
+  // 静态环内的顶层读取惰性转调（与 session-data-loader-host 同模式）：
+  // agent-loader-host → project-data → session-ui → agent-snapshot-loader-host →
+  // session-data-loader-host → 本模块 的环里，本模块可能先于 agent-loader-host
+  // 求值，其 `export const {...} = loader` 此时尚未初始化（TDZ）。转调保留参数
+  // 传递与 `host.<name>(...)` 方法调用形态（生产函数不读 `this`）。
+  loadDetail: (...args) => loadAgentDetail(...args),
   beginLoading: beginChatLoadingSession,
 });
 export const { selectWorkspaceSurface } = navigation;

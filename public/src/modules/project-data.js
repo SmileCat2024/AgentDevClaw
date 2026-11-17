@@ -4,11 +4,38 @@
  * 从 app-ui.js 拆出（Phase 2c-2）。
  * 提供 agent workspace state 管理、项目列表构建、显示名解析等纯数据函数。
  *
- * 依赖（全局作用域，运行时解析）:
- * - app-core.js: allAgents, currentLanguage, isUiOnlyUnit, getCurrentUnitUi
- * - app-core.js: invoke, getCurrentAgentRecord
- * - session-ui.js: getWorkspaceSessions
+ * ESM 化：P2 W2-8（2026-11-17）。原位转换，数据语义与渲染输出零变化。
+ *
+ * 依赖（ESM，装载顺序由 import 图确定）:
+ * - i18n-environment-state：实时语言
+ * - session-ui：getWorkspaceSessions
+ * - agent-store-state：allAgents（live binding）+ setAllAgents（updateAgentRecord 写入口）
+ * - assembly-data：buildWorkspaceProjectKey（项目键归一化，权威实现）
+ *
+ * 仍 classic（调用时点显式 window 晚绑定，各域收敛时改 import）:
+ * - app-main：getCurrentAgentRecord；app-core：isPhStyleWorkspaceAgent /
+ *   isUiOnlyUnit / getCurrentUnitUi / hasPendingSessionNavigation
+ * - remote-connections：getRemoteHistoryProjectBuckets
+ *
+ * 时序（R1/R2/R4，逐条审计见批次报告）：首屏 `applyTheme/applyLanguage →
+ * renderCurrentMainView` 在 allAgents 为空时以 `getCurrentUnitUi(null) === null`
+ * 早退，classic 相零触达本域函数（实测探针证据）；本模块顶层只做
+ * `window.ClawFW` / `phProjectEntities` 初始化 + 兼容桥注册（`defineKey` /
+ * `claim`，参数全是本地函数声明与先定义的 const），不做业务调用；classic 相
+ * 唯一读取方（sidebar-render 渲染签名）以 `?.projects || []` 容忍缺席，且首屏
+ * 两者同为空清单——执行相从加载期推迟到模块执行期等价（R4）。
+ *
+ * 求值闭包副作用（P2 项目/装配批新增直接边后扩大，测试夹具需具备对应 classic
+ * 工厂）：`assembly-data → workspace-blocks → debug-overview` 把
+ * `debug-overview` 与其 `p2-bootstrap-debug-panel`（顶层 `debugPanel =
+ * window.createP2BootstrapDebugPanelHost()`）拉进本模块的求值闭包；生产里
+ * app-core（classic）先于 module 入口执行，工厂必然就位。
  */
+
+import { getCurrentLanguage } from './i18n-environment-state.js';
+import { getWorkspaceSessions } from './session-ui.js';
+import { allAgents, setAllAgents } from './agent-store-state.js';
+import { buildWorkspaceProjectKey } from './assembly-data.js';
 
 /**
  * Stable descending sort comparator for sessions and projects.
@@ -25,7 +52,7 @@ function compareByRecency(a, b) {
   return String(b?.id || '').localeCompare(String(a?.id || ''));
 }
 
-function getFeatureCreatorProjects(agent = getCurrentAgentRecord()) {
+export function getFeatureCreatorProjects(agent = window.getCurrentAgentRecord()) {
   if (agent?.id !== 'feature-creator') return [];
 
   const workspaceState = getAgentWorkspaceState(agent);
@@ -108,7 +135,7 @@ function getFeatureCreatorProjects(agent = getCurrentAgentRecord()) {
     .sort(compareByRecency);
 }
 
-function getAgentCreatorProjects(agent = getCurrentAgentRecord()) {
+export function getAgentCreatorProjects(agent = window.getCurrentAgentRecord()) {
   if (agent?.id !== 'agent-creator') return [];
 
   const workspaceState = getAgentWorkspaceState(agent);
@@ -206,7 +233,7 @@ function getAgentCreatorProjects(agent = getCurrentAgentRecord()) {
     .sort(compareByRecency);
 }
 
-function getPathLeaf(value) {
+export function getPathLeaf(value) {
   const text = String(value || '').trim();
   if (!text) return '';
   const parts = text.split(/[\\/]+/).filter(Boolean);
@@ -224,11 +251,11 @@ function getPathLeaf(value) {
  * openDirectory 只是创建时记录，绝不能用来分组（否则 A/B 混进同路径
  * 目录 D 的组）。显示名不参与身份比较（契约：侧栏组键）。
  */
-window.resolveSidebarChildProjectGroup = function (entry, sessionDirMap) {
+export function resolveSidebarChildProjectGroup(entry, sessionDirMap) {
   const projectId = String(entry?.projectId || '').trim();
   if (projectId) {
-    const zh = currentLanguage === 'zh';
-    const entity = (window.ClawFW?.phProjectEntities?.projects || [])
+    const zh = getCurrentLanguage() === 'zh';
+    const entity = (phProjectEntities.projects || [])
       .find((project) => project.id === projectId);
     return {
       projectKey: 'prj:' + projectId,
@@ -243,7 +270,7 @@ window.resolveSidebarChildProjectGroup = function (entry, sessionDirMap) {
   }
   if (!dir) return null;
   return { projectKey: '', projectName: getPathLeaf(dir), projectDir: dir };
-};
+}
 
 function toFeatureDisplayName(value) {
   const text = String(value || '').trim().replace(/^[^a-zA-Z0-9]+|[^a-zA-Z0-9-]+$/g, '');
@@ -258,7 +285,7 @@ function toFeatureDisplayName(value) {
     .join('');
 }
 
-function getFeatureSessionDisplayName(session, agent = getCurrentAgentRecord()) {
+export function getFeatureSessionDisplayName(session, agent = window.getCurrentAgentRecord()) {
   const workspaceState = getAgentWorkspaceState(agent);
   const directoryName = getPathLeaf(session?.openDirectory) || getPathLeaf(workspaceState?.openDirectory);
   const derivedName = toFeatureDisplayName(directoryName);
@@ -268,7 +295,7 @@ function getFeatureSessionDisplayName(session, agent = getCurrentAgentRecord()) 
   return String(session?.id || '').trim();
 }
 
-function getFeatureProjectDisplayName(project) {
+export function getFeatureProjectDisplayName(project) {
   const directoryName = getPathLeaf(project?.openDirectory);
   const derivedName = toFeatureDisplayName(directoryName);
   if (derivedName) return derivedName;
@@ -277,7 +304,7 @@ function getFeatureProjectDisplayName(project) {
   return 'UntitledFeature';
 }
 
-function getAgentProjectDisplayName(project) {
+export function getAgentProjectDisplayName(project) {
   const directoryName = getPathLeaf(project?.openDirectory);
   const derivedName = toFeatureDisplayName(directoryName);
   if (derivedName) return derivedName;
@@ -306,6 +333,18 @@ window.ClawFW.phProjectEntities = window.ClawFW.phProjectEntities || {
   projects: [],
 };
 
+/**
+ * 项目实体缓存的 ESM 命名面：求值时点与 classic 消费方（sidebar-render 的
+ * phProjectNames）读的 window 键**取自同一对象**，不是镜像副本；此后两侧都只
+ * 变异该对象的字段（loaded / loading / projects），不做整体重赋值——生产代码
+ * 没有替换该对象的路径，因此两侧读到的是同一份数据。
+ *
+ * 契约边界：本命名导出**不支持**运行期把 `window.ClawFW.phProjectEntities`
+ * 整体换成另一个对象（ESM 读方持的是求值时点那份）。需要整体替换时，先改这里
+ * 与全部 ESM 读方（统一走 getter），并同步 classic sidebar-render。
+ */
+export const phProjectEntities = window.ClawFW.phProjectEntities;
+
 function normalizePhProjectEntity(raw) {
   const id = String(raw?.id || '').trim();
   if (!id.startsWith('prj_')) return null;
@@ -326,8 +365,8 @@ function normalizePhProjectEntity(raw) {
  * 拉取项目实体清单（ensure*Loaded 模式：在飞合并、幂等）。返回后调用方
  * 自行重渲染；不主动触发渲染（数据层无渲染职责）。
  */
-function ensurePhProjectEntitiesLoaded(force = false) {
-  const store = window.ClawFW.phProjectEntities;
+export function ensurePhProjectEntitiesLoaded(force = false) {
+  const store = phProjectEntities;
   if (!force && (store.loaded || store.loading)) return store.loading || Promise.resolve();
   store.loading = (async () => {
     try {
@@ -355,7 +394,7 @@ function ensurePhProjectEntitiesLoaded(force = false) {
  *      首个目录桶（旧版行为）。
  * 没有显式项目目标的桌面/目录入口自然落入目录模式。
  */
-function getPhBrowsingTarget(agent = getCurrentAgentRecord()) {
+export function getPhBrowsingTarget(agent = window.getCurrentAgentRecord()) {
   const workspaceState = getAgentWorkspaceState(agent);
   const openDirectory = String(workspaceState?.openDirectory || '').trim();
   const normDirId = (dir) => `dir:${String(dir).replace(/\\/g, '/').toLowerCase()}`;
@@ -368,14 +407,14 @@ function getPhBrowsingTarget(agent = getCurrentAgentRecord()) {
     stored = JSON.parse(localStorage.getItem(_phBrowsingTargetStorageKey(agent?.id || '')) || 'null');
   } catch { stored = null; }
   if (stored && stored.type === 'project' && String(stored.id || '').startsWith('prj_')) {
-    const entity = (window.ClawFW.phProjectEntities?.projects || [])
+    const entity = (phProjectEntities.projects || [])
       .find((p) => p.id === stored.id);
     // 已归档项目不再是有效浏览目标（ticket 046：从正常选择器隐藏）——与
     // 被删除同款处理：清掉过期目标，走目录回退。恢复归档后用户重新选择。
     if (entity && !entity.archived) return { type: 'project', id: entity.id, project: entity };
     // 元数据未加载完（loaded=false）：不退回另一个目标（契约），保持项目
     // 待定态——id 保留，project 为空，渲染层呈现加载中而非目录回退。
-    if (!(window.ClawFW.phProjectEntities?.loaded)) {
+    if (!phProjectEntities.loaded) {
       return { type: 'project', id: stored.id, project: null };
     }
     // 已加载但项目不在列（被删除）：清掉过期目标，走目录回退
@@ -386,13 +425,13 @@ function getPhBrowsingTarget(agent = getCurrentAgentRecord()) {
     if (match) return { type: 'dir', id: stored.id, openDirectory: match };
     // 项目绑定目录（含托管）也是合法目录目标：目录清单收录项目绑定目录，
     // 但这类目录不写 workspace_state / 目录注册表——目标凭项目实体解析。
-    const boundEntity = (window.ClawFW.phProjectEntities?.projects || [])
+    const boundEntity = (phProjectEntities.projects || [])
       .find((p) => !p.archived && p.openDirectory && normDirId(p.openDirectory) === stored.id);
     if (boundEntity) return { type: 'dir', id: stored.id, openDirectory: boundEntity.openDirectory };
     // 远程目录桶（ADR-0012）：既有远程目录能力与寻址保持——目标凭远程历史
     // 桶解析，不因本地无此目录而静默回退（回退会把远程导航污染成本地目录）。
-    if (typeof getRemoteHistoryProjectBuckets === 'function') {
-      const remoteBucket = getRemoteHistoryProjectBuckets()
+    if (typeof window.getRemoteHistoryProjectBuckets === 'function') {
+      const remoteBucket = window.getRemoteHistoryProjectBuckets()
         .find((bucket) => bucket?.openDirectory && normDirId(bucket.openDirectory) === stored.id);
       if (remoteBucket) return { type: 'dir', id: stored.id, openDirectory: remoteBucket.openDirectory, remote: true };
     }
@@ -448,7 +487,7 @@ function _phActivityDirKey(dir) {
 function _phSortProjectsByRecency(list, agent, signals = null) {
   // 调用方可能没有当前 agent（如脱离主壳的渲染场景）：此时只做活动时间排序，
   // 不解析浏览目标——避免依赖主壳全局 getCurrentAgentRecord。
-  const resolvedAgent = agent ?? (typeof getCurrentAgentRecord === 'function' ? getCurrentAgentRecord() : null);
+  const resolvedAgent = agent ?? (typeof window.getCurrentAgentRecord === 'function' ? window.getCurrentAgentRecord() : null);
   const resolvedSignals = signals ?? _phActivitySignals(resolvedAgent);
   const target = resolvedAgent && typeof getPhBrowsingTarget === 'function' ? getPhBrowsingTarget(resolvedAgent) : null;
   const currentId = target?.type === 'project' ? String(target.id || '') : '';
@@ -460,8 +499,8 @@ function _phSortProjectsByRecency(list, agent, signals = null) {
   });
 }
 
-function getPhDirectoryNavigationList(agent = getCurrentAgentRecord()) {
-  if (typeof isPhStyleWorkspaceAgent !== 'function' || !isPhStyleWorkspaceAgent(agent)) return [];
+export function getPhDirectoryNavigationList(agent = window.getCurrentAgentRecord()) {
+  if (typeof window.isPhStyleWorkspaceAgent !== 'function' || !window.isPhStyleWorkspaceAgent(agent)) return [];
   const projects = typeof getProgrammingHelperProjects === 'function'
     ? getProgrammingHelperProjects(agent) : [];
   const activitySignals = _phActivitySignals(agent);
@@ -482,7 +521,7 @@ function getPhDirectoryNavigationList(agent = getCurrentAgentRecord()) {
     entries.push(entry);
     byId.set(entry.id, entry);
   }
-  for (const entity of (window.ClawFW.phProjectEntities?.projects || [])) {
+  for (const entity of (phProjectEntities.projects || [])) {
     if (entity.archived || !entity.openDirectory) continue;
     const id = phDirIdOf(entity.openDirectory);
     let entry = byId.get(id);
@@ -534,7 +573,7 @@ function getPhDirectoryNavigationList(agent = getCurrentAgentRecord()) {
  * 目录目标 → 目标目录；无有效目标 → null（无当前目录，新建项目不得无声
  * 指定其他路径）。
  */
-function getPhCurrentDirectoryContext(agent = getCurrentAgentRecord()) {
+export function getPhCurrentDirectoryContext(agent = window.getCurrentAgentRecord()) {
   const target = typeof getPhBrowsingTarget === 'function' ? getPhBrowsingTarget(agent) : null;
   if (target?.type === 'project' && target.project) {
     return {
@@ -551,10 +590,10 @@ function getPhCurrentDirectoryContext(agent = getCurrentAgentRecord()) {
 }
 
 /** 同目录项目（右侧归属选择器候选）：非归档实体按归一化 workDirectory 匹配，最近访问排序。 */
-function getPhProjectsInDirectory(openDirectory) {
+export function getPhProjectsInDirectory(openDirectory) {
   const norm = String(openDirectory || '').replace(/\\/g, '/').toLowerCase();
   if (!norm) return [];
-  const matched = (window.ClawFW.phProjectEntities?.projects || [])
+  const matched = (phProjectEntities.projects || [])
     .filter((p) => !p.archived && p.openDirectory
       && String(p.openDirectory).replace(/\\/g, '/').toLowerCase() === norm);
   return _phSortProjectsByRecency(matched);
@@ -564,10 +603,10 @@ function getPhProjectsInDirectory(openDirectory) {
  * 项目绑定目录的呈现桶（渲染层用）：目录目标指向项目绑定目录（非注册目录桶）
  * 时合成 directory 桶，仅驱动 surface 呈现与目录切片——不进目录注册表。
  */
-function getPhProjectBoundDirectoryBucket(agent = getCurrentAgentRecord()) {
+export function getPhProjectBoundDirectoryBucket(agent = window.getCurrentAgentRecord()) {
   const target = typeof getPhBrowsingTarget === 'function' ? getPhBrowsingTarget(agent) : null;
   if (target?.type !== 'dir') return null;
-  const boundEntity = (window.ClawFW.phProjectEntities?.projects || [])
+  const boundEntity = (phProjectEntities.projects || [])
     .find((p) => !p.archived && p.openDirectory && phDirIdOf(p.openDirectory) === target.id);
   if (!boundEntity) return null;
   return {
@@ -580,7 +619,7 @@ function getPhProjectBoundDirectoryBucket(agent = getCurrentAgentRecord()) {
 }
 
 /** 显式设置浏览目标（selector 选择 / 新建项目后进入）。 */
-function setPhBrowsingTarget(agentId, target) {
+export function setPhBrowsingTarget(agentId, target) {
   if (!agentId || !target?.type) return;
   try {
     localStorage.setItem(_phBrowsingTargetStorageKey(agentId), JSON.stringify({
@@ -590,7 +629,7 @@ function setPhBrowsingTarget(agentId, target) {
   } catch { /* localStorage 不可用时仅内存态（下次渲染回退目录模式） */ }
 }
 
-function clearPhBrowsingTarget(agentId) {
+export function clearPhBrowsingTarget(agentId) {
   try { localStorage.removeItem(_phBrowsingTargetStorageKey(agentId)); } catch { /* ignore */ }
 }
 
@@ -608,8 +647,8 @@ function clearPhBrowsingTarget(agentId) {
  *
  * @returns {{projectId: string}|{projectDir: string}|{}}
  */
-function getPhSessionOwnershipParams(agent = getCurrentAgentRecord()) {
-  if (typeof isPhStyleWorkspaceAgent === 'function' && !isPhStyleWorkspaceAgent(agent)) return {};
+export function getPhSessionOwnershipParams(agent = window.getCurrentAgentRecord()) {
+  if (typeof window.isPhStyleWorkspaceAgent === 'function' && !window.isPhStyleWorkspaceAgent(agent)) return {};
   const target = typeof getPhBrowsingTarget === 'function' ? getPhBrowsingTarget(agent) : null;
   if (target?.type === 'project' && target.id) return { projectId: target.id };
   if (target?.openDirectory) return { projectDir: target.openDirectory };
@@ -621,7 +660,7 @@ function getPhSessionOwnershipParams(agent = getCurrentAgentRecord()) {
  * 供「只想刷新元数据/计数、不改变列表身份」的调用方使用：结果仍交给
  * mergeWorkspaceSessionSnapshots 合并，保留已加载的深层分页段。
  */
-async function phFetchSessionsWithOwnership(agent, extra = {}) {
+export async function phFetchSessionsWithOwnership(agent, extra = {}) {
   if (!agent?.id) return null;
   const params = new URLSearchParams({ agentId: agent.id });
   const ownership = getPhSessionOwnershipParams(agent);
@@ -637,8 +676,8 @@ async function phFetchSessionsWithOwnership(agent, extra = {}) {
   return await response.json();
 }
 
-function getProgrammingHelperProjects(agent = getCurrentAgentRecord()) {
-  if (!isPhStyleWorkspaceAgent(agent)) return [];
+export function getProgrammingHelperProjects(agent = window.getCurrentAgentRecord()) {
+  if (!window.isPhStyleWorkspaceAgent(agent)) return [];
 
   const workspaceState = getAgentWorkspaceState(agent);
   const sessions = getWorkspaceSessions(agent);
@@ -690,8 +729,8 @@ function getProgrammingHelperProjects(agent = getCurrentAgentRecord()) {
   // 标记是「该桶无本地目录」的数据事实（保留，不做 UI 门控）：消费端经
   // getProjectLocalHostAgentId 解析本地宿主身份后查询能力矩阵
   // （window.RemoteConnections.capabilityFor）做门控判定。
-  if (typeof getRemoteHistoryProjectBuckets === 'function') {
-    for (const bucket of getRemoteHistoryProjectBuckets()) {
+  if (typeof window.getRemoteHistoryProjectBuckets === 'function') {
+    for (const bucket of window.getRemoteHistoryProjectBuckets()) {
       const dirId = `dir:${String(bucket.openDirectory).replace(/\\/g, '/').toLowerCase()}`;
       const isRemoteOnly = !projects.has(dirId);
       const project = upsertProject({ openDirectory: bucket.openDirectory });
@@ -710,7 +749,7 @@ function getProgrammingHelperProjects(agent = getCurrentAgentRecord()) {
   // 处于未加载/空态（空项目可见，conversationCount 0）。
   const wsMeta = agent?.workspace_sessions || {};
   const sliceProjectId = String(wsMeta?.sessionProjectId || '').trim();
-  for (const entity of (window.ClawFW.phProjectEntities?.projects || [])) {
+  for (const entity of (phProjectEntities.projects || [])) {
     // 归档项目不出现在选择器/项目组（ticket 046）：正常入口隐藏，管理弹窗
     // 单独经 ClawFW.phProjectEntities 呈现与恢复。项目会话仍留在索引里。
     if (entity.archived) continue;
@@ -739,7 +778,7 @@ function getProgrammingHelperProjects(agent = getCurrentAgentRecord()) {
     .sort(compareByRecency);
 }
 
-function getProgrammingHelperProjectDisplayName(project) {
+export function getProgrammingHelperProjectDisplayName(project) {
   // 项目实体有独立名称（ticket 045）；目录桶沿用目录叶名
   if (project?.type === 'project') return project.name || 'UntitledProject';
   const directoryName = getPathLeaf(project?.openDirectory);
@@ -750,38 +789,38 @@ function getProgrammingHelperProjectDisplayName(project) {
 // 本地工作区身份；remoteOnly 桶的目录仅存在于远程主机，没有本地宿主，返回
 // 空串——本地工作区切换等真本地动作对该类桶不可用（这是真本地事实而非
 // 能力位，不造伪能力位），由消费端按「动作不可用」路由到视图呈现。
-function getProjectLocalHostAgentId(project, localAgentId) {
+export function getProjectLocalHostAgentId(project, localAgentId) {
   if (!project || project.remoteOnly) return '';
   return String(localAgentId || '');
 }
 
-function hasWorkspaceSessions(agent = getCurrentAgentRecord()) {
+export function hasWorkspaceSessions(agent = window.getCurrentAgentRecord()) {
   return getWorkspaceSessions(agent).length > 0;
 }
 
-function canEnterWorkspaceChat(agent = getCurrentAgentRecord()) {
-  const ui = getCurrentUnitUi(agent);
+export function canEnterWorkspaceChat(agent = window.getCurrentAgentRecord()) {
+  const ui = window.getCurrentUnitUi(agent);
   if (!ui) return true;
-  if (isUiOnlyUnit(agent)) return false;
+  if (window.isUiOnlyUnit(agent)) return false;
   // A newly committed session is a valid chat target before its runtime is
   // connected. Allow the caller to keep the chat surface mounted while startup
   // finishes instead of falling back to the workspace home because the session
   // list has not been refreshed yet.
-  if (typeof hasPendingSessionNavigation === 'function' && hasPendingSessionNavigation(agent)) return true;
+  if (typeof window.hasPendingSessionNavigation === 'function' && window.hasPendingSessionNavigation(agent)) return true;
   return hasWorkspaceSessions(agent);
 }
 
-function getWorkspaceFormStorageKey(agentId) {
+export function getWorkspaceFormStorageKey(agentId) {
   return `protoclaw:workspace-form:${agentId}`;
 }
 
-function getAgentWorkspaceState(agent) {
+export function getAgentWorkspaceState(agent) {
   return agent?.workspace_state && typeof agent.workspace_state === 'object'
     ? agent.workspace_state
     : { forms: {}, openDirectory: '', updatedAt: null };
 }
 
-function updateAgentWorkspaceState(agentId, nextState) {
+export function updateAgentWorkspaceState(agentId, nextState) {
   for (const agent of allAgents) {
     if (agent.id === agentId) {
       agent.workspace_state = nextState;
@@ -789,17 +828,17 @@ function updateAgentWorkspaceState(agentId, nextState) {
   }
 }
 
-function updateAgentRecord(agentId, updates = {}) {
+export function updateAgentRecord(agentId, updates = {}) {
   let matched = null;
-  allAgents = allAgents.map((agent) => {
+  setAllAgents(allAgents.map((agent) => {
     if (agent.id !== agentId) return agent;
     matched = { ...agent, ...updates };
     return matched;
-  });
+  }));
   return matched;
 }
 
-function applyManagedPrebuiltAgent(agentId, connectedAgent, options = {}) {
+export function applyManagedPrebuiltAgent(agentId, connectedAgent, options = {}) {
   if (!connectedAgent) {
     return updateAgentRecord(agentId, {
       runtime_session_id: null,
@@ -819,8 +858,58 @@ function applyManagedPrebuiltAgent(agentId, connectedAgent, options = {}) {
   });
 }
 
-function getWorkspaceBlockData(agent, blockId) {
+export function getWorkspaceBlockData(agent, blockId) {
   const workspaceData = agent?.workspace_data;
   if (!workspaceData || typeof workspaceData !== 'object') return null;
   return workspaceData[blockId] || null;
 }
+
+// —— 桥接期兼容面（kernel-state 访问器桥，domain: project-data）——
+// 保留原因：仍有 classic 文件在调用时点以裸标识符取用这些数据查询（窗口键名
+// 与访问器语义不变）。逐键剩余消费面（P2 项目/装配批 + workspace-actions 验收
+// 后的现状；证据 = 全 public 的 AST + 裸标识符扫描）：
+//   getPathLeaf                     ← classic runtime-status
+//   resolveSidebarChildProjectGroup ← classic runtime-status
+//   ensurePhProjectEntitiesLoaded   ← classic sidebar-render
+//   getPhBrowsingTarget             ← classic app-main
+//   getPhSessionOwnershipParams     ← classic sidebar-render
+//   canEnterWorkspaceChat           ← classic app-ui
+//   getAgentWorkspaceState          ← classic app-main / app-ui / claw-host / sidebar-render
+//   updateAgentRecord               ← classic app-main
+// 已注销的桥键（classic 消费方归零，消费方全部为 ESM 直接 import）：
+//   getFeatureCreatorProjects / getAgentCreatorProjects / hasWorkspaceSessions /
+//   applyManagedPrebuiltAgent（最后一个 classic 消费方 workspace-actions 已验收为
+//   ESM 并在文件头具名 import）；phFetchSessionsWithOwnership（model-settings import）。
+// 已改 direct import 的 ESM 消费方：feature-config / assembly-actions / assembly-data /
+//   session-list-render / workspace-blocks / p2-w2-10-workspace-docset / session-dialogs /
+//   trim-page / session-mutation / dir-config-dialog / ph-project-actions /
+//   ph-project-session-move / ctx-menu-items / sidebar-operations / agent-loader-host /
+//   workspace-actions（含早前批次注销的 getFeatureSessionDisplayName /
+//   getPhDirectoryNavigationList / getWorkspaceFormStorageKey / getWorkspaceBlockData /
+//   updateAgentWorkspaceState 等）。
+// 无桥（唯一消费已改 import）：setPhBrowsingTarget / clearPhBrowsingTarget /
+//   getProjectLocalHostAgentId；phDirIdOf / normalizePhProjectEntity / 比较与活动时间 helper
+//   为模块私有。
+// 注销条件：上列剩余 classic 消费方迁移后删除对应 defineKey 并下调桥债基线。
+const bridgeApi = {
+  getPathLeaf,
+  resolveSidebarChildProjectGroup,
+  ensurePhProjectEntitiesLoaded,
+  getPhBrowsingTarget,
+  getPhSessionOwnershipParams,
+  canEnterWorkspaceChat,
+  getAgentWorkspaceState,
+  updateAgentRecord,
+};
+window.KernelState.defineKey('project-data', 'getPathLeaf', getPathLeaf);
+window.KernelState.defineKey('project-data', 'resolveSidebarChildProjectGroup', resolveSidebarChildProjectGroup);
+window.KernelState.defineKey('project-data', 'ensurePhProjectEntitiesLoaded', ensurePhProjectEntitiesLoaded);
+window.KernelState.defineKey('project-data', 'getPhBrowsingTarget', getPhBrowsingTarget);
+window.KernelState.defineKey('project-data', 'getPhSessionOwnershipParams', getPhSessionOwnershipParams);
+window.KernelState.defineKey('project-data', 'canEnterWorkspaceChat', canEnterWorkspaceChat);
+window.KernelState.defineKey('project-data', 'getAgentWorkspaceState', getAgentWorkspaceState);
+window.KernelState.defineKey('project-data', 'updateAgentRecord', updateAgentRecord);
+window.KernelState.claim('project-data', {
+  get: (key) => bridgeApi[key],
+  set: (key, value) => { bridgeApi[key] = value; },
+});

@@ -6,13 +6,25 @@
  *   - renderReverseHooksPanel
  *   - renderFeatureDetailOverlay（独立 portal，挂载于 document.body）
  *
- * 依赖（全局变量，声明于 app-core.js）：
+ * 迁移边界（R4）：本文件保持 **classic 唯一实现**，不进 P2 ESM 批次。
+ * app-ui 的 ClawPanels 注册在 classic 相就为 hooks / inspector 生成 rail 按钮
+ * （注册元数据带 icon + order，rail-customize 不隐藏），首屏 applyLanguage →
+ * syncRailButtons 之后即可点击——「面板体未渲染 / activeFeaturePanel 为空」不等于
+ * 「不可点击」。把这些 render 入口搬进 deferred ESM 会让模块求值前的真实点击抛
+ * ReferenceError（HEAD 同一次点击正常渲染）。render 入口与它的闭合依赖（空态 /
+ * 分组 / 卡片、详情弹窗与技能阅读页）互相缠绕，无法合理拆分，故整文件保 classic；
+ * 不保留 ESM 副本，等 app-ui 的面板注册同批迁移后再整体转换。
+ *
+ * 依赖（全局状态，app-core 在 classic 相注册的 KernelState 桥键，有真初值）：
  *   - selectedFeatureName, currentHookInspector
  *
  * 依赖（全局函数）：
- *   - escapeHtml, t (app-core.js)
- *   - getFeatureStatus, getStatusBadgeClass, getFeatureStatusLabel,
- *     shortenSourcePath (app-ui.js / overview-data.js)
+ *   - escapeHtml (markdown-bootstrap 桥键), t (i18n.js)
+ *   - getFeatureStatus, getStatusBadgeClass, getFeatureStatusLabel (app-core.js)
+ *   - shortenSourcePath (overview-data ESM 桥键)：只在有 feature / hook 数据时触达，
+ *     数据由 boot 之后的 inspector 轮询写入，因此不在 classic 相调用
+ *   - renderFeaturePanel (debug-panel-host.js)、openFeatureDetails /
+ *     closeFeatureDetails (debug-overview ESM 桥键，用户动作触发)
  */
 
 // ═══════════════════════════════════════════════════════════════
@@ -354,6 +366,8 @@ let _skillView = null;
 let _pendingScrollRestore = null;
 let _skillListScroll = 0;
 
+// 保留既有 window 导出（classic 顶层函数声明/赋值即全局属性，台账按 behavior
+// 键计量）；生产路径是 data-action="features.setDetailTab" 经分发器注册表分发。
 window.setFeatureDetailTab = function (tab, featureName) {
   if (!FEATURE_DETAIL_TABS.includes(tab)) return;
   if (featureName && selectedFeatureName !== featureName) return;
@@ -1048,7 +1062,7 @@ function renderReverseHooksPanel() {
 
 // 功能特性 / 反向钩子面板动作（data-action 分发）。openFeatureDetails /
 // closeFeatureDetails 实现住 debug-overview.js，经 window 调用；
-// setFeatureDetailTab 保留 window 导出（测试契约）。
+// setFeatureDetailTab 保留既有 window 导出（无生产消费方，台账 behavior 键）。
 // details 的 toggle 不冒泡，bindEventType 必须走 capture（见分发器注释）。
 window.ClawFW.actions.bindEventType('toggle', { capture: true });
 window.ClawFW.actions.registerMany({

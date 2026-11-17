@@ -22,21 +22,57 @@
  *   Assembly Workbench 入口：
  *     - renderAssemblyWorkbenchBlock
  *
- * 依赖（全局作用域）：
- *   app-core.js: currentLanguage, escapeHtml, t, localizeWorkspaceValue, formatWorkspaceDate,
- *                getCurrentAgentRecord, shouldAnimateWorkspaceSurface,
- *                repoSourceFilter, repoSearchQuery, selectedRepositoryPackageId
- *   project-data.js: getFeatureCreatorProjects, getAgentCreatorProjects, getWorkspaceSessions,
- *                    canEnterWorkspaceChat, getAgentWorkspaceState, updateAgentWorkspaceState
- *   im-ui.js: getIMWorkspaceDraft, isIMWorkspaceConfigEditor, renderIMWorkspaceConfigEditor,
- *   imPortalCarrierOf, imChannelLabel, imChannelConfigured
- *   app-ui.js (壳): renderCurrentMainView, renderAssemblyWorkbenchStageFlow
- *   app-ui.js (域 E): getWorkspaceFormDraft, saveWorkspaceFormDraft, persistWorkspaceState,
- *                     getFeatureCreatorOutputDirectory
- *   app-main.js: getSavedAssemblyConfigs, canonicalizeAssemblyFeatureSelection
- *   debug-overview.js: window.openRepositoryPackageDetails, window.closeRepositoryPackageDetails,
- *                    window.setRepoSourceFilter, window.setRepoSearchQuery, window.openFeatureUploadDialog
+ * ESM（P2 W2-10 装配工作台与表面块批次）：语言 / 转义 / 时间格式 / 渲染与
+ * 会话存储状态显式 import；批内模块（assembly-data / assembly-actions /
+ * feature-config / fw-config-panel / workspace-docset）与已迁的 debug 面板族
+ * （debug-overview / debug-summary-upload）与 project-data 数据面一律 import。
+ * 仍为 classic 的宿主函数（app-core / app-main / app-ui / im-ui）经 window
+ * 晚绑定并注明收敛批次。
+ *
+ * 排期边界（R1/R4 审计结论）：本文件全部渲染入口只经 app-ui 的
+ * `ClawHost.blocks.registerPrimitive` 闭包调用，而闭包只有存在 agent 与
+ * workspace ui 数据时才会被执行；首屏 `applyTheme/applyLanguage → applyLanguage
+ * → renderCurrentMainView`（app-main 顶层）在 allAgents 为空时走空态分支，
+ * 不触达这些函数。因此注册相位取 ESM 相（本模块顶层）。
  */
+
+import { getCurrentLanguage } from './i18n-environment-state.js';
+import { escapeHtml } from './markdown-utils.js';
+import { formatWorkspaceDate } from './time-format-host.js';
+import { currentWorkspaceTab, setShouldAnimateWorkspaceSurface } from './render-entry-state.js';
+import { currentMessages } from './session-view-storage.js';
+import { debugPanel } from './p2-bootstrap-debug-panel.js';
+import {
+  getWorkspaceFormDraft,
+  saveWorkspaceFormDraft,
+  persistWorkspaceState,
+  getFeatureCreatorOutputDirectory,
+  getAssemblyDisplayName,
+} from './assembly-data.js';
+import {
+  canonicalizeAssemblyFeatureSelection,
+  updateWorkspaceFormDraft,
+  chooseWorkspaceDirectory,
+  toggleWorkspaceSelection,
+  saveWorkspaceForm,
+  resetWorkspaceForm,
+} from './assembly-actions.js';
+import { getWorkspaceSessions } from './session-ui.js';
+import {
+  getFeatureCreatorProjects,
+  getAgentCreatorProjects,
+  getAgentWorkspaceState,
+  canEnterWorkspaceChat,
+} from './project-data.js';
+import {
+  setRepoSearchQuery,
+  setRepoSourceFilter,
+  openFeatureUploadDialog,
+} from './debug-summary-upload.js';
+import {
+  openRepositoryPackageDetails,
+  closeRepositoryPackageDetails,
+} from './debug-overview.js';
 
 // ═══════════════════════════════════════════════════════════════
 // 通用 Workspace Blocks
@@ -61,15 +97,15 @@ function shouldRenderBlock(block) {
 }
 
 function renderActionButton(action, options = {}) {
-  const label = localizeWorkspaceValue(action?.label, '');
+  const label = window.localizeWorkspaceValue(action?.label, '');
   const encoded = escapeHtml(JSON.stringify(action?.action || {}));
   const btnClass = options.className || 'workspace-action';
   return '<button class="' + escapeHtml(btnClass) + '" type="button" data-workspace-action="' + encoded + '" data-action="wsBlocks.workspaceAction"' + (options.disabled ? ' disabled' : '') + '>' + escapeHtml(label) + '</button>';
 }
 
 function renderWorkspaceHero(agent, block) {
-  const title = localizeWorkspaceValue(block.title, agent.name || agent.id);
-  const body = localizeWorkspaceValue(block.body, agent.description || '');
+  const title = window.localizeWorkspaceValue(block.title, agent.name || agent.id);
+  const body = window.localizeWorkspaceValue(block.body, agent.description || '');
   // bar 变体：codex 登录卡片同款紧凑横排（左标题说明 / 右按钮组），
   // 由 CSS .workspace-hero.bar 定形；声明驱动，不按 agent id 分支
   const heroClass = agent?.id === 'home'
@@ -77,7 +113,7 @@ function renderWorkspaceHero(agent, block) {
     : 'workspace-hero' + (block?.variant === 'bar' ? ' bar' : '');
   const isIM = agent?.id === 'qqbot';
   const actionsHtml = isIM
-    ? '<div class="workspace-hero-actions"><button class="ph-banner-btn secondary im-channel-config-btn" type="button" data-action="wsBlocks.openIMChannelConfig">' + (currentLanguage === 'zh' ? '配置渠道' : 'Channel Config') + '</button></div>'
+    ? '<div class="workspace-hero-actions"><button class="ph-banner-btn secondary im-channel-config-btn" type="button" data-action="wsBlocks.openIMChannelConfig">' + (getCurrentLanguage() === 'zh' ? '配置渠道' : 'Channel Config') + '</button></div>'
     : (Array.isArray(block?.actions) && block.actions.length > 0
       ? '<div class="workspace-hero-actions">' + block.actions.map((action) => renderActionButton(action, {
         className: action?.className
@@ -87,7 +123,7 @@ function renderWorkspaceHero(agent, block) {
   return [
     '<section class="' + heroClass + (actionsHtml ? ' has-actions' : '') + '">',
     '<div class="workspace-hero-main">',
-    '<div class="workspace-kicker">' + escapeHtml(localizeWorkspaceValue(block.kicker, t('workspace_kicker'))) + '</div>',
+    '<div class="workspace-kicker">' + escapeHtml(window.localizeWorkspaceValue(block.kicker, window.t('workspace_kicker'))) + '</div>',
     '<div class="workspace-title">' + escapeHtml(title) + '</div>',
     '<div class="workspace-body">' + escapeHtml(body) + '</div>',
     '</div>',
@@ -124,10 +160,10 @@ function renderWorkspaceLauncherGrid(agent, block) {
   return [
     '<section class="' + gridClass + '">',
     cards.map((card, index) => {
-      const title = localizeWorkspaceValue(card.title, '');
-      const body = localizeWorkspaceValue(card.body, '');
-      const note = localizeWorkspaceValue(card.note, '');
-      const actionLabel = localizeWorkspaceValue(card.actionLabel, '');
+      const title = window.localizeWorkspaceValue(card.title, '');
+      const body = window.localizeWorkspaceValue(card.body, '');
+      const note = window.localizeWorkspaceValue(card.note, '');
+      const actionLabel = window.localizeWorkspaceValue(card.actionLabel, '');
       const action = escapeHtml(JSON.stringify(card.action || {}));
       const actionType = card?.action?.type || '';
       const disabled = (
@@ -161,8 +197,8 @@ function renderWorkspaceField(agent, field, draft, formId) {
   const name = String(field.name || '').trim();
   if (!name) return '';
 
-  const label = localizeWorkspaceValue(field.label, name);
-  const placeholder = localizeWorkspaceValue(field.placeholder, '');
+  const label = window.localizeWorkspaceValue(field.label, name);
+  const placeholder = window.localizeWorkspaceValue(field.placeholder, '');
   const value = draft[name] ?? '';
   const escapedName = escapeHtml(name);
   const escapedLabel = escapeHtml(label);
@@ -182,7 +218,7 @@ function renderWorkspaceField(agent, field, draft, formId) {
     const options = Array.isArray(field.options) ? field.options : [];
     const optionsHtml = options.map((option) => {
       const optionValue = typeof option === 'string' ? option : String(option?.value ?? '');
-      const optionLabel = typeof option === 'string' ? option : localizeWorkspaceValue(option?.label, optionValue);
+      const optionLabel = typeof option === 'string' ? option : window.localizeWorkspaceValue(option?.label, optionValue);
       const selected = String(value) === optionValue ? ' selected' : '';
       return '<option value="' + escapeHtml(optionValue) + '"' + selected + '>' + escapeHtml(optionLabel) + '</option>';
     }).join('');
@@ -203,10 +239,10 @@ function renderWorkspaceField(agent, field, draft, formId) {
         '<label class="workspace-form-field">',
         '<span class="workspace-form-label">' + escapedLabel + '</span>',
         '<div class="workspace-form-directory-picker">',
-        '<input class="workspace-form-input" type="text" value="' + escapeHtml(displayedValue || t('workspace_directory_not_selected')) + '" readonly data-workspace-form-display="' + escapeHtml(formId + ':' + escapedName) + '">',
-        '<button class="workspace-action" type="button" data-action="wsBlocks.chooseDirectory" data-form-id="' + escapeHtml(formId) + '" data-field-name="' + escapedName + '">' + escapeHtml(t('workspace_pick_directory')) + '</button>',
+        '<input class="workspace-form-input" type="text" value="' + escapeHtml(displayedValue || window.t('workspace_directory_not_selected')) + '" readonly data-workspace-form-display="' + escapeHtml(formId + ':' + escapedName) + '">',
+        '<button class="workspace-action" type="button" data-action="wsBlocks.chooseDirectory" data-form-id="' + escapeHtml(formId) + '" data-field-name="' + escapedName + '">' + escapeHtml(window.t('workspace_pick_directory')) + '</button>',
         '</div>',
-        '<div class="workspace-form-note">' + escapeHtml(t('workspace_pick_directory_hint')) + '</div>',
+        '<div class="workspace-form-note">' + escapeHtml(window.t('workspace_pick_directory_hint')) + '</div>',
         '</label>',
       ].join('');
     }
@@ -220,20 +256,20 @@ function renderWorkspaceField(agent, field, draft, formId) {
         '<label class="workspace-form-field">',
         '<span class="workspace-form-label">' + escapedLabel + '</span>',
         '<div class="workspace-form-directory-picker">',
-        '<input class="workspace-form-input" type="text" value="' + escapeHtml(displayedValue || t('workspace_directory_not_selected')) + '" readonly data-workspace-form-display="' + escapeHtml(formId + ':' + escapedName) + '">',
-        '<button class="workspace-action" type="button" data-action="wsBlocks.chooseDirectory" data-form-id="' + escapeHtml(formId) + '" data-field-name="' + escapedName + '">' + escapeHtml(t('workspace_pick_directory')) + '</button>',
+        '<input class="workspace-form-input" type="text" value="' + escapeHtml(displayedValue || window.t('workspace_directory_not_selected')) + '" readonly data-workspace-form-display="' + escapeHtml(formId + ':' + escapedName) + '">',
+        '<button class="workspace-action" type="button" data-action="wsBlocks.chooseDirectory" data-form-id="' + escapeHtml(formId) + '" data-field-name="' + escapedName + '">' + escapeHtml(window.t('workspace_pick_directory')) + '</button>',
         '</div>',
-        '<div class="workspace-form-note">' + escapeHtml(t('workspace_pick_directory_hint')) + '</div>',
-        outputDir ? '<div class="workspace-form-note" data-workspace-output-note="' + escapeHtml(formId) + '">' + escapeHtml(t('feature_creator_output_dir')) + ': ' + escapeHtml(outputDir) + '</div>' : '',
+        '<div class="workspace-form-note">' + escapeHtml(window.t('workspace_pick_directory_hint')) + '</div>',
+        outputDir ? '<div class="workspace-form-note" data-workspace-output-note="' + escapeHtml(formId) + '">' + escapeHtml(window.t('feature_creator_output_dir')) + ': ' + escapeHtml(outputDir) + '</div>' : '',
         '</label>',
       ].join('');
     }
     return [
       '<label class="workspace-form-field">',
       '<span class="workspace-form-label">' + escapedLabel + '</span>',
-      '<input class="workspace-form-input" type="text" value="' + escapeHtml(displayedValue || t('workspace_directory_not_selected')) + '" readonly data-workspace-form-display="' + escapeHtml(formId + ':' + escapedName) + '">',
-      '<div class="workspace-form-note">' + escapeHtml(t('workspace_install_mode_system')) + '</div>',
-      outputDir ? '<div class="workspace-form-note" data-workspace-output-note="' + escapeHtml(formId) + '">' + escapeHtml(t('feature_creator_output_dir')) + ': ' + escapeHtml(outputDir) + '</div>' : '',
+      '<input class="workspace-form-input" type="text" value="' + escapeHtml(displayedValue || window.t('workspace_directory_not_selected')) + '" readonly data-workspace-form-display="' + escapeHtml(formId + ':' + escapedName) + '">',
+      '<div class="workspace-form-note">' + escapeHtml(window.t('workspace_install_mode_system')) + '</div>',
+      outputDir ? '<div class="workspace-form-note" data-workspace-output-note="' + escapeHtml(formId) + '">' + escapeHtml(window.t('feature_creator_output_dir')) + ': ' + escapeHtml(outputDir) + '</div>' : '',
       '</label>',
     ].join('');
   }
@@ -247,12 +283,12 @@ function renderWorkspaceField(agent, field, draft, formId) {
 }
 
 function renderWorkspaceForm(agent, block) {
-  const title = localizeWorkspaceValue(block.title, t('workspace_tab_form'));
-  const desc = localizeWorkspaceValue(block.description, '');
+  const title = window.localizeWorkspaceValue(block.title, window.t('workspace_tab_form'));
+  const desc = window.localizeWorkspaceValue(block.description, '');
   const fields = Array.isArray(block.fields) ? block.fields : [];
   const formId = block.id || 'form';
   if (fields.length === 0) {
-    return '<section class="workspace-section"><div class="workspace-section-title">' + escapeHtml(t('workspace_form_empty')) + '</div></section>';
+    return '<section class="workspace-section"><div class="workspace-section-title">' + escapeHtml(window.t('workspace_form_empty')) + '</div></section>';
   }
 
   const draft = getWorkspaceFormDraft(agent)[formId] || {};
@@ -271,11 +307,11 @@ function renderWorkspaceForm(agent, block) {
     '<div class="workspace-form-actions' + (backAction ? ' spread' : '') + '">',
     backAction ? '<div>' + backAction + '</div>' : '',
     '<div class="workspace-actions">',
-    '<button class="workspace-action" type="button" data-workspace-form-id="' + escapeHtml(formId) + '" data-workspace-submit-action="' + submitAction + '" data-action="wsBlocks.saveForm">' + escapeHtml(t('workspace_form_save')) + '</button>',
-    '<button class="workspace-action" type="button" data-workspace-form-id="' + escapeHtml(formId) + '" data-action="wsBlocks.resetForm">' + escapeHtml(t('workspace_form_reset')) + '</button>',
+    '<button class="workspace-action" type="button" data-workspace-form-id="' + escapeHtml(formId) + '" data-workspace-submit-action="' + submitAction + '" data-action="wsBlocks.saveForm">' + escapeHtml(window.t('workspace_form_save')) + '</button>',
+    '<button class="workspace-action" type="button" data-workspace-form-id="' + escapeHtml(formId) + '" data-action="wsBlocks.resetForm">' + escapeHtml(window.t('workspace_form_reset')) + '</button>',
     '</div>',
     '</div>',
-    '<div class="workspace-form-note">' + escapeHtml(t('workspace_form_saved')) + '</div>',
+    '<div class="workspace-form-note">' + escapeHtml(window.t('workspace_form_saved')) + '</div>',
     '</div>',
     '</section>',
   ].join('');
@@ -285,23 +321,25 @@ function renderWorkspaceForm(agent, block) {
 function renderFlowEditorBlock(agent, block) {
   if (window.ClawFlowEditor && typeof window.ClawFlowEditor.renderBlock === 'function') {
     return window.ClawFlowEditor.renderBlock(agent, block, {
-      currentLanguage,
+      // Flow 编辑器仍为 classic（public/flow-editor.js），经注入面取宿主能力：
+      // 语言给现值（原 currentLanguage 词法读取），其余 classic 函数经 window 晚绑定。
+      currentLanguage: getCurrentLanguage(),
       escapeHtml,
-      localizeWorkspaceValue,
-      getCurrentAgentRecord,
+      localizeWorkspaceValue: window.localizeWorkspaceValue, // 桥接期：定义于 app-core（i18n 域收敛）
+      getCurrentAgentRecord: window.getCurrentAgentRecord,   // 桥接期：定义于 app-main（编排域收敛）
       getWorkspaceFormDraft,
       saveWorkspaceFormDraft,
       persistWorkspaceState,
-      renderCurrentMainView,
+      renderCurrentMainView: window.renderCurrentMainView,   // 桥接期：定义于 app-ui（渲染入口域收敛）
       updateAgentWorkspaceState,
       getAgentWorkspaceState,
     });
   }
-  const title = localizeWorkspaceValue(block.title, currentLanguage === 'zh' ? '编排' : 'Flows');
+  const title = window.localizeWorkspaceValue(block.title, getCurrentLanguage() === 'zh' ? '编排' : 'Flows');
   return [
     '<section class="assembly-intro">',
     '<div class="workspace-section-title">' + escapeHtml(title) + '</div>',
-    '<div class="assembly-workbench-note">' + escapeHtml(currentLanguage === 'zh' ? 'Flow 编辑器资源正在加载。' : 'Flow editor assets are loading.') + '</div>',
+    '<div class="assembly-workbench-note">' + escapeHtml(getCurrentLanguage() === 'zh' ? 'Flow 编辑器资源正在加载。' : 'Flow editor assets are loading.') + '</div>',
     '</section>',
   ].join('');
 }
@@ -323,9 +361,9 @@ function renderDirectorySummaryPanel(agent, block) {
   const summary = getDirectorySummaryData(agent, block);
   if (!summary) return '';
 
-  const title = localizeWorkspaceValue(block?.directorySummary?.title, '目录概览');
-  const pathLabel = localizeWorkspaceValue(block?.directorySummary?.pathLabel, '目录路径');
-  const updatedLabel = localizeWorkspaceValue(block?.directorySummary?.updatedLabel, '最后变更');
+  const title = window.localizeWorkspaceValue(block?.directorySummary?.title, '目录概览');
+  const pathLabel = window.localizeWorkspaceValue(block?.directorySummary?.pathLabel, '目录路径');
+  const updatedLabel = window.localizeWorkspaceValue(block?.directorySummary?.updatedLabel, '最后变更');
   const names = Array.isArray(summary.sampleNames) ? summary.sampleNames : [];
 
   return [
@@ -342,48 +380,48 @@ function renderDirectorySummaryPanel(agent, block) {
 }
 
 function renderWorkspaceStatusGrid(agent, block) {
-  const title = localizeWorkspaceValue(block.title, t('workspace_tab_live'));
-  const desc = localizeWorkspaceValue(block.description, agent?.description || '');
+  const title = window.localizeWorkspaceValue(block.title, window.t('workspace_tab_live'));
+  const desc = window.localizeWorkspaceValue(block.description, agent?.description || '');
   const sessions = getWorkspaceSessions(agent);
   const summary = sessions.find((session) => session.id === (agent?.active_workspace_session_id || agent?.workspace_sessions?.activeSessionId)) || sessions[0] || null;
-  const connected = agent ? (agent.connected !== false ? t('status_connected') : t('status_disconnected')) : t('status_no_agent');
-  const imDraft = getIMWorkspaceDraft();
+  const connected = agent ? (agent.connected !== false ? window.t('status_connected') : window.t('status_disconnected')) : window.t('status_no_agent');
+  const imDraft = window.getIMWorkspaceDraft();
   const directorySummary = getDirectorySummaryData(agent, block);
   const canOpenChat = canEnterWorkspaceChat(agent);
   const cardsHtml = [
-    { label: t('workspace_live_status'), value: connected, note: agent?.status || '-' },
-    { label: t('workspace_live_runtime'), value: agent?.runtime_session_id || agent?.runtimeSessionId || '-', note: agent?.pid ? `PID ${agent.pid}` : '-' },
-    { label: t('workspace_live_pending'), value: String(agent?.pending_input_count ?? 0), note: String(agent?.message_count ?? currentMessages.length ?? 0) + ' ' + t('feature_messages') },
-    { label: t('workspace_live_session'), value: summary ? (summary.title || summary.id || '-') : t('workspace_history_empty'), note: summary?.updatedAt ? formatWorkspaceDate(summary.updatedAt) : '-' },
+    { label: window.t('workspace_live_status'), value: connected, note: agent?.status || '-' },
+    { label: window.t('workspace_live_runtime'), value: agent?.runtime_session_id || agent?.runtimeSessionId || '-', note: agent?.pid ? `PID ${agent.pid}` : '-' },
+    { label: window.t('workspace_live_pending'), value: String(agent?.pending_input_count ?? 0), note: String(agent?.message_count ?? currentMessages.length ?? 0) + ' ' + window.t('feature_messages') },
+    { label: window.t('workspace_live_session'), value: summary ? (summary.title || summary.id || '-') : window.t('workspace_history_empty'), note: summary?.updatedAt ? formatWorkspaceDate(summary.updatedAt) : '-' },
     directorySummary
       ? {
-          label: localizeWorkspaceValue(block?.directorySummary?.countLabel, 'Skills'),
+          label: window.localizeWorkspaceValue(block?.directorySummary?.countLabel, 'Skills'),
           value: String(directorySummary.skillCount ?? 0),
           note: directorySummary.exists
-            ? `${localizeWorkspaceValue(block?.directorySummary?.countNote, 'Entries')}: ${directorySummary.entryCount ?? 0}`
+            ? `${window.localizeWorkspaceValue(block?.directorySummary?.countNote, 'Entries')}: ${directorySummary.entryCount ?? 0}`
             : (directorySummary.error || 'Not ready'),
         }
       : null,
-    isIMWorkspaceConfigEditor(block)
+    window.isIMWorkspaceConfigEditor(block)
       ? (function () {
           // 门户渠道 = 接线员线路的 carrier（ADR-0042 决策 1）。旧实现按
           // selectedChannel 分支，该字段归一后恒不存在——卡片会永远落到
           // 「QQ」分支，无论用户实际接的是哪个渠道。
-          const portalCarrier = imPortalCarrierOf(imDraft);
+          const portalCarrier = window.imPortalCarrierOf(imDraft);
           const carrierLabel = portalCarrier
             ? (imDraft.workspaceConfig?.channels?.[portalCarrier]?.label
-                || imChannelLabel(portalCarrier))
+                || window.imChannelLabel(portalCarrier))
             : '';
           return {
-            label: t('workspace_live_config'),
+            label: window.t('workspace_live_config'),
             value: portalCarrier
-              ? imChannelConfigured(imDraft, portalCarrier)
-                ? t('im_workspace_bound')
-                : t('im_workspace_not_bound')
-              : t('im_workspace_not_bound'),
+              ? window.imChannelConfigured(imDraft, portalCarrier)
+                ? window.t('im_workspace_bound')
+                : window.t('im_workspace_not_bound')
+              : window.t('im_workspace_not_bound'),
             note: carrierLabel
               || imDraft.workspaceConfig?.channels?.qq?.label
-              || t('im_workspace_qq_section'),
+              || window.t('im_workspace_qq_section'),
           };
         })()
       : null,
@@ -398,11 +436,11 @@ function renderWorkspaceStatusGrid(agent, block) {
     '<div class="workspace-section-title">' + escapeHtml(title) + '</div>',
     '<div class="workspace-section-desc">' + escapeHtml(desc) + '</div>',
     '</div>',
-    '<button class="workspace-action" type="button" data-workspace-action="{&quot;type&quot;:&quot;show_chat&quot;}" data-action="wsBlocks.workspaceAction"' + (canOpenChat ? '' : ' disabled') + '>' + escapeHtml(t('workspace_open_chat')) + '</button>',
+    '<button class="workspace-action" type="button" data-workspace-action="{&quot;type&quot;:&quot;show_chat&quot;}" data-action="wsBlocks.workspaceAction"' + (canOpenChat ? '' : ' disabled') + '>' + escapeHtml(window.t('workspace_open_chat')) + '</button>',
     '</div>',
     '<div class="workspace-grid">' + cardsHtml + '</div>',
     directorySummary ? renderDirectorySummaryPanel(agent, block) : '',
-    isIMWorkspaceConfigEditor(block) ? renderIMWorkspaceConfigEditor(block) : '',
+    window.isIMWorkspaceConfigEditor(block) ? window.renderIMWorkspaceConfigEditor(block) : '',
     '</section>',
   ].join('');
 
@@ -422,7 +460,7 @@ function getFeatureRepositoryData(agent, block) {
 }
 
 function getRepoLocaleText(zh, en) {
-  return currentLanguage === 'zh' ? zh : en;
+  return getCurrentLanguage() === 'zh' ? zh : en;
 }
 
 function parseWorkspaceListField(value) {
@@ -441,22 +479,22 @@ function serializeWorkspaceListField(items) {
 
 function getAssemblyPresetLabel(value) {
   const map = {
-    'general-chatbot': currentLanguage === 'zh' ? '通用对话助手' : 'General Chatbot',
-    'tool-operator': currentLanguage === 'zh' ? '工具执行助手' : 'Tool Operator',
-    'workflow-assistant': currentLanguage === 'zh' ? '工作流推进助手' : 'Workflow Assistant',
+    'general-chatbot': getCurrentLanguage() === 'zh' ? '通用对话助手' : 'General Chatbot',
+    'tool-operator': getCurrentLanguage() === 'zh' ? '工具执行助手' : 'Tool Operator',
+    'workflow-assistant': getCurrentLanguage() === 'zh' ? '工作流推进助手' : 'Workflow Assistant',
   };
-  return map[value] || value || (currentLanguage === 'zh' ? '未设置' : 'Unset');
+  return map[value] || value || (getCurrentLanguage() === 'zh' ? '未设置' : 'Unset');
 }
 
 function getAssemblyPresetDescription(value) {
   const map = {
-    'general-chatbot': currentLanguage === 'zh'
+    'general-chatbot': getCurrentLanguage() === 'zh'
       ? '偏向通用对话体验，强调基础能力完整和上手速度。'
       : 'Optimized for a general chat experience with balanced baseline capabilities.',
-    'tool-operator': currentLanguage === 'zh'
+    'tool-operator': getCurrentLanguage() === 'zh'
       ? '偏向联网、执行和观察类能力，适合操作型助手。'
       : 'Optimized for web, execution, and observation capabilities for operator-style assistants.',
-    'workflow-assistant': currentLanguage === 'zh'
+    'workflow-assistant': getCurrentLanguage() === 'zh'
       ? '偏向任务推进、控制和过程组织，适合持续跟进型 Agent。'
       : 'Optimized for task progression, control, and process organization.',
   };
@@ -475,8 +513,8 @@ const ASSEMBLY_BUNDLE_FEATURES = {
   'dev-operator': ['shell-feature', 'lsp-feature', 'websearch-feature'],
 };
 
-window.applyAssemblyPreset = (formId, presetKey) => {
-  const agent = getCurrentAgentRecord();
+function applyAssemblyPreset(formId, presetKey) {
+  const agent = window.getCurrentAgentRecord();
   if (!agent?.id) return;
   const draft = getWorkspaceFormDraft(agent);
   draft[formId] = draft[formId] || {};
@@ -489,8 +527,8 @@ window.applyAssemblyPreset = (formId, presetKey) => {
   });
   draft[formId].selected_features = serializeWorkspaceListField(canonicalizeAssemblyFeatureSelection(agent, featureTokens));
   saveWorkspaceFormDraft(agent.id, draft);
-  shouldAnimateWorkspaceSurface = false;
-  renderCurrentMainView();
+  setShouldAnimateWorkspaceSurface(false);
+  window.renderCurrentMainView(); // 桥接期：定义于 app-ui（渲染入口域收敛）
 };
 
 function getAssemblyFeaturePackageToken(featureRef, agentOrPackages) {
@@ -506,24 +544,24 @@ function getAssemblyFeaturePackageToken(featureRef, agentOrPackages) {
   return featureRef;
 }
 
-window.setBundleFilter = (formId, bundleKey) => {
-  const agent = getCurrentAgentRecord();
+function setBundleFilter(formId, bundleKey) {
+  const agent = window.getCurrentAgentRecord();
   if (!agent?.id) return;
   const draft = getWorkspaceFormDraft(agent);
   draft[formId] = draft[formId] || {};
   const currentFilter = draft[formId].bundle_filter || '';
   draft[formId].bundle_filter = currentFilter === bundleKey ? '' : bundleKey;
   saveWorkspaceFormDraft(agent.id, draft);
-  shouldAnimateWorkspaceSurface = false;
-  renderCurrentMainView();
+  setShouldAnimateWorkspaceSurface(false);
+  window.renderCurrentMainView(); // 桥接期：定义于 app-ui（渲染入口域收敛）
 };
 
 function getAssemblyStageLabel(value) {
   const map = {
-    goal: currentLanguage === 'zh' ? '定义目标 Agent' : 'Define Target Agent',
-    capabilities: currentLanguage === 'zh' ? '选择能力' : 'Choose Capabilities',
-    environment: currentLanguage === 'zh' ? '环境准备' : 'Environment Setup',
-    review: currentLanguage === 'zh' ? '确认与启动' : 'Review And Launch',
+    goal: getCurrentLanguage() === 'zh' ? '定义目标 Agent' : 'Define Target Agent',
+    capabilities: getCurrentLanguage() === 'zh' ? '选择能力' : 'Choose Capabilities',
+    environment: getCurrentLanguage() === 'zh' ? '环境准备' : 'Environment Setup',
+    review: getCurrentLanguage() === 'zh' ? '确认与启动' : 'Review And Launch',
   };
   return map[value] || value || '';
 }
@@ -554,7 +592,7 @@ function getAssemblyFeatureLabel(token, packages = []) {
 }
 
 function buildAssemblyGeneratedPrompt(form, packages = []) {
-  const assemblyName = getAssemblyDisplayName(form) || (currentLanguage === 'zh' ? '未命名 Agent' : 'Untitled Agent');
+  const assemblyName = getAssemblyDisplayName(form) || (getCurrentLanguage() === 'zh' ? '未命名 Agent' : 'Untitled Agent');
   const preset = String(form?.preset || 'general-chatbot').trim();
   const goal = String(form?.goal || '').trim();
   const selectedFeatures = parseWorkspaceListField(form?.selected_features)
@@ -562,21 +600,21 @@ function buildAssemblyGeneratedPrompt(form, packages = []) {
     .filter(Boolean);
 
   const sections = [
-    currentLanguage === 'zh'
+    getCurrentLanguage() === 'zh'
       ? `你是一个已经装配完成并直接面对最终用户的聊天 Agent。\n你的名称是：${assemblyName}。`
       : `You are a chat agent that has already been assembled and now speaks directly to the end user.\nYour name is: ${assemblyName}.`,
-    currentLanguage === 'zh'
+    getCurrentLanguage() === 'zh'
       ? `预设定位：${getAssemblyPresetLabel(preset)}。${getAssemblyPresetDescription(preset)}`
       : `Preset: ${getAssemblyPresetLabel(preset)}. ${getAssemblyPresetDescription(preset)}`,
   ];
 
   if (goal) {
-    sections.push(currentLanguage === 'zh' ? `主要目标：${goal}` : `Primary goal: ${goal}`);
+    sections.push(getCurrentLanguage() === 'zh' ? `主要目标：${goal}` : `Primary goal: ${goal}`);
   }
   if (selectedFeatures.length > 0) {
-    sections.push((currentLanguage === 'zh' ? '当前已启用能力：' : 'Enabled capabilities: ') + selectedFeatures.join(currentLanguage === 'zh' ? '、' : ', '));
+    sections.push((getCurrentLanguage() === 'zh' ? '当前已启用能力：' : 'Enabled capabilities: ') + selectedFeatures.join(getCurrentLanguage() === 'zh' ? '、' : ', '));
   }
-  sections.push(currentLanguage === 'zh'
+  sections.push(getCurrentLanguage() === 'zh'
     ? '直接以目标 Agent 身份与用户对话，不要提及 Agent Creator、装配过程或工作空间内部机制。没有挂载的能力不要假装拥有。'
     : 'Speak directly as the target agent. Do not mention Agent Creator, the assembly workflow, or workspace internals. Never pretend to have capabilities that are not enabled.');
 
@@ -643,8 +681,8 @@ function getCompatibilityTagLabel(value) {
 }
 
 function renderFeatureRepositoryBlock(agent, block) {
-  const title = localizeWorkspaceValue(block.title, getRepoLocaleText('插件仓库', 'Plugin Repository'));
-  const desc = localizeWorkspaceValue(block.description, '');
+  const title = window.localizeWorkspaceValue(block.title, getRepoLocaleText('插件仓库', 'Plugin Repository'));
+  const desc = window.localizeWorkspaceValue(block.description, '');
   const repository = getFeatureRepositoryData(agent, block);
   const packages = Array.isArray(repository?.packages) ? repository.packages : [];
   const assemblySelection = block?.assemblySelection || null;
@@ -710,12 +748,12 @@ function renderFeatureRepositoryBlock(agent, block) {
 
   const filteredPackages = packages
     .filter((item) => {
-      if (repoSourceFilter === 'official') return item.source === 'official';
-      if (repoSourceFilter === 'custom') return item.source === 'custom';
+      if (debugPanel.repoSourceFilter === 'official') return item.source === 'official';
+      if (debugPanel.repoSourceFilter === 'custom') return item.source === 'custom';
       return true;
     })
     .filter((item) => {
-      if (!repoSearchQuery) return true;
+      if (!debugPanel.repoSearchQuery) return true;
       const haystack = [
         item?.name,
         item?.id,
@@ -724,12 +762,12 @@ function renderFeatureRepositoryBlock(agent, block) {
         ...(Array.isArray(item?.featureTypes) ? item.featureTypes : []),
         ...(Array.isArray(item?.tags) ? item.tags : []),
       ].join(' ').toLowerCase();
-      return haystack.includes(repoSearchQuery);
+      return haystack.includes(debugPanel.repoSearchQuery);
     });
 
-  const selectedPackage = packages.find((item) => item.id === selectedRepositoryPackageId) || null;
-  if (selectedRepositoryPackageId && !selectedPackage) {
-    selectedRepositoryPackageId = null;
+  const selectedPackage = packages.find((item) => item.id === debugPanel.selectedRepositoryPackageId) || null;
+  if (debugPanel.selectedRepositoryPackageId && !selectedPackage) {
+    debugPanel.selectedRepositoryPackageId = null;
   }
 
   const packagesHtml = filteredPackages.length === 0
@@ -804,7 +842,7 @@ function renderFeatureRepositoryBlock(agent, block) {
       '<div class="feature-detail-title">' + escapeHtml(selectedPackage.name || selectedPackage.id) + '</div>',
       '<div class="feature-detail-subtitle">' + escapeHtml(selectedPackage.packageName || selectedPackage.id) + '</div>',
       '</div>',
-      '<button class="feature-detail-close" type="button" title="' + escapeHtml(t('panel_close')) + '" data-action="wsBlocks.repoDetailsCloseBtn">×</button>',
+      '<button class="feature-detail-close" type="button" title="' + escapeHtml(window.t('panel_close')) + '" data-action="wsBlocks.repoDetailsCloseBtn">×</button>',
       '</div>',
       '<div class="feature-detail-stats">',
       '<div class="feature-detail-stat"><div class="feature-detail-stat-label">' + escapeHtml(getRepoLocaleText('来源', 'Source')) + '</div><div class="feature-detail-stat-value">' + escapeHtml(selectedPackage.source === 'official' ? getRepoLocaleText('官方', 'Official') : getRepoLocaleText('自定义', 'Custom')) + '</div></div>',
@@ -846,12 +884,12 @@ function renderFeatureRepositoryBlock(agent, block) {
     '</div>',
     '<div class="workspace-repo-summary">' + summaryHtml + '</div>',
     '<div class="assembly-source-tabs">',
-    '<button class="assembly-source-tab' + (repoSourceFilter === 'all' ? ' active' : '') + '" type="button" data-action="wsBlocks.repoFilter" data-source="all">' + escapeHtml(getRepoLocaleText('全部', 'All')) + ' (' + (officialCount + customCount) + ')</button>',
-    '<button class="assembly-source-tab' + (repoSourceFilter === 'official' ? ' active' : '') + '" type="button" data-action="wsBlocks.repoFilter" data-source="official">' + escapeHtml(getRepoLocaleText('官方', 'Official')) + ' (' + officialCount + ')</button>',
-    '<button class="assembly-source-tab' + (repoSourceFilter === 'custom' ? ' active' : '') + '" type="button" data-action="wsBlocks.repoFilter" data-source="custom">' + escapeHtml(getRepoLocaleText('自定义', 'Custom')) + ' (' + customCount + ')</button>',
+    '<button class="assembly-source-tab' + (debugPanel.repoSourceFilter === 'all' ? ' active' : '') + '" type="button" data-action="wsBlocks.repoFilter" data-source="all">' + escapeHtml(getRepoLocaleText('全部', 'All')) + ' (' + (officialCount + customCount) + ')</button>',
+    '<button class="assembly-source-tab' + (debugPanel.repoSourceFilter === 'official' ? ' active' : '') + '" type="button" data-action="wsBlocks.repoFilter" data-source="official">' + escapeHtml(getRepoLocaleText('官方', 'Official')) + ' (' + officialCount + ')</button>',
+    '<button class="assembly-source-tab' + (debugPanel.repoSourceFilter === 'custom' ? ' active' : '') + '" type="button" data-action="wsBlocks.repoFilter" data-source="custom">' + escapeHtml(getRepoLocaleText('自定义', 'Custom')) + ' (' + customCount + ')</button>',
     '</div>',
     '<div class="assembly-capability-topbar" style="margin-bottom:14px;">',
-    '<input class="assembly-search-input" style="flex:1 1 280px;min-height:40px;" type="text" value="' + escapeHtml(repoSearchQuery) + '" placeholder="' + escapeHtml(getRepoLocaleText('按名称、说明或标签搜索', 'Search by name, description, or tags')) + '" data-action="wsBlocks.repoSearch" data-event="input keydown focusout" >',
+    '<input class="assembly-search-input" style="flex:1 1 280px;min-height:40px;" type="text" value="' + escapeHtml(debugPanel.repoSearchQuery) + '" placeholder="' + escapeHtml(getRepoLocaleText('按名称、说明或标签搜索', 'Search by name, description, or tags')) + '" data-action="wsBlocks.repoSearch" data-event="input keydown focusout" >',
     '<button class="workspace-action" type="button" data-action="wsBlocks.openFeatureUpload">' + escapeHtml(getRepoLocaleText('上传 tgz', 'Upload tgz')) + '</button>',
     '</div>',
     '<div class="workspace-repo-list">' + packagesHtml + '</div>',
@@ -865,7 +903,7 @@ function renderFeatureRepositoryBlock(agent, block) {
 // ═══════════════════════════════════════════════════════════════
 
 function renderAssemblyWorkbenchBlock(agent, block) {
-  return renderAssemblyWorkbenchStageFlow(agent, block);
+  return window.renderAssemblyWorkbenchStageFlow(agent, block);
 }
 
 // 工作空间表单与功能仓库动作（原内联 onclick/oninput/onchange/onblur/onkeydown，统一经分发器）。
@@ -874,28 +912,118 @@ function renderAssemblyWorkbenchBlock(agent, block) {
 window.ClawFW.actions.registerMany({
   'wsBlocks.workspaceAction': (el) => window.runWorkspaceAction(el.dataset.workspaceAction, el),
   'wsBlocks.openIMChannelConfig': () => window.openIMChannelConfig(),
-  'wsBlocks.formDraft': (el) => window.updateWorkspaceFormDraft(el.dataset.formId, el.dataset.fieldName, el.value),
-  'wsBlocks.chooseDirectory': (el) => window.chooseWorkspaceDirectory(el.dataset.formId, el.dataset.fieldName),
-  'wsBlocks.saveForm': (el) => window.saveWorkspaceForm(el.dataset.workspaceFormId, el.dataset.workspaceSubmitAction),
-  'wsBlocks.resetForm': (el) => window.resetWorkspaceForm(el.dataset.workspaceFormId),
-  'wsBlocks.repoDetails': (el) => window.openRepositoryPackageDetails(el.dataset.packageId),
-  'wsBlocks.toggleSelection': (el) => window.toggleWorkspaceSelection(el.dataset.selectionFormId, el.dataset.selectionField, el.dataset.selectionToken),
+  'wsBlocks.formDraft': (el) => updateWorkspaceFormDraft(el.dataset.formId, el.dataset.fieldName, el.value),
+  'wsBlocks.chooseDirectory': (el) => chooseWorkspaceDirectory(el.dataset.formId, el.dataset.fieldName),
+  'wsBlocks.saveForm': (el) => saveWorkspaceForm(el.dataset.workspaceFormId, el.dataset.workspaceSubmitAction),
+  'wsBlocks.resetForm': (el) => resetWorkspaceForm(el.dataset.workspaceFormId),
+  'wsBlocks.repoDetails': (el) => openRepositoryPackageDetails(el.dataset.packageId),
+  'wsBlocks.toggleSelection': (el) => toggleWorkspaceSelection(el.dataset.selectionFormId, el.dataset.selectionField, el.dataset.selectionToken),
   'wsBlocks.repoDetailsClose': (el, event) => {
     // 原 overlay 内联守卫：仅点击背景自身时关闭，内部内容冒泡不触发。
-    if (event.target === el) window.closeRepositoryPackageDetails();
+    if (event.target === el) closeRepositoryPackageDetails();
   },
-  'wsBlocks.repoDetailsCloseBtn': () => window.closeRepositoryPackageDetails(),
-  'wsBlocks.repoFilter': (el) => window.setRepoSourceFilter(el.dataset.source),
+  'wsBlocks.repoDetailsCloseBtn': () => closeRepositoryPackageDetails(),
+  'wsBlocks.repoFilter': (el) => setRepoSourceFilter(el.dataset.source),
   'wsBlocks.repoSearch': (el, event) => {
     // 输入即时过滤（写 app-core 全局过滤词）；Enter 与失焦提交（经 setter 触发重渲染）。
     if (event.type === 'keydown') {
       if (event.key !== 'Enter') return;
       event.preventDefault();
-      window.setRepoSearchQuery(el.value);
+      setRepoSearchQuery(el.value);
       return;
     }
-    if (event.type === 'focusout') { window.setRepoSearchQuery(el.value); return; }
-    repoSearchQuery = el.value.trim().toLowerCase();
+    if (event.type === 'focusout') { setRepoSearchQuery(el.value); return; }
+    debugPanel.repoSearchQuery = el.value.trim().toLowerCase();
   },
-  'wsBlocks.openFeatureUpload': () => window.openFeatureUploadDialog(),
+  'wsBlocks.openFeatureUpload': () => openFeatureUploadDialog(),
 });
+
+// ── 兼容桥（classic 消费方收敛后注销）────────────────────────────────
+// 消费面（grep public/src，排除本批文件）：
+//   shouldRenderBlock —— app-ui（renderWorkspaceBlock / syncAppChatInputSlot /
+//     refreshVisibleWorkspacePanelData 的 block 可见性判定）
+//   renderWorkspaceHero / renderWorkspaceLauncherGrid / renderWorkspaceActionGroup /
+//     renderWorkspaceForm / renderWorkspaceStatusGrid / renderFlowEditorBlock /
+//     renderAssemblyWorkbenchBlock / renderFeatureRepositoryBlock —— app-ui 的
+//     ClawHost.blocks.registerPrimitive 闭包（按 agent 数据渲染时调用）
+//   getFeatureRepositoryData —— app-ui（FW 列表/详情读取仓库块数据）、claw-host（块刷新）
+//   getRepoLocaleText —— app-ui（11 处渲染文案）、debug-summary-upload、ctx-menu-handlers
+//   parseWorkspaceListField —— app-ui（装配草稿列表字段解析）；批内 assembly-data /
+//     assembly-actions 已改 import
+//   getAssemblyPresetLabel / getAssemblyPresetDescription / getAssemblyStageLabel /
+//     getAssemblyFeatureLabel / buildAssemblyGeneratedPrompt / getAssemblyPromptValue /
+//     getFeatureTypeLabel —— app-ui 的装配工作台与 FW 详情渲染
+//   ASSEMBLY_PRESET_FEATURES / ASSEMBLY_BUNDLE_FEATURES —— app-ui（预设与打包卡片）
+//   applyAssemblyPreset / setBundleFilter —— app-ui 的 assembly.* 动作注册
+// 已 ESM 的消费方（不经桥）：session-list-render 的 renderActionButton 与
+// isAssemblySession 均改为直接 import；本模块的 getWorkspaceSessions 亦改为
+// import session-ui（不再 window 晚绑定）。
+// 收敛条件：app-ui / claw-host / ctx-menu-handlers 迁入 ESM 后改为 import 本模块，
+// 逐键注销。
+const bridgeState = {
+  shouldRenderBlock,
+  renderWorkspaceHero,
+  renderWorkspaceActionGroup,
+  renderWorkspaceLauncherGrid,
+  renderWorkspaceForm,
+  renderFlowEditorBlock,
+  renderWorkspaceStatusGrid,
+  getFeatureRepositoryData,
+  getRepoLocaleText,
+  parseWorkspaceListField,
+  getAssemblyPresetLabel,
+  getAssemblyPresetDescription,
+  ASSEMBLY_PRESET_FEATURES,
+  ASSEMBLY_BUNDLE_FEATURES,
+  applyAssemblyPreset,
+  setBundleFilter,
+  getAssemblyStageLabel,
+  getAssemblyFeatureLabel,
+  buildAssemblyGeneratedPrompt,
+  getAssemblyPromptValue,
+  getFeatureTypeLabel,
+  renderFeatureRepositoryBlock,
+  renderAssemblyWorkbenchBlock,
+};
+for (const [key, value] of Object.entries(bridgeState)) {
+  window.KernelState.defineKey('workspace-blocks', key, value);
+}
+window.KernelState.claim('workspace-blocks', {
+  get: (key) => bridgeState[key],
+  set: (key, value) => { bridgeState[key] = value; },
+});
+
+// 命名导出面：跨文件消费的键（批内 import / classic 桥键）。纯渲染 helper
+//（getDirectorySummaryData / renderDirectorySummaryPanel / normalizeRepoUrl /
+// renderRepoLink / formatAssemblyFeatureToken / getFeatureCapabilityLabel /
+// getCompatibilityTagLabel / getAssemblyFeaturePackageToken）零跨文件消费方，
+// 保持模块私有。
+export {
+  shouldRenderBlock,
+  renderActionButton,
+  renderWorkspaceHero,
+  renderWorkspaceActionGroup,
+  renderWorkspaceLauncherGrid,
+  renderWorkspaceField,
+  renderWorkspaceForm,
+  renderFlowEditorBlock,
+  renderWorkspaceStatusGrid,
+  getFeatureRepositoryData,
+  getRepoLocaleText,
+  parseWorkspaceListField,
+  serializeWorkspaceListField,
+  getAssemblyPresetLabel,
+  getAssemblyPresetDescription,
+  ASSEMBLY_PRESET_FEATURES,
+  ASSEMBLY_BUNDLE_FEATURES,
+  applyAssemblyPreset,
+  setBundleFilter,
+  getAssemblyStageLabel,
+  getAssemblyFeatureLabel,
+  buildAssemblyGeneratedPrompt,
+  getAssemblyPromptValue,
+  formatRepoFileSize,
+  getFeatureTypeLabel,
+  renderFeatureRepositoryBlock,
+  renderAssemblyWorkbenchBlock,
+};

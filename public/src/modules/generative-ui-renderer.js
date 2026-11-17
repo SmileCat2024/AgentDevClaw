@@ -21,16 +21,21 @@
  *   - boolean for Checkbox, Switch
  *   - string  for RadioGroup (selected option id)
  *
- * Exposed globally:
+ * Exports:
  *   - renderGenUISpec(spec, viewState, callbacks) → HTMLElement
  *   - createGenUIViewState() → fresh empty object
+ *
+ * ESM 化（P2）：两个入口为命名导出；兼容桥 `window.renderGenUISpec` /
+ * `window.createGenUIViewState`（KernelState）服务 generative-ui-panel.js
+ * （classic，裸标识符经 window 解析），该消费方迁移为 import 后注销。
+ * 其余渲染函数是模块私有 helper，不上桥。
  */
 
 // ═══════════════════════════════════════════════════════════════
 // Public API
 // ═══════════════════════════════════════════════════════════════
 
-function createGenUIViewState() {
+export function createGenUIViewState() {
   return {};
 }
 
@@ -40,7 +45,7 @@ function createGenUIViewState() {
  * @param {Object} callbacks — { onSubmit(actionId, action, fields), onReset(actionId, action) }
  * @returns {HTMLElement}
  */
-function renderGenUISpec(spec, viewState, callbacks) {
+export function renderGenUISpec(spec, viewState, callbacks) {
   const elements = spec.elements || {};
   const actions = spec.actions || {};
   const initialValues = spec.initialValues || {};
@@ -1531,8 +1536,16 @@ const _COMPONENT_HANDLERS = {
 };
 
 // ═══════════════════════════════════════════════════════════════
-// Global exports
+// Classic 取用面（桥接期）
 // ═══════════════════════════════════════════════════════════════
 
-window.renderGenUISpec = renderGenUISpec;
-window.createGenUIViewState = createGenUIViewState;
+// 桥接期（KernelState，domain: generative-ui-renderer）：generative-ui-panel.js
+// （classic）以裸标识符调用这两个入口，经 window 访问器解析；该文件迁为
+// import 后注销。
+const bridgeState = { renderGenUISpec, createGenUIViewState };
+window.KernelState.defineKey('generative-ui-renderer', 'renderGenUISpec', bridgeState.renderGenUISpec);
+window.KernelState.defineKey('generative-ui-renderer', 'createGenUIViewState', bridgeState.createGenUIViewState);
+window.KernelState.claim('generative-ui-renderer', {
+  get: (key) => bridgeState[key],
+  set: (key, value) => { bridgeState[key] = value; },
+});

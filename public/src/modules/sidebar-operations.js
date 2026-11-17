@@ -4,11 +4,34 @@
  * Unified operation state for sidebar-affecting session changes. Operation
  * records remain pure data; the small diagnostic queue is transport-only and
  * never participates in UI completion semantics.
+ *
+ * ESM 化：P2 W2-6（2026-11-17）。操作状态、诊断队列与乐观合并缓存全部收敛为
+ * 本模块私有状态（唯一 owner），跨文件键改为命名导出 + kernel-state 兼容桥。
+ *
+ * 依赖（ESM，装载顺序由 import 图确定）：
+ *   - allAgents（agent-store-state.js，live binding 引用）
+ *   - lastRenderedWorkspaceHtml / setLastRenderedWorkspaceHtml（render-entry-state.js）
+ *   - sidebarRender（p2-bootstrap-sidebar.js 的渲染签名适配面；owner 仍是
+ *     classic sidebar-render.js）
+ *
+ * 桥接期兼容面（KernelState defineKey/claim，domain: sidebar-operations）：
+ * 只剩仍 classic 的消费方（app-main / sidebar-render / runtime-status）经
+ * window 访问器取用的键还挂在桥上；操作生命周期、pending-stop 抑制与增量应用
+ * API 的消费方已全部改具名 import，桥键随之注销（逐键证据见文件末尾清单）。
+ *
+ * 与 project-data 的静态环（经 agent-loader-host 闭合）：本模块只在
+ * applySessionMutationDelta 的函数体内调用 updateAgentRecord；环内对端
+ * （agent-loader-host 注入本模块三个函数、session-ui 等）也都在函数体/惰性
+ * 转调里读取 → 环内两侧顶层零解引用（求值顺序无关，多入口整图见
+ * test/p2-input-loader-cycle-graph.test.js）。
  */
 
+import { allAgents } from './agent-store-state.js';
+import { setLastRenderedWorkspaceHtml } from './render-entry-state.js';
+import { sidebarRender } from './p2-bootstrap-sidebar.js';
+import { updateAgentRecord } from './project-data.js';
+
 const _sidebarOperations = new Map();
-// Compatibility alias while callers migrate from the replacement-only map.
-const _sessionReplacementMutations = _sidebarOperations;
 let _sidebarOperationVersion = 0;
 let _sidebarMutationEpoch = 0;
 let _sidebarOperationSequence = 0;
@@ -310,8 +333,10 @@ function beginSidebarOperationMainThreadObservation(operationId) {
 function invalidateSidebarProjection() {
   _sidebarOperationVersion += 1;
   _sidebarMutationEpoch += 1;
-  if (typeof lastAgentListRenderSignature !== 'undefined') lastAgentListRenderSignature = '';
-  if (typeof renderAgentList === 'function') renderAgentList();
+  // 渲染签名清空即强制下次 renderAgentList 重建（owner: classic sidebar-render.js）。
+  sidebarRender.lastAgentListRenderSignature = '';
+  // 桥接期：renderAgentList 定义于 classic sidebar-render（侧栏渲染域收敛时移除）
+  if (typeof window.renderAgentList === 'function') window.renderAgentList();
 }
 
 function beginSidebarOperation(raw = {}) {
@@ -392,10 +417,11 @@ async function waitForSidebarTargetRuntime(operationId, agentId, sessionId, resu
   const immediateAgent = result?.agent || null;
   const immediateRuntimeId = immediateAgent?.runtime_session_id || immediateAgent?.runtimeSessionId || immediateAgent?.id || '';
   if (immediateRuntimeId) return immediateAgent;
-  if (typeof waitForTargetRuntimeSession !== 'function') {
+  // 桥接期：waitForTargetRuntimeSession 定义于 classic sidebar-render（侧栏渲染域收敛时移除）
+  if (typeof window.waitForTargetRuntimeSession !== 'function') {
     throw new Error('Targeted runtime readiness helper is unavailable');
   }
-  return waitForTargetRuntimeSession(agentId, sessionId, attempts, { operationId });
+  return window.waitForTargetRuntimeSession(agentId, sessionId, attempts, { operationId });
 }
 
 function getWorkspaceRevision(workspaceSessions) {
@@ -602,9 +628,11 @@ function applySessionMutationDelta(agentId, payload) {
       : (agent.active_workspace_session_id || current.activeSessionId || null),
   });
   markSidebarAuthoritativeMutation();
-  if (typeof renderAgentList === 'function') renderAgentList();
-  if (typeof lastRenderedWorkspaceHtml !== 'undefined') lastRenderedWorkspaceHtml = '';
-  if (typeof renderCurrentMainView === 'function') renderCurrentMainView();
+  // 桥接期：renderAgentList / renderCurrentMainView 仍是 classic 实现（侧栏渲染域
+  // 与渲染入口域收敛时移除）；工作空间 HTML 缓存已归 ESM owner，经 setter 写入。
+  if (typeof window.renderAgentList === 'function') window.renderAgentList();
+  setLastRenderedWorkspaceHtml('');
+  if (typeof window.renderCurrentMainView === 'function') window.renderCurrentMainView();
   return true;
 }
 
@@ -616,3 +644,93 @@ function applySidebarMutationDeltaWithDiagnostics(operationId, agentId, payload)
   });
   return applied;
 }
+
+export {
+  // 操作生命周期（跨文件 API）
+  beginSidebarOperation,
+  getSidebarOperation,
+  listSidebarOperations,
+  findSidebarOperation,
+  updateSidebarOperation,
+  finishSidebarOperation,
+  createSidebarOperationId,
+  invalidateSidebarProjection,
+  waitForSidebarTargetRuntime,
+  // 快照时效 / 权威变更代次
+  captureSidebarSnapshotToken,
+  isSidebarSnapshotTokenCurrent,
+  getSidebarOperationVersion,
+  markSidebarAuthoritativeMutation,
+  // 诊断队列
+  sidebarDiagnosticNow,
+  queueSidebarDiagnosticEvent,
+  recordSidebarOperationCheckpoint,
+  beginSidebarOperationMainThreadObservation,
+  // 待停止 runtime 抑制（pendingRuntimeStopKey 为零消费的模块私有 helper，不导出不上桥）
+  markPendingRuntimeStop,
+  releasePendingRuntimeStop,
+  isRuntimeStopPending,
+  reconcilePendingRuntimeStops,
+  // 会话快照合并与增量应用
+  mergeWorkspaceSessionSnapshots,
+  applySessionMutationDelta,
+  applySidebarMutationDeltaWithDiagnostics,
+};
+
+// —— 桥接期兼容面（kernel-state 访问器桥）——
+// 保留原因：仍 classic 的消费方（sidebar-render / app-main / runtime-status）在
+// 调用时点以裸标识符（即 window 属性）取用这些函数。逐键消费面与注销条件：
+//   queueSidebarDiagnosticEvent            ← classic sidebar-render
+//   recordSidebarOperationCheckpoint       ← classic app-main
+//   beginSidebarOperationMainThreadObservation ← classic app-main
+//   sidebarDiagnosticNow                   ← classic app-main
+//   createSidebarOperationId               ← classic app-main
+//   isRuntimeStopPending                   ← classic runtime-status
+//   reconcilePendingRuntimeStops           ← classic sidebar-render
+//   listSidebarOperations                  ← classic runtime-status / sidebar-render
+//   findSidebarOperation                   ← classic runtime-status
+//   captureSidebarSnapshotToken            ← classic sidebar-render
+//   isSidebarSnapshotTokenCurrent          ← classic sidebar-render
+//   getSidebarOperationVersion             ← classic sidebar-render
+//   mergeWorkspaceSessionSnapshots         ← classic sidebar-render / app-main
+// 注销条件：上列消费方全部迁 ESM 后改 import，删除对应 defineKey 并下调桥债基线。
+// 已注销（消费方改直引即触发，只保留命名导出）：waitForSidebarTargetRuntime（ESM
+// session-dialogs）、invalidateSidebarProjection（ESM ctx-menu-items），以及
+// markPendingRuntimeStop / releasePendingRuntimeStop / beginSidebarOperation /
+// getSidebarOperation / updateSidebarOperation / finishSidebarOperation /
+// applySessionMutationDelta / applySidebarMutationDeltaWithDiagnostics（消费方
+// session-mutation / workspace-actions / ctx-menu-items / ctx-menu-handlers /
+// session-ui / session-dialogs / trim-page / assembly-actions / auto-title 全部
+// 具名 import，全树无 window 消费者）。
+const bridgeApi = {
+  queueSidebarDiagnosticEvent,
+  recordSidebarOperationCheckpoint,
+  beginSidebarOperationMainThreadObservation,
+  sidebarDiagnosticNow,
+  createSidebarOperationId,
+  isRuntimeStopPending,
+  reconcilePendingRuntimeStops,
+  listSidebarOperations,
+  findSidebarOperation,
+  captureSidebarSnapshotToken,
+  isSidebarSnapshotTokenCurrent,
+  getSidebarOperationVersion,
+  mergeWorkspaceSessionSnapshots,
+};
+window.KernelState.defineKey('sidebar-operations', 'queueSidebarDiagnosticEvent', queueSidebarDiagnosticEvent);
+window.KernelState.defineKey('sidebar-operations', 'recordSidebarOperationCheckpoint', recordSidebarOperationCheckpoint);
+window.KernelState.defineKey('sidebar-operations', 'beginSidebarOperationMainThreadObservation', beginSidebarOperationMainThreadObservation);
+window.KernelState.defineKey('sidebar-operations', 'sidebarDiagnosticNow', sidebarDiagnosticNow);
+window.KernelState.defineKey('sidebar-operations', 'createSidebarOperationId', createSidebarOperationId);
+window.KernelState.defineKey('sidebar-operations', 'isRuntimeStopPending', isRuntimeStopPending);
+window.KernelState.defineKey('sidebar-operations', 'reconcilePendingRuntimeStops', reconcilePendingRuntimeStops);
+window.KernelState.defineKey('sidebar-operations', 'listSidebarOperations', listSidebarOperations);
+window.KernelState.defineKey('sidebar-operations', 'findSidebarOperation', findSidebarOperation);
+window.KernelState.defineKey('sidebar-operations', 'captureSidebarSnapshotToken', captureSidebarSnapshotToken);
+window.KernelState.defineKey('sidebar-operations', 'isSidebarSnapshotTokenCurrent', isSidebarSnapshotTokenCurrent);
+window.KernelState.defineKey('sidebar-operations', 'getSidebarOperationVersion', getSidebarOperationVersion);
+window.KernelState.defineKey('sidebar-operations', 'mergeWorkspaceSessionSnapshots', mergeWorkspaceSessionSnapshots);
+window.KernelState.claim('sidebar-operations', {
+  get: (key) => bridgeApi[key],
+  set: (key, value) => { bridgeApi[key] = value; },
+});

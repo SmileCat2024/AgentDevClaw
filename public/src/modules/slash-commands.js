@@ -13,12 +13,25 @@
  * 命令注册到 SlashMenu（基础设施见 slash-menu.js）；执行是控制动作，
  * 不构造 user-turn 消息。
  *
- * 依赖（全局）：SlashMenu (slash-menu.js)、currentLanguage、getRuntimeId、
- * getLogicalAgentId、getRuntimeWorkspaceSessionId (app-core.js)、
- * getCurrentRuntimeRecord、getCurrentAgentRecord (app-main.js)、
- * getActiveWorkspaceSessionId (app-core.js)、runWorkspaceAction (workspace-actions.js)、
- * sessionOpsAllowed (session-menu-decls.js，ADR-0049 声明驱动事实)
+ * 依赖：
+ * - 已 ESM（直接 import，装载顺序由 import 图确定）：SlashMenu
+ *   (slash-menu.js)、currentRuntimeAgentId (orchestration-state.js)、
+ *   focusedAgentId (agent-store-state.js)、实时语言 (i18n-environment-state.js)、
+ *   ClawToast (toast-notify.js)
+ * - 仍是 classic（调用时点显式 window 晚绑定）：getRuntimeId / getLogicalAgentId /
+ *   getRuntimeWorkspaceSessionId / getActiveWorkspaceSessionId (app-core.js)、
+ *   getCurrentRuntimeRecord / getCurrentAgentRecord (app-main.js)、
+ *   isRemoteNamespaceAgentId (remote-connections.js)、sessionOpsAllowed
+ *   (session-menu-decls.js，ADR-0049 声明驱动事实)、isThreadHostAgentId
+ *   (thread-store.js)、runWorkspaceAction (workspace-actions.js)
  */
+
+import { SlashMenu } from './slash-menu.js';
+import { currentRuntimeAgentId } from './orchestration-state.js';
+import { focusedAgentId } from './agent-store-state.js';
+import { getCurrentLanguage } from './i18n-environment-state.js';
+import { sessionOpsAllowed } from './session-menu-decls.js';
+import { ClawToast } from './toast-notify.js';
 
 function _resolveSessionContext() {
   // 输入框属于当前 runtime 视图：agent record 从 runtime 反查（焦点派生的
@@ -27,21 +40,28 @@ function _resolveSessionContext() {
   // _currentTarget 同一不变量：命令作用于输入框所属的那个会话。
   // 纯解析（无副作用）：applies 谓词每次击键都会调用，失败提示由
   // _currentSessionContext 包装层负责。
-  const runtimeId = getRuntimeId(currentRuntimeAgentId)
+  // 桥接期晚绑定（首次使用处）：getRuntimeId / getLogicalAgentId /
+  // getRuntimeWorkspaceSessionId / getActiveWorkspaceSessionId 定义于 app-core
+  // （身份与会话解析域），getCurrentRuntimeRecord / getCurrentAgentRecord 定义于
+  // app-main（编排域）；迁为 import 后删除各自的 window. 前缀。
+  const runtimeId = window.getRuntimeId(currentRuntimeAgentId)
     || (typeof currentRuntimeAgentId === 'string' ? currentRuntimeAgentId : '');
-  const record = (typeof getCurrentRuntimeRecord === 'function' && getCurrentRuntimeRecord())
-    || (typeof getCurrentAgentRecord === 'function' ? getCurrentAgentRecord() : null);
-  let agentId = record ? (getLogicalAgentId(record) || record.id || '') : '';
-  let sessionId = (runtimeId && getRuntimeWorkspaceSessionId(runtimeId))
-    || (record ? getActiveWorkspaceSessionId(record) : null);
+  const record = (typeof window.getCurrentRuntimeRecord === 'function' && window.getCurrentRuntimeRecord())
+    || (typeof window.getCurrentAgentRecord === 'function' ? window.getCurrentAgentRecord() : null);
+  let agentId = record ? (window.getLogicalAgentId(record) || record.id || '') : '';
+  let sessionId = (runtimeId && window.getRuntimeWorkspaceSessionId(runtimeId))
+    || (record ? window.getActiveWorkspaceSessionId(record) : null);
   // 远程会话（R2-02，ADR-0012）：远程条目不在 allAgents，record 链落空。
   // 身份从远程目录解析：sessionId 用目录条目值（命名空间化），agentId 收敛
   // 宿主级命名空间 id（数据层身份纪律，ADR-0012）。目录未含条目时返回
   // remote-unavailable 语义（区别于无会话）。
+  // 桥接期晚绑定（首次使用处）：isRemoteNamespaceAgentId 定义于
+  // remote-connections（远程连接域）；RemoteConnections 是其 classic 命名空间对象。
+  // 该文件迁为 import 后删除这里的 window. 前缀。
   if ((!agentId || !sessionId)
-    && typeof isRemoteNamespaceAgentId === 'function'
-    && (isRemoteNamespaceAgentId(runtimeId)
-      || (typeof focusedAgentId === 'string' && isRemoteNamespaceAgentId(focusedAgentId)))) {
+    && typeof window.isRemoteNamespaceAgentId === 'function'
+    && (window.isRemoteNamespaceAgentId(runtimeId)
+      || (typeof focusedAgentId === 'string' && window.isRemoteNamespaceAgentId(focusedAgentId)))) {
     const rc = typeof window !== 'undefined' ? window.RemoteConnections : null;
     const dirSessionId = (typeof rc?.getEntryRuntimeSessionId === 'function' && runtimeId)
       ? rc.getEntryRuntimeSessionId(runtimeId)
@@ -61,20 +81,21 @@ function _resolveSessionContext() {
 function _currentSessionContext() {
   const ctx = _resolveSessionContext();
   if (ctx.agentId && ctx.sessionId) return ctx;
+  const isZh = getCurrentLanguage() === 'zh';
   // 目录未含条目（连接断开/条目消失）：显式失败，不猜测宿主。
   if (ctx.reason === 'remote_unavailable') {
-    window.ClawToast?.show?.({
+    ClawToast.show({
       id: 'slash-no-session',
       status: 'error',
-      title: currentLanguage === 'zh' ? '远程连接不可用，无法操作该会话' : 'Remote connection is unavailable for this session',
+      title: isZh ? '远程连接不可用，无法操作该会话' : 'Remote connection is unavailable for this session',
       autoDismiss: 5000,
     });
     return null;
   }
-  window.ClawToast?.show?.({
+  ClawToast.show({
     id: 'slash-no-session',
     status: 'error',
-    title: currentLanguage === 'zh' ? '当前没有可操作的会话' : 'No active session to operate on',
+    title: isZh ? '当前没有可操作的会话' : 'No active session to operate on',
     autoDismiss: 5000,
   });
   return null;
@@ -90,12 +111,17 @@ function _currentSessionContext() {
 // 声明 = 有手动精简产品面 = 手动接续 APP；coder / memo 不声明，行为不变。
 // 线程索引未就绪时保守放行（显示），执行侧守卫兜底。
 function _isThreadCarriedSession(ctx) {
+  // 桥接期晚绑定（首次使用处）：isThreadHostAgentId 定义于 thread-store（线程域）、
+  // sessionOpsAllowed 定义于 session-menu-decls（会话操作声明域）；两者迁为 import
+  // 后删除 window. 前缀。
   if (!ctx || !ctx.agentId || !ctx.sessionId) return false;
   if (typeof window.isThreadHostAgentId !== 'function') return false;
   if (!window.isThreadHostAgentId(ctx.agentId, ctx.sessionId)) return false;
   return !sessionOpsAllowed(ctx.agentId);
 }
 
+// 命令可见性谓词（applies）：线程承接的会话不显示手动精简/摘要入口。
+// 模块私有——测试经 SLASH_COMMANDS 条目的 applies 真实入口驱动，不额外导出。
 function _manualSessionOpsApplicable() {
   return !_isThreadCarriedSession(_resolveSessionContext());
 }
@@ -104,10 +130,10 @@ function _manualSessionOpsContext() {
   const ctx = _currentSessionContext();
   if (!ctx) return null;
   if (_isThreadCarriedSession(ctx)) {
-    window.ClawToast?.show?.({
+    ClawToast.show({
       id: 'slash-session-ops-unavailable',
       status: 'info',
-      title: currentLanguage === 'zh'
+      title: getCurrentLanguage() === 'zh'
         ? '该会话的连续性由线程承接，不支持手动精简/摘要'
         : 'This session is carried by a thread; manual trim/summary is unavailable',
       autoDismiss: 4000,
@@ -120,7 +146,9 @@ function _manualSessionOpsContext() {
 async function _handleSummary() {
   const ctx = _manualSessionOpsContext();
   if (!ctx) return;
-  runWorkspaceAction({
+  // 桥接期晚绑定（首次使用处）：runWorkspaceAction 定义于 workspace-actions
+  // （工作空间动作域），迁为 import 后删除 window. 前缀
+  window.runWorkspaceAction({
     type: 'compact_session_menu',
     compactType: 'summary',
     agentId: ctx.agentId,
@@ -131,7 +159,7 @@ async function _handleSummary() {
 async function _handleTrim() {
   const ctx = _manualSessionOpsContext();
   if (!ctx) return;
-  const isZh = currentLanguage === 'zh';
+  const isZh = getCurrentLanguage() === 'zh';
 
   // preview 只为确认文案提供轮数/释放占比；提交策略固定全量精简。
   // 拉取失败不阻断，确认文案退化为不带轮数。
@@ -167,7 +195,7 @@ async function _handleTrim() {
       : `Trim all rounds of this session and continue in a new one?${statsSuffix ? '\n' + statsSuffix : ''}\n(No summary; use right-click "Trim" for per-round selection)`);
   if (!window.confirm(confirmMsg)) return;
 
-  runWorkspaceAction({
+  window.runWorkspaceAction({
     type: 'compact_session_menu',
     compactType: 'trim_all',
     agentId: ctx.agentId,
@@ -179,19 +207,22 @@ async function _handleTrim() {
 // P0 静态注册（P1 起由 GET /protoclaw/commands 动态清单合并取代）。
 // applies：自动接续 APP 的线程会话不显示；手动接续 APP（PH）保留——
 // 口径见上方 _isThreadCarriedSession 注释（ADR-0032 决策 2）。
-SlashMenu.registerCommands([
+// 描述文案在装载时按当时语言定稿（与迁移前的 classic 装载语义一致）。
+export const SLASH_COMMANDS = [
   {
     name: 'trim',
-    description: currentLanguage === 'zh' ? '全量精简当前会话（不生成摘要）' : 'Trim all rounds of current session (no summary)',
+    description: getCurrentLanguage() === 'zh' ? '全量精简当前会话（不生成摘要）' : 'Trim all rounds of current session (no summary)',
     destination: 'host',
     applies: _manualSessionOpsApplicable,
     handler: _handleTrim,
   },
   {
     name: 'summary',
-    description: currentLanguage === 'zh' ? '总结当前会话并创建新会话' : 'Summarize current session into a new session',
+    description: getCurrentLanguage() === 'zh' ? '总结当前会话并创建新会话' : 'Summarize current session into a new session',
     destination: 'host',
     applies: _manualSessionOpsApplicable,
     handler: _handleSummary,
   },
-]);
+];
+
+SlashMenu.registerCommands(SLASH_COMMANDS);

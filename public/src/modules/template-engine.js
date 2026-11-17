@@ -1,6 +1,19 @@
 // template-engine.js
 // Phase 2d-2: 模板引擎 / 工具渲染（Domain O-b）
 // 从 app-ui.js 提取的模板加载、解析与渲染函数
+//
+// ESM（P2 迁移）：跨文件依赖全部显式——已迁模块直接 import（markdown-utils 的
+// escapeHtml、agent-loader 的模板映射与重载入口、会话/渲染状态、会话切换引导
+// 标志）；仍 classic 的 window 可达函数（renderCurrentMainView / getRuntimeId /
+// isWorkspaceSurfaceUnit）晚绑定调用，行内注明归属。仍有 classic 消费方的入口经
+// KernelState 桥键（template-engine 域）提供，文件尾部统一注册。
+
+import { escapeHtml } from './markdown-utils.js';
+import { FEATURE_TEMPLATE_MAP, loadFeatureTemplateMap } from './agent-loader-host.js';
+import { currentRuntimeAgentId } from './orchestration-state.js';
+import { currentMessages, toolRenderConfigs, TOOL_NAMES } from './session-view-storage.js';
+import { setLastRenderedChatSig } from './render-entry-state.js';
+import { sessionSwitch } from './p2-bootstrap-session-switch.js';
 
 // 默认 fallback 模板（当动态加载失败时使用）
 const RENDER_TEMPLATES = {
@@ -40,7 +53,7 @@ const templateCache = new Map();
 // FEATURE_TEMPLATE_MAP 按焦点 agent 重新拉取，/res/ URL 按 agentId 寻址
 // （ADR-0038，同名模板在不同 runtime 指向不同 URL），切换即整体失效。
 // 内置模板（RENDER_TEMPLATES）随后按需重建，无副作用。
-function clearFeatureTemplateCache() {
+export function clearFeatureTemplateCache() {
   templateCache.clear();
 }
 
@@ -54,7 +67,7 @@ const MAX_HIGHLIGHT_LINES = 200;
 const _fullHighlightData = new Map();
 let _highlightIdCounter = 0;
 
-function clearTruncatedHighlightData() {
+export function clearTruncatedHighlightData() {
   _fullHighlightData.clear();
 }
 
@@ -76,7 +89,7 @@ function compactCodeReadMarkup(html) {
   );
 }
 
-function renderJsonHighlight(data) {
+export function renderJsonHighlight(data) {
   const displayData = typeof data === 'object' ? JSON.stringify(data, null, 2) : String(data);
   const lines = displayData.split('\n');
   const isTruncated = lines.length > MAX_HIGHLIGHT_LINES;
@@ -140,7 +153,7 @@ function interpolateTemplate(template, data) {
   });
 }
 
-function applyTemplate(template, data, success = true, args = {}) {
+export function applyTemplate(template, data, success = true, args = {}) {
   if (typeof template === 'function') {
     return compactCodeReadMarkup(template(data, success, args));
   }
@@ -157,7 +170,7 @@ function applyTemplate(template, data, success = true, args = {}) {
   return compactCodeReadMarkup(interpolateTemplate(template, data));
 }
 
-function parseToolResult(content, display) {
+export function parseToolResult(content, display) {
   let result;
   try {
     const json = JSON.parse(content);
@@ -200,8 +213,6 @@ function parseToolResult(content, display) {
  * 模板 URL 由 ViewerWorker 从注册事实生成（/res/{agentId}/{rootId}/{rel}，ADR-0038），不透明、不含布局知识。
  * 未注册的模板名一律等待 FEATURE_TEMPLATE_MAP 加载，不做任何本地路径推断。
  */
-const self = this;
-
 function resolveTemplatePath(templateName) {
   // 1. 查找 Feature 模板（从后端注入的动态数据）
   if (FEATURE_TEMPLATE_MAP[templateName]) {
@@ -239,8 +250,9 @@ async function loadTemplate(templateName, retryCount = 0) {
       if (retryCount < 3) {
         console.log('[Viewer] Waiting for FEATURE_TEMPLATE_MAP to load... (attempt ' + (retryCount + 1) + ')');
         await new Promise(resolve => setTimeout(resolve, 500));
-        // 重新加载模板映射
-        await window.loadFeatureTemplateMap();
+        // 重新加载模板映射：与 agent-loader-host 的静态环内具名 import（同环对端
+        // 只在本函数体内调用，求值期不解引用对端绑定）
+        await loadFeatureTemplateMap();
         return loadTemplate(templateName, retryCount + 1);
       }
       console.warn('[Viewer] Template "' + templateName + '" not found after retries');
@@ -274,7 +286,7 @@ async function loadTemplate(templateName, retryCount = 0) {
   }
 }
 
-function collectTemplateNames(tools) {
+export function collectTemplateNames(tools) {
   const templatesToLoad = new Set();
 
   for (const tool of tools) {
@@ -299,17 +311,17 @@ function collectTemplateNames(tools) {
   return Array.from(templatesToLoad);
 }
 
-function warmTemplatesInBackground(templateNames, agentId) {
+export function warmTemplatesInBackground(templateNames, agentId) {
   if (!Array.isArray(templateNames) || templateNames.length === 0) {
     return;
   }
 
-  const warmupToken = ++templateWarmupToken;
+  const warmupToken = ++sessionSwitch.templateWarmupToken;
   const missing = templateNames.filter(name => !templateCache.has(name));
   if (missing.length === 0) return;
   Promise.all(missing.map(name => loadTemplate(name)))
     .then(() => {
-      if (warmupToken !== templateWarmupToken || currentRuntimeAgentId !== agentId
+      if (warmupToken !== sessionSwitch.templateWarmupToken || currentRuntimeAgentId !== agentId
           || !Array.isArray(currentMessages)
           || !currentMessages.some(msg => msg.role === 'tool' || msg.toolCalls?.length > 0)
           || !missing.some(name => templateCache.has(name))) {
@@ -317,17 +329,18 @@ function warmTemplatesInBackground(templateNames, agentId) {
       }
       // Messages rendered before the templates loaded may have used JSON.
       // Rebuild only when a real template became available for this runtime.
-      if (typeof _lastRenderedChatSig !== 'undefined') {
-        _lastRenderedChatSig = '';
-      }
-      renderCurrentMainView();
+      // 渲染去重签名 owner 已迁 ESM（render-entry-state）；classic 相的
+      // typeof 守卫由显式 setter 取代。
+      setLastRenderedChatSig('');
+      // 桥接期：定义于 app-ui（渲染入口域收敛时移除）
+      window.renderCurrentMainView();
     })
     .catch((error) => {
       console.warn('[Viewer] Background template warmup failed:', error);
     });
 }
 
-function getToolRenderTemplate(toolName) {
+export function getToolRenderTemplate(toolName) {
   const config = toolRenderConfigs[toolName];
   const callTemplateName = (config?.render?.call) || 'json';
   const resultTemplateName = (config?.render?.result) || 'json';
@@ -360,17 +373,22 @@ function getToolRenderTemplate(toolName) {
   };
 }
 
-function getToolDisplayName(toolName) {
+export function getToolDisplayName(toolName) {
   if (!toolName) return 'Tool';
   return TOOL_NAMES[toolName] || toolName;
 }
 
-function getAgentRuntimeId(agent) {
-  return typeof getRuntimeId === 'function' ? (getRuntimeId(agent) || '') : '';
+// 本文件版本是 classic 装载序里的赢家（index.html 中晚于 app-core 的同名声明），
+// 迁移后作为具名导出供同批 auto-title 等直接 import；classic 消费方仍读
+// app-core 的同名全局实现（两者等价：getRuntimeId 恒为函数）。
+export function getAgentRuntimeId(agent) {
+  // 桥接期：定义于 app-core（身份域收敛时移除）
+  return typeof window.getRuntimeId === 'function' ? (window.getRuntimeId(agent) || '') : '';
 }
 
 function getAgentDisplayId(agent) {
-  if (isWorkspaceSurfaceUnit(agent)) {
+  // 桥接期：定义于 app-core（身份/工作空间域收敛时移除）
+  if (window.isWorkspaceSurfaceUnit(agent)) {
     return '工作空间';
   }
   if (agent.source === 'prebuilt') {
@@ -383,4 +401,40 @@ function getAgentDisplayId(agent) {
 window.ClawFW.actions.registerMany({
   // 截断 JSON 结果展开：按钮自带 data-expand-id，处理器复用同名函数
   'templates.expandTruncated': (el) => expandTruncatedResult(el),
+});
+
+// ── 兼容桥（KernelState，template-engine 域）─────────────────────────────────
+// 仍有 classic 消费方的入口逐键上桥；读写经访问器双向转发，撤销条件写在各键旁：
+//   clearTruncatedHighlightData ← chat-renderer.js（正文重建前清理截断缓存）
+//   renderJsonHighlight         ← chat-renderer.js（工具调用/结果回退渲染）
+//   applyTemplate               ← chat-renderer.js（模板结果渲染）
+//   parseToolResult             ← chat-renderer.js（工具结果解析）
+//   getToolRenderTemplate       ← chat-renderer.js（工具模板选择）
+//   getToolDisplayName          ← chat-renderer.js / runtime-status.js（工具名展示）
+// collectTemplateNames / warmTemplatesInBackground 已由 agent-loader-host 直接
+// import（不再经 window），桥已注销：两模块互为静态依赖，但环内两侧顶层都不解
+// 引用对端绑定——本模块只在函数体内读 FEATURE_TEMPLATE_MAP 与
+// loadFeatureTemplateMap（模板重试时重载映射），对端以惰性包装（箭头）转发
+// 这两个函数，安全性不依赖函数声明提升。真实整图由 frontend-agent-loader-host /
+// p2-esm-graph-isolation 用例执行，模板重试的真实行为由
+// test/p2-template-summary-imports.test.js 覆盖。
+// getAgentRuntimeId 不上桥：window 上仍是 app-core 的同名 classic 声明（全局
+// function 声明属性不可重定义），本文件版本改由具名导出给同批消费方。
+const compatibility = {
+  clearTruncatedHighlightData,
+  renderJsonHighlight,
+  applyTemplate,
+  parseToolResult,
+  getToolRenderTemplate,
+  getToolDisplayName,
+};
+window.KernelState.defineKey('template-engine', 'clearTruncatedHighlightData', clearTruncatedHighlightData);
+window.KernelState.defineKey('template-engine', 'renderJsonHighlight', renderJsonHighlight);
+window.KernelState.defineKey('template-engine', 'applyTemplate', applyTemplate);
+window.KernelState.defineKey('template-engine', 'parseToolResult', parseToolResult);
+window.KernelState.defineKey('template-engine', 'getToolRenderTemplate', getToolRenderTemplate);
+window.KernelState.defineKey('template-engine', 'getToolDisplayName', getToolDisplayName);
+window.KernelState.claim('template-engine', {
+  get: (key) => compatibility[key],
+  set: (key, value) => { compatibility[key] = value; },
 });

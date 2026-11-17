@@ -5,12 +5,35 @@
  *   - getCtxMenuItems (menu structure for runtime/session roles)
  *   - getSessionReplacementMutation (Map lookup)
  *   - dispatchCtxAction (action routing to window functions)
+ *
+ * 装载路线（P2 ESM 配方第三节）：ctx-menu-items / session-mutation /
+ * session-menu-decls / assembly-data / session-ui / external-runtime 等已是 ESM，
+ * 经 withP2EsmCase 的 `c.load` 真实 import（每 case 整图隔离，含静态依赖）；
+ * classic 只剩首屏 bootstrap（action-dispatcher / i18n / app-core /
+ * sidebar-render / session-view-state / agent-data-loader）。app-core 注册 kernel
+ * 访问器桥（allAgents / currentLanguage / _navigationGuardEpoch …）并交出侧栏
+ * 与调用状态宿主工厂；app-main（切换事务宿主）与其它不在链上的 classic owner
+ * 以最小宿主替身注入——本文件只消费其调用契约。
+ *
+ * 真实边界重钉（已迁出实现不经 window 转发）：
+ *   - 菜单「精简 / 分支 / 重命名 / 查看历史」现在直接调用 ESM 入口，断言钉在
+ *     这些入口的真实用户可见效果上：预览/详情请求的 (agentId, sessionId)、
+ *     精简页与分支对话框的 DOM 文案、重命名对话框的标题。
+ *   - 右键「激活」走 ESM switchAgent，断言视图绑定到被点击的 runtime（宿主
+ *     state 由被测实现写入），不再是「调用过 window.switchAgent」。
+ *   - toast 文案断言钉在 ClawToast 真实渲染出的卡片 DOM（title/description/
+ *     data-status），而不是注入的 toast 替身。
  */
 
-import { describe, it } from 'node:test';
+import { describe, it as nodeIt } from 'node:test';
 import assert from 'node:assert/strict';
 import { deepEqual as deepLoose } from 'node:assert';
-import { createFrontendSandbox } from './helpers/frontend-vm.js';
+import { withP2EsmCase } from './helpers/p2-esm-case.js';
+import { installForegroundSyncOwner } from './p2-classic-hosts.js';
+
+const OPS = 'public/src/modules/sidebar-operations.js';
+const MUTATION = 'public/src/modules/session-mutation.js';
+const CTX_MENU = 'public/src/modules/ctx-menu-items.js';
 
 /**
  * Shared test agent data with sessions for programming-helper.
@@ -37,83 +60,469 @@ const TEST_AGENT = {
   },
 };
 
+/* ── DOM 夹具：稳定 id 元素（模块顶层 capture）+ 创建记录（toast/对话框） ── */
+
+function makeElement(tag = 'div') {
+  return {
+    tagName: String(tag).toUpperCase(),
+    id: '',
+    className: '',
+    innerHTML: '',
+    textContent: '',
+    value: '',
+    disabled: false,
+    checked: false,
+    type: '',
+    style: {},
+    dataset: {},
+    attributes: {},
+    children: [],
+    offsetHeight: 0,
+    classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
+    addEventListener() {},
+    removeEventListener() {},
+    appendChild(child) { this.children.push(child); return child; },
+    removeChild() {},
+    insertAdjacentHTML() {},
+    remove() {},
+    replaceWith() {},
+    focus() {},
+    select() {},
+    getAttribute(name) { return this.attributes[name] ?? null; },
+    setAttribute(name, value) { this.attributes[name] = String(value); },
+    removeAttribute() {},
+    getBoundingClientRect() { return { right: 0, bottom: 0 }; },
+    querySelector() { return makeElement(); },
+    querySelectorAll() { return []; },
+  };
+}
+
+function createDocumentStub() {
+  const elements = new Map();
+  const created = [];
+  const stable = (id) => {
+    if (!elements.has(id)) {
+      const el = makeElement();
+      el.id = id;
+      elements.set(id, el);
+    }
+    return elements.get(id);
+  };
+  return {
+    elements,
+    created,
+    document: {
+      getElementById: (id) => stable(id),
+      createElement: (tag) => { const el = makeElement(tag); created.push(el); return el; },
+      createTextNode: (text) => ({ textContent: String(text) }),
+      querySelector: () => makeElement(),
+      querySelectorAll: () => [],
+      addEventListener() {},
+      body: makeElement('body'),
+      head: makeElement('head'),
+      documentElement: makeElement('html'),
+      readyState: 'complete',
+      execCommand: () => true,
+    },
+  };
+}
+
+/** 按 className 在创建记录里找一个卡片/子节点（toast 卡片结构）。 */
+function findByClass(root, className) {
+  const queue = [root];
+  while (queue.length > 0) {
+    const el = queue.shift();
+    if (el.className === className) return el;
+    queue.push(...(el.children || []));
+  }
+  return null;
+}
+
+const toastCards = (doc) => doc.created.filter((el) => el.className === 'toast-card');
+
+/* ── classic 宿主面（本文件消费其调用契约，不含业务实现） ── */
+
+/** classic 真源优先：只补齐 bootstrap 尚未声明的宿主全局。 */
+function fillMissingGlobals(sandbox, stubs) {
+  for (const [name, value] of Object.entries(stubs)) {
+    if (sandbox.run(`typeof ${name} !== 'undefined'`)) continue;
+    sandbox[name] = value;
+  }
+}
+
 /**
- * Create a sandbox with ctx-menu-items.js loaded.
- * Returns { ctx, calls } where calls records window function invocations.
+ * 切换事务宿主（owner: classic app-main，本链不加载）。ESM switchAgent /
+ * requestSwitch 经它调用 classic 侧的渲染、数据加载与视图绑定；这里只提供
+ * 调用契约，并把「切到哪个 runtime」记在 `state.runtimeId` 与 switchCalls 上。
+ */
+function createRuntimeSwitchHost(sandbox, switchCalls, bindCalls) {
+  return {
+    state: {},
+    switchAgent: (id) => { switchCalls.push(id); return Promise.resolve(); },
+    bindSession: (runtimeId) => { bindCalls.push(runtimeId); },
+    setTimeout: (callback, delay) => sandbox.setTimeout(callback, delay),
+    hasPendingNavigation: () => false,
+    bumpNavigationGuard: () => {},
+    closeContextMenu: () => {},
+    findAgent: (id) => (sandbox.allAgents || []).find((agent) => agent.id === id) || null,
+    isWorkspaceHost: () => false,
+    runtimeId: (agent) => agent?.runtime_session_id || '',
+    agentRuntimeId: (agent) => agent?.runtime_session_id || '',
+    isRemote: (id) => String(id || '').startsWith('remote:'),
+    remote: () => sandbox.window.RemoteConnections,
+    closeReadOnlySession: () => {},
+    isWorkspaceSurface: () => false,
+    selectWorkspace: () => {},
+    storeDraft: () => {},
+    saveWorkspaceScroll: () => {},
+    saveCache: () => {},
+    logicalId: (agent) => agent?.parent_id || agent?.id || null,
+    normalize: (id) => String(id || '').trim(),
+    clearFinished: () => {},
+    deriveSession: () => null,
+    updateThreadIndicators: () => {},
+    browseOnly: () => false,
+    resetSurface: () => {},
+    resetScroll: () => {},
+    resetStatus: () => {},
+    activateCollapse: () => {},
+    contextKey: () => '',
+    restoreCache: () => null,
+    setPendingScroll: () => {},
+    render: () => {},
+    renderPanel: () => {},
+    patch: () => {},
+    emptyOverview: () => ({}),
+    emptyTodo: () => ({}),
+    setFollowLatest: () => {},
+    beginFollowWindows: () => {},
+    renderAgents: () => {},
+    fetch: (url) => sandbox.fetch(url),
+    applyCalling: () => {},
+    isCalling: () => false,
+    syncActionButton: () => {},
+    persistFocus: () => {},
+    loadData: async () => {},
+    loadAgents: async () => {},
+    clearLoading: () => {},
+    alert: (message) => sandbox.window.alert(message),
+    // 切换事务里的告警直通用例 console（即 console 守卫记录器），不静音
+    warn: (...args) => sandbox.console.warn(...args),
+    error: (...args) => sandbox.console.error(...args),
+  };
+}
+
+/* ── 用例地基 ── */
+
+/** 当前用例的沙箱与夹具；由 it 包装器建立。 */
+let activeCase = null;
+
+/**
+ * 真实 wire 的 fetch 替身：按端点回答与生产同形状的响应，让 classic `invoke`
+ * （app-core 的真实实现）拿到正确类型的载荷——连接快照是数组、viewer 是
+ * `{ agents }`、动作端点回执是对象。端点级差异经 `fixture.wireOverrides`
+ * 覆盖，未覆盖的端点一律按真实形状回答，避免 `{}` 泄漏成 TypeError。
+ */
+function createWireFetch(fixture) {
+  const jsonResponse = (payload) => ({
+    ok: true,
+    status: 200,
+    json: async () => payload,
+    text: async () => '',
+  });
+  return async (url, options = {}) => {
+    const target = String(url);
+    const method = options.method || 'GET';
+    fixture.fetchCalls.push({ url: target, method, body: options.body });
+    for (const [prefix, handler] of fixture.wireOverrides) {
+      if (!target.startsWith(prefix)) continue;
+      const result = await handler({ url: target, method, body: options.body, options });
+      if (result !== undefined) return result;
+    }
+    if (target.startsWith('/protoclaw/get_connected_agents')) return jsonResponse(fixture.connected);
+    if (target.startsWith('/protoclaw/get_prebuilt_agents')) return jsonResponse([]);
+    if (target === '/api/agents') return jsonResponse({ agents: fixture.viewerAgents });
+    if (target.startsWith('/protoclaw/ph_project/projects')) return jsonResponse({ projects: [] });
+    if (target.startsWith('/protoclaw/session_trim_preview')) return jsonResponse({ rounds: [], messages: [] });
+    if (target.startsWith('/protoclaw/threads/')) return jsonResponse({ ok: true, threadId: 'wt-1', cleanup: {} });
+    if (target.startsWith('/protoclaw/workspace_settings/sidebar_sessions')) return jsonResponse({ ok: true });
+    return jsonResponse({ ok: true });
+  };
+}
+
+function bootstrapClassic(sandbox, fixture) {
+  const { doc } = fixture;
+  sandbox.loadSource('public/src/modules/action-dispatcher.js');
+  sandbox.loadSource('public/src/i18n.js');
+  sandbox.loadSource('public/src/app-core.js');
+  // 引擎（app-main）在装载期组合 sidebar-render 的**真实**
+  // createAgentCallStatesHost（读 runtime-status 的 _agentSuspended）：按生产
+  // 先行脚本序装真链，不复制宿主实现。
+  sandbox.loadSource('public/src/modules/runtime-status.js');
+  sandbox.loadSource('public/src/modules/sidebar-render.js');
+  sandbox.loadSource('public/src/modules/session-view-state.js');
+  // runtime-status 的切换重置会经该视口守卫（owner: chat-viewport）：本图不驱动
+  // 视口，按宿主缝合上皮。
+  sandbox.runWithSuppressedChatViewportObservers = (fn) => (typeof fn === 'function' ? fn() : undefined);
+  // 常驻输入 / 通知链的 classic 汇点（owner: persistent-input）：真实
+  // runtime-status 的通知渲染会裸调它们，本图不断言这些控件。
+  if (typeof sandbox._syncPersistentActionButton !== 'function') sandbox._syncPersistentActionButton = () => {};
+  if (typeof sandbox._syncPersistentInputUi !== 'function') sandbox._syncPersistentInputUi = () => {};
+  installForegroundSyncOwner(sandbox);
+  // 不在本链上的 classic 宿主工厂（app-main / app-ui / 侧栏装载器 / 布局）：
+  // 逐项覆盖真实工厂里 `typeof x === 'function' ? x() : …` 的调用目标，
+  // 缺键会让成功路径变成 ReferenceError，因此显式提供而非依赖吞错。
+  sandbox.AgentLoaderHost = { loadedAgentDetailIds: new Set() };
+  // 数据加载图静态依赖（agent-data-loader → input-actions）在装载期取 app-main
+  // 的轮询宿主工厂；本文件不驱动轮询。
+  sandbox.createPollCoordinatorHost = () => ({});
+  sandbox.createRuntimeSwitchHost = () => {
+    fixture.switchHost = createRuntimeSwitchHost(sandbox, fixture.switchCalls, fixture.bindCalls);
+    return fixture.switchHost;
+  };
+  // app-ui 的真实工厂在用例里不装载（其顶层会注册 ClawHost block 与面板），
+  // 故按其宿主契约提供同形 facade：query 类读真实经典状态，副作用类转发到
+  // 本 harness 的记录点。偏好/标签页读取归 app-ui，未装载时按「无偏好」空值
+  // 回答（不复制 app-ui 的策略）。
+  sandbox.createWorkspaceSurfaceHost = () => ({
+    bumpNavigationGuard: () => sandbox.bumpNavigationGuard(),
+    closeReadOnlySession: () => {},
+    hasDetail: (id) => sandbox.AgentLoaderHost.loadedAgentDetailIds.has(id),
+    loadDetail: (id) => sandbox.loadAgentDetail(id),
+    findAgent: (id) => (sandbox.allAgents || []).find((item) => item.id === id) || null,
+    currentAgent: () => sandbox.getCurrentAgentRecord(),
+    preferenceKey: () => '',
+    tabs: () => [],
+    surfacePreference: () => null,
+    defaultMode: () => 'home',
+    ui: (agent) => sandbox.getCurrentUnitUi(agent),
+    focusedAgentId: () => sandbox.focusedAgentId,
+    runtimeId: () => sandbox.currentRuntimeAgentId,
+    contextKey: (id) => sandbox.getRuntimeContextKey(id),
+    saveScroll: () => {},
+    readOnlyMode: () => sandbox.readOnlyMode === true,
+    saveCache: () => {},
+    bindWorkspace: (agentId) => { fixture.surfaceBindings.push([agentId]); },
+    setFollowLatest: () => {},
+    resetRuntimeState: () => {},
+    beginPending: () => {},
+    setTab: (tab) => { sandbox.currentWorkspaceTab = tab; },
+    beginLoading: () => {},
+    clearPending: () => {},
+    renderAgents: () => {},
+    render: () => {},
+    renderPanel: () => {},
+    refreshPanels: () => {},
+  });
+  // app-main 的桥接全局（runtime-status-loader 的 ownerRecord 经
+  // `window.getCurrentRuntimeRecord() || window.getCurrentAgentRecord()` 取当前记录，
+  // 源码注释标为「定义于 app-main，编排域收敛时移除」）。app-main 末尾的启动 IIFE
+  // 会拉起轮询与网络，用例里不能跑，故以同一份经典状态的投影补齐：
+  //   - 宿主记录 = focusedAgentId 在 allAgents 里的身份投影（无策略分支）
+  //   - 运行时记录 = app-core 真实 getRuntimeRecord(当前 runtime)，回退宿主记录
+  const resolveHostRecord = () => {
+    const hostId = sandbox.normalizeAgentIdentity(sandbox.focusedAgentId);
+    if (!hostId) return null;
+    return (sandbox.allAgents || []).find(
+      (agent) => sandbox.normalizeAgentIdentity(agent?.id) === hostId,
+    ) || null;
+  };
+  sandbox.getCurrentAgentRecord = resolveHostRecord;
+  sandbox.getCurrentRuntimeRecord = () => sandbox.getRuntimeRecord(sandbox.currentRuntimeAgentId) || resolveHostRecord();
+  sandbox.createCompactResumeHost = () => ({ state: {}, now: () => Date.now() });
+  sandbox.window.ClawSidebarLayout = {
+    isInteracting: () => false,
+    signature: () => 'fixture-layout',
+    load: async () => {},
+    render: () => {},
+    toggle: () => {},
+  };
+  fillMissingGlobals(sandbox, {
+    renderAgentList: () => {},
+    renderCurrentMainView: () => {},
+    renderFeaturePanel: () => {},
+    updateAgentRecord: () => {},
+    runWorkspaceAction: () => {},
+    closeCtxMenu: () => {},
+    closeCompactMenu: () => {},
+    closeProjectContextMenu: () => {},
+    closeAgentContextMenu: () => {},
+    alert: () => {},
+    confirm: () => false,
+    isRemoteNamespaceAgentId: (id) => typeof id === 'string' && id.startsWith('remote:'),
+    performance: { now: () => 0 },
+    setPreferredUnitMode: () => {},
+    resolveFocusedAgentAfterRefresh: () => null,
+    handlePrebuiltAgentClick: () => {},
+    loadAgentDetail: async () => ({}),
+    selectWorkspaceSurface: () => {},
+    refreshAgentCallStates: async () => {},
+    getVisibleRemoteEntries: () => [],
+    resetRuntimeStatusForSwitch: () => {},
+    patchRuntimeStatusForSwitch: () => {},
+    updateRollbackActionVisibility: () => {},
+    renderRollbackActions: () => {},
+    applyContextGuardStatus: () => {},
+    updateNotificationStatus: () => {},
+  });
+  sandbox.document = doc.document;
+  sandbox.window.document = doc.document;
+}
+
+/**
+ * console 记录器：直通宿主 console（不吞输出），按等级收集供断言。
+ * 词法捕获宿主 console——用例期间 globalThis.console 就是 recorder。
+ */
+function createConsoleRecorder() {
+  const host = globalThis.console;
+  const entries = { error: [], warn: [], log: [] };
+  const format = (args) => args
+    .map((arg) => (arg instanceof Error ? `${arg.name}: ${arg.message}\n${arg.stack}` : String(arg)))
+    .join(' ');
+  return {
+    entries,
+    recorder: {
+      ...host,
+      error: (...args) => { entries.error.push(format(args)); host.error(...args); },
+      warn: (...args) => { entries.warn.push(format(args)); host.warn(...args); },
+      log: (...args) => { entries.log.push(format(args)); host.log(...args); },
+      info: (...args) => { entries.log.push(format(args)); host.info(...args); },
+    },
+  };
+}
+
+/**
+ * 用例包装。平台全局（fetch / navigator / console / document / CSS）全部经
+ * withP2EsmCase 的 `globals` 托管：用例结束时 helper 按原 descriptor 恢复，
+ * 测试体不再直接写 `globalThis`。
+ *
+ * `options.globals` 用于用例级平台面（如 copy-id 需要的 navigator.clipboard）；
+ * `options.expectConsole` 声明该用例**预期**出现的 console 行，其余任何
+ * error / warn 都会让用例失败——成功路径的 TypeError / ReferenceError 不会被吞。
+ */
+function it(name, fn, options = {}) {
+  nodeIt(name, async () => {
+    const doc = createDocumentStub();
+    const fixture = {
+      doc,
+      calls: [],
+      switchCalls: [],
+      bindCalls: [],
+      switchHost: null,
+      surfaceBindings: [],
+      fetchCalls: [],
+      fetchRef: { current: null },
+      // wire 事实：连接快照（数组）/ viewer 存活 / 端点级覆盖
+      connected: [{
+        id: 'programming-helper',
+        name: 'PH',
+        source: 'prebuilt',
+        connected: true,
+        workspace_sessions: { revision: 1, activeSessionId: 'sess-active', sessions: [] },
+      }],
+      viewerAgents: [],
+      wireOverrides: [],
+    };
+    fixture.fetchRef.current = createWireFetch(fixture);
+    const { recorder, entries } = createConsoleRecorder();
+    const { globals: extraGlobals = {}, expectConsole = [] } = options;
+    await withP2EsmCase({
+      classic: (sandbox) => bootstrapClassic(sandbox, fixture),
+      globals: {
+        document: doc.document,
+        // ESM 侧以裸标识符使用（浏览器里就是 window.CSS）
+        CSS: { escape: (value) => String(value) },
+        console: recorder,
+        fetch: (...args) => fixture.fetchRef.current(...args),
+        ...extraGlobals,
+      },
+    }, async (c) => {
+      await c.load('public/src/modules/agent-data-loader.js');
+      await c.load('public/src/modules/project-data.js');
+      const ops = await c.load(OPS);
+      // sidebar-operations 已把 beginSidebarOperation 从 KernelState 桥注销（消费方
+      // 一律具名 import）：classic 侧脚本按**模块命名空间**调用同一批 ESM 导出。
+      c.expose('SidebarOps', ops);
+      await c.load(MUTATION);
+      await c.load(CTX_MENU);
+      activeCase = { ctx: c.sandbox, ...fixture };
+      try {
+        const result = await fn();
+        const unexpected = [...entries.error, ...entries.warn]
+          .filter((line) => !expectConsole.some((pattern) => pattern.test(line)));
+        assert.deepEqual(unexpected, [], '成功路径不应产生未预期的 console.error / console.warn');
+        return result;
+      } finally {
+        activeCase = null;
+      }
+    });
+  });
+}
+
+/**
+ * 取当前用例的装载面：`overrides` 在装载后生效（状态键写经 kernel 访问器桥）。
+ * 平台面（fetch / navigator / console）不在这里写主 realm：
+ *   - `fetch` 经用例级代理转发（`fetchRef`），classic 与 ESM 侧看到同一实现；
+ *   - `navigator` 必须由用例声明期的 `it(..., { globals })` 提供（helper 托管恢复）。
+ * 返回 { ctx, calls, doc } 与迁移前一致；`doc` 是本用例的 DOM 夹具。
  */
 function loadCtxMenuItems(overrides = {}) {
-  const calls = [];
-
-  const defaults = {
-    currentLanguage: 'zh',
-    allAgents: [TEST_AGENT],
-    t: (key) => key,
-    getWorkspaceSessionById: (agent, sid) => {
-      const sessions = agent?.workspace_sessions?.sessions || [];
-      return sessions.find((s) => s.id === sid) || null;
-    },
-    getWorkspaceSessions: (agent) => agent?.workspace_sessions?.sessions || [],
-    updateAgentRecord: () => {},
-    renderCurrentMainView: () => {},
-    renderAgentList: () => {},
-    lastRenderedWorkspaceHtml: '',
-    ClawToast: { show() {}, update() {} },
-    escapeHtml: (text) => {
-      if (text == null) return '';
-      return String(text).replace(/[&<>"']/g, (m) => ({
-        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
-      })[m]);
-    },
-    CSS: { escape: (s) => s },
-    bumpNavigationGuard: () => 1,
-    _navigationGuardEpoch: 0,
-    getExternalRuntimeAgent: () => null,
-    clearAgentRuntimeCache: () => {},
-    restartingRuntimeIds: new Set(),
-    suppressSidebarRerender: false,
-    restartSidebarExternalRuntime: () => ({}),
-    loadAgents: () => {},
-    requestSwitch: () => {},
-    invoke: () => ({}),
-    isRemoteNamespaceAgentId: (id) => typeof id === 'string' && id.startsWith('remote:'),
-  };
-
-  const ctx = createFrontendSandbox({ ...defaults, ...overrides });
-
-  // Window function stubs with call recording
-  ctx.window.switchAgent = (id) => { calls.push({ fn: 'switchAgent', args: [id] }); };
+  if (!activeCase) throw new Error('loadCtxMenuItems 必须在用例体内调用');
+  const { ctx, calls, doc, fetchRef } = activeCase;
+  if (!('allAgents' in overrides)) ctx.allAgents = [TEST_AGENT];
+  for (const [key, value] of Object.entries(overrides)) {
+    if (key === 'navigator') {
+      throw new Error('navigator 必须在用例声明期经 it(..., { globals: { navigator } }) 提供');
+    }
+    if (key === 'connected') {
+      // 覆盖连接快照 wire（真实 invoke 直接返回 res.json()，即数组）
+      activeCase.connected = value;
+      continue;
+    }
+    if (key === 'wire') {
+      // 端点级覆盖：[[前缀, handler], ...]；handler 返回 undefined 表示回落默认 wire
+      activeCase.wireOverrides.push(...value);
+      continue;
+    }
+    if (key === 'fetch') {
+      fetchRef.current = value;
+      ctx.fetch = value;
+      continue;
+    }
+    ctx[key] = value;
+  }
+  // Window 函数 stubs with call recording（仍是 classic 消费面的那些）
   ctx.window.closeCtxMenu = () => { calls.push({ fn: 'closeCtxMenu' }); };
   ctx.window.runWorkspaceAction = (json) => { calls.push({ fn: 'runWorkspaceAction', args: [json] }); };
-  ctx.window.openTrimPage = (ns, sid, archive) => { calls.push({ fn: 'openTrimPage', args: [ns, sid, archive] }); };
-  ctx.window.openBranchDialog = (ns, sid, archive) => { calls.push({ fn: 'openBranchDialog', args: [ns, sid, archive] }); };
   ctx.window.confirm = () => false;
   ctx.window.alert = () => {};
-
-  ctx.loadSource('public/src/modules/sidebar-operations.js');
-  ctx.loadSource('public/src/modules/session-mutation.js');
-  // ctx-menu-items.js 的 restart/stop/archive 动作经 NavigationCore 解析宿主
-  // 身份与 runtime 引用（ADR-0014 Phase 2）——缺失会 TypeError。
-  ctx.loadSource('public/src/modules/navigation-core.js');
-  // ctx-menu-items.js 依赖 assembly-data.js 的 isAssemblySession（见该文件
-  // 头部「依赖 assembly-data.js」注释）——缺失会导致 getCtxMenuItems 抛
-  // ReferenceError: isAssemblySession is not defined。
-  ctx.loadSource('public/src/modules/assembly-data.js');
-  // ctx-menu-items.js 的会话操作事实（sessionOpsAllowed）来自
-  // session-menu-decls.js（ADR-0049 声明驱动）——缺失会 ReferenceError。
-  ctx.loadSource('public/src/modules/session-menu-decls.js');
-  ctx.loadSource('public/src/modules/ctx-menu-items.js');
-  return { ctx, calls };
+  return { ctx, calls, doc };
 }
 
 describe('ctx-menu-items: explicit restart identity', () => {
   it('uses the clicked child session even when the runtime catalog is stale', async () => {
-    const requests = [];
     const { ctx } = loadCtxMenuItems({
-      getExternalRuntimeAgent: () => ({ id: 'rt-old', parent_id: 'programming-helper', active_workspace_session_id: 'directory-session' }),
-      invoke: async (command, payload) => { requests.push({ command, ...payload }); return {}; },
+      // 场景事实改为「目录里确有该 child runtime」——真实 getExternalRuntimeAgent
+      // 读 agent store（不再经注入的函数替身）。
+      allAgents: [TEST_AGENT, {
+        id: 'rt-old', source: 'child', parent_id: 'programming-helper',
+        active_workspace_session_id: 'directory-session',
+      }],
     });
-    await ctx.run(`ctxRestartAgent({ ns: 'programming-helper', id: 'rt-old', sessionId: 'project-session', variant: 'child' })`);
-    assert.deepEqual(requests, [{ command: 'restart_agent', agentId: 'programming-helper', sessionId: 'project-session' }]);
+    // 公开入口：右键「重启」动作（内部即 ctxRestartAgent 的真实身份解析）。
+    // 重启提交后的续体（loadAgents 刷新）在用例内跑完，不落进下一个 case。
+    await ctx.run(`(async () => {
+      await dispatchCtxAction('restart', { ns: 'programming-helper', id: 'rt-old', sessionId: 'project-session', variant: 'child' });
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    })()`);
+    // 真实 IPC → HTTP：断言到达服务端的那一次重启请求（app-core invoke 的 wire）
+    const restarts = activeCase.fetchCalls.filter((entry) => entry.url === '/protoclaw/restart_agent');
+    assert.equal(restarts.length, 1, '恰好一次重启请求');
+    assert.equal(restarts[0].method, 'POST');
+    assert.deepEqual(JSON.parse(restarts[0].body), {
+      agentId: 'programming-helper',
+      sessionId: 'project-session',
+    }, '寻址用被点击的 child session，不用陈旧的 catalog');
   });
 });
 
@@ -231,7 +640,6 @@ describe('ctx-menu-items: getCtxMenuItems (session)', () => {
     ctx.window.getThreadForSession = (agentId, sessionId) => (sessionId === 'sess-threaded'
       ? { threadId: 'wt-1', headSessionId: 'sess-threaded', lifeState: 'open', sessionIds: ['sess-threaded', 's-old-1', 's-old-2'] }
       : null);
-    ctx.window.phThreadArchiveCount = (agentId, sessionId) => (sessionId === 'sess-threaded' ? 2 : 0);
     const items = ctx.run(`getCtxMenuItems('session', 'programming-helper', 'main', 'sess-threaded')`);
     const archiveItem = items.find((i) => i.action === 'thread-archive');
     assert.ok(archiveItem, 'threaded conversation archives via the thread endpoint');
@@ -247,7 +655,6 @@ describe('ctx-menu-items: getCtxMenuItems (session)', () => {
     // 菜单必须以线程 lifeState 为准给出「取消归档」并走线程端点。
     const { ctx } = loadCtxMenuItems();
     ctx.window.getThreadForSession = () => ({ threadId: 'wt-2', headSessionId: 'sess-x', lifeState: 'archived', sessionIds: ['sess-x'] });
-    ctx.window.phThreadArchiveCount = () => 0;
     const items = ctx.run(`getCtxMenuItems('session', 'programming-helper', 'main', 'sess-x')`);
     const archiveItem = items.find((i) => i.action === 'thread-unarchive');
     assert.ok(archiveItem, 'archived thread offers thread unarchive');
@@ -282,7 +689,7 @@ describe('ctx-menu-items: getCtxMenuItems (session)', () => {
 describe('ctx-menu-items: getSessionReplacementMutation', () => {
   it('found → mutation object', () => {
     const { ctx } = loadCtxMenuItems();
-    ctx.run(`beginSidebarOperation({
+    ctx.run(`SidebarOps.beginSidebarOperation({
       operationId: 'summary:test', type: 'replacement', agentId: 'agent1',
       sourceSessionId: 'sess1', kind: 'summary', phase: 'generating', startedAt: 12345,
     })`);
@@ -306,12 +713,36 @@ describe('ctx-menu-items: getSessionReplacementMutation', () => {
 // ── dispatchCtxAction: routing ──────────────────────────────
 
 describe('ctx-menu-items: dispatchCtxAction (routing)', () => {
-  it('activate → window.switchAgent(id)', () => {
-    const { ctx, calls } = loadCtxMenuItems();
+  it('activate → the real switch binds the view to the clicked runtime', async () => {
+    // 快照事实：被点击的 runtime 是 programming-helper 名下存活的 child
+    // （真实 get_connected_agents 会把 child 作为独立条目下发，focused 因此
+    // 在刷新后仍能解析到它，不会触发「焦点丢失 → 回退工作台面」分支）。
+    const { ctx } = loadCtxMenuItems({
+      connected: [
+        {
+          id: 'programming-helper',
+          name: 'PH',
+          source: 'prebuilt',
+          connected: true,
+          workspace_sessions: { revision: 1, activeSessionId: 's1', sessions: [] },
+        },
+        {
+          id: 'rt-1',
+          name: 'rt-1',
+          source: 'child',
+          parent_id: 'programming-helper',
+          connected: true,
+          active_workspace_session_id: 's1',
+        },
+      ],
+    });
     ctx.run(`dispatchCtxAction('activate', { id: 'rt-1', ns: 'ph', sessionId: 's1' })`);
-    assert.equal(calls.length, 1);
-    assert.equal(calls[0].fn, 'switchAgent');
-    assert.equal(calls[0].args[0], 'rt-1');
+    // ESM switchAgent 同步写入宿主事务 state：视图绑定到被点击的 runtime。
+    assert.equal(activeCase.switchHost.state.runtimeId, 'rt-1');
+    assert.equal(activeCase.switchHost.state.focusedAgentId, 'rt-1');
+    assert.deepEqual(activeCase.bindCalls, ['rt-1'], '会话绑定到被点击的 runtime');
+    // 切换后续的正文加载在用例内跑完，续体不落进下一个 case。
+    await new Promise((resolve) => setTimeout(resolve, 20));
   });
 
   it('summary → window.runWorkspaceAction with compactType summary', () => {
@@ -324,77 +755,86 @@ describe('ctx-menu-items: dispatchCtxAction (routing)', () => {
     assert.equal(payload.archiveOriginal, undefined, 'menu summary no longer archives the original');
   });
 
-  it('trim → window.openTrimPage(ns, sid)', () => {
-    const { ctx, calls } = loadCtxMenuItems();
+  it('trim → the real trim page opens for the targeted session', async () => {
+    const { ctx, doc } = loadCtxMenuItems();
     ctx.run(`dispatchCtxAction('trim', { ns: 'ph', id: 's1', sessionId: 's1' })`);
-    assert.equal(calls[0].fn, 'openTrimPage');
-    assert.equal(calls[0].args[0], 'ph');
-    assert.equal(calls[0].args[1], 's1');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const previews = activeCase.fetchCalls.filter((entry) => entry.url === '/protoclaw/session_trim_preview?agentId=ph&sessionId=s1');
+    assert.equal(previews.length, 1, 'trim preview requested once for ns + sessionId');
+    assert.equal(activeCase.fetchCalls.length, 1, 'trim 打开只发一次预览请求');
+    assert.equal(doc.elements.get('trim-page-title').textContent, '精简对话', 'trim page opened');
+    assert.equal(doc.elements.get('branch-submit')?.textContent || '', '', 'branch dialog untouched');
   });
 
-  it('branch → window.openBranchDialog(ns, sid)', () => {
-    const { ctx, calls } = loadCtxMenuItems();
+  it('branch → the real branch dialog opens for the targeted session', async () => {
+    const { ctx, doc } = loadCtxMenuItems();
     ctx.run(`dispatchCtxAction('branch', { ns: 'ph', id: 's1', sessionId: 's1' })`);
-    assert.equal(calls[0].fn, 'openBranchDialog');
-    assert.equal(calls[0].args[0], 'ph');
-    assert.equal(calls[0].args[1], 's1');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const previews = activeCase.fetchCalls.filter((entry) => entry.url === '/protoclaw/session_trim_preview?agentId=ph&sessionId=s1');
+    assert.equal(previews.length, 1, 'branch preview requested once for ns + sessionId');
+    assert.equal(activeCase.fetchCalls.length, 1, 'branch 打开只发一次预览请求');
+    assert.equal(doc.elements.get('branch-submit').textContent, '创建分支', 'branch dialog opened');
+    assert.equal(doc.elements.get('trim-page-title').textContent, '', 'trim page untouched');
   });
 
   // 归档 toast 按服务端 cleanup 事实展示：空闲归档只报结果；真的取消了
   // 排队消息才说明后果，且不得残留「指令」类内部术语。
   describe('thread-archive toast follows cleanup facts', () => {
     const archiveDispatch = async (cleanup) => {
-      const toasts = [];
-      const { ctx } = loadCtxMenuItems({
+      const { ctx, doc } = loadCtxMenuItems({
         currentRuntimeAgentId: '',
-        ClawToast: { show: (opts) => toasts.push(opts), update() {} },
-        fetch: async () => ({
-          ok: true,
-          json: async () => ({ ok: true, threadId: 'wt-1', cleanup }),
-        }),
+        // 只覆盖归档端点，其余端点仍按真实 wire 形状回答（连接快照保持数组）
+        wire: [[
+          '/protoclaw/threads/',
+          async () => ({ ok: true, status: 200, json: async () => ({ ok: true, threadId: 'wt-1', cleanup }), text: async () => '' }),
+        ]],
       });
       ctx.window.getThreadById = () => ({ threadId: 'wt-1', agentId: 'programming-helper', headViewerAgentId: 'rt-1' });
       ctx.window.refreshThreads = async () => ({ ok: true });
       await ctx.run(`dispatchCtxAction('thread-archive', { ns: 'programming-helper', id: 'rt-1', sessionId: 's1', threadId: 'wt-1' })`);
       // thread-archive 经 async IIFE 提交（提交回执即返回），等宏任务让 toast 落地
       await new Promise((resolve) => setTimeout(resolve, 0));
-      return toasts.filter((t) => String(t.id || '').startsWith('ctx-thread-archive'));
+      return toastCards(doc);
     };
 
     it('idle archive: reports the result without inventing cancelled-message reminders', async () => {
-      const toasts = await archiveDispatch({ status: 'complete', commandsCancelled: 0, handoffConverged: false, inflightDrain: { count: 0 } });
-      assert.equal(toasts.length, 1);
-      assert.equal(toasts[0].title, '已归档');
-      assert.equal(toasts[0].description, undefined, 'nothing was cancelled — no description');
+      const cards = await archiveDispatch({ status: 'complete', commandsCancelled: 0, handoffConverged: false, inflightDrain: { count: 0 } });
+      assert.equal(cards.length, 1);
+      assert.equal(cards[0].attributes['data-status'], 'success');
+      assert.equal(findByClass(cards[0], 'toast-title').textContent, '已归档');
+      assert.equal(findByClass(cards[0], 'toast-desc'), null, 'nothing was cancelled — no description');
     });
 
     it('archive with cancelled commands: explains the consequence in user language', async () => {
-      const toasts = await archiveDispatch({ status: 'complete', commandsCancelled: 2, handoffConverged: true, inflightDrain: { count: 1 } });
-      assert.equal(toasts.length, 1);
-      assert.equal(toasts[0].title, '已归档');
-      assert.ok(toasts[0].description.includes('2 条排队中的消息已取消'), `description: ${toasts[0].description}`);
-      assert.ok(toasts[0].description.includes('不会自动重新发送'), `description: ${toasts[0].description}`);
-      assert.ok(!toasts[0].description.includes('指令'), 'no internal jargon in user-facing copy');
+      const cards = await archiveDispatch({ status: 'complete', commandsCancelled: 2, handoffConverged: true, inflightDrain: { count: 1 } });
+      assert.equal(cards.length, 1);
+      assert.equal(findByClass(cards[0], 'toast-title').textContent, '已归档');
+      const description = String(findByClass(cards[0], 'toast-desc')?.textContent || '');
+      assert.ok(description.includes('2 条排队中的消息已取消'), `description: ${description}`);
+      assert.ok(description.includes('不会自动重新发送'), `description: ${description}`);
+      assert.ok(!description.includes('指令'), 'no internal jargon in user-facing copy');
     });
   });
 
-  it('rename-session → window.phOpenRenameDialog(ns, sid)', () => {
-    const { ctx, calls } = loadCtxMenuItems();
-    ctx.window.phOpenRenameDialog = (ns, sid) => { calls.push({ fn: 'phOpenRenameDialog', args: [ns, sid] }); };
-    ctx.run(`dispatchCtxAction('rename-session', { ns: 'ph', id: 's1', sessionId: 's1' })`);
-    const renameCall = calls.find((c) => c.fn === 'phOpenRenameDialog');
-    assert.ok(renameCall, 'rename dialog must open for the main-list role');
-    assert.deepEqual(renameCall.args, ['ph', 's1']);
+  it('rename-session → the real rename dialog opens for the session', () => {
+    const { ctx, doc } = loadCtxMenuItems();
+    ctx.run(`dispatchCtxAction('rename-session', { ns: 'programming-helper', id: 's1', sessionId: 'sess-active' })`);
+    const dialogs = doc.created.filter((el) => String(el.innerHTML).includes('重命名对话'));
+    assert.equal(dialogs.length, 1, 'rename dialog must open for the main-list role');
+    assert.ok(String(dialogs[0].innerHTML).includes('sess-active'), 'dialog carries the targeted session title fallback');
+    assert.equal(activeCase.fetchCalls.length, 0, '打开重命名对话框不发请求（保存才 PUT）');
   });
 
-  it('open-history → phOpenThreadHistory with the resolved thread id', () => {
-    const { ctx, calls } = loadCtxMenuItems();
+  it('open-history → the real history panel loads the resolved thread', async () => {
+    const { ctx } = loadCtxMenuItems();
     ctx.window.getThreadForSession = () => ({ threadId: 'wt-hist', headSessionId: 's1', lifeState: 'open' });
-    ctx.window.phOpenThreadHistory = (ns, tid) => { calls.push({ fn: 'phOpenThreadHistory', args: [ns, tid] }); };
     ctx.run(`dispatchCtxAction('open-history', { ns: 'ph', id: 's1', sessionId: 's1' })`);
-    const historyCall = calls.find((c) => c.fn === 'phOpenThreadHistory');
-    assert.ok(historyCall, 'history panel must open');
-    assert.deepEqual(historyCall.args, ['ph', 'wt-hist']);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.deepEqual(
+      activeCase.fetchCalls.filter((entry) => entry.url.includes('/protoclaw/threads/')).map((entry) => entry.url),
+      ['/protoclaw/threads/wt-hist'],
+      'history panel requests the resolved thread id exactly once',
+    );
   });
 
   it('delete-session → runWorkspaceAction with delete type', () => {
@@ -413,21 +853,27 @@ describe('ctx-menu-items: dispatchCtxAction (routing)', () => {
 // ── dispatchCtxAction: ctx* routes call closeCtxMenu ────────
 
 describe('ctx-menu-items: dispatchCtxAction (ctx* routes)', () => {
-  it('restart → calls closeCtxMenu', () => {
+  // ctx* 路由在 async IIFE 里提交请求；用例等其收尾，避免续体跑进下一个 case。
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 10));
+
+  it('restart → calls closeCtxMenu', async () => {
     const { ctx, calls } = loadCtxMenuItems();
     ctx.run(`dispatchCtxAction('restart', { ns: 'ph', id: 'rt-1', sessionId: 's1' })`);
+    await settle();
     assert.ok(calls.find((c) => c.fn === 'closeCtxMenu'));
   });
 
-  it('stop → calls closeCtxMenu', () => {
+  it('stop → calls closeCtxMenu', async () => {
     const { ctx, calls } = loadCtxMenuItems();
     ctx.run(`dispatchCtxAction('stop', { ns: 'ph', id: 'rt-1', sessionId: 's1' })`);
+    await settle();
     assert.ok(calls.find((c) => c.fn === 'closeCtxMenu'));
   });
 
-  it('rename with ns+sessionId → calls closeCtxMenu', () => {
+  it('rename with ns+sessionId → calls closeCtxMenu', async () => {
     const { ctx, calls } = loadCtxMenuItems();
     ctx.run(`dispatchCtxAction('rename', { ns: 'ph', id: 'rt-1', sessionId: 's1' })`);
+    await settle();
     assert.ok(calls.find((c) => c.fn === 'closeCtxMenu'));
   });
 });
@@ -438,8 +884,8 @@ describe('ctx-menu-items: dispatchCtxAction (edge cases)', () => {
   it('unknown action → no crash', () => {
     const { ctx } = loadCtxMenuItems();
     ctx.run(`dispatchCtxAction('totally-unknown', { ns: 'ph', id: 'rt-1' })`);
-    // Should not throw — falls to default case with console.warn
-  });
+    // 不抛错——落到 default 分支的 console.warn（预期日志，显式声明）
+  }, { expectConsole: [/Unknown ctx-menu action/] });
 
   it('null action → early return (no calls)', () => {
     const { ctx, calls } = loadCtxMenuItems();
@@ -492,16 +938,8 @@ describe('ctx-menu-items: remote runtime leaf menu parity', () => {
 describe('ctx-menu-items: dispatchCtxAction remote variants', () => {
   function loadRemoteHarness() {
     const { ctx, calls } = loadCtxMenuItems({
-      invoke: (command, payload) => {
-        calls.push({ fn: 'invoke', args: [command, payload] });
-        return {};
-      },
-      loadAgents: () => {
-        calls.push({ fn: 'loadAgents' });
-      },
-      requestSwitch: (id) => {
-        calls.push({ fn: 'requestSwitch', args: [id] });
-      },
+      // 刷新后的权威读也要能回答（远程无本地条目 → 保留空快照外的既有投影）
+      connected: [],
     });
     ctx.window.RemoteConnections = {
       refresh: () => { calls.push({ fn: 'RemoteConnections.refresh' }); },
@@ -522,28 +960,35 @@ describe('ctx-menu-items: dispatchCtxAction remote variants', () => {
     const { ctx, calls } = loadRemoteHarness();
     ctx.run(`dispatchCtxAction('restart', { ns: '${REMOTE_NS}', id: 'remote:lab-b:rt-1', sessionId: 'remote:lab-b:sess-1', variant: 'remote' })`);
     await settle(ctx);
-    const invokeCall = calls.find((c) => c.fn === 'invoke');
-    assert.ok(invokeCall, 'restart_agent must go through invoke');
-    assert.equal(invokeCall.args[0], 'restart_agent');
-    assert.equal(invokeCall.args[1].agentId, REMOTE_NS, 'agentId must be the host namespace id');
-    assert.equal(invokeCall.args[1].sessionId, 'remote:lab-b:sess-1');
+    const restarts = activeCase.fetchCalls.filter((entry) => entry.url === '/protoclaw/restart_agent');
+    assert.equal(restarts.length, 1, 'restart_agent must reach the server');
+    assert.deepEqual(JSON.parse(restarts[0].body), {
+      agentId: REMOTE_NS,
+      sessionId: 'remote:lab-b:sess-1',
+    }, 'agentId must be the host namespace id');
     assert.ok(calls.some((c) => c.fn === 'RemoteConnections.refresh'), 'catalog must refresh after restart');
-    assert.ok(calls.some((c) => c.fn === 'loadAgents'));
+    // 侧栏刷新是真实 loadAgents（连接快照 + viewer 读取）——真实 wire 上可见两次读
+    assert.ok(
+      activeCase.fetchCalls.some((entry) => entry.url.startsWith('/protoclaw/get_connected_agents')),
+      'agents are re-read after the restart',
+    );
+    assert.ok(activeCase.fetchCalls.some((entry) => entry.url === '/api/agents'), 'viewer liveness re-read');
     const located = calls.find((c) => c.fn === 'waitForRuntimeForSession');
     assert.equal(located.args[0], 'remote:lab-b:sess-1', 'new runtime is located via the session');
-    const switched = calls.find((c) => c.fn === 'requestSwitch');
-    assert.equal(switched.args[0], 'remote:lab-b:rt-new');
+    // 真实 requestSwitch 把切换意图交给宿主事务：切到的正是按会话重新定位的新 runtime
+    assert.ok(activeCase.switchCalls.includes('remote:lab-b:rt-new'), 'switch targets the re-located runtime');
   });
 
   it('stop on a remote leaf invokes stop_agent with the host namespace id', async () => {
-    const { ctx, calls } = loadRemoteHarness();
+    const { ctx } = loadRemoteHarness();
     ctx.run(`dispatchCtxAction('stop', { ns: '${REMOTE_NS}', id: 'remote:lab-b:rt-1', sessionId: 'remote:lab-b:sess-1', variant: 'remote' })`);
     await settle(ctx);
-    const invokeCall = calls.find((c) => c.fn === 'invoke');
-    assert.ok(invokeCall, 'stop_agent must go through invoke');
-    assert.equal(invokeCall.args[0], 'stop_agent');
-    assert.equal(invokeCall.args[1].agentId, REMOTE_NS);
-    assert.equal(invokeCall.args[1].sessionId, 'remote:lab-b:sess-1');
+    const stops = activeCase.fetchCalls.filter((entry) => entry.url === '/protoclaw/stop_agent');
+    assert.equal(stops.length, 1, 'stop_agent must reach the server');
+    assert.deepEqual(JSON.parse(stops[0].body), {
+      agentId: REMOTE_NS,
+      sessionId: 'remote:lab-b:sess-1',
+    });
   });
 });
 
@@ -557,23 +1002,17 @@ describe('ctx-menu-items: dispatchCtxAction child leaf stop addressing', () => {
       parent_id: 'programming-helper',
       active_workspace_session_id: 'sess-9',
     };
-    const { ctx, calls } = loadCtxMenuItems({
+    const { ctx } = loadCtxMenuItems({
       allAgents: [TEST_AGENT, childAgent],
-      getExternalRuntimeAgent: (id) => [TEST_AGENT, childAgent].find((a) => a.id === id) || null,
-      invoke: (command, payload) => {
-        calls.push({ fn: 'invoke', args: [command, payload] });
-        return {};
-      },
-      refreshSidebarRuntimeAfterMutation: () => Promise.resolve(),
     });
     ctx.run(`dispatchCtxAction('stop', { ns: 'programming-helper', id: 'rt-9', sessionId: 'sess-9', variant: 'child' })`);
     await new Promise((resolve) => setTimeout(resolve, 10));
-    const invokeCall = calls.find((c) => c.fn === 'invoke');
-    assert.ok(invokeCall, 'stop_agent must go through invoke');
-    assert.equal(invokeCall.args[0], 'stop_agent');
-    assert.equal(invokeCall.args[1].agentId, 'programming-helper',
+    const stops = activeCase.fetchCalls.filter((entry) => entry.url === '/protoclaw/stop_agent');
+    assert.equal(stops.length, 1, 'stop_agent must reach the server');
+    const body = JSON.parse(stops[0].body);
+    assert.equal(body.agentId, 'programming-helper',
       'agentId must resolve to the host via parent_id — sending the runtime id is a server-side silent no-op');
-    assert.equal(invokeCall.args[1].sessionId, 'sess-9');
+    assert.equal(body.sessionId, 'sess-9');
   });
 });
 
@@ -653,44 +1092,53 @@ describe('ctx-menu-items: declared session menu items (ADR-0049)', () => {
   });
 
   it('claw: prefixed action dispatches to the builtin handler after prefix stripping', () => {
-    const moved = [];
+    // move-session 处理器现在直接调用 ESM 的 phOpenSessionMoveDialog（不再经 window
+    // 替身），因此用该处理器的可观察前置动作钉住「恰一次命中内建 case」：
+    // 进入 case 先关菜单；无当前 agent 时对话框入口静默返回（不误弹）。
+    let closed = 0;
+    const alerts = [];
     const { ctx } = loadCtxMenuItems();
-    ctx.window.phOpenSessionMoveDialog = (ids) => { moved.push(ids); };
+    ctx.window.closeCtxMenu = () => { closed += 1; };
+    ctx.window.alert = (message) => { alerts.push(String(message)); };
+    ctx.window.getCurrentAgentRecord = () => null;
     ctx.run(`dispatchCtxAction('claw:move-session', { ns: 'programming-helper', id: 'sess-active', variant: 'session' })`);
-    assert.equal(moved.length, 1, 'claw:move-session 恰好触发一次移动对话框');
-    assert.equal(moved[0][0], 'sess-active', 'claw:move-session 剥前缀后命中既有 move-session 处理器');
-  });
+    assert.equal(closed, 1, 'claw:move-session 恰好命中一次内建 move-session 处理器（剥前缀）');
+    assert.deepEqual(alerts, [], '缺少当前 agent 时对话框入口静默返回，不猜测也不提示');
+
+    // 未声明的 claw:* 动作不落到任何内建处理器
+    ctx.run(`dispatchCtxAction('claw:unknown-action', { ns: 'programming-helper', id: 'sess-active', variant: 'session' })`);
+    assert.equal(closed, 1, '未知 claw 动作不得命中 move-session 处理器');
+  }, { expectConsole: [/Unknown ctx-menu action/] });
 });
 
 // ── copy-id action ──────────────────────────────────────────
 
 describe('ctx-menu-items: copy-id action', () => {
+  // navigator 由用例声明期的 globals 托管（helper 负责按原 descriptor 恢复）
+  const clipboard = { copied: [] };
+  const copyCaseGlobals = {
+    navigator: { clipboard: { writeText: async (text) => { clipboard.copied.push(text); } } },
+  };
   function loadCopyHarness() {
-    const copied = [];
-    const toasts = [];
-    const { ctx } = loadCtxMenuItems({
-      navigator: { clipboard: { writeText: async (text) => { copied.push(text); } } },
-      ClawToast: {
-        show: (opts) => { toasts.push(opts); },
-        update() {},
-      },
-    });
+    clipboard.copied.length = 0;
+    const { ctx, doc } = loadCtxMenuItems();
     ctx.window.isSecureContext = true;
-    return { ctx, copied, toasts };
+    return { ctx, copied: clipboard.copied, doc };
   }
 
   it('copies the sessionId when no thread data exists', async () => {
-    const { ctx, copied, toasts } = loadCopyHarness();
+    const { ctx, copied, doc } = loadCopyHarness();
     ctx.run(`dispatchCtxAction('copy-id', { ns: 'programming-helper', id: 'rt-1', sessionId: 'sess-abc' })`);
     await new Promise((resolve) => setTimeout(resolve, 10));
     assert.ok(copied.includes('sess-abc'), 'clipboard must receive the sessionId');
-    assert.equal(toasts.length, 1);
-    assert.equal(toasts[0].status, 'success');
-    assert.equal(toasts[0].description, 'sess-abc');
-  });
+    const cards = toastCards(doc);
+    assert.equal(cards.length, 1);
+    assert.equal(cards[0].attributes['data-status'], 'success');
+    assert.equal(findByClass(cards[0], 'toast-desc').textContent, 'sess-abc');
+  }, { globals: copyCaseGlobals });
 
   it('copies the thread id when the session resolves to a thread', async () => {
-    const { ctx, copied, toasts } = loadCopyHarness();
+    const { ctx, copied, doc } = loadCopyHarness();
     ctx.window.getThreadForSession = (ns, sid) => (sid === 'sess-th'
       ? { threadId: 'wt-abc', headSessionId: 'sess-th', lifeState: 'open' }
       : null);
@@ -698,16 +1146,16 @@ describe('ctx-menu-items: copy-id action', () => {
     await new Promise((resolve) => setTimeout(resolve, 10));
     assert.ok(copied.includes('wt-abc'), 'thread id wins when the conversation is threaded');
     assert.ok(!copied.includes('sess-th'), 'sessionId must not be copied for threaded rows');
-    assert.equal(toasts[0].status, 'success');
-  });
+    assert.equal(toastCards(doc)[0].attributes['data-status'], 'success');
+  }, { globals: copyCaseGlobals });
 
   it('runtime leaf without explicit sessionId falls back to id', async () => {
-    const { ctx, copied, toasts } = loadCopyHarness();
+    const { ctx, copied, doc } = loadCopyHarness();
     ctx.run(`dispatchCtxAction('copy-id', { ns: 'programming-helper', id: 'sess-fallback' })`);
     await new Promise((resolve) => setTimeout(resolve, 10));
     assert.ok(copied.includes('sess-fallback'));
-    assert.equal(toasts[0].status, 'success');
-  });
+    assert.equal(toastCards(doc)[0].attributes['data-status'], 'success');
+  }, { globals: copyCaseGlobals });
 });
 
 // ── getCtxMenuItems: workspace role（ADR-0050 工作空间条目操作面）──
@@ -746,34 +1194,76 @@ describe('ctx-menu-items: workspace role menu composition', () => {
 
 describe('ctx-menu-items: dispatch toggle-sidebar-sessions', () => {
   function loadToggleHarness(agentRecord) {
-    const requests = [];
-    const loads = [];
+    // 真实 wire：PUT 回执 { ok }、连接快照按数组返回（切换后 loadAgents 会重读）
     const { ctx } = loadCtxMenuItems({
       allAgents: [agentRecord],
-      fetch: async (url, options) => {
-        requests.push({ url, options });
-        return { ok: true, status: 200, json: async () => ({}) };
-      },
-      loadAgents: async () => { loads.push(1); },
+      connected: [agentRecord],
     });
-    return { ctx, requests, loads };
+    return { ctx, requests: activeCase.fetchCalls };
   }
 
+  const putRequests = (requests) => requests.filter((entry) => entry.method === 'PUT');
+
   it('submits the inverted target policy and refreshes the wire', async () => {
-    const { ctx, requests, loads } = loadToggleHarness({ id: 'memo', sidebarSessions: 'visible', sidebarSessionsPolicy: 'visible' });
+    const { ctx, requests } = loadToggleHarness({ id: 'memo', sidebarSessions: 'visible', sidebarSessionsPolicy: 'visible' });
     ctx.run(`dispatchCtxAction('toggle-sidebar-sessions', { role: 'workspace', ns: 'memo', id: 'memo', variant: 'prebuilt' })`);
     await new Promise((resolve) => setTimeout(resolve, 10));
-    assert.equal(requests.length, 1, 'exactly one PUT');
-    assert.equal(requests[0].url, '/protoclaw/workspace_settings/sidebar_sessions');
-    assert.equal(requests[0].options.method, 'PUT');
-    assert.deepEqual(JSON.parse(requests[0].options.body), { agentId: 'memo', policy: 'hidden' });
-    assert.equal(loads.length, 1, 'wire refreshed so the render signature flips');
+    const puts = putRequests(requests);
+    assert.equal(puts.length, 1, 'exactly one PUT');
+    assert.equal(puts[0].url, '/protoclaw/workspace_settings/sidebar_sessions');
+    assert.deepEqual(JSON.parse(puts[0].body), { agentId: 'memo', policy: 'hidden' });
+    // 真实 loadAgents 的 viewer 读取（wire 已刷新，渲染签名随之翻转）
+    assert.ok(
+      requests.some((entry) => entry.url === '/api/agents'),
+      'wire refreshed so the render signature flips',
+    );
   });
 
   it('hidden → visible inverts the other way', async () => {
     const { ctx, requests } = loadToggleHarness({ id: 'memo', sidebarSessions: 'visible', sidebarSessionsPolicy: 'hidden' });
     ctx.run(`dispatchCtxAction('toggle-sidebar-sessions', { role: 'workspace', ns: 'memo', id: 'memo', variant: 'prebuilt' })`);
     await new Promise((resolve) => setTimeout(resolve, 10));
-    assert.deepEqual(JSON.parse(requests[0].options.body), { agentId: 'memo', policy: 'visible' });
+    assert.deepEqual(JSON.parse(putRequests(requests)[0].body), { agentId: 'memo', policy: 'visible' });
+  });
+});
+
+/* ── 主 realm 的 case 级托管：跨 case 恢复（不静音、不泄漏） ── */
+
+describe('ctx-menu-items: case-scoped main-realm globals', () => {
+  const TRACKED = ['navigator', 'console', 'fetch', 'CSS'];
+  const descriptorsOf = () => Object.fromEntries(
+    TRACKED.map((name) => [name, Object.getOwnPropertyDescriptor(globalThis, name)]),
+  );
+  const probeNavigator = (tag) => ({
+    tag,
+    clipboard: { writeText: async () => {} },
+  });
+
+  nodeIt('restores the original descriptors after each case, including a throwing case', async () => {
+    const before = descriptorsOf();
+    const first = probeNavigator('first');
+    const second = probeNavigator('second');
+
+    await withP2EsmCase({ globals: { navigator: first } }, async () => {
+      assert.equal(globalThis.navigator, first, '用例期间由 globals 托管 navigator');
+    });
+    // 逐键比对描述符：getter/setter/value/writable/enumerable/configurable 全部还原
+    assert.deepEqual(descriptorsOf(), before, '第一个 case 结束后全部描述符已恢复');
+
+    await withP2EsmCase({ globals: { navigator: second } }, async () => {
+      assert.equal(globalThis.navigator, second, '第二个 case 拿到自己的托管值');
+      assert.notEqual(globalThis.navigator, first, '前一个 case 的托管值没有泄漏');
+    });
+    assert.deepEqual(descriptorsOf(), before, '第二个 case 结束后全部描述符已恢复');
+
+    // 用例体内抛错时 finally 仍要还原——否则后续 case 会拿到脱手的探针
+    await assert.rejects(
+      withP2EsmCase({ globals: { navigator: first } }, async () => {
+        assert.equal(globalThis.navigator, first);
+        throw new Error('case body failed');
+      }),
+      /case body failed/,
+    );
+    assert.deepEqual(descriptorsOf(), before, '抛错路径同样恢复描述符');
   });
 });

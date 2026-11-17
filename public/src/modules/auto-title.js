@@ -10,20 +10,19 @@
  *   2. 自动标题生成 —— 历史实现，被 isShellTitleTriggerDisabled() 硬屏蔽，
  *      入口不可达。**标题由应用自己的 AutoTitlePolicyFeature 生成**（ADR-0041）。
  *
- * 依赖全局状态（定义在 app-core.js）:
- *   currentRuntimeAgentId, focusedAgentId, currentLanguage,
- *   allAgents, _autoTitleTriggered, _seenChoiceAlertIds, _lastChoiceAlertCheckAt
- *   getLogicalAgentId (app-core.js)
- * 依赖全局函数:
- *   getCurrentAgentRecord (app-main.js)
- *   ClawToast (modules/toast-notify.js)
- *   _tryNotifyInputRequest (modules/desktop-notify.js)
- * 导出全局函数:
- *   getAutoTitleSessionInfo, markAutoTitleCandidate, recheckAutoTitleCandidate,
- *   _messagesEqual, findFirstChangedMessageIndex, tryAutoTitleGeneration,
- *   autoGenerateSessionTitle, checkGlobalChoiceAlerts
- * 导出全局变量:
- *   _autoTitlePending
+ * ESM（P2 迁移）：运行时与会话列表状态直接 import 已迁 ESM owner
+ * （orchestration-state / agent-store-state / session-view-storage），转义无关的
+ * 调用集合经 p2-bootstrap-call-activity 适配模块按引用使用同一容器，语言取自
+ * i18n-environment-state，ClawToast 取自 toast-notify 的具名导出，
+ * applySessionMutationDelta 取自 sidebar-operations 的具名导出。仍 classic 的
+ * window 可达函数（normalizeAgentIdentity / getLogicalAgentId /
+ * getCurrentAgentRecord / isRuntimeCalling）按调用时点晚绑定。仍有 classic
+ * 消费方（app-main、agent-data-loader）的入口经 KernelState 桥键（auto-title 域）提供。
+ *
+ * 幂等键：本文件里的 newIdempotencyKey 与 session-dialogs / ctx-menu-handlers /
+ * debug-summary-upload / workspace-actions / input-helpers 五份副本逐字节相同；
+ * classic 装载序里全局赢家是最后加载的 ctx-menu-handlers 版本，本文件副本从未
+ * 被外部调用，因此迁移为模块私有不改变任何调用方语义。
  *
  * ══════════════════════════════════════════════════════════════════════════
  * 重要：本文件下半部分的「自动标题生成」是 ADR-0041 之前的历史实现，已被
@@ -40,6 +39,15 @@
  * test/frontend-auto-title-legacy-disabled.test.js 守住。
  * ══════════════════════════════════════════════════════════════════════════
  */
+
+import { getCurrentLanguage } from './i18n-environment-state.js';
+import { currentRuntimeAgentId } from './orchestration-state.js';
+import { allAgents, focusedAgentId } from './agent-store-state.js';
+import { currentMessages } from './session-view-storage.js';
+import { callActivity } from './p2-bootstrap-call-activity.js';
+import { ClawToast } from './toast-notify.js';
+import { getAgentRuntimeId } from './template-engine.js';
+import { applySessionMutationDelta } from './sidebar-operations.js';
 
 // ── 幂等键（ADR-0011）：写类提交统一携带（本地忽略、远程强制）───────────
 function newIdempotencyKey() {
@@ -106,21 +114,21 @@ function getAutoTitleSessionInfo() {
   // 当用户在查看某个 runtime 时，优先使用该 runtime agent 的 session 信息。
   // host agent 的 active_workspace_session_id 指向 "primary" runtime（通常是最近启动的），
   // 但用户可能正在查看另一个 runtime 的会话。
-  const runtimeId = normalizeAgentIdentity(currentRuntimeAgentId);
+  const runtimeId = window.normalizeAgentIdentity(currentRuntimeAgentId);
   if (runtimeId) {
     const runtimeAgent = allAgents.find(function(a) {
-      return normalizeAgentIdentity(a && a.id) === runtimeId;
+      return window.normalizeAgentIdentity(a && a.id) === runtimeId;
     });
     if (runtimeAgent) {
       const sessionId = String(runtimeAgent.active_workspace_session_id || '').trim();
       if (sessionId) {
         // Runtime child records own the live session projection, but server
         // session routes are scoped by the logical workspace agent.
-        const logicalAgentId = typeof getLogicalAgentId === 'function'
-          ? getLogicalAgentId(runtimeAgent)
+        const logicalAgentId = typeof window.getLogicalAgentId === 'function'
+          ? window.getLogicalAgentId(runtimeAgent)
           : String(runtimeAgent.parent_id || '').trim();
         const hostAgent = allAgents.find(function(a) {
-          return normalizeAgentIdentity(a && a.id) === logicalAgentId;
+          return window.normalizeAgentIdentity(a && a.id) === logicalAgentId;
         }) || null;
         const session = hostAgent?.workspace_sessions?.sessions?.find(function(s) {
           return s && String(s.id || '').trim() === sessionId;
@@ -140,7 +148,8 @@ function getAutoTitleSessionInfo() {
     }
   }
   // Fallback: 使用 host agent
-  const agent = getCurrentAgentRecord();
+  // 桥接期：定义于 app-main（编排域收敛时移除）
+  const agent = window.getCurrentAgentRecord();
   if (!agent) return null;
   const sessionId = String(agent.active_workspace_session_id || agent.workspace_sessions?.activeSessionId || '').trim();
   if (!sessionId) return null;
@@ -177,12 +186,12 @@ function isAppOwnedTitlePolicy(agentRecord) {
 function isValidTitleEvent(info) {
   const agentRecord = (info && info.agent) || {};
   const hostAgent = allAgents.find(function(a) {
-    return normalizeAgentIdentity(a && a.id) === normalizeAgentIdentity(info.agentId);
+    return window.normalizeAgentIdentity(a && a.id) === window.normalizeAgentIdentity(info.agentId);
   });
   return !isAppOwnedTitlePolicy(agentRecord) && !isAppOwnedTitlePolicy(hostAgent);
 }
 
-function markAutoTitleCandidate(previousMessages, nextMessages) {
+export function markAutoTitleCandidate(previousMessages, nextMessages) {
   // ADR-0041：壳层自动标题已硬屏蔽，不再登记任何候选。
   if (isShellTitleTriggerDisabled()) return;
   const info = getAutoTitleSessionInfo();
@@ -211,7 +220,7 @@ function markAutoTitleCandidate(previousMessages, nextMessages) {
  * 0→1 assistant transition was missed because messages arrived in bulk
  * (page refresh, session switch with cached data).
  */
-function recheckAutoTitleCandidate() {
+export function recheckAutoTitleCandidate() {
   // ADR-0041：壳层自动标题已硬屏蔽，不再登记任何候选。
   if (isShellTitleTriggerDisabled()) return;
   const info = getAutoTitleSessionInfo();
@@ -251,7 +260,7 @@ function _messagesEqual(a, b) {
   return true;
 }
 
-function findFirstChangedMessageIndex(nextMessages, previousMessages) {
+export function findFirstChangedMessageIndex(nextMessages, previousMessages) {
   if (!Array.isArray(nextMessages) || !Array.isArray(previousMessages)) {
     return 0;
   }
@@ -319,18 +328,18 @@ function _tryTitleForSession(agent, sessionId, sessionTitle, titleState, session
 
   // Prevent concurrent calls for the same session.
   // autoGenerateSessionTitle handles all retries internally.
-  if (_autoTitleTriggered.has(sessionId)) return;
+  if (callActivity._autoTitleTriggered.has(sessionId)) return;
 
-  _autoTitleTriggered.add(sessionId);
+  callActivity._autoTitleTriggered.add(sessionId);
 
   // Fire and forget — don't block the poll loop
-  const logicalAgentId = typeof getLogicalAgentId === 'function'
-    ? getLogicalAgentId(agent)
+  const logicalAgentId = typeof window.getLogicalAgentId === 'function'
+    ? window.getLogicalAgentId(agent)
     : String(agent.parent_id || '').trim();
   autoGenerateSessionTitle(logicalAgentId || agent.id, sessionId, !!messages);
 }
 
-function tryAutoTitleGeneration(messages) {
+export function tryAutoTitleGeneration(messages) {
   // ADR-0041：壳层自动标题已硬屏蔽——不扫候选、不发请求。
   // 应用自行装配 AutoTitlePolicyFeature 决定何时生成。
   if (isShellTitleTriggerDisabled()) return;
@@ -342,7 +351,7 @@ function tryAutoTitleGeneration(messages) {
   // Feature 触发生成，壳层不再介入；这里也清掉可能残留的候选登记。
   if (info && !isValidTitleEvent(info)) {
     _autoTitlePending.delete(info.sessionId);
-    _autoTitleTriggered.delete(info.sessionId);
+    callActivity._autoTitleTriggered.delete(info.sessionId);
     return;
   }
 
@@ -364,12 +373,13 @@ function tryAutoTitleGeneration(messages) {
     if (!owner) {
       // Session no longer exists in any agent — clean up
       _autoTitlePending.delete(pendingId);
-      _autoTitleTriggered.delete(pendingId);
+      callActivity._autoTitleTriggered.delete(pendingId);
       continue;
     }
 
     // Only trigger if the owning runtime is idle (assistant finished responding)
-    if (typeof isRuntimeCalling === 'function' && isRuntimeCalling(owner.runtimeId)) continue;
+    // 桥接期：定义于 runtime-status（运行时状态域收敛时移除）
+    if (typeof window.isRuntimeCalling === 'function' && window.isRuntimeCalling(owner.runtimeId)) continue;
 
     _tryTitleForSession(owner.agent, pendingId, owner.title, owner.titleState, true, null);
   }
@@ -391,7 +401,7 @@ async function autoGenerateSessionTitle(agentId, sessionId, isForeground) {
   if (isShellTitleTriggerDisabled()) return;
   let succeeded = false;
   let lastError = null;
-  const isZh = currentLanguage === 'zh';
+  const isZh = getCurrentLanguage() === 'zh';
   const toastId = 'title-auto-' + sessionId;
 
   // 查找会话当前标题，用于 Toast 展示
@@ -414,7 +424,7 @@ async function autoGenerateSessionTitle(agentId, sessionId, isForeground) {
     const fetchTimer = setTimeout(function() { controller.abort(); }, AUTO_TITLE_FETCH_TIMEOUT_MS);
 
     try {
-      const response = await fetch('/protoclaw/generate_session_title', {
+      const response = await window.fetch('/protoclaw/generate_session_title', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-idempotency-key': newIdempotencyKey() },
         body: JSON.stringify({ agentId: agentId, sessionId: sessionId }),
@@ -424,12 +434,10 @@ async function autoGenerateSessionTitle(agentId, sessionId, isForeground) {
         throw new Error('HTTP ' + response.status);
       }
       const result = await response.json();
-      if (typeof applySessionMutationDelta === 'function') {
-        applySessionMutationDelta(agentId, result);
-      }
+      applySessionMutationDelta(agentId, result);
       if (result.ok && result.title) {
         // Update local data
-        const agent = typeof getCurrentAgentRecord === 'function' ? getCurrentAgentRecord() : null;
+        const agent = typeof window.getCurrentAgentRecord === 'function' ? window.getCurrentAgentRecord() : null;
         if (agent) {
           const sessions = agent.workspace_sessions && agent.workspace_sessions.sessions || [];
           const target = sessions.find(function(s) { return s.id === sessionId; });
@@ -482,7 +490,7 @@ async function autoGenerateSessionTitle(agentId, sessionId, isForeground) {
     });
   }
 
-  _autoTitleTriggered.delete(sessionId);
+  callActivity._autoTitleTriggered.delete(sessionId);
   _autoTitlePending.delete(sessionId);
 }
 
@@ -496,16 +504,16 @@ async function autoGenerateSessionTitle(agentId, sessionId, isForeground) {
  * app-notification SSE frame (unified notification outlet, ADR-0030;
  * presented by desktop-notify.js). This separation is intentional.
  */
-async function checkGlobalChoiceAlerts() {
+export async function checkGlobalChoiceAlerts() {
   try {
-    const res = await fetch('/protoclaw/choice_alerts');
+    const res = await window.fetch('/protoclaw/choice_alerts');
     if (!res.ok) return;
     const data = await res.json();
     const alerts = Array.isArray(data.alerts) ? data.alerts : [];
     for (const alert of alerts) {
-      if (!_seenChoiceAlertIds.has(alert.requestId)) {
-        if (_seenChoiceAlertIds.size > 500) _seenChoiceAlertIds.clear();
-        _seenChoiceAlertIds.add(alert.requestId);
+      if (!callActivity._seenChoiceAlertIds.has(alert.requestId)) {
+        if (callActivity._seenChoiceAlertIds.size > 500) callActivity._seenChoiceAlertIds.clear();
+        callActivity._seenChoiceAlertIds.add(alert.requestId);
         // Try to find a richer display name from allAgents
         const matched = allAgents.find(
           (a) => (a.runtime_session_id || a.runtimeSessionId) === alert.agentId
@@ -515,7 +523,7 @@ async function checkGlobalChoiceAlerts() {
           || matched?.name
           || alert.agentName
           || alert.agentId;
-        const isZh = currentLanguage === 'zh';
+        const isZh = getCurrentLanguage() === 'zh';
         ClawToast.show({
           id: 'choice-alert-' + alert.requestId,
           title: isZh ? '等待用户选择' : 'Waiting for user choice',
@@ -526,3 +534,30 @@ async function checkGlobalChoiceAlerts() {
     }
   } catch { /* non-critical */ }
 }
+
+// ── 兼容桥（KernelState，auto-title 域）─────────────────────────────────────────
+// 仍有 classic 消费方的入口逐键上桥（消费方都是晚绑定闭包，调用发生在轮询/装载期）：
+//   markAutoTitleCandidate       ← app-main.js（消息 probe host.markTitle）
+//   findFirstChangedMessageIndex ← app-main.js（消息 probe host.firstChanged）
+//   tryAutoTitleGeneration       ← app-main.js（运行时轮询 host.title）
+//   checkGlobalChoiceAlerts      ← app-main.js（轮询周期 host.checkChoices）
+// recheckAutoTitleCandidate 已改由 agent-data-loader.js 直接 import，桥已注销。
+// 其余入口（isShellTitleTriggerDisabled / isAppOwnedTitlePolicy / isValidTitleEvent /
+// getAutoTitleSessionInfo / titleCandidateState / _messagesEqual / _autoTitlePending /
+// autoGenerateSessionTitle / newIdempotencyKey）只在本文件内使用：保持模块私有，
+// 不导出、不上桥。既有沙箱测试迁移时经公开入口（硬屏蔽后无候选、无请求）验证行为，
+// 不为测试倒推公开 API。
+const compatibility = {
+  markAutoTitleCandidate,
+  findFirstChangedMessageIndex,
+  tryAutoTitleGeneration,
+  checkGlobalChoiceAlerts,
+};
+window.KernelState.defineKey('auto-title', 'markAutoTitleCandidate', markAutoTitleCandidate);
+window.KernelState.defineKey('auto-title', 'findFirstChangedMessageIndex', findFirstChangedMessageIndex);
+window.KernelState.defineKey('auto-title', 'tryAutoTitleGeneration', tryAutoTitleGeneration);
+window.KernelState.defineKey('auto-title', 'checkGlobalChoiceAlerts', checkGlobalChoiceAlerts);
+window.KernelState.claim('auto-title', {
+  get: (key) => compatibility[key],
+  set: (key, value) => { compatibility[key] = value; },
+});

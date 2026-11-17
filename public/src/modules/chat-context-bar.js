@@ -1,6 +1,18 @@
 /**
  * chat-context-bar.js — 上下文栏与弹窗模块（从 app-ui.js 域 C 提取）
  *
+ * ESM 迁移状态（P2 第二波批次 1）：**保留唯一 classic 实现，本文件不转 ESM**。
+ * R1 触线证据（同步首屏真实调用链，不是监听回调）：
+ *   app-main.js 顶层 `applyTheme(currentTheme); applyLanguage();`
+ *     → theme-lang.js `applyLanguage()` 末行 `renderCurrentMainView()`
+ *     → app-ui.js `renderCurrentMainView()` 在三条分支（workspace surface /
+ *       空会话 / 有消息）都同步调用 `updateChatContextBar(viewState)`
+ *       （app-ui.js 1427 / 1441 / 1450）。
+ * ESM 域模块在 deferred 执行相才装载，而上述调用发生在 classic 解析相，故
+ * `updateChatContextBar` 必须首屏同步可用——迁走即首屏 ReferenceError。等到
+ * 主视图入口本身完成联合迁移（P2/P3 的同步 bootstrap 收敛）后，本文件与
+ * renderCurrentMainView 的调用方一并转 ESM。
+ *
  * 包含：
  *   - updateChatContextBar: 上下文栏主渲染（模型名、token 进度条）
  *   - CCB hover popup: token 详情弹窗（hover chat-context-bar 触发）

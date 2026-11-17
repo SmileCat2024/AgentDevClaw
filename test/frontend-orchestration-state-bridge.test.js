@@ -13,8 +13,8 @@ const INITIAL = {
   _navigationGuardEpoch: 0,
   _pendingSessionNavigation: null,
   _chatLoadingSession: false,
-  _chatLoadingTimeout: null,
   _restoredScrollTop: null,
+  // _chatLoadingTimeout 不在此列：其桥已注销，状态唯一 owner 是 ESM 域模块。
 };
 
 async function setup() {
@@ -32,6 +32,8 @@ function cleanupKeys() {
 test('real pending navigation survives claim and is invalidated by subsequent user navigation', async () => {
   const ctx = createFrontendSandbox();
   ctx.loadSource('public/src/app-core.js');
+  // 生产 classic 相不再注册该桥键（_chatLoadingTimeout 归 ESM 域模块唯一持有）。
+  assert.equal(ctx.run("'_chatLoadingTimeout' in window"), false);
   const pending = ctx.run("beginPendingSessionNavigation('agent-a', 'session-a')");
   const previousWindow = globalThis.window;
   globalThis.window = ctx;
@@ -71,6 +73,30 @@ test('orchestration claim absorbs runtime, epoch and navigation values without r
   }
 });
 
+test('chat loading timeout is owned by the ESM module only, with null initial value and live handle identity', async () => {
+  const { cleanup } = await setup();
+  try {
+    assert.equal('_chatLoadingTimeout' in window, false, 'classic 相不再注册该桥键');
+    const { module } = await loadModuleOnce(MODULE, { installGlobals: false });
+    assert.equal('_chatLoadingTimeout' in window, false, 'claim 不重建已注销的桥');
+    assert.strictEqual(module._chatLoadingTimeout, null, '初值与撤桥前一致');
+
+    const timer = setTimeout(() => {}, 10000);
+    try {
+      module.setChatLoadingTimeout(timer);
+      assert.strictEqual(module._chatLoadingTimeout, timer, '计时句柄按引用原样保存');
+      assert.equal('_chatLoadingTimeout' in window, false, 'owner 写入不经 window 暴露');
+      module.setChatLoadingTimeout(null);
+      assert.strictEqual(module._chatLoadingTimeout, null, '清理后回 null');
+    } finally {
+      clearTimeout(timer);
+    }
+  } finally {
+    cleanupKeys();
+    cleanup();
+  }
+});
+
 test('orchestration bridge preserves classic writes, ESM writes, increments and handle identity', async () => {
   const { cleanup } = await setup();
   try {
@@ -98,8 +124,10 @@ test('orchestration bridge preserves classic writes, ESM writes, increments and 
     const timer = setTimeout(() => {}, 10000);
     const promise = Promise.resolve('switch');
     try {
-      window._chatLoadingTimeout = timer;
+      // 该槽无桥：写入走真实 owner 接口，读回仍是同一句柄引用。
+      module.setChatLoadingTimeout(timer);
       assert.strictEqual(module._chatLoadingTimeout, timer);
+      assert.equal('_chatLoadingTimeout' in window, false, '桥已注销：window 上无该访问器');
       module.setPendingSwitchTarget(promise);
       assert.strictEqual(window.pendingSwitchTarget, promise);
       window._restoredScrollTop = 37;

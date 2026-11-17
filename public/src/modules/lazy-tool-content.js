@@ -1,5 +1,5 @@
 /**
- * lazy-tool-content.js — "content-visibility:hidden 虚拟化"
+ * lazy-tool-content.js — "content-visibility:hidden 虚拟化"（ESM 域）
  *
  * 根本原理：
  *   display:none → 高度归零 → 滚动条失真 → 需要 scrollTop 补偿（补丁）
@@ -21,11 +21,31 @@
  *   show 模式下不调用 syncCollapseStates（读 scrollHeight 会强制
  *   计算 cv-hidden 子树布局，触发 Chromium 性能警告）。
  *
- * 依赖全局变量: container, showChatProcess
- * 依赖全局函数: runWithSuppressedChatViewportObservers, syncRowCollapseState
- * 导出: applyProcessDistance, clearProcessDistance, precomputeViewportIdx,
- *       setProcessWindowingDisabled
+ * ESM 迁移（P2 第二波批次 1，原位转换）：文件内全部实现与状态原地保留，只把
+ * 跨文件面显式化——七个公开函数改为命名导出（原为行为层全局键），两个窗口分级
+ * 标志拆到 p2-w2-1-process-windowing-mode.js（与 chat-row-visibility 共享的
+ * 上游状态，避免 import 环）。
+ *
+ * 依赖（已迁移部分直接 import）：
+ *   - domRefs / chatSurface（p2-bootstrap-dom / p2-bootstrap-chat-surface）
+ *   - processWindowingMode（p2-w2-1-process-windowing-mode）
+ *   - refreshMeasuredChatRows / clearMeasuredChatRows（chat-row-visibility；
+ *     原为 `typeof … === 'function'` 的可选全局调用，现为静态依赖，调用点与
+ *     时相不变）
+ * 依赖（classic，显式 window 晚绑定；classic 脚本先于 deferred 模块执行，
+ * 故模块执行相取用即已定义）：
+ *   - window.runWithSuppressedChatViewportObservers（chat-viewport 顶层函数）
+ *   - window.syncRowCollapseState / window.settleAllRowCollapseStates
+ *     （chat-renderer 顶层函数）
+ * 导出: applyProcessDistance, clearProcessDistance, freezeProcessWindowing,
+ *       unfreezeProcessWindowing, runLandingCollapseScan, setProcessWindowingDisabled,
+ *       precomputeViewportIdx
  */
+
+import { domRefs } from './p2-bootstrap-dom.js';
+import { chatSurface } from './p2-bootstrap-chat-surface.js';
+import { processWindowingMode } from './p2-w2-1-process-windowing-mode.js';
+import { refreshMeasuredChatRows, clearMeasuredChatRows } from './chat-row-visibility.js';
 
 /* ── config ── */
 
@@ -49,8 +69,6 @@ var _rowIdxMap = null;
 var _scrollStopTimer = null;
 var _lastScrollTop = 0;
 var _largeDeltaPending = false;
-var _windowingFrozen = false;
-var _windowingDisabled = false;
 
 /* ── cache ── */
 
@@ -106,7 +124,7 @@ function _setRowCvVisible(row, isNear) {
 /* ── viewport detection ── */
 
 function _findViewportTopRowIdx(rows) {
-  var scrollTop = container.scrollTop;
+  var scrollTop = domRefs.container.scrollTop;
   var startIdx = Math.max(0, Math.min(rows.length - 1, _lastTopIdx));
 
   // With cv-hidden, ALL rows have non-zero height, so we never need
@@ -168,15 +186,15 @@ function _findViewportTopRowIdx(rows) {
 // cv-hidden — fold attempts are guarded no-ops), and a fold+compensation
 // write mid-drag would shift the scrollbar thumb under the user's hand.
 function _runCollapseScan(settleContext, focusScrollTop) {
-  if (!showChatProcess || !container) return;
+  if (!chatSurface.showChatProcess || !domRefs.container) return;
   // Full-render tier: the landing settle (settleAllRowCollapseStates) fixed
   // every row's state when the session rendered. Post-landing scans only
   // "correct" borderline rows whose measured height drifted (font swap and
   // similar late layout effects) — each correction writes to a fully
   // laid-out 50K-node tree and forces a 100ms+ synchronous reflow. Skip the
   // scans entirely; new streaming rows settle via the append path.
-  if (_windowingDisabled) return;
-  if (typeof syncRowCollapseState !== 'function') return;
+  if (processWindowingMode.disabled) return;
+  if (typeof window.syncRowCollapseState !== 'function') return;
   var rows = _cachedRows;
   if (!rows || rows.length === 0) return;
 
@@ -189,8 +207,8 @@ function _runCollapseScan(settleContext, focusScrollTop) {
   // post-lock position so the scan covers the viewport the user will see.
   var scrollTop = typeof focusScrollTop === 'number'
     ? focusScrollTop
-    : container.scrollTop;
-  var viewBottom = scrollTop + (container.clientHeight || 1);
+    : domRefs.container.scrollTop;
+  var viewBottom = scrollTop + (domRefs.container.clientHeight || 1);
 
   // Rows are in document order (offsetTop monotonic): binary search for the
   // first row whose bottom passes scrollTop, then walk forward. The row
@@ -202,7 +220,7 @@ function _runCollapseScan(settleContext, focusScrollTop) {
     if (rows[mid].offsetTop + rows[mid].offsetHeight > scrollTop) { first = mid; hi = mid - 1; }
     else lo = mid + 1;
   }
-  runWithSuppressedChatViewportObservers(function() {
+  window.runWithSuppressedChatViewportObservers(function() {
     // Look back a few fully-above rows, not just the boundary row: a wheel
     // step can jump past a row's entire "fully above" band in one frame,
     // which would let a tall row enter the viewport still expanded. Rows
@@ -226,8 +244,8 @@ function _runCollapseScan(settleContext, focusScrollTop) {
 function _foldRowIfOutside(row, settleContext, focusScrollTop) {
   var scrollTop = typeof focusScrollTop === 'number'
     ? focusScrollTop
-    : container.scrollTop;
-  var viewBottom = scrollTop + (container.clientHeight || 1);
+    : domRefs.container.scrollTop;
+  var viewBottom = scrollTop + (domRefs.container.clientHeight || 1);
   var rowTop = row.offsetTop;
   var rowBottom = rowTop + row.offsetHeight;
 
@@ -249,22 +267,22 @@ function _foldRowIfOutside(row, settleContext, focusScrollTop) {
     // guard skipped the compensation entirely — same jolt, worse. Within
     // one synchronous scan no user scroll can interleave, so per-fold live
     // snapshots keep back-to-back folds in one batch correct.
-    var liveTop = container.scrollTop;
+    var liveTop = domRefs.container.scrollTop;
     var before = row.offsetHeight;
-    syncRowCollapseState(row);
+    window.syncRowCollapseState(row);
     var delta = before - row.offsetHeight;
-    if (delta !== 0 && !followLatestEnabled) {
-      container.scrollTop = Math.max(0, liveTop - delta);
+    if (delta !== 0 && !chatSurface.followLatestEnabled) {
+      domRefs.container.scrollTop = Math.max(0, liveTop - delta);
       // Keep the delta tracker in sync so the synthetic scroll event fired
       // by this write is not misread as another large user jump.
-      _lastScrollTop = container.scrollTop;
+      _lastScrollTop = domRefs.container.scrollTop;
     }
     return;
   }
 
   if (rowTop >= viewBottom) {
     // Fully below the viewport: folding is invisible
-    syncRowCollapseState(row);
+    window.syncRowCollapseState(row);
     return;
   }
 
@@ -289,15 +307,15 @@ function _foldRowIfOutside(row, settleContext, focusScrollTop) {
     // keep the exemption.) The height-delta guard leaves manually expanded
     // and already-folded rows untouched: no fold → no re-anchor.
     var beforeSpan = row.offsetHeight;
-    syncRowCollapseState(row);
+    window.syncRowCollapseState(row);
     if (beforeSpan - row.offsetHeight > 0) {
       // Re-read offsetTop: folds of rows above (processed first) shift it.
-      if (!followLatestEnabled) {
+      if (!chatSurface.followLatestEnabled) {
         var stubTop = row.offsetTop;
-        container.scrollTop = Math.max(0, stubTop - 120);
+        domRefs.container.scrollTop = Math.max(0, stubTop - 120);
         // Keep the delta tracker in sync so the synthetic scroll event fired
         // by this write is not misread as another large user jump.
-        _lastScrollTop = container.scrollTop;
+        _lastScrollTop = domRefs.container.scrollTop;
       }
     }
     return;
@@ -305,15 +323,15 @@ function _foldRowIfOutside(row, settleContext, focusScrollTop) {
 
   // Intersecting with its top inside the viewport: the canonical fold —
   // the stub stays where the row started, content below rises.
-  syncRowCollapseState(row);
+  window.syncRowCollapseState(row);
 }
 
 /* ── scroll handler ── */
 
 function _onScrollForWindowing() {
-  if (!showChatProcess || !container || _windowingDisabled) return;
+  if (!chatSurface.showChatProcess || !domRefs.container || processWindowingMode.disabled) return;
 
-  var currentScrollTop = container.scrollTop;
+  var currentScrollTop = domRefs.container.scrollTop;
   var delta = Math.abs(currentScrollTop - _lastScrollTop);
   _lastScrollTop = currentScrollTop;
 
@@ -321,9 +339,9 @@ function _onScrollForWindowing() {
   // 锚定写入会让 reveal 补偿 / settle 折叠重锚定把 scrollTop 纠向另一个
   // 位置，两个写入者交替"纠正"对方 = 拖动中的持续上下抖动。见
   // freezeProcessWindowing。
-  if (_windowingFrozen) return;
+  if (processWindowingMode.frozen) return;
 
-  if (!_cachedClientHeight) _cachedClientHeight = container.clientHeight;
+  if (!_cachedClientHeight) _cachedClientHeight = domRefs.container.clientHeight;
 
   // Large delta (scrollbar drag / fast flick) — switch to deferral mode:
   // total silence until release. One comprehensive settle (fresh window +
@@ -351,7 +369,7 @@ function _onScrollForWindowing() {
 
 function _onScrollStop() {
   _scrollStopTimer = null;
-  if (_windowingDisabled) {
+  if (processWindowingMode.disabled) {
     _largeDeltaPending = false;
     return;
   }
@@ -374,9 +392,9 @@ function _onScrollStop() {
     let releaseAnchor = null;
     let releaseAnchorIdx = -1;
     let releaseAnchorOffset = 0;
-    if (!followLatestEnabled && container) {
-      const relRows = _cachedRows || container.querySelectorAll('.message-row');
-      const relTop = container.scrollTop;
+    if (!chatSurface.followLatestEnabled && domRefs.container) {
+      const relRows = _cachedRows || domRefs.container.querySelectorAll('.message-row');
+      const relTop = domRefs.container.scrollTop;
       for (let ri = 0; ri < relRows.length; ri++) {
         const relRow = relRows[ri];
         if (relRow.classList.contains('process-cv-hidden')) continue;
@@ -388,7 +406,7 @@ function _onScrollStop() {
         }
       }
     }
-    if (!_windowingDisabled) {
+    if (!processWindowingMode.disabled) {
       _lastWindowStart = -1; // force fresh windowing
       _applyWindow();
     }
@@ -401,11 +419,11 @@ function _onScrollStop() {
     if (releaseAnchor && liveAnchorRows && liveAnchorRows[releaseAnchorIdx] === releaseAnchor
         && !releaseAnchor.classList.contains('process-cv-hidden')) {
       const pinnedTop = Math.max(0, releaseAnchor.offsetTop - releaseAnchorOffset);
-      if (container.scrollTop !== pinnedTop) {
-        container.scrollTop = pinnedTop;
+      if (domRefs.container.scrollTop !== pinnedTop) {
+        domRefs.container.scrollTop = pinnedTop;
         // Keep the delta tracker in sync so the synthetic scroll event fired
         // by this write is not misread as another large user jump.
-        _lastScrollTop = container.scrollTop;
+        _lastScrollTop = domRefs.container.scrollTop;
       }
     }
     return;
@@ -417,25 +435,25 @@ function _onScrollStop() {
 }
 
 function _applyWindow() {
-  if (!showChatProcess || !container) return;
+  if (!chatSurface.showChatProcess || !domRefs.container) return;
   // 全渲染分级：无窗口切换，滚动中唯一的几何变化来自折叠扫描的补偿。
-  if (_windowingDisabled) return;
+  if (processWindowingMode.disabled) return;
 
   // Pixel fast-path: skip all work if scrollTop is safely within window.
   // Must not fire when fresh windowing was forced (_lastWindowStart === -1):
   // after a large jump the release point can still sit inside the old
   // window's pixel bounds, which previously skipped the refresh entirely.
-  var scrollTop = container.scrollTop;
+  var scrollTop = domRefs.container.scrollTop;
   if (_winPixTop >= 0 && _lastWindowStart >= 0) {
-    var halfView = container.clientHeight * 0.6;
+    var halfView = domRefs.container.clientHeight * 0.6;
     if (scrollTop >= _winPixTop + halfView && scrollTop <= _winPixBottom - halfView) {
       return;
     }
   }
 
   if (!_cachedRows || _cachedRows.length === 0 ||
-      _cachedRows[0] !== container.querySelector('.message-row')) {
-    _cachedRows = container.querySelectorAll('.message-row');
+      _cachedRows[0] !== domRefs.container.querySelector('.message-row')) {
+    _cachedRows = domRefs.container.querySelectorAll('.message-row');
   }
   var rows = _cachedRows;
   if (rows.length === 0) return;
@@ -508,13 +526,13 @@ function _applyWindow() {
   // compensation — the bottom-lock settlement absorbs height changes there
   // (same rule as the fold compensation in _foldRowIfOutside).
   var revealPlaceholders = null;
-  if (toReveal.length > 0 && !followLatestEnabled) {
+  if (toReveal.length > 0 && !chatSurface.followLatestEnabled) {
     revealPlaceholders = new Array(toReveal.length);
     for (var p = 0; p < toReveal.length; p++) {
       revealPlaceholders[p] = { row: toReveal[p], top: toReveal[p].offsetTop, hBefore: toReveal[p].offsetHeight };
     }
   }
-  runWithSuppressedChatViewportObservers(function() {
+  window.runWithSuppressedChatViewportObservers(function() {
     for (var j = 0; j < toHide.length; j++) {
       _setRowCvVisible(toHide[j], false);
     }
@@ -536,10 +554,10 @@ function _applyWindow() {
       }
     }
     if (compensate !== 0) {
-      container.scrollTop += compensate;
+      domRefs.container.scrollTop += compensate;
       // Keep the delta tracker in sync so the synthetic scroll event fired
       // by this write is not misread as another large user jump.
-      _lastScrollTop = container.scrollTop;
+      _lastScrollTop = domRefs.container.scrollTop;
     }
   }
 
@@ -569,7 +587,7 @@ function _updatePixBounds(rows, windowStart, windowEnd) {
 // 显式冻结。解冻时以"大跳释放"同语义做一次完整 settle（fresh window +
 // settle 折叠 + 释放钉扎），一次性收敛到最终布局。
 function freezeProcessWindowing() {
-  _windowingFrozen = true;
+  processWindowingMode.frozen = true;
   if (_scrollStopTimer) {
     clearTimeout(_scrollStopTimer);
     _scrollStopTimer = null;
@@ -577,13 +595,13 @@ function freezeProcessWindowing() {
 }
 
 function unfreezeProcessWindowing() {
-  if (!_windowingFrozen) return;
-  _windowingFrozen = false;
-  if (!showChatProcess || !container) return;
-  _lastScrollTop = container.scrollTop;
+  if (!processWindowingMode.frozen) return;
+  processWindowingMode.frozen = false;
+  if (!chatSurface.showChatProcess || !domRefs.container) return;
+  _lastScrollTop = domRefs.container.scrollTop;
   _largeDeltaPending = true; // 复用滚动大跳释放语义收敛布局
   _onScrollStop();
-  if (typeof refreshMeasuredChatRows === 'function') refreshMeasuredChatRows('width-settled');
+  refreshMeasuredChatRows('width-settled');
 }
 
 // Landing collapse scan with settle powers (spanning rows may fold and
@@ -641,8 +659,8 @@ function _applyIncrementalProcessRows(root, fromIndex) {
 }
 
 function applyProcessDistance(root, fromIndex) {
-  root = root || container;
-  if (!showChatProcess) return;
+  root = root || domRefs.container;
+  if (!chatSurface.showChatProcess) return;
 
   // Landing = first windowing after a reset. Full renders, mode toggles and
   // session switches all run clearProcessDistance first (which resets
@@ -651,7 +669,7 @@ function applyProcessDistance(root, fromIndex) {
   var isLanding = _lastWindowStart < 0;
 
   if (typeof fromIndex === 'number' && fromIndex > 0 && !isLanding
-      && _windowingDisabled && _rowCache) {
+      && processWindowingMode.disabled && _rowCache) {
     _applyIncrementalProcessRows(root, fromIndex);
     return;
   }
@@ -688,23 +706,23 @@ function applyProcessDistance(root, fromIndex) {
     if (rows[idx].classList.contains('tool') || rows[idx].classList.contains('system')) {
       rows[idx].classList.remove('process-hidden');
     }
-    _setRowCvVisible(rows[idx], _windowingDisabled
+    _setRowCvVisible(rows[idx], processWindowingMode.disabled
       || (idx >= windowStart && idx <= windowEnd));
   }
   // Also remove process-hidden from assistant row children
   root.querySelectorAll('.reasoning-block.process-hidden, .tool-call-container.process-hidden')
     .forEach(function(el) { el.classList.remove('process-hidden'); });
 
-  _lastWindowStart = _windowingDisabled ? 0 : Math.max(0, windowStart);
-  _lastWindowEnd = _windowingDisabled ? rows.length - 1 : Math.min(rows.length - 1, windowEnd);
+  _lastWindowStart = processWindowingMode.disabled ? 0 : Math.max(0, windowStart);
+  _lastWindowEnd = processWindowingMode.disabled ? rows.length - 1 : Math.min(rows.length - 1, windowEnd);
   // Repopulate the row cache BEFORE the scheduled collapse check below —
   // otherwise it reads null and every post-render check silently no-ops
   // until the first _applyWindow bypasses its pixel fast-path.
   _cachedRows = rows;
   _updatePixBounds(rows, _lastWindowStart, _lastWindowEnd);
 
-  if (!_scrollListenerAttached && container) {
-    container.addEventListener('scroll', _onScrollForWindowing, { passive: true });
+  if (!_scrollListenerAttached && domRefs.container) {
+    domRefs.container.addEventListener('scroll', _onScrollForWindowing, { passive: true });
     _scrollListenerAttached = true;
   }
 
@@ -717,17 +735,17 @@ function applyProcessDistance(root, fromIndex) {
   // Background patches run the conservative scan only — see the collapse
   // timing contract above.
   if (isLanding) {
-    if (_windowingDisabled && typeof settleAllRowCollapseStates === 'function') {
+    if (processWindowingMode.disabled && typeof window.settleAllRowCollapseStates === 'function') {
       // Full-render landing: settle the WHOLE session once (batched read
       // pass then write pass). Any row the scroll-time scans later touch is
       // already settled, so those scans stay pure reads — under the
       // full-render tier a single scroll-time DOM write forces a 100ms+
       // synchronous reflow of the fully laid-out tree.
-      settleAllRowCollapseStates(root);
+      window.settleAllRowCollapseStates(root);
     } else {
       var focusTop = -1;
-      if (followLatestEnabled) {
-        focusTop = Math.max(0, container.scrollHeight - (container.clientHeight || 1));
+      if (chatSurface.followLatestEnabled) {
+        focusTop = Math.max(0, domRefs.container.scrollHeight - (domRefs.container.clientHeight || 1));
       }
       _runCollapseScan(true, focusTop);
     }
@@ -737,8 +755,8 @@ function applyProcessDistance(root, fromIndex) {
 }
 
 function clearProcessDistance(root) {
-  if (typeof clearMeasuredChatRows === 'function') clearMeasuredChatRows();
-  root = root || container;
+  clearMeasuredChatRows();
+  root = root || domRefs.container;
   _cachedRows = null;
   _rowCache = null;
   _lastTopIdx = 0;
@@ -754,7 +772,7 @@ function clearProcessDistance(root) {
   // Switch from cv-hidden to display:none (hide mode). Full-render tiering
   // (show mode, within node budget): no pre-hide at all — rows must stay
   // laid out; only strip stale cv marks so the landing starts clean.
-  if (_windowingDisabled && showChatProcess) {
+  if (processWindowingMode.disabled && chatSurface.showChatProcess) {
     root.querySelectorAll(
       '.message-row.system, .reasoning-block, ' +
       '.message-row.assistant .tool-call-container, .message-row.tool'
@@ -771,8 +789,8 @@ function clearProcessDistance(root) {
     });
   }
 
-  if (_scrollListenerAttached && container) {
-    container.removeEventListener('scroll', _onScrollForWindowing);
+  if (_scrollListenerAttached && domRefs.container) {
+    domRefs.container.removeEventListener('scroll', _onScrollForWindowing);
     _scrollListenerAttached = false;
   }
 }
@@ -782,12 +800,12 @@ function clearProcessDistance(root) {
  * （本文件全部虚拟化逻辑照常）。
  * 流式追加不重估，沿用当前模式直到下一次全量渲染。 */
 function setProcessWindowingDisabled(disabled) {
-  _windowingDisabled = !!disabled;
+  processWindowingMode.disabled = !!disabled;
 }
 
 function precomputeViewportIdx() {
-  var scrollTop = container.scrollTop;
-  var rows = container.querySelectorAll('.message-row');
+  var scrollTop = domRefs.container.scrollTop;
+  var rows = domRefs.container.querySelectorAll('.message-row');
   for (var i = 0; i < rows.length; i++) {
     var row = rows[i];
     // In hide mode, skip display:none rows
@@ -801,3 +819,26 @@ function precomputeViewportIdx() {
   }
   _preToggleViewportIdx = 0;
 }
+
+// ── 对外命名导出（原行为层全局键）─────────────────────────────────────
+// 七个公开函数迁移前都是 classic 顶层 function 声明（window 可达）。其中五个仍有
+// classic 消费方，兼容桥在 p2-w2-1-chat-windowing-host.js，逐键消费证据与注销
+// 条件见该文件头注：
+//   clearProcessDistance        ← chat-renderer.js（全量渲染前预隐藏）
+//   freezeProcessWindowing      ← app-ui.js（面板拖动开始）
+//   unfreezeProcessWindowing    ← app-ui.js（面板拖动释放）
+//   runLandingCollapseScan      ← chat-renderer.js（渲染落位后）
+//   setProcessWindowingDisabled ← chat-renderer.js（按节点预算重估分级）
+// 已注销（classic 零消费面，只留命名导出）：applyProcessDistance /
+// precomputeViewportIdx —— 唯一消费方 chat-process-visibility 已 import。
+// 私有 helper（_applyWindow / _runCollapseScan / _foldRowIfOutside /
+// _onScrollForWindowing 等）与全部缓存状态保持模块私有，不造桥。
+export {
+  applyProcessDistance,
+  clearProcessDistance,
+  freezeProcessWindowing,
+  unfreezeProcessWindowing,
+  runLandingCollapseScan,
+  setProcessWindowingDisabled,
+  precomputeViewportIdx,
+};

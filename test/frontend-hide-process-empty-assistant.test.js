@@ -9,14 +9,19 @@
  *   1. tool-call-only assistant message appended while in hide mode
  *   2. same message patched again (updateLastMessage) as calls stream in
  *   3. assistant message appended empty, then patched with text
+ *
+ * 装载路线（P2）：classic 侧按 index.html 真实加载序跑 action-dispatcher →
+ * i18n → app-core → chat-viewport → input-helpers → chat-renderer（同名全局函数就是生产入口，
+ * 经 `c.read` 调用）；lazy-tool-content / chat-row-visibility 已迁 ESM，经
+ * `c.load` 真实 import，classic 消费面由生产兼容桥 p2-w2-1-chat-windowing-host
+ * 提供。过程可见性状态经 app-core 的 chatSurface host 读写（既有 seam）。
  */
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import vm from 'node:vm';
+import { withP2EsmCase } from './helpers/p2-esm-case.js';
 
-const src = (p) => fs.readFileSync(new URL('../public/src/' + p, import.meta.url), 'utf8');
+const LAZY_TOOL_CONTENT = 'public/src/modules/lazy-tool-content.js';
 
 const VIEW_H = 800;
 
@@ -100,7 +105,7 @@ function makeAssistantRow({ text = '', callCount = 0, msgId = '' }) {
   return row;
 }
 
-function createHarness({ messages } = {}) {
+function createRig() {
   const container = {
     clientHeight: VIEW_H,
     clientWidth: 1000,
@@ -138,54 +143,69 @@ function createHarness({ messages } = {}) {
     },
   });
 
-  const sandbox = {
-    console, Date, JSON, Math, Promise, Map, Set, Number, Object, Array, Boolean, String, isNaN, parseInt,
-    CSS: { supports: () => true },
-    window: {},
-    setTimeout: () => 0, clearTimeout() {},
-    requestAnimationFrame: () => 0, cancelAnimationFrame() {},
-    MutationObserver: class { observe() {} disconnect() {} },
-    ResizeObserver: class { observe() {} disconnect() {} },
-    document: {
-      getElementById: () => null,
-      querySelector: () => null,
-      querySelectorAll: () => [],
-      createElement: () => ({
-        style: {},
-        classList: makeClassList(),
-        dataset: {},
-        setAttribute() {},
-        appendChild(c) { return c; },
-        querySelector: () => null,
-        querySelectorAll: () => [],
-      }),
-      body: { contains: () => true },
-      activeElement: null,
-      addEventListener() {}, // action-dispatcher 装载时绑定委托监听
+  const elements = new Map();
+  const elementStub = (id) => ({
+    id, innerHTML: '', textContent: '', style: {},
+    classList: makeClassList(), dataset: {},
+    clientHeight: 0, clientWidth: 0, scrollHeight: 0, scrollTop: 0, parentElement: null,
+    addEventListener() {}, removeEventListener() {},
+    querySelector() { return null; }, querySelectorAll() { return []; },
+    getBoundingClientRect() { return { top: 0, left: 0, width: 0, height: 0 }; },
+  });
+  const document = {
+    activeElement: null,
+    readyState: 'complete',
+    getElementById(id) {
+      if (id === 'chat-container') return container;
+      if (!elements.has(id)) elements.set(id, elementStub(id));
+      return elements.get(id);
     },
-    localStorage: { getItem: () => null, setItem() {}, removeItem() {} },
+    querySelector() { return null; },
+    querySelectorAll() { return []; },
+    createElement: () => elementStub('created'),
+    createTextNode: (text) => ({ textContent: text }),
+    addEventListener() {}, removeEventListener() {},
+    body: elementStub('body'), head: elementStub('head'), documentElement: elementStub('html'),
+  };
 
-    container,
-    followLatestButton: { classList: { toggle() {}, add() {}, remove() {} }, innerHTML: '' },
-    currentMessages: messages || [],
-    allAgents: [],
-    toolRenderConfigs: {},
-    _lastRenderedChatSig: '',
-    _userExpandedReasoning: new Set(),
-    _userExpandedMsgs: new Set(),
-    _userCollapsedMsgs: new Set(),
-    currentInputRequests: [],
-    chatProcessToggle: null,
-    CHAT_PROCESS_VISIBILITY_KEY: 'k',
-    readCurrentSessionViewState: () => ({ messages: sandbox.currentMessages, inputRequests: [] }),
-    saveChatProcessVisibility() {},
+  const timers = new Map();
+  let seq = 1;
+  const fakeTimers = {
+    setTimeout(callback) { const id = seq++; timers.set(id, callback); return id; },
+    clearTimeout(id) { timers.delete(id); },
+    setInterval(callback) { const id = seq++; timers.set(id, callback); return id; },
+    clearInterval(id) { timers.delete(id); },
+    requestAnimationFrame() { return seq++; },
+    cancelAnimationFrame() {},
+  };
 
+  return {
+    container, document, fakeTimers,
+    queueRow(row) { pendingRows.push({ row }); },
+  };
+}
+
+async function withHarness({ messages } = {}, fn) {
+  const rig = createRig();
+  const counters = { fullRenders: 0 };
+  // currentMessages 的唯一真源是 app-core 装载期注册的桥键；会话视图读取面
+  // 绑定到同一 owner（不读初始数组副本）。
+  const live = { readMessages: () => [] };
+  const globals = {
+    document: rig.document,
+    // input-actions 已 import 真实 poll 模块（poll-coordinator-host）：按生产
+    // 宿主 seam 提供最小面，本文件不驱动轮询、不再保留 window.poll 桩。
+    createPollCoordinatorHost: () => ({
+      run: () => Promise.resolve(),
+      fastInterval: () => 2000,
+      setTimeout: (callback, delay) => setTimeout(callback, delay),
+      clearTimeout: (id) => clearTimeout(id),
+    }),
+    CSS: { supports: () => true },
     isChatSurfaceActive: () => true,
     shouldRenderWorkspaceSurface: () => false,
     shouldShowChatWelcome: () => false,
     escapeHtml: (v) => String(v ?? ''),
-    // message-timeline.js：时间分隔线包装（无时间锚场景透传行 html）
-    prependTimeSeparatorHtml: (_messages, _index, rowHtml) => rowHtml,
     t: (k) => k,
     renderMarkdown: (s) => String(s ?? ''),
     parseToolResult: (content) => ({ success: true, data: content }),
@@ -197,48 +217,58 @@ function createHarness({ messages } = {}) {
     getToolDisplayName: (n) => n || 'Tool',
     getToolRenderTemplate: () => ({}),
     resolveToolProgressForCall: () => null,
-    canRollbackMessage: () => false,
     requestRollbackEdit() {},
     switchAgent() {},
     ensureChatRuntimeIndicator() {},
     getEmptyStateHtml: () => '<div class="empty-state">empty</div>',
-    renderCurrentMainView() {},
     renderChatEmptyState() {},
-
-    followLatestEnabled: false,
-    suppressFollowScrollEvent: false,
-    lastManualScrollIntentAt: 0,
-    _progScrollCooldownUntil: 0,
-    followLatestEntryUntil: 0,
-    chatViewportObserversReady: true,
-    chatViewportObserverSuppressDepth: 0,
-    chatViewportObserverQuietUntil: 0,
-    chatViewportMutationObserver: null,
-    chatViewportResizeObserver: null,
-    chatViewportSettlementToken: 0,
-    chatViewportSettlementRaf: 0,
-    chatViewportSettlementTimer: null,
-    chatViewportSettlementContext: null,
-    chatViewportFollowRaf: 0,
-    chatViewportFollowToken: 0,
-    chatViewportFollowTransition: 'locked',
-    assemblySideRailRevealTimer: null,
+    readCurrentSessionViewState: () => ({ messages: live.readMessages(), inputRequests: [] }),
+    // message-timeline.js：时间分隔线包装（无时间锚场景透传行 html）
+    prependTimeSeparatorHtml: (_messages, _index, rowHtml) => rowHtml,
   };
-  sandbox.window = sandbox;
-
-  vm.createContext(sandbox);
-  // 真实生产加载顺序第一位：分发器先于一切声明 data-action 的模块装载
-  vm.runInContext(src('modules/action-dispatcher.js'), sandbox, { filename: 'action-dispatcher.js' });
-  vm.runInContext(src('modules/chat-viewport.js'), sandbox, { filename: 'chat-viewport.js' });
-  vm.runInContext(src('modules/input-helpers.js'), sandbox, { filename: 'input-helpers.js' });
-  vm.runInContext(src('modules/lazy-tool-content.js'), sandbox, { filename: 'lazy-tool-content.js' });
-  vm.runInContext(src('modules/chat-renderer.js'), sandbox, { filename: 'chat-renderer.js' });
-  vm.runInContext(src('modules/chat-row-visibility.js'), sandbox, { filename: 'chat-row-visibility.js' });
-
-  return {
-    sandbox, container,
-    queueRow(row) { pendingRows.push({ row }); },
-  };
+  return withP2EsmCase({
+    classic: (sandbox) => {
+      Object.assign(sandbox, rig.fakeTimers);
+      // index.html 真实加载序：分发器先于一切声明 data-action 的模块装载，
+      // 随后 i18n、app-core，最后是各业务 classic 模块。
+      sandbox.loadSource('public/src/modules/action-dispatcher.js');
+      sandbox.loadSource('public/src/i18n.js');
+      sandbox.loadSource('public/src/app-core.js');
+      sandbox.loadSource('public/src/modules/chat-viewport.js');
+      sandbox.loadSource('public/src/modules/input-helpers.js');
+      // 会话视图同步实现：input-actions 的 token/提交策略经宿主要求它（生产加载序）
+      sandbox.loadSource('public/src/modules/session-view-state.js');
+      sandbox.loadSource('public/src/modules/chat-renderer.js');
+    },
+    globals,
+  }, async (c) => {
+    const surface = c.window.createP2BootstrapChatSurfaceHost();
+    surface.showChatProcess = true;
+    surface.followLatestEnabled = false;
+    c.window.currentMessages = messages || [];
+    live.readMessages = () => c.window.currentMessages;
+    c.window.allAgents = [];
+    c.window.toolRenderConfigs = {};
+    c.window.currentInputRequests = [];
+    c.window._lastRenderedChatSig = '';
+    c.window.renderCurrentMainView = () => { counters.fullRenders += 1; };
+    await c.load('public/src/modules/p2-w2-1-chat-windowing-host.js');
+    // 输入面域（本批迁 ESM）：回退按钮可见性与过程显隐的真实实现
+    await c.load('public/src/modules/input-actions.js');
+    await c.load('public/src/modules/chat-process-visibility.js');
+    const mod = await c.load(LAZY_TOOL_CONTENT);
+    mod.setProcessWindowingDisabled(true);
+    return fn(Object.assign(rig, {
+      setShowChatProcess: (value) => { surface.showChatProcess = value; },
+      messages: () => c.window.currentMessages,
+      setMessages: (value) => { c.window.currentMessages = value; },
+      fullRenders: () => counters.fullRenders,
+      applyProcessState: () => c.read('applyConversationProcessState(container)'),
+      append: (messageIndex, startIndex) => c.read(`appendNewMessages([currentMessages[${messageIndex}]], ${startIndex})`),
+      updateLast: () => c.read('updateLastMessage(currentMessages[currentMessages.length - 1])'),
+      setProcessWindowingDisabled: (value) => mod.setProcessWindowingDisabled(value),
+    }));
+  });
 }
 
 function addGroupedPrefix(h) {
@@ -248,217 +278,222 @@ function addGroupedPrefix(h) {
   // Production render() projects two errors into one row with no msg-N element.
   const group = makeAssistantRow({ text: 'two errors' });
   h.container._entries.push({ row: user }, { row: group });
-  h.sandbox.currentMessages = [
+  h.setMessages([
     { role: 'user', content: 'hi' },
     ...['first', 'second'].map(content => ({ role: 'assistant', content,
       execution: { status: 'failed', error: { category: 'server_error' } } })),
-  ];
+  ]);
   return { user, group };
 }
 
 for (const show of [false, true]) {
-  test(`grouped prefix: append and tail text updates use DOM row positions (show=${show})`, () => {
-    const h = createHarness();
-    h.sandbox.showChatProcess = show;
-    addGroupedPrefix(h);
-    h.sandbox.setProcessWindowingDisabled(true);
-    h.sandbox.applyConversationProcessState(h.container);
-    const row = makeAssistantRow({ callCount: 1, msgId: 'msg-3' });
-    h.queueRow(row);
-    const message = { role: 'assistant', content: '',
-      toolCalls: [{ id: 'c1', name: 'Read', arguments: {} }] };
-    h.sandbox.currentMessages.push(message);
-    h.sandbox.appendNewMessages([message], 3);
-    assert.equal(row._callCards[0].classList.contains('process-hidden'), !show,
-      'show mode must reveal the appended call card without a process toggle');
-    assert.equal(row.classList.contains('process-hidden-empty'), !show);
+  test(`grouped prefix: append and tail text updates use DOM row positions (show=${show})`, async () => {
+    await withHarness({}, (h) => {
+      h.setShowChatProcess(show);
+      addGroupedPrefix(h);
+      h.setProcessWindowingDisabled(true);
+      h.applyProcessState();
+      const row = makeAssistantRow({ callCount: 1, msgId: 'msg-3' });
+      h.queueRow(row);
+      const message = { role: 'assistant', content: '',
+        toolCalls: [{ id: 'c1', name: 'Read', arguments: {} }] };
+      h.messages().push(message);
+      h.append(3, 3);
+      assert.equal(row._callCards[0].classList.contains('process-hidden'), !show,
+        'show mode must reveal the appended call card without a process toggle');
+      assert.equal(row.classList.contains('process-hidden-empty'), !show);
 
-    let fullRenders = 0;
-    h.sandbox.renderCurrentMainView = () => { fullRenders++; };
-    message.content = 'streamed text';
-    h.sandbox.updateLastMessage(message);
-    assert.equal(fullRenders, 0, 'tail patch must find msg-3 in DOM row 2');
-    assert.equal(row._markdownBody.textContent, 'streamed text');
-    assert.equal(row.classList.contains('process-hidden-empty'), false);
-    message.content = '';
-    h.sandbox.updateLastMessage(message);
-    assert.equal(row.classList.contains('process-hidden-empty'), !show);
+      message.content = 'streamed text';
+      h.updateLast();
+      assert.equal(h.fullRenders(), 0, 'tail patch must find msg-3 in DOM row 2');
+      assert.equal(row._markdownBody.textContent, 'streamed text');
+      assert.equal(row.classList.contains('process-hidden-empty'), false);
+      message.content = '';
+      h.updateLast();
+      assert.equal(row.classList.contains('process-hidden-empty'), !show);
+    });
   });
 }
 
 for (const show of [false, true]) {
-  test(`grouped prefix: late toolCalls rebuild the live tail row (show=${show})`, () => {
-    const h = createHarness();
-    h.sandbox.showChatProcess = show;
-    addGroupedPrefix(h);
-    h.sandbox.setProcessWindowingDisabled(true);
-    h.sandbox.applyConversationProcessState(h.container);
-    const born = makeAssistantRow({ msgId: 'msg-3' });
-    h.queueRow(born);
-    const message = { role: 'assistant', content: '' };
-    h.sandbox.currentMessages.push(message);
-    h.sandbox.appendNewMessages([message], 3);
-    const rebuilt = makeAssistantRow({ callCount: 1, msgId: 'msg-3' });
-    born.insertAdjacentHTML = () => {
-      h.container._entries.splice(2, 0, { row: rebuilt });
-    };
-    born.remove = () => {
-      const i = h.container._entries.findIndex(e => e.row === born);
-      h.container._entries.splice(i, 1);
-    };
-    message.toolCalls = [{ id: 'c1', name: 'Read', arguments: {} }];
-    h.sandbox.updateLastMessage(message);
-    assert.equal(h.container._entries[2].row, rebuilt);
-    assert.equal(rebuilt._callCards[0].classList.contains('process-hidden'), !show);
-    assert.equal(rebuilt.classList.contains('process-hidden-empty'), !show);
+  test(`grouped prefix: late toolCalls rebuild the live tail row (show=${show})`, async () => {
+    await withHarness({}, (h) => {
+      h.setShowChatProcess(show);
+      addGroupedPrefix(h);
+      h.setProcessWindowingDisabled(true);
+      h.applyProcessState();
+      const born = makeAssistantRow({ msgId: 'msg-3' });
+      h.queueRow(born);
+      const message = { role: 'assistant', content: '' };
+      h.messages().push(message);
+      h.append(3, 3);
+      const rebuilt = makeAssistantRow({ callCount: 1, msgId: 'msg-3' });
+      born.insertAdjacentHTML = () => {
+        h.container._entries.splice(2, 0, { row: rebuilt });
+      };
+      born.remove = () => {
+        const i = h.container._entries.findIndex(e => e.row === born);
+        h.container._entries.splice(i, 1);
+      };
+      message.toolCalls = [{ id: 'c1', name: 'Read', arguments: {} }];
+      h.updateLast();
+      assert.equal(h.container._entries[2].row, rebuilt);
+      assert.equal(rebuilt._callCards[0].classList.contains('process-hidden'), !show);
+      assert.equal(rebuilt.classList.contains('process-hidden-empty'), !show);
+    });
   });
 }
 
-test('grouped prefix: appended call cards settle their collapse state at birth', () => {
-  const h = createHarness();
-  h.sandbox.showChatProcess = true;
-  addGroupedPrefix(h);
-  h.sandbox.setProcessWindowingDisabled(true);
-  h.sandbox.applyConversationProcessState(h.container);
-  const row = makeAssistantRow({ callCount: 1, msgId: 'msg-3' });
-  row.querySelector('.message-content').scrollHeight = 500;
-  h.queueRow(row);
-  const message = { role: 'assistant', content: '',
-    toolCalls: [{ id: 'c1', name: 'Read', arguments: {} }] };
-  h.sandbox.currentMessages.push(message);
-  h.sandbox.appendNewMessages([message], 3);
-  assert.equal(row.querySelector('.message-content').classList.contains('collapsed'), true,
-    'collapse scan must start at the actual appended DOM row');
+test('grouped prefix: appended call cards settle their collapse state at birth', async () => {
+  await withHarness({}, (h) => {
+    h.setShowChatProcess(true);
+    addGroupedPrefix(h);
+    h.setProcessWindowingDisabled(true);
+    h.applyProcessState();
+    const row = makeAssistantRow({ callCount: 1, msgId: 'msg-3' });
+    row.querySelector('.message-content').scrollHeight = 500;
+    h.queueRow(row);
+    const message = { role: 'assistant', content: '',
+      toolCalls: [{ id: 'c1', name: 'Read', arguments: {} }] };
+    h.messages().push(message);
+    h.append(3, 3);
+    assert.equal(row.querySelector('.message-content').classList.contains('collapsed'), true,
+      'collapse scan must start at the actual appended DOM row');
+  });
 });
 
-test('hide mode: tool-call-only assistant message appended must be fully hidden', () => {
-  const h = createHarness();
-  h.sandbox.showChatProcess = false; // hide mode
+test('hide mode: tool-call-only assistant message appended must be fully hidden', async () => {
+  await withHarness({}, (h) => {
+    h.setShowChatProcess(false); // hide mode
 
-  const userRow = makeAssistantRow({ text: 'hi', msgId: 'msg-0' });
-  userRow.classList.remove('assistant');
-  userRow.classList.add('user');
-  h.container._entries.push({ row: userRow });
+    const userRow = makeAssistantRow({ text: 'hi', msgId: 'msg-0' });
+    userRow.classList.remove('assistant');
+    userRow.classList.add('user');
+    h.container._entries.push({ row: userRow });
 
-  const assistantRow = makeAssistantRow({ text: '', callCount: 2, msgId: 'msg-1' });
-  h.queueRow(assistantRow);
-  h.sandbox.currentMessages = [
-    { role: 'user', content: 'hi' },
-    { role: 'assistant', content: '', toolCalls: [
+    const assistantRow = makeAssistantRow({ text: '', callCount: 2, msgId: 'msg-1' });
+    h.queueRow(assistantRow);
+    h.setMessages([
+      { role: 'user', content: 'hi' },
+      { role: 'assistant', content: '', toolCalls: [
+        { id: 'c1', name: 'Read', arguments: { filePath: 'a' } },
+        { id: 'c2', name: 'Edit', arguments: { filePath: 'b' } },
+      ] },
+    ]);
+
+    h.append(1, 1);
+
+    assert.ok(assistantRow.classList.contains('process-hidden-empty'),
+      'tool-call-only assistant row must be hidden via process-hidden-empty in hide mode');
+    assert.ok(assistantRow._callCards.every((c) => c.classList.contains('process-hidden')),
+      'its call cards must be process-hidden');
+  });
+});
+
+test('hide mode: empty assistant message patched by updateLastMessage stays hidden', async () => {
+  await withHarness({}, (h) => {
+    h.setShowChatProcess(false);
+
+    const userRow = makeAssistantRow({ text: 'hi', msgId: 'msg-0' });
+    userRow.classList.remove('assistant');
+    userRow.classList.add('user');
+    h.container._entries.push({ row: userRow });
+
+    const assistantRow = makeAssistantRow({ text: '', callCount: 1, msgId: 'msg-1' });
+    h.queueRow(assistantRow);
+    h.setMessages([
+      { role: 'user', content: 'hi' },
+      { role: 'assistant', content: '', toolCalls: [{ id: 'c1', name: 'Read', arguments: {} }] },
+    ]);
+    h.append(1, 1);
+    assert.ok(assistantRow.classList.contains('process-hidden-empty'));
+
+    // Poll patch: the call arguments grew (streaming), content still empty.
+    h.messages()[1].toolCalls[0].arguments = { filePath: 'longer/path' };
+    h.updateLast();
+
+    assert.ok(assistantRow.classList.contains('process-hidden-empty'),
+      'patched empty assistant row must remain hidden (no badge-only row)');
+  });
+});
+
+test('hide mode: assistant row that gains text becomes visible, losing text hides it again', async () => {
+  await withHarness({}, (h) => {
+    h.setShowChatProcess(false);
+
+    const userRow = makeAssistantRow({ text: 'hi', msgId: 'msg-0' });
+    userRow.classList.remove('assistant');
+    userRow.classList.add('user');
+    h.container._entries.push({ row: userRow });
+
+    const assistantRow = makeAssistantRow({ text: '', callCount: 0, msgId: 'msg-1' });
+    h.queueRow(assistantRow);
+    h.setMessages([
+      { role: 'user', content: 'hi' },
+      { role: 'assistant', content: '' },
+    ]);
+    h.append(1, 1);
+    assert.ok(assistantRow.classList.contains('process-hidden-empty'),
+      'textless assistant row must start hidden');
+
+    // Text streams in → row must become visible.
+    h.messages()[1].content = '让我看看';
+    h.updateLast();
+    assert.equal(assistantRow.classList.contains('process-hidden-empty'), false,
+      'row with streamed text must be visible');
+
+    // Text removed again (edge case) → must re-hide.
+    h.messages()[1].content = '';
+    h.updateLast();
+    assert.ok(assistantRow.classList.contains('process-hidden-empty'),
+      'row returning to no text must hide again');
+  });
+});
+
+test('hide mode: toolCalls arriving after birth rebuild the row (cards enter DOM hidden)', async () => {
+  await withHarness({}, (h) => {
+    h.setShowChatProcess(false);
+
+    const userRow = makeAssistantRow({ text: 'hi', msgId: 'msg-0' });
+    userRow.classList.remove('assistant');
+    userRow.classList.add('user');
+    h.container._entries.push({ row: userRow });
+
+    // The message was born empty (no text, no calls yet) — its row has no cards.
+    const bornRow = makeAssistantRow({ text: '', callCount: 0, msgId: 'msg-1' });
+    h.queueRow(bornRow);
+    h.setMessages([
+      { role: 'user', content: 'hi' },
+      { role: 'assistant', content: '' },
+    ]);
+    h.append(1, 1);
+    assert.ok(bornRow.classList.contains('process-hidden-empty'),
+      'empty row starts hidden');
+
+    // Streaming race: toolCalls populate on the already-appended message.
+    h.messages()[1].toolCalls = [
       { id: 'c1', name: 'Read', arguments: { filePath: 'a' } },
-      { id: 'c2', name: 'Edit', arguments: { filePath: 'b' } },
-    ] },
-  ];
+    ];
 
-  vm.runInContext('appendNewMessages([currentMessages[1]], 1)', h.sandbox);
+    // The rebuild path materializes the fresh row via insertAdjacentHTML.
+    const rebuiltRow = makeAssistantRow({ text: '', callCount: 1, msgId: 'msg-1' });
+    bornRow.insertAdjacentHTML = () => {
+      const i = h.container._entries.findIndex((e) => e.row === bornRow);
+      h.container._entries.splice(i, 0, { row: rebuiltRow });
+    };
+    bornRow.remove = () => {
+      const i = h.container._entries.findIndex((e) => e.row === bornRow);
+      if (i >= 0) h.container._entries.splice(i, 1);
+    };
 
-  assert.ok(assistantRow.classList.contains('process-hidden-empty'),
-    'tool-call-only assistant row must be hidden via process-hidden-empty in hide mode');
-  assert.ok(assistantRow._callCards.every((c) => c.classList.contains('process-hidden')),
-    'its call cards must be process-hidden');
-});
+    h.updateLast();
 
-test('hide mode: empty assistant message patched by updateLastMessage stays hidden', () => {
-  const h = createHarness();
-  h.sandbox.showChatProcess = false;
-
-  const userRow = makeAssistantRow({ text: 'hi', msgId: 'msg-0' });
-  userRow.classList.remove('assistant');
-  userRow.classList.add('user');
-  h.container._entries.push({ row: userRow });
-
-  const assistantRow = makeAssistantRow({ text: '', callCount: 1, msgId: 'msg-1' });
-  h.queueRow(assistantRow);
-  h.sandbox.currentMessages = [
-    { role: 'user', content: 'hi' },
-    { role: 'assistant', content: '', toolCalls: [{ id: 'c1', name: 'Read', arguments: {} }] },
-  ];
-  vm.runInContext('appendNewMessages([currentMessages[1]], 1)', h.sandbox);
-  assert.ok(assistantRow.classList.contains('process-hidden-empty'));
-
-  // Poll patch: the call arguments grew (streaming), content still empty.
-  h.sandbox.currentMessages[1].toolCalls[0].arguments = { filePath: 'longer/path' };
-  vm.runInContext('updateLastMessage(currentMessages[currentMessages.length - 1])', h.sandbox);
-
-  assert.ok(assistantRow.classList.contains('process-hidden-empty'),
-    'patched empty assistant row must remain hidden (no badge-only row)');
-});
-
-test('hide mode: assistant row that gains text becomes visible, losing text hides it again', () => {
-  const h = createHarness();
-  h.sandbox.showChatProcess = false;
-
-  const userRow = makeAssistantRow({ text: 'hi', msgId: 'msg-0' });
-  userRow.classList.remove('assistant');
-  userRow.classList.add('user');
-  h.container._entries.push({ row: userRow });
-
-  const assistantRow = makeAssistantRow({ text: '', callCount: 0, msgId: 'msg-1' });
-  h.queueRow(assistantRow);
-  h.sandbox.currentMessages = [
-    { role: 'user', content: 'hi' },
-    { role: 'assistant', content: '' },
-  ];
-  vm.runInContext('appendNewMessages([currentMessages[1]], 1)', h.sandbox);
-  assert.ok(assistantRow.classList.contains('process-hidden-empty'),
-    'textless assistant row must start hidden');
-
-  // Text streams in → row must become visible.
-  h.sandbox.currentMessages[1].content = '让我看看';
-  vm.runInContext('updateLastMessage(currentMessages[currentMessages.length - 1])', h.sandbox);
-  assert.equal(assistantRow.classList.contains('process-hidden-empty'), false,
-    'row with streamed text must be visible');
-
-  // Text removed again (edge case) → must re-hide.
-  h.sandbox.currentMessages[1].content = '';
-  vm.runInContext('updateLastMessage(currentMessages[currentMessages.length - 1])', h.sandbox);
-  assert.ok(assistantRow.classList.contains('process-hidden-empty'),
-    'row returning to no text must hide again');
-});
-
-test('hide mode: toolCalls arriving after birth rebuild the row (cards enter DOM hidden)', () => {
-  const h = createHarness();
-  h.sandbox.showChatProcess = false;
-
-  const userRow = makeAssistantRow({ text: 'hi', msgId: 'msg-0' });
-  userRow.classList.remove('assistant');
-  userRow.classList.add('user');
-  h.container._entries.push({ row: userRow });
-
-  // The message was born empty (no text, no calls yet) — its row has no cards.
-  const bornRow = makeAssistantRow({ text: '', callCount: 0, msgId: 'msg-1' });
-  h.queueRow(bornRow);
-  h.sandbox.currentMessages = [
-    { role: 'user', content: 'hi' },
-    { role: 'assistant', content: '' },
-  ];
-  vm.runInContext('appendNewMessages([currentMessages[1]], 1)', h.sandbox);
-  assert.ok(bornRow.classList.contains('process-hidden-empty'),
-    'empty row starts hidden');
-
-  // Streaming race: toolCalls populate on the already-appended message.
-  h.sandbox.currentMessages[1].toolCalls = [
-    { id: 'c1', name: 'Read', arguments: { filePath: 'a' } },
-  ];
-
-  // The rebuild path materializes the fresh row via insertAdjacentHTML.
-  const rebuiltRow = makeAssistantRow({ text: '', callCount: 1, msgId: 'msg-1' });
-  bornRow.insertAdjacentHTML = () => {
-    const i = h.container._entries.findIndex((e) => e.row === bornRow);
-    h.container._entries.splice(i, 0, { row: rebuiltRow });
-  };
-  bornRow.remove = () => {
-    const i = h.container._entries.findIndex((e) => e.row === bornRow);
-    if (i >= 0) h.container._entries.splice(i, 1);
-  };
-
-  vm.runInContext('updateLastMessage(currentMessages[currentMessages.length - 1])', h.sandbox);
-
-  assert.equal(h.container._entries[h.container._entries.length - 1].row, rebuiltRow,
-    'the row is replaced in place');
-  assert.ok(rebuiltRow.classList.contains('process-hidden-empty'),
-    'rebuilt empty row stays hidden (no badge-only row)');
-  assert.ok(rebuiltRow._callCards.every((c) => c.classList.contains('process-hidden')),
-    'late-arriving call cards enter the DOM pre-hidden');
-  assert.equal(bornRow._callCards.length, 0, 'stale row had no cards');
+    assert.equal(h.container._entries[h.container._entries.length - 1].row, rebuiltRow,
+      'the row is replaced in place');
+    assert.ok(rebuiltRow.classList.contains('process-hidden-empty'),
+      'rebuilt empty row stays hidden (no badge-only row)');
+    assert.ok(rebuiltRow._callCards.every((c) => c.classList.contains('process-hidden')),
+      'late-arriving call cards enter the DOM pre-hidden');
+    assert.equal(bornRow._callCards.length, 0, 'stale row had no cards');
+  });
 });

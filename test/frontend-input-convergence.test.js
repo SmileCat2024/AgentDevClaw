@@ -8,16 +8,28 @@
  *      calling 翻转 / choice 交互与拒绝 / 回退对话框关闭 / 提交成功 / 排队同步）
  *   3. 乐观即时性：提交成功后输入面更新不依赖 poll（同步完成）
  *
- * 沙箱加载真实 session-view-state.js + input-composer.js + input-render.js
- * （与 index.html 加载序语义一致），mini DOM 方式参考
- * test/frontend-input-composer.test.js。
+ * 加载路线（P2 跨批测试迁移）：
+ *   - classic 相（`sandbox.loadSource` / `sandbox.run`）：action-dispatcher +
+ *     session-view-state + input-composer + input-render + rollback-dialog（同步注册壳）
+ *     + persistent-input 片段——输入面的渲染入口与模式矩阵仍是 classic（与
+ *     index.html 加载序语义一致），mini DOM 方式参考
+ *     test/frontend-input-composer.test.js。
+ *   - 会话视图存储键按生产协议在 classic 相 register（app-core 只 defineKey），
+ *     ESM owner claim 后 classic 与 ESM 两侧读写同一份状态。
+ *   - ESM 相：`c.load` 真实 import —— sse-client（排队锚点与 queued-inputs 事件入口）、
+ *     input-actions（动作提交与回退可用性）、choice-input（选择卡整域）、
+ *     rollback-dialog-runtime（回退对话框与运行期编排）。每个用例独占一份 window
+ *     与一张 ESM 图（withP2EsmCase）：模块私有状态（乐观锚点、已观察排队 id、
+ *     快照缓存）不跨用例残留，用例体经 createConvergenceSandbox() 取当前用例的
+ *     沙箱外观。
+ *   - 排队事件走真实公开入口：bootSseClient() + MockEventSource 的 queued-inputs 帧；
+ *     选择卡与回退动作走真实分发器动作（choice.*）与 window.requestRollbackEdit。
  */
 
 import fs from 'node:fs';
-import { describe, it } from 'node:test';
+import { describe, it as nodeIt } from 'node:test';
 import assert from 'node:assert/strict';
-import { createFrontendSandbox } from './helpers/frontend-vm.js';
-import { createCallInterruptState } from '../public/src/modules/call-interrupt-state.js';
+import { withP2EsmCase } from './helpers/p2-esm-case.js';
 
 // ── Mini DOM：与 frontend-input-composer.test.js 同款最小元素树 ─────────────
 
@@ -81,7 +93,7 @@ function createMiniElement(tagName, doc) {
       return true;
     },
   });
-  return {
+  const el = {
     tagName: String(tagName).toUpperCase(),
     children: [],
     parentNode: null,
@@ -99,7 +111,6 @@ function createMiniElement(tagName, doc) {
     title: '',
     selectionStart: 0,
     selectionEnd: 0,
-    innerHTML: '',
     style: {},
     dataset,
     get id() { return attributes.has('id') ? attributes.get('id') : ''; },
@@ -180,7 +191,66 @@ function createMiniElement(tagName, doc) {
       this.selectionEnd = end;
     },
   };
+  // innerHTML 的标签树构建：卡片模板（选择卡 / 回退对话框）以字符串装配，
+  // 真实 DOM 会在赋值时建树，测试要断言结构与其 querySelector 就必须同样建树。
+  // 只构建标签/属性（class/id/data-*），文本节点忽略——断言面是结构与接线。
+  let _innerHTML = '';
+  Object.defineProperty(el, 'innerHTML', {
+    get() { return _innerHTML; },
+    set(html) {
+      _innerHTML = String(html);
+      el.children = [];
+      const stack = [el];
+      const tagRe = /<(\/)?([a-zA-Z][a-zA-Z0-9-]*)((?:\s+[\w-]+(?:="[^"]*")?)*)\s*(\/)?>/g;
+      let match;
+      while ((match = tagRe.exec(_innerHTML))) {
+        const [, closing, tag, attrText, selfClosing] = match;
+        if (closing) { if (stack.length > 1) stack.pop(); continue; }
+        const child = createMiniElement(tag, doc);
+        const attrRe = /([\w-]+)(?:="([^"]*)")?/g;
+        let attr;
+        while ((attr = attrRe.exec(attrText))) {
+          if (attr[1] === 'class') child.className = attr[2] || '';
+          else child.setAttribute(attr[1], attr[2] ?? '');
+        }
+        stack[stack.length - 1].appendChild(child);
+        if (!selfClosing) stack.push(child);
+      }
+    },
+  });
+  return el;
 }
+
+/**
+ * 新增可达模块（queue-projection → thread-store-domain → workspace-actions →
+ * trim-page）在模块求值期按 id 取自己的节点并注册监听；生产里这些节点由
+ * index.html 提供。夹具按 id 建最小节点，避免把"元素缺席"当成被测链路的
+ * 事实（它们只有 id，不参与 class 选择器断言）。
+ */
+const NEWLY_REACHABLE_ELEMENT_IDS = [
+  // app-core 的 classic 顶层 const（chat-renderer 的容器）：必须在 app-core 装载前
+  // 就存在，回显气泡才落到本用例断言的同一个节点上。
+  'chat-container',
+  // trim-page
+  'trim-page', 'trim-page-list', 'trim-page-title', 'trim-page-submit',
+  'trim-page-mode', 'trim-page-ratio-config', 'trim-page-manual-config',
+  'trim-page-ratio-slider', 'trim-page-ratio-input', 'trim-page-readout',
+  'trim-page-summary-toggle', 'trim-page-archive-toggle', 'trim-page-archive-row',
+  'trim-page-keep-skill-toggle', 'trim-page-keep-skill-control',
+  'trim-page-keep-skill-value', 'trim-page-keep-skill-dec', 'trim-page-keep-skill-inc',
+  // session-dialogs（分支对话框）
+  'branch-dialog', 'branch-round-list', 'branch-footer-info',
+];
+
+
+const TRIM_PAGE_ELEMENT_IDS = [
+  'trim-page', 'trim-page-list', 'trim-page-title', 'trim-page-submit',
+  'trim-page-mode', 'trim-page-ratio-config', 'trim-page-manual-config',
+  'trim-page-ratio-slider', 'trim-page-ratio-input', 'trim-page-readout',
+  'trim-page-summary-toggle', 'trim-page-archive-toggle', 'trim-page-archive-row',
+  'trim-page-keep-skill-toggle', 'trim-page-keep-skill-control',
+  'trim-page-keep-skill-value', 'trim-page-keep-skill-dec', 'trim-page-keep-skill-inc',
+];
 
 function createMiniDocument() {
   const doc = { activeElement: null, readyState: 'complete' };
@@ -191,12 +261,190 @@ function createMiniDocument() {
   doc.querySelector = (selector) => findFirst(doc.body, selectorPredicate(selector));
   doc.querySelectorAll = (selector) => findAllDeep(doc.body, selectorPredicate(selector));
   doc.addEventListener = () => {};
+  for (const id of NEWLY_REACHABLE_ELEMENT_IDS) {
+    const node = doc.createElement('div');
+    node.id = id;
+    doc.body.appendChild(node);
+  }
   return doc;
 }
 
-// ── 沙箱：真实 session-view-state + input-composer + input-render 同链路 ─────
+// ── 用例上下文：classic 输入面链 + 真实 import 的 sse-client 图 ────────────
 
-function createConvergenceSandbox({ contextKey = 'session-a' } = {}) {
+class MockEventSource {
+  static instances = [];
+  constructor(url) {
+    this.url = url;
+    this.readyState = 0;
+    this.listeners = new Map();
+    this.onerror = null;
+    MockEventSource.instances.push(this);
+  }
+  addEventListener(kind, fn) {
+    if (!this.listeners.has(kind)) this.listeners.set(kind, []);
+    this.listeners.get(kind).push(fn);
+  }
+  close() { this.readyState = 2; }
+  emit(kind, data) {
+    this.readyState = 1;
+    for (const fn of this.listeners.get(kind) || []) fn({ data: JSON.stringify(data) });
+  }
+}
+
+const latestSseSource = () => MockEventSource.instances[MockEventSource.instances.length - 1] || null;
+
+/**
+ * sse-client 图在装载期 `...window.createXHost()` 取宿主面。本文件只消费排队
+ * 锚点语义与 queued-inputs 帧，不驱动通知 / 元数据提交 / 轮询 / runtime 消失
+ * 路径——这些域的真实行为由各自测试文件覆盖（frontend-sse-client 等）。
+ * 因此这里按生产 seam 提供最小宿主面，不复制任何业务策略。
+ */
+function createSseGraphHostStubs({ container, pollState } = {}) {
+  return {
+    createAgentCallStatesHost: () => ({}),
+    createMetadataCommitHost: () => ({}),
+    createMessageProbeHost: () => ({}),
+    createAgentSnapshotLoaderHost: () => ({}),
+    createRuntimeNotFoundHost: () => ({}),
+    // 轮询协调器宿主（生产由 app-main 提供）：input-actions / choice-input 已改为
+    // 直接 import poll-coordinator-host，本文件按该 seam 提供最小可用宿主，
+    // 直接用真实 poll 模块，不保留 window.poll 回退。
+    createPollCoordinatorHost: () => ({
+      // 真实 poll 模块的宿主 seam（生产由 app-main 提供）。run 记次并支持用例
+      // 挂 hook，以便在 poll 真实调用点观察状态（不再用 window.poll 桩）。
+      run: () => {
+        pollState.runs += 1;
+        return pollState.hook ? Promise.resolve(pollState.hook()) : Promise.resolve();
+      },
+      fastInterval: () => 2000,
+      setTimeout: (callback, delay) => setTimeout(callback, delay),
+      clearTimeout: (id) => clearTimeout(id),
+    }),
+    // call 活动容器：input-actions 的 submitInputAction 与 classic 侧共享同一 Map
+    // 引用（生产由 app-core 的 createP2BootstrapCallActivityHost 交出）。
+    createP2BootstrapCallActivityHost: () => ({
+      _agentCallActive: new Map(),
+      _recentlyFinishedRuntimes: new Set(),
+      _seenChoiceAlertIds: new Set(),
+      _autoTitleTriggered: new Set(),
+      _lastInterruptUserActionAt: 0,
+    }),
+    // DOM 引用（input-actions 回退按钮同步扫描 .message-row 的根节点）
+    createP2BootstrapDomHost: () => ({ container }),
+    // 其余 P2 bootstrap 适配 seam：本文件不驱动这些域的路径
+    createP2BootstrapSessionSwitchHost: () => ({}),
+    createP2BootstrapChatSurfaceHost: () => ({}),
+    createP2BootstrapSidebarHost: () => ({}),
+    // SSE / 列表快照 / 元数据提交等已迁 ESM 域的装载期宿主 seam（生产分别由
+    // sidebar-render / session-view-state / app-main 交出）：本文件不驱动这些域。
+    createP2BootstrapSidebarRenderHost: () => ({}),
+    createAgentCallStatesHost: () => ({}),
+    createAgentSnapshotLoaderHost: () => ({ state: { suppressRender: true } }),
+    createMetadataCommitHost: () => ({}),
+    createMessageProbeHost: () => ({}),
+    createSessionDataLoaderHost: () => ({}),
+    createRuntimeStatusLoaderHost: () => ({}),
+    createRuntimeNotFoundHost: () => ({}),
+    createP2BootstrapPhSessionHost: () => ({}),
+    createP2BootstrapDebugPanelHost: () => ({}),
+    createRuntimePollHost: () => ({}),
+    createPollCycleHost: () => ({}),
+    createPollMaintenanceHost: () => ({}),
+    AgentLoaderHost: { loadedAgentDetailIds: new Set() },
+  };
+}
+
+/**
+ * 用例作用域内的沙箱外观：`ctx.run` / `ctx.loadSource` / `ctx.state` 是本用例
+ * 专属面，其余读写原样转发到真实沙箱全局（`ctx.fetch = …` 之类与原来一致）。
+ */
+function createCaseApi(c, state, sse, net, inputActions, choiceInput) {
+  const base = {
+    state,
+    sse,
+    /** 真实选择卡模块（命名导出 + 模块私有交互状态；classic 消费方经桥键取用）。 */
+    choiceInput,
+    /** 真实动作提交（ESM 入口；classic 消费方经 window 晚绑定，本文件直接调用）。 */
+    submitInputAction: (...args) => inputActions.submitInputAction(...args),
+    run: (code) => c.read(code),
+    loadSource: (rel) => c.sandbox.loadSource(rel),
+    /** 真实 SSE 入口：queued-inputs 帧（sse-client 的唯一排队事件消费路径）。 */
+    emitQueued: (data, agentId = 'agent-1') => {
+      const source = latestSseSource();
+      assert.ok(source, 'sse-client 已建连（queued-inputs 帧需要真实连接）');
+      source.emit('queued-inputs', { agentId, data });
+    },
+    /** 真实 import 一个仓库内 ESM 模块（本用例图内同一实例）。 */
+    loadModule: (rel) => c.load(rel),
+    noteQueuedOptimistic: (...args) => sse.noteQueuedOptimistic(...args),
+    reconcileQueuedTexts: (...args) => sse.reconcileQueuedTexts(...args),
+    getLastQueuedSnapshot: (...args) => sse.getLastQueuedSnapshot(...args),
+    window: c.window,
+    get document() { return c.window.document; },
+    // 网络面：写穿到 case 的委托（classic 与 ESM 两侧同时生效）
+    get fetch() { return (url, init) => (net.impl ? net.impl(url, init) : c.window.fetch(url, init)); },
+    set fetch(fn) { net.impl = fn; },
+  };
+  return new Proxy(base, {
+    get(target, prop) { return prop in target ? target[prop] : c.window[prop]; },
+    set(target, prop, value) {
+      if (prop in target) { target[prop] = value; return true; }
+      c.window[prop] = value;
+      return true;
+    },
+    has(target, prop) { return prop in target || prop in c.window; },
+  });
+}
+
+/**
+ * 会话视图存储键与 setter（app-core.js 在生产里提供的同一批符号）。
+ *
+ * 存储键按**生产协议**在 classic 相 register（app-core 只 defineKey、不另声明
+ * 同名 let），因此 classic 侧裸读写与 ESM owner（session-view-storage）claim 后
+ * 的读写是同一份状态——choice-input / input-actions 读到的 `currentInputRequests`
+ * 就是 `applySessionViewPatch` 刚写进去的那一份，不靠测试副本。
+ */
+const CONVERGENCE_STATE_PRELUDE = `
+  // 会话视图存储键按生产协议在 classic 相 register（app-core 只 defineKey、不另声明
+  // 同名 let），因此 classic 侧裸读写与 ESM owner（session-view-storage）claim 后的
+  // 读写是同一份状态——choice-input / input-actions 读到的 currentInputRequests 就是
+  // applySessionViewPatch 刚写进去的那一份，不靠测试副本。
+  // session-view-storage 的 10 个桥键由真实 app-core（本相第一支脚本）注册，
+  // 这里不再重复 defineKey（唯一注册制，重复会抛错）。
+  // 输入队列桥键（§3 级 6 输入）+ 投影归属：生产由 persistent-input 在 classic 相
+  // 注册；本文件的 classic 子集不含该文件，此处按同一协议注册，ESM owner
+  // （p2-w2-3a-input-queue-state）装载时 claim 吸收现值，无双存储。
+  window.KernelState.defineKey('input-queue', '_pendingQueuedCount', 0);
+  window.KernelState.defineKey('input-queue', '_queuedTexts', []);
+  window.KernelState.defineKey('input-queue', '_localQueuedInputPending', false);
+  window.KernelState.defineKey('input-queue', '_lastQueueBubbleSignature', '');
+  window.KernelState.defineKey('input-queue', '_queuedProjectionRuntimeId', null);
+  currentRuntimeConnected = true;
+  var _switchEpoch = 0;
+  function setCurrentHookInspector(value) {
+    currentHookInspector = value;
+    currentHookInspectorSignature = JSON.stringify(value);
+  }
+  function setCurrentOverviewSnapshot(value) {
+    currentOverviewSnapshot = value;
+    currentOverviewSignature = JSON.stringify(value);
+  }
+  function setCurrentTodoPlan(value) {
+    currentTodoPlan = value;
+    currentTodoPlanSignature = JSON.stringify(value);
+  }
+`;
+
+/** 一个用例的加载环境：mini DOM + classic 输入面链 + sse-client 图的宿主桩。 */
+function convergenceCaseOptions() {
+  // 网络面委托：ESM 模块以裸 fetch 调用（主 realm 的 globalThis.fetch 是 case
+  // 开始时的快照），classic 代码走沙箱全局 fetch。两者都指向同一个委托函数，
+  // 用例内 `ctx.fetch = …` 换实现时不会因 realm 差异失联。
+  const net = { impl: null };
+  const pollState = { runs: 0, hook: null };
+  const fetchBridge = (url, init) => (net.impl
+    ? net.impl(url, init)
+    : Promise.resolve({ ok: false, status: 0, json: async () => ({}), text: async () => '' }));
   const doc = createMiniDocument();
   const container = createMiniElement('div', doc);
   container.id = 'user-input-container';
@@ -205,126 +453,237 @@ function createConvergenceSandbox({ contextKey = 'session-a' } = {}) {
   choiceContainer.id = 'choice-input-container';
   doc.body.appendChild(choiceContainer);
 
-  const state = { doc, container, choiceContainer, liveKey: contextKey };
-
-  const ctx = createFrontendSandbox({
-    document: doc,
-    currentLanguage: 'zh',
-    currentRuntimeAgentId: 'agent-1',
-    currentMessages: [],
-    currentInputRequests: [],
-    readOnlyMode: false,
-    followLatestEnabled: false,
-    _rollbackDialogOpen: false,
-    _partialCompactInFlight: false,
-    _partialCompactRuntimeId: null,
-    _partialCompactContextKey: null,
-    _compactTimerInterval: null,
-    _agentCallActive: new Map(),
-    // 语音域（默认无录音）
-    _voiceRecording: false,
-    _voiceStopping: false,
-    _voiceTranscribing: false,
-    _voicePendingSend: false,
-    _voiceCacheKey: null,
-    _pendingVoiceResults: {},
-    // 依赖函数 stub
-    t: (key) => key,
-    getRuntimeContextKey: () => state.liveKey,
-    _getSessionInputCacheKey: () => state.liveKey,
-    isChatSurfaceActive: () => true,
-    isRemoteNamespaceAgentId: () => false,
-    runWithSuppressedChatViewportObservers: (fn) => fn(),
-    notifyChatViewportMutation: () => {},
-    // choice 渲染替身：由 input-render 的 choice 分支调用，用例内替换为计数器
-    renderChoiceInputRequest: () => {},
-    collapsePrimaryChoiceRequest: () => {},
-    renderPersistentInput: () => {},
-    _renderQueueBubbles: () => {},
-    _syncPersistentInputUi: () => {},
-    _renderLastCallElapsed: () => {},
-    _renderRecapHint: () => {},
-    _injectPendingVoiceResult: () => {},
-    _renderAttachmentPreview: () => {},
-    updateInputModelSwitcher: () => {},
-    updateThinkingEffortSwitcher: () => {},
-    autoResize: () => {},
-    _syncPersistentActionButton: () => {},
-    stopVoiceRecording: () => {},
-    _cancelVoiceRecording: () => {},
-    _shouldPreserveVoiceInputForRender: () => false,
-    readPartialCompactStartedAt: () => null,
-    writePartialCompactStartedAt: () => {},
-    // composer 端点绑定（正常输入仅走 persistent user-turn；action 应答独立）
-    handleInputPaste: () => {},
-    handlePersistentInputKey: () => {},
-    onPersistentBtnClick: () => {},
-    submitInputAction: () => {},
-    onImageFilesSelected: () => {},
-    toggleVoiceRecording: () => {},
-    toggleInputModelDropdown: () => {},
-    toggleThinkingEffortDropdown: () => {},
-    escapeHtml: (text) => String(text == null ? '' : text),
-  });
-
-  // applySessionViewPatch 的写入目标与 setter（app-core.js 提供的同名符号）
-  ctx.run(`
-    var toolRenderConfigs = {};
-    var TOOL_NAMES = {};
-    var currentHookInspector = { lifecycleOrder: [], features: [], hooks: [] };
-    var currentHookInspectorSignature = '';
-    var currentOverviewSnapshot = {};
-    var currentOverviewSignature = '';
-    var currentTodoPlan = {};
-    var currentTodoPlanSignature = '';
-    currentRuntimeConnected = true;
-    // 队列乐观态（persistent-input 域全局；§3 级 6 输入）+ 投影归属
-    var _queuedTexts = [];
-    var _pendingQueuedCount = 0;
-    var _localQueuedInputPending = false;
-    var _queuedProjectionRuntimeId = null;
-    var _lastQueueBubbleSignature = '';
-    var _switchEpoch = 0;
-    // choice 域替身（choice-input.js 未加载时的中性实现）；
-    // choice 用例加载真实模块后由 window.* 实现重新接管。
-    function isChoiceInputRequest(req) {
-      return !!req && req.mode === 'choices' && Array.isArray(req.questions) && req.questions.length > 0;
-    }
-    function isChoiceInputRejected() { return false; }
-    function isChoiceInputConsumed() { return false; }
-    function setCurrentHookInspector(value) {
-      currentHookInspector = value;
-      currentHookInspectorSignature = JSON.stringify(value);
-    }
-    function setCurrentOverviewSnapshot(value) {
-      currentOverviewSnapshot = value;
-      currentOverviewSignature = JSON.stringify(value);
-    }
-    function setCurrentTodoPlan(value) {
-      currentTodoPlan = value;
-      currentTodoPlanSignature = JSON.stringify(value);
-    }
-  `);
-  ctx.loadSource('public/src/modules/session-view-state.js');
-  ctx.loadSource('public/src/modules/input-composer.js');
-  ctx.run(`
-    function getInputSurfaceMode(requests = readCurrentSessionViewState().inputRequests) {
-      return resolveInputSurfaceMode(readInputSurfaceModeState(requests, isChatSurfaceActive()));
-    }
-  `);
-  // renderPersistentInput 真实片段（persistent 分支的属性级更新依赖它）
+  const state = { doc, container, choiceContainer, liveKey: 'session-a', poll: pollState };
   const persistentSource = fs.readFileSync('public/src/modules/persistent-input.js', 'utf8');
   const rpStart = persistentSource.indexOf('function renderPersistentInput(container) {');
   const rpEnd = persistentSource.indexOf('function onPersistentBtnClick', rpStart);
-  ctx.run(persistentSource.slice(rpStart, rpEnd));
   // 排队气泡投影的会话重绑真实现（renderInputRequests 的模式判定依赖）
   const rebindStart = persistentSource.indexOf('function rebindQueueProjectionForRuntime');
-  const rebindEnd = persistentSource.indexOf('function applyQueuedInputsTexts', rebindStart);
-  ctx.run(persistentSource.slice(rebindStart, rebindEnd));
-  ctx.loadSource('public/src/modules/input-render.js');
+  const rebindEnd = persistentSource.indexOf('function handlePersistentInputKey', rebindStart);
+  // 交互面占用事实（选择卡 / 回退对话框共用交互面容器）：排队投影响亮地直调它
+  const guardStart = persistentSource.indexOf('function _interactiveSurfaceOccupiesInput() {');
+  const guardEnd = persistentSource.indexOf('function _renderLastCallElapsed()', guardStart);
 
-  ctx.state = state;
-  return ctx;
+  const caseGlobals = {
+        document: doc,
+        EventSource: MockEventSource,
+        URLSearchParams,
+        ClawToast: { show() {} },
+        marked: { parse: (markdown) => String(markdown ?? '') },
+        performance: { now: () => Date.now() },
+        fetch: fetchBridge,
+        currentLanguage: 'zh',
+        currentMessages: [],
+        currentInputRequests: [],
+        readOnlyMode: false,
+        followLatestEnabled: false,
+        _rollbackDialogOpen: false,
+        _partialCompactInFlight: false,
+        _partialCompactRuntimeId: null,
+        _partialCompactContextKey: null,
+        _compactTimerInterval: null,
+        _agentCallActive: new Map(),
+        // 语音域（默认无录音）
+        _voiceRecording: false,
+        _voiceStopping: false,
+        _voiceTranscribing: false,
+        _voicePendingSend: false,
+        _voiceCacheKey: null,
+        _pendingVoiceResults: {},
+        // 依赖函数 stub
+        t: (key) => key,
+        getRuntimeContextKey: () => state.liveKey,
+        _getSessionInputCacheKey: () => state.liveKey,
+        isChatSurfaceActive: () => true,
+        isRemoteNamespaceAgentId: () => false,
+        runWithSuppressedChatViewportObservers: (fn) => fn(),
+        notifyChatViewportMutation: () => {},
+        // choice 渲染替身：由 input-render 的 choice 分支调用，用例内替换为计数器
+        renderPersistentInput: () => {},
+        _renderQueueBubbles: () => {},
+        _syncPersistentInputUi: () => {},
+        _renderLastCallElapsed: () => {},
+        _renderRecapHint: () => {},
+        _injectPendingVoiceResult: () => {},
+        _renderAttachmentPreview: () => {},
+        updateInputModelSwitcher: () => {},
+        updateThinkingEffortSwitcher: () => {},
+        autoResize: () => {},
+        _syncPersistentActionButton: () => {},
+        stopVoiceRecording: () => {},
+        _cancelVoiceRecording: () => {},
+        _shouldPreserveVoiceInputForRender: () => false,
+        readPartialCompactStartedAt: () => null,
+        writePartialCompactStartedAt: () => {},
+        // composer 端点绑定（正常输入仅走 persistent user-turn；action 应答独立）
+        handleInputPaste: () => {},
+        handlePersistentInputKey: () => {},
+        onPersistentBtnClick: () => {},
+        onImageFilesSelected: () => {},
+        toggleVoiceRecording: () => {},
+        toggleInputModelDropdown: () => {},
+        toggleThinkingEffortDropdown: () => {},
+        escapeHtml: (text) => String(text == null ? '' : text),
+        // 回退对话框运行时的 classic 汇点（生产分别定义于 runtime-status /
+        // persistent-input；本文件不驱动打断链路，按既有注入面提供）。
+        isRuntimeCalling: () => false,
+        interruptAgent: async () => ({ ok: true }),
+        ...createSseGraphHostStubs({ container, pollState }),
+  };
+
+  return {
+    state,
+    net,
+    options: {
+      classic: (sandbox) => {
+        // classic 相（本文件是**切片式**夹具：只装输入面收敛需要的 classic 片段）。
+        // 完整真实链安装实测会改变用例钉住的行为（见交付报告：wakeup 按钮态 /
+        // echo 确认 6 例），故保留裁剪链 + 逐支说明的宿主 seam：
+        //   app-core.js     → P2Bootstrap* / RuntimeViewCache / ApplicationStartup（成对 get/set 访问器袋）
+        //   app-main.js     → RuntimeSwitch（顶层读 host.state）/ PollCoordinator / CompactResume / WorkspaceEntry
+        //   sidebar-render  → AgentCallStates / AgentSnapshotLoader / SidebarRender（lastAgentListRenderSignature 访问器）
+        //   app-ui.js       → WorkspaceSurface（只 spread 注入）
+        // 宿主接口按生产读取面给出（非统一空壳），装真链的阻断链见交付报告。
+        sandbox.loadSource('public/src/modules/action-dispatcher.js');
+        // 真实 app-core：call-interrupt 的 classic 同步引擎（四个桥键）与
+        // session-view-storage / orchestration 的桥键都在这里注册。本用例的
+        // classic 与 ESM 两侧因此读同一 window 上的同一份状态与同一 policy 实例
+        // （不再从第二个 sandbox 搬运访问器）。
+        sandbox.loadSource('public/src/app-core.js');
+        // app-core 的真实 getRuntimeContextKey 会覆盖夹具的会话上下文桩（本文件的
+        // 断言以 state.liveKey 为会话键），按既有宿主 seam 恢复。
+        sandbox.getRuntimeContextKey = () => state.liveKey;
+        sandbox.run(CONVERGENCE_STATE_PRELUDE);
+        sandbox.loadSource('public/src/modules/session-view-state.js');
+        sandbox.loadSource('public/src/modules/thread-store.js');
+        sandbox.loadSource('public/src/modules/input-composer.js');
+        sandbox.run(`
+          function getInputSurfaceMode(requests = readCurrentSessionViewState().inputRequests) {
+            return resolveInputSurfaceMode(readInputSurfaceModeState(requests, isChatSurfaceActive()));
+          }
+        `);
+        sandbox.run(persistentSource.slice(rpStart, rpEnd));
+        sandbox.run(persistentSource.slice(rebindStart, rebindEnd));
+        sandbox.run(persistentSource.slice(guardStart, guardEnd));
+        sandbox.loadSource('public/src/modules/rollback-dialog.js');
+        sandbox.loadSource('public/src/modules/input-render.js');
+        sandbox.createRuntimeViewCacheHost = () => ({ cache: new Map(), capacity: 0 });
+        sandbox.createRuntimeSwitchHost = () => ({ state: {} });
+        sandbox.createCompactResumeHost = () => ({});
+        sandbox.createP2BootstrapPhSessionHost = () => ({});
+        sandbox.createP2BootstrapAssemblyHost = () => ({});
+        sandbox.createP2BootstrapContextMenuHost = () => ({});
+        sandbox.createP2BootstrapDebugPanelHost = () => ({});
+        sandbox.createWorkspaceEntryHost = () => ({});
+        sandbox.createWorkspaceSurfaceHost = () => ({});
+      },
+      globals: caseGlobals,
+    },
+  };
+}
+
+/** 在「非预期 warn/error 必须为空」的守卫下跑一个 case（失败也要还原 console）。 */
+async function withNoiseClean(label, fn) {
+  const noise = captureConsoleNoise(NOISE_ALLOWED);
+  try {
+    const result = await fn();
+    noise.assertClean(label);
+    return result;
+  } finally {
+    noise.restore();
+  }
+}
+
+/** 当前用例的沙箱外观（只能在 it() 用例体内取用）。 */
+let currentConvergence = null;
+
+function createConvergenceSandbox(options = {}) {
+  if (!currentConvergence) throw new Error('createConvergenceSandbox 只能在 it() 用例体内使用');
+  if (options.contextKey) currentConvergence.state.liveKey = options.contextKey;
+  return currentConvergence;
+}
+
+/**
+ * 本文件允许的既有输出（逐条理由；其余任何 warn/error 一律失败）。两条都来自
+ * 用例**故意**制造的失败响应，生产侧如实记录，且用例已断言其本地恢复语义：
+ *   - `[Choice] interrupt request failed`：拒绝用例让 fetch 抛错，断言本地立即
+ *     恢复输入面（不等网络）；
+ *   - `排队输入提交失败`：409 operation_rejected 用例，断言草稿保留 + 明确提示。
+ */
+const NOISE_ALLOWED = [
+  /^error: \[Choice\] interrupt request failed: reject must restore input before any network$/,
+  /^error: 排队输入提交失败: A non-text interactive input request must be completed before submitting a new user turn$/,
+];
+
+/**
+ * 用例级控制台噪音捕获：production 的 `host.warn` / `promise.catch` 会把失败降级
+ * 成 warn 输出，测试若不看输出就可能带着 ReferenceError 变绿。case 内接管
+ * console.warn / console.error，用例结束断言为空——不吞错。
+ */
+function captureConsoleNoise(allowed = []) {
+  const entries = [];
+  const original = { warn: console.warn, error: console.error };
+  const record = (level) => (...args) => {
+    entries.push(`${level}: ${args.map((value) => (value instanceof Error ? value.message : String(value))).join(' ')}`);
+  };
+  console.warn = record('warn');
+  console.error = record('error');
+  return {
+    entries,
+    restore() {
+      console.warn = original.warn;
+      console.error = original.error;
+    },
+    assertClean(label) {
+      const unexpected = entries.filter((line) => !allowed.some((pattern) => pattern.test(line)));
+      assert.deepEqual(unexpected, [],
+        `${label} 不得出现非预期 warn/error 输出：\n${unexpected.join('\n')}`);
+    },
+  };
+}
+
+/**
+ * 每个用例：一份 window + 一张 ESM 图。焦点 runtime 在生产由 app-core 注册桥键、
+ * orchestration owner 认领（本文件的 classic 子集不含 app-core，故按同一协议注册）。
+ */
+function it(name, body) {
+  return nodeIt(name, async () => {
+    const { state, net, options } = convergenceCaseOptions();
+    MockEventSource.instances.length = 0;
+    await withNoiseClean('输入面收敛用例', () => withP2EsmCase(options, async (c) => {
+      // 桥键按生产协议在 classic 相注册、**初值为 null**（本文件的 classic 子集不含
+      // app-core）；焦点 runtime 随后经真实 setter 写入，而不是预置状态副本。
+      c.sandbox.run(`
+        // currentRuntimeAgentId / _switchEpoch 由真实 app-core 注册（初值 null / 0）。
+        window.__clawAuthReady = new Promise(() => {});
+      `);
+      const orchestration = await c.load('public/src/modules/orchestration-state.js');
+      orchestration.setCurrentRuntimeAgentId('agent-1');
+      assert.equal(c.read('currentRuntimeAgentId'), 'agent-1', '焦点 runtime 经真实 setter 生效');
+      // agent-data-loader 的 host 工厂（session-data-loader / runtime-status-loader seam）
+      await c.load('public/src/modules/agent-data-loader.js');
+      // 排队气泡投影域（P2 W2-3a 已迁出 persistent-input）：气泡渲染与后端队列
+      // 同步的真实实现，classic 消费方经 input-queue 桥键继续调用
+      await c.load('public/src/modules/p2-w2-3a-input-queue-state.js');
+      await c.load('public/src/modules/p2-w2-3a-queue-projection.js');
+      // 输入面动作与选择卡（本批收尾批次已迁 ESM）：动作提交、回退按钮可见性与
+      // 选择卡谓词/渲染在生产里就是这两个模块，classic 消费方经桥键取用谓词。
+      const inputActions = await c.load('public/src/modules/input-actions.js');
+      const choiceInput = await c.load('public/src/modules/choice-input.js');
+      // 回退对话框与运行期编排（原 rollback-dialog.js 的 ESM 部分）
+      await c.load('public/src/modules/rollback-dialog-runtime.js');
+      const sse = await c.load('public/src/modules/sse-client.js');
+      sse.bootSseClient();
+      const source = latestSseSource();
+      if (source) source.emit('hello', { hello: true });
+      currentConvergence = createCaseApi(c, state, sse, net, inputActions, choiceInput);
+      try {
+        await body();
+      } finally {
+        currentConvergence = null;
+      }
+    }));
+  });
 }
 
 // ── 用例 1：状态写入自动触发（订阅生效，无需手动 poke） ─────────────────────
@@ -461,26 +820,18 @@ describe('contract §8 event->display mapping after convergence (ticket 037)', (
     ctx.run(`applySessionViewPatch({ inputRequests: [{ requestId: 'r-act', actions: [{ id: 'proceed' }] }] })`);
     assert.ok(ctx.run("document.getElementById('input-persistent')"), 'persistent composer remains mounted');
 
-    // 真实 submitInputAction 路径（input-helpers.js）
-    const helpersSource = fs.readFileSync('public/src/modules/input-helpers.js', 'utf8');
-    const block = helpersSource.slice(
-      helpersSource.indexOf('function captureInputViewToken'),
-    );
-    ctx.run(block);
+    // 真实 submitInputAction（input-actions.js）；仍是 classic 的汇点按生产形态
+    // 以 window 函数提供（模块经 window 晚绑定调用它们）。
     ctx.run(`
-      function clearInterruptSuppression() {}
       function _markAgentCallStartedForNotify() {}
       function renderAgentList() {}
       function beginFollowLatestEntryWindow() {}
       function requestFollowLatest() {}
-      function newIdempotencyKey() { return 'k'; }
       function _syncPersistentActionButton() {}
-      var _submitActionPolls = 0;
-      function poll() { _submitActionPolls += 1; }
     `);
     ctx.fetch = async () => ({ ok: true, status: 200, json: async () => ({}) });
 
-    await ctx.run(`submitInputAction('r-act', 'proceed', {}, 'agent-1')`);
+    await ctx.submitInputAction('r-act', 'proceed', {}, 'agent-1');
 
     // 乐观即时性：await 返回时输入面已恢复 persistent，不依赖后台 poll。
     assert.ok(ctx.run("document.getElementById('input-persistent')") !== null,
@@ -521,19 +872,10 @@ describe('contract §8 event->display mapping after convergence (ticket 037)', (
   it('§8 选择卡交互（选项/收起/展开/拒绝）：state write + notify rebuilds the card', async () => {
     const ctx = createConvergenceSandbox();
     ctx.run('renderInputRequests([])');
-    ctx.run(`
-      var choiceInputState = {};
-      function poll() {}
-      function newIdempotencyKey() { return 'k'; }
-    `);
-    ctx.loadSource('public/src/modules/action-dispatcher.js');
-    ctx.loadSource('public/src/modules/choice-input.js');
-    // 真实模块以 window.* 注册 choice 判定；vm 沙箱的 bare-name 解析走
-    // 上下文全局，这里把真实实现接管回来（浏览器里 window 即全局）。
-    ctx.run(`
-      isChoiceInputRejected = window.isChoiceInputRejected;
-      isChoiceInputConsumed = window.isChoiceInputConsumed;
-    `);
+    // 命名导出是跨文件契约（本批补齐）：四个键都可从真实模块取得。
+    for (const name of ['isChoiceInputRequest', 'isChoiceInputConsumed', 'getChoiceInteractionSignature', 'renderChoiceInputRequest']) {
+      assert.equal(typeof ctx.choiceInput[name], 'function', `${name} 必须是命名导出`);
+    }
     ctx.run(`
       applySessionViewPatch({ inputRequests: [{
         requestId: 'choice-1', mode: 'choices',
@@ -548,7 +890,8 @@ describe('contract §8 event->display mapping after convergence (ticket 037)', (
     // 选项交互：状态写入 + 声明 → 选择卡重建（经唯一入口）
     ctx.run(`window.ClawFW.actions.invoke('choice.selectOption', { dataset: { requestId: 'choice-1', optionIndex: '1' } })`);
     assert.ok(choiceRenders >= 1, 'option interaction re-renders the choice card');
-    assert.equal(ctx.run(`choiceInputState['choice-1'].selectedIndex`), 1);
+    assert.equal(JSON.parse(ctx.choiceInput.getChoiceInteractionSignature('choice-1'))[1], 1,
+      'option selection lands in the module-private interaction state');
 
     // 展开/收起：状态入签名，声明即重建
     const rendersBeforeCollapse = choiceRenders;
@@ -561,34 +904,32 @@ describe('contract §8 event->display mapping after convergence (ticket 037)', (
     assert.equal(ctx.run(
       "document.getElementById('user-input-container').querySelector('[data-persistent-composer]') !== null",
     ), true, 'reject restores the persistent composer immediately');
+
+    // 桥键可写转发（诊断 / 测试整体替换后消费方命中替换实现），随后还原。
+    const realConsumed = ctx.choiceInput.isChoiceInputConsumed;
+    ctx.window.isChoiceInputConsumed = () => true;
+    assert.equal(ctx.window.isChoiceInputConsumed('not-submitted'), true,
+      'isChoiceInputConsumed 桥键 setter 转发到替换后的实现');
+    ctx.window.isChoiceInputConsumed = realConsumed;
   });
 
   it('§8 选择卡提交成功：consumed lease 在陈旧快照中不再重建（防闪回第一题）', async () => {
     const ctx = createConvergenceSandbox();
     ctx.run('renderInputRequests([])');
     ctx.run(`
-      var choiceInputState = {};
-      function poll() {}
-      function newIdempotencyKey() { return 'k'; }
-    `);
-    ctx.loadSource('public/src/modules/action-dispatcher.js');
-    ctx.loadSource('public/src/modules/choice-input.js');
-    ctx.run(`
-      isChoiceInputRejected = window.isChoiceInputRejected;
-      isChoiceInputConsumed = window.isChoiceInputConsumed;
-    `);
-    ctx.run(`
       applySessionViewPatch({ inputRequests: [{
         requestId: 'choice-2', mode: 'choices',
         questions: [{ id: 'q1', question: 'How?', options: [{ id: 'a' }, { id: 'b' }] }],
       }] });
     `);
-    assert.equal(ctx.run(`choiceInputState['choice-2'].questionIndex`), 0);
+    assert.equal(JSON.parse(ctx.choiceInput.getChoiceInteractionSignature('choice-2'))[0], 0,
+      'fresh interaction starts at the first question');
 
     // 提交答案（单题即最后一题）：POST 成功后交互状态清理、lease 登记 consumed。
     ctx.fetch = async () => ({ ok: true, status: 200, json: async () => ({}) });
     await ctx.run(`window.ClawFW.actions.invoke('choice.confirm', { dataset: { requestId: 'choice-2' } })`);
-    assert.equal(ctx.run(`choiceInputState['choice-2']`), undefined, 'interaction state cleared on submit');
+    assert.equal(ctx.choiceInput.getChoiceInteractionSignature('choice-2'), 'new',
+      'interaction state cleared on submit');
     assert.equal(ctx.run(`window.isChoiceInputConsumed('choice-2')`), true, 'submitted lease registered as consumed');
     assert.equal(composerMode(ctx), 'persistent', 'choice card closes immediately after submit success');
     assert.equal(ctx.run(
@@ -638,26 +979,45 @@ describe('contract §8 event->display mapping after convergence (ticket 037)', (
     ), null, 'interactive surface takeover removes both queued and thread-staged bubbles');
   });
 
-  it('rollback dialog renders on the interactive surface without destroying the composer (source-locked)', () => {
-    const source = fs.readFileSync('public/src/modules/rollback-dialog.js', 'utf8');
-    const dialogBlock = source.slice(
-      source.indexOf('function showRollbackActionDialog'),
-      source.indexOf("card.querySelector('[data-mode=\"rollback\"]')"),
-    );
-    // 渲染目标：独立交互面容器（与选择卡同款），输入槽不被占据、不清空
-    assert.match(dialogBlock, /getElementById\('choice-input-container'\)/,
-      'dialog must target the interactive surface container');
-    assert.match(dialogBlock, /choiceContainer\.appendChild\(card\)/,
-      'dialog card is appended to the interactive surface');
-    assert.doesNotMatch(dialogBlock, /\.innerHTML = ''/,
-      'dialog must never wipe the composer container');
-    // composer 隐藏而非销毁：输入槽只清 transient、composer 走 display 隐藏
-    assert.match(dialogBlock, /detachTransientInputContent\(inputContainer\)/);
-    assert.match(dialogBlock, /hidePersistentComposerCard\(\)/);
-    // 打开与关闭都经唯一声明入口（打开声明记录 frozen 签名，关闭声明恢复）
-    const notifyCount = (dialogBlock.match(/notifyInputSurfaceChanged\(\)/g) || []).length;
-    assert.ok(notifyCount >= 2,
-      'open and close must each declare through notifyInputSurfaceChanged');
+  it('rollback dialog renders on the interactive surface without destroying the composer', () => {
+    const ctx = createConvergenceSandbox();
+    ctx.run('renderInputRequests([])');
+    const composer = ctx.run("document.getElementById('input-persistent')");
+    assert.ok(composer, 'persistent composer is mounted before the dialog opens');
+
+    // 真实入口：回退动作 lease 在场时点击「编辑此轮」= window.requestRollbackEdit。
+    ctx.run(`currentMessages = [{ role: 'user', turn: 0, content: 'draft me' }];
+      applySessionViewPatch({ inputRequests: [{ requestId: 'rb-lease',
+        actions: [{ id: 'rollback_to_call', data: { availableCallIndices: [0] } }] }] });`);
+    ctx.run('window.requestRollbackEdit(0)');
+
+    // 渲染目标：独立交互面容器（与 Ask User 同款），输入槽不被占据、不清空
+    assert.ok(ctx.run("document.getElementById('choice-input-container').children[0]"),
+      'dialog renders on the interactive surface');
+    // 对话框内容由 innerHTML 装配（mini DOM 不解析标签）：断言两个动作按钮的
+    // data-mode 接线仍在卡片模板里；真实点击语义由 frontend-rollback-runtime 覆盖。
+    const dialogHtml = ctx.run("document.getElementById('choice-input-container').children[0].innerHTML");
+    assert.match(dialogHtml, /data-mode="rollback"/, 'rollback action button is wired on the dialog');
+    assert.match(dialogHtml, /data-mode="compact"/, 'compact action button is wired on the dialog');
+    assert.match(dialogHtml, /data-mode="cancel"/, 'cancel button is wired on the dialog');
+    assert.equal(ctx.run("document.getElementById('input-persistent')"), composer,
+      'composer node is preserved (hidden, not destroyed)');
+    assert.equal(ctx.run(
+      "document.getElementById('user-input-container').querySelector('[data-persistent-composer]').style.display",
+    ), 'none', 'composer is hidden while the dialog owns the input surface');
+    assert.equal(ctx.run('_rollbackDialogOpen'), true, 'freeze flag is set');
+
+    // 点交互面空白处关闭（容器 onclick 是真实关闭路径）：声明恢复输入面。
+    ctx.run(`document.getElementById('choice-input-container')
+      .onclick({ target: document.getElementById('choice-input-container') })`);
+    assert.equal(ctx.run('_rollbackDialogOpen'), false, 'close clears the freeze flag');
+    assert.equal(ctx.run("document.getElementById('choice-input-container').children.length"), 0,
+      'dialog is removed on the next declared render');
+    assert.equal(ctx.run(
+      "document.getElementById('user-input-container').querySelector('[data-persistent-composer]').style.display",
+    ), '', 'composer returns without being recreated');
+    assert.equal(ctx.run("document.getElementById('input-persistent')"), composer,
+      'the same composer node survives the dialog round-trip');
   });
 
   it('dialog open declaration keeps close restorable with no state change while frozen', () => {
@@ -738,8 +1098,6 @@ describe('contract §8 event->display mapping after convergence (ticket 037)', (
 
 function loadQueueSubmitPaths(ctx) {
   const source = fs.readFileSync('public/src/modules/persistent-input.js', 'utf8');
-  ctx.run(source.slice(source.indexOf('function _interactiveSurfaceOccupiesInput()'), source.indexOf('function _renderLastCallElapsed()')));
-  ctx.run(source.slice(source.indexOf('function _renderQueueBubbles(container)'), source.indexOf('function handlePersistentInputKey')));
   ctx.run(source.slice(source.indexOf('async function submitQueuedInput()'), source.indexOf('// 返回 { ok }')));
   ctx.run(`
     var _submitInFlight = false;
@@ -758,8 +1116,6 @@ function loadQueueSubmitPaths(ctx) {
     function newIdempotencyKey() { return 'test-key'; }
     function isRuntimeCalling(id) { return !!_agentCallActive.get(id); }
   `);
-  ctx.window.__clawAuthReady = new Promise(() => {});
-  ctx.loadSource('public/src/modules/sse-client.js');
 }
 
 // Real notification → composer button path, including an idle text lease that
@@ -767,19 +1123,23 @@ function loadQueueSubmitPaths(ctx) {
 function loadWakeupButtonPaths(ctx) {
   const source = fs.readFileSync('public/src/modules/persistent-input.js', 'utf8');
   ctx.run(source.slice(source.indexOf('function onPersistentBtnClick('), source.indexOf('function _renderQueueBubbles(container)')));
+  // 真实先行脚本序已声明 renderAgentList / normalizeAgentIdentity 与
+  // runtime-status（classic 通知链）：这里只补 persistent-input 切片自己需要的
+  // 计时/提交态初值，不重复声明同名 let（重复声明会 SyntaxError）。
   ctx.run(`var _submitInFlight = false; var _sendingHoldTimer = null;
     var _sendingStartedAt = 0; var _lastCallFinishTime = 0;
     var _recapPendingTrigger = false;
-    var _interruptSuppression = new Map();
     function _markAgentCallStartedForNotify() {}
     function renderAgentList() {}
     function _imageBucket() { return []; }
     function normalizeAgentIdentity(id) { return String(id || '').trim(); }
   `);
-  Object.assign(ctx, createCallInterruptState(ctx.run('_interruptSuppression'), () => ctx.Date.now()));
+  // 通知链与 classic 基座共用同一个 call-interrupt owner（用例基座已接线；
+  // 本 helper 直接装载 runtime-status，后者按桥键裸引用四个访问器）。
   ctx.state.now = 1000;
   ctx.Date = class extends Date { static now() { return ctx.state.now; } };
   ctx.window.setInterval = () => 0;
+  // classic runtime-status（通知链）在本裁剪链里由该 helper 自行装载。
   ctx.loadSource('public/src/modules/runtime-status.js');
   ctx.run('function ensureChatRuntimeIndicator() {}');
   for (const id of ['notification-status', 'notification-phase', 'notification-summary', 'notification-metrics']) {
@@ -820,7 +1180,6 @@ it('running composer uses user-turn, keeps rejected choice-conflict text, and ex
   ctx._nextPaint = async () => {};
   ctx._resolvePendingImagesForTarget = async () => ({ images: [], failedCount: 0 });
   ctx._imageBucketKey = () => 'images-a';
-  ctx.poll = () => {};
   const toasts = [];
   const echoes = [];
   ctx.window.ClawToast = { show: (value) => toasts.push(value) };
@@ -918,8 +1277,8 @@ it('late queued POST receipt does not resurrect a consumed bubble in the live in
   ctx.run("document.getElementById('input-persistent').value = 'fast queued message'");
   const submit = ctx.run('submitQueuedInput()');
   await new Promise((resolve) => setImmediate(resolve));
-  ctx.run(`handleQueuedInputsEvent({ agentId: 'agent-1', data: [{ id: 'q-fast', text: 'fast queued message' }] });
-    handleQueuedInputsEvent({ agentId: 'agent-1', data: [] });`);
+  ctx.emitQueued([{ id: 'q-fast', text: 'fast queued message' }]);
+  ctx.emitQueued([]);
   receipt.resolve({ ok: true, json: async () => ({ delivery: 'queued', id: 'q-fast' }) });
   await submit;
   assert.deepEqual(queueBubbleTexts(ctx), [], 'already consumed input must not return to the staging stack');
@@ -929,6 +1288,9 @@ it('empty queue response clears a bubble added while the response was in flight'
   const ctx = createConvergenceSandbox();
   ctx.run('renderInputRequests([])');
   loadQueueSubmitPaths(ctx);
+  // renderInputRequests 首轮触发的队列同步是浮动异步工作：等它落地再起本轮同步，
+  // 避免撞上并发守卫（守卫本身不是本用例的断言对象）
+  await new Promise((resolve) => setImmediate(resolve));
   const response = deferred();
   ctx.fetch = () => response.promise;
   const sync = ctx.run('_syncPersistentInputUi()');
@@ -949,7 +1311,7 @@ it('late HTTP queue snapshot cannot restore bubbles consumed by a newer SSE even
   ctx.fetch = async () => ({ ok: true, json: () => body.promise });
   const sync = ctx.run('_syncPersistentInputUi()');
   await new Promise((resolve) => setImmediate(resolve));
-  ctx.run(`handleQueuedInputsEvent({ agentId: 'agent-1', data: [] });`);
+  ctx.emitQueued([]);
   body.resolve([{ id: 'old-q', text: 'already consumed' }]);
   await sync;
   assert.deepEqual(queueBubbleTexts(ctx), [], 'newer SSE queue state must remain visible');
@@ -973,12 +1335,12 @@ it('queue body from an earlier visit cannot restore bubbles after A to B to A', 
 it('off-focus queue confirmation clears optimistic anchors before switching back', () => {
   const ctx = createConvergenceSandbox();
   loadQueueSubmitPaths(ctx);
-  ctx.run(`noteQueuedOptimistic('q-away', 'sent while away', 'agent-1');
-    currentRuntimeAgentId = 'agent-2';
-    handleQueuedInputsEvent({ agentId: 'agent-1', data: [{ id: 'q-away', text: 'sent while away' }] });
-    handleQueuedInputsEvent({ agentId: 'agent-1', data: [] });
-    currentRuntimeAgentId = 'agent-1';`);
-  assert.equal(ctx.run("reconcileQueuedTexts([], Date.now(), 'agent-1').length"), 0);
+  ctx.noteQueuedOptimistic('q-away', 'sent while away', 'agent-1');
+  ctx.run(`currentRuntimeAgentId = 'agent-2';`);
+  ctx.emitQueued([{ id: 'q-away', text: 'sent while away' }]);
+  ctx.emitQueued([]);
+  ctx.run(`currentRuntimeAgentId = 'agent-1';`);
+  assert.equal(ctx.reconcileQueuedTexts([], Date.now(), 'agent-1').length, 0);
 });
 
 it('direct POST receipt after switching sessions cannot echo or scroll in the other session', async () => {
@@ -1012,9 +1374,9 @@ it('direct POST receipt after switching sessions cannot echo or scroll in the ot
 function loadEchoPaths(ctx) {
   const source = fs.readFileSync('public/src/modules/chat-renderer.js', 'utf8');
   ctx.run(source.slice(source.indexOf('let _optimisticEchoes'), source.indexOf('// 更新最后一条消息')));
-  const chat = ctx.document.createElement('div');
-  ctx.state.doc.body.appendChild(chat);
-  ctx.container = chat;
+  // chat-renderer 的容器来自 app-core 的 classic 顶层 const（装载期按 id 取）：
+  // 本用例用同一节点断言，而不是另建一个游离 div。
+  const chat = ctx.run("document.getElementById('chat-container')");
   ctx.renderMarkdown = (text) => text;
   ctx.renderUserImages = () => '';
   ctx.renderSessionReferenceChips = () => '';
@@ -1063,8 +1425,8 @@ it('idle text lease uses user-turn and preserves immediate echo without waiting 
   ctx.run(`applySessionViewPatch({ inputRequests: [{ requestId: 'slot' }] })`);
   loadQueueSubmitPaths(ctx);
   ctx.run(`function beginFollowLatestEntryWindow() {} function requestFollowLatest() {}
-    function clearInterruptSuppression() {} function _markAgentCallStartedForNotify() {}
-    function renderAgentList() {} function poll() {}`);
+    function _markAgentCallStartedForNotify() {}
+    function renderAgentList() {}`);
   const echoes = [];
   ctx.window.ClawFW.pushOptimisticUserEcho = (value) => echoes.push(value);
   ctx.run("document.getElementById('input-persistent').value = 'slot input'");
@@ -1103,13 +1465,12 @@ it('switching sessions during image preparation cannot reroute A input to B thre
 it('action receipt cannot clear a newer input lease in the same session', async () => {
   const ctx = createConvergenceSandbox();
   ctx.run(`applySessionViewPatch({ inputRequests: [{ requestId: 'old' }] })`);
-  ctx.loadSource('public/src/modules/input-helpers.js');
   ctx.run(`function beginFollowLatestEntryWindow() {} function requestFollowLatest() {}
-    function clearInterruptSuppression() {} function _markAgentCallStartedForNotify() {}
-    function renderAgentList() {} function poll() {}`);
+    function _markAgentCallStartedForNotify() {}
+    function renderAgentList() {}`);
   const receipt = deferred();
   ctx.fetch = () => receipt.promise;
-  const submit = ctx.run("submitInputAction('old', 'proceed')");
+  const submit = ctx.submitInputAction('old', 'proceed');
   ctx.run(`applySessionViewPatch({ inputRequests: [{ requestId: 'new' }] })`);
   receipt.resolve({ ok: true });
   await submit;
@@ -1125,6 +1486,11 @@ const FILES_OUTSIDE_RENDERER = [
   'public/src/modules/agent-data-loader.js',
   'public/src/modules/choice-input.js',
   'public/src/modules/generative-ui-panel.js',
+  // 本批新迁出的三个 ESM 模块：动作提交 / 过程显隐 / 回退对话框运行时。
+  // 它们只经 notifyInputSurfaceChanged 声明，不得就地戳渲染签名。
+  'public/src/modules/input-actions.js',
+  'public/src/modules/chat-process-visibility.js',
+  'public/src/modules/rollback-dialog-runtime.js',
   'public/src/modules/input-helpers.js',
   'public/src/modules/persistent-input.js',
   'public/src/modules/rollback-dialog.js',
@@ -1191,36 +1557,38 @@ describe('manual poke protocol is retired (ticket 037)', () => {
     assert.equal(observations.length, 1, 'an unrelated patch must not announce another input change');
   });
 
-  it('optimistic submit paths keep immediate feedback without poll dependency', () => {
-    const helpersSource = fs.readFileSync('public/src/modules/input-helpers.js', 'utf8');
-    const submitBlock = helpersSource.slice(
-      helpersSource.indexOf('async function submitInputAction'),
-    );
-    // 乐观即时性：patch 写入（同步触发渲染）先于 poll()
-    const patchAt = submitBlock.indexOf('inputRequests: []');
-    const pollAt = submitBlock.indexOf('poll()');
-    assert.notEqual(patchAt, -1, 'submitInputAction still patches inputRequests');
-    assert.ok(pollAt > patchAt, 'poll() must come after the synchronous optimistic restore');
-    assert.doesNotMatch(submitBlock, /lastRenderedInputSignature/);
+  it('optimistic submit paths keep immediate feedback without poll dependency', async () => {
+    const ctx = createConvergenceSandbox();
+    ctx.run(`applySessionViewPatch({ identity: { agentId: 'agent-1', sessionId: 'A' }, inputRequests: [{ requestId: 'p-request' }] })`);
+    // poll() 是提交后的收尾动作：它被调用时乐观清空必须已经落地。观察真实 poll
+    // 模块的宿主 run 调用点（不再用 window.poll 桩）。
+    const requestsSeenByPoll = [];
+    ctx.state.poll.hook = () => {
+      requestsSeenByPoll.push(JSON.parse(JSON.stringify(ctx.window.currentInputRequests || [])));
+    };
+    ctx.run(`function beginFollowLatestEntryWindow() {} function requestFollowLatest() {}
+      function _markAgentCallStartedForNotify() {} function renderAgentList() {}
+      function _syncPersistentActionButton() {}`);
+    ctx.fetch = async () => ({ ok: true, status: 200, json: async () => ({}) });
+    await ctx.submitInputAction('p-request', 'proceed', {}, 'agent-1');
+    assert.ok(ctx.state.poll.runs >= 1, '提交成功后调用真实 poll');
+    assert.deepEqual(requestsSeenByPoll[0], [],
+      'poll() runs only after the synchronous optimistic restore (patch before poll)');
   });
 
   it('delayed action lease from session A cannot clear or rerender session B', async () => {
     const ctx = createConvergenceSandbox();
     ctx.run(`applySessionViewPatch({ identity: { agentId: 'agent-1', sessionId: 'A' }, inputRequests: [{ requestId: 'A-request' }] })`);
-    ctx.loadSource('public/src/modules/input-helpers.js');
     ctx.run(`
-      function clearInterruptSuppression() {}
       function _markAgentCallStartedForNotify() {}
       function renderAgentList() {}
       function beginFollowLatestEntryWindow() { globalThis.followCalls = (globalThis.followCalls || 0) + 1; }
       function requestFollowLatest() {}
-      function newIdempotencyKey() { return 'k'; }
       function _syncPersistentActionButton() {}
-      function poll() {}
     `);
     let finish;
     ctx.fetch = () => new Promise((resolve) => { finish = resolve; });
-    const pending = ctx.run(`submitInputAction('A-request', 'proceed', {}, 'agent-1')`);
+    const pending = ctx.submitInputAction('A-request', 'proceed', {}, 'agent-1');
     ctx.run(`applySessionViewPatch({ identity: { agentId: 'agent-1', sessionId: 'B' } });
     applySessionViewPatch({ inputRequests: [{ requestId: 'B-request' }] });`);
     const rendersBeforeResponse = ctx.run('globalThis.inputSurfaceRenderCount || 0');
@@ -1234,19 +1602,15 @@ describe('manual poke protocol is retired (ticket 037)', () => {
   it('same-session action lease still clears input requests optimistically', async () => {
     const ctx = createConvergenceSandbox();
     ctx.run(`applySessionViewPatch({ identity: { agentId: 'agent-1', sessionId: 'A' }, inputRequests: [{ requestId: 'A-request' }] })`);
-    ctx.loadSource('public/src/modules/input-helpers.js');
     ctx.run(`
-      function clearInterruptSuppression() {}
       function _markAgentCallStartedForNotify() {}
       function renderAgentList() {}
       function beginFollowLatestEntryWindow() {}
       function requestFollowLatest() {}
-      function newIdempotencyKey() { return 'k'; }
       function _syncPersistentActionButton() {}
-      function poll() {}
     `);
     ctx.fetch = async () => ({ ok: true, status: 200, json: async () => ({}) });
-    await ctx.run(`submitInputAction('A-request', 'proceed', {}, 'agent-1')`);
+    await ctx.submitInputAction('A-request', 'proceed', {}, 'agent-1');
     assert.deepEqual(Array.from(ctx.run('currentInputRequests')), []);
   });
 });
@@ -1256,7 +1620,6 @@ describe('manual poke protocol is retired (ticket 037)', () => {
 describe('ordinary text lease updates leave the persistent composer untouched', () => {
   it('arrival and clearing preserve the same composer node and deliver rollback draft feedback', () => {
     const ctx = createConvergenceSandbox();
-    ctx.loadSource('public/src/modules/input-helpers.js');
     ctx.run(`_sessionInputCache = {};
       var autoResizeCalls = 0;
       autoResize = () => { autoResizeCalls++; };

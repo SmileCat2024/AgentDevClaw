@@ -1,15 +1,20 @@
-import { createCallInterruptState } from './call-interrupt-state.js';
+// Late-bound adapter over the classic call-interrupt sync owner in app-core.js.
+// The owner registers the four KernelState bridge keys; this module never
+// initializes, claims, or re-registers anything. Classic consumers keep using
+// the same accessors, so ESM and classic share one policy instance.
 
-const host = window.createCallInterruptHost();
-const policy = createCallInterruptState(host.pending, host.now);
-export const { getNotificationCallStartedAt, markInterruptPending,
-  isInterruptSuppressed, clearInterruptSuppression } = policy;
+export function getNotificationCallStartedAt(...args) {
+  return window.getNotificationCallStartedAt(...args);
+}
 
-window.KernelState.defineKey('call-interrupt', 'getNotificationCallStartedAt', getNotificationCallStartedAt);
-window.KernelState.defineKey('call-interrupt', 'markInterruptPending', markInterruptPending);
-window.KernelState.defineKey('call-interrupt', 'isInterruptSuppressed', isInterruptSuppressed);
-window.KernelState.defineKey('call-interrupt', 'clearInterruptSuppression', clearInterruptSuppression);
-window.KernelState.claim('call-interrupt', {
-  get: (key) => policy[key],
-  set: (key, value) => { policy[key] = value; },
-});
+export function markInterruptPending(...args) {
+  return window.markInterruptPending(...args);
+}
+
+export function isInterruptSuppressed(...args) {
+  return window.isInterruptSuppressed(...args);
+}
+
+export function clearInterruptSuppression(...args) {
+  return window.clearInterruptSuppression(...args);
+}

@@ -18,21 +18,28 @@
  *   - 外部插件 APP（ADR-0049 P3，按需后置）：manifest v3 ui.sessionMenu
  *     facet 经声明合成通道下发，届时在此合并。
  *
- * 依赖全局状态（定义在 app-core.js）：
- *   allAgents, currentLanguage
- * 依赖 app-core.js / remote 模块：
- *   isRemoteNamespaceAgentId
- * 依赖 remote-connections.js（可选，运行期探测）：
- *   window.RemoteConnections.capabilityFor
+ * ESM 化：P2 W2-7（2026-11-17）。原位转换，无状态、无加载期副作用。
+ * 依赖（ESM）：allAgents（agent-store-state.js 的 live binding）、
+ *   实时语言（i18n-environment-state.js 的 getCurrentLanguage）。
+ * 仍 classic（调用时点显式 window 晚绑定）：isRemoteNamespaceAgentId
+ *   （remote-connections.js 函数声明）、window.RemoteConnections.capabilityFor。
+ *
+ * 桥已注销（本域零 window 消费方）：sessionOpsAllowed 由 slash-commands 直接
+ * import；getDeclaredSessionMenuItems 唯一消费方 ctx-menu-items 早已直接 import。
  */
 
+import { allAgents } from './agent-store-state.js';
+import { getCurrentLanguage } from './i18n-environment-state.js';
+
 function _sessionMenuAgentRecord(agentId) {
-  if (typeof allAgents === 'undefined' || !Array.isArray(allAgents)) return null;
+  if (!Array.isArray(allAgents)) return null;
   return allAgents.find((item) => item?.id === agentId) || null;
 }
 
 function _sessionMenuIsRemoteNs(ns) {
-  return typeof isRemoteNamespaceAgentId === 'function' && isRemoteNamespaceAgentId(ns);
+  // 桥接期：isRemoteNamespaceAgentId 定义于 classic remote-connections.js
+  //（远程连接域收敛时改 import）。
+  return typeof window.isRemoteNamespaceAgentId === 'function' && window.isRemoteNamespaceAgentId(ns);
 }
 
 // sessionOps 事实（ADR-0049）：
@@ -42,7 +49,7 @@ function _sessionMenuIsRemoteNs(ns) {
 //     同源），再受握手能力位 sessionOps 门控（ADR-0011：旧远程缺位时
 //     降级隐藏）。connId 不含冒号（request-target 不变量），第二个冒号
 //     之后即宿主 agent id。
-function sessionOpsAllowed(ns) {
+export function sessionOpsAllowed(ns) {
   if (typeof ns !== 'string' || !ns) return false;
   if (!_sessionMenuIsRemoteNs(ns)) {
     return _sessionMenuAgentRecord(ns)?.sessionOps === true;
@@ -59,7 +66,7 @@ function sessionOpsAllowed(ns) {
 // feature-ui-registry 的 toHostMeta 同款语义）。
 function _resolveSessionMenuLabel(label) {
   if (!label || typeof label !== 'object') return '';
-  const lang = (typeof currentLanguage !== 'undefined' && currentLanguage) || 'zh';
+  const lang = getCurrentLanguage() || 'zh';
   return String(label[lang] || label.zh || label.en || '');
 }
 
@@ -67,7 +74,7 @@ function _resolveSessionMenuLabel(label) {
 // facts 由宿主求值传入：{ archived, hasThread, threadBusy }。
 // v1 边界（ADR-0049 取舍）：远程叶子不呈现自定义项（处理器在本机）；
 // 未知谓词按声明错误处理——项跳过并告警，不静默通过。
-function getDeclaredSessionMenuItems(ns, facts) {
+export function getDeclaredSessionMenuItems(ns, facts) {
   if (typeof ns !== 'string' || !ns) return [];
   if (_sessionMenuIsRemoteNs(ns)) return [];
   const declared = _sessionMenuAgentRecord(ns)?.ui?.sessionMenu?.items;
@@ -101,3 +108,5 @@ function getDeclaredSessionMenuItems(ns, facts) {
   }
   return items;
 }
+
+// 桥已注销（本域零 window 消费方）：sessionOpsAllowed 由 slash-commands 直接 import。

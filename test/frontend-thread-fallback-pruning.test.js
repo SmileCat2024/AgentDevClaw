@@ -12,6 +12,7 @@ import fs from 'node:fs';
 import test from 'node:test';
 import vm from 'node:vm';
 import { installSessionViewCommit } from './helpers/session-view-commit.js';
+import { withThreadDomainCase } from './p2-thread-case.js';
 
 const storeSource = fs.readFileSync(new URL('../public/src/modules/thread-store.js', import.meta.url), 'utf8');
 // ADR-0026：thread-store 的等待表面调用会话视图提交原语——装载真模块，
@@ -132,49 +133,78 @@ test('T018-A2: 无 runtime 态且无 activeConversation——宿主 active 回�
 });
 
 test('T018-D1: 接力挡板中点击线程条目——本地挂线程等待视图，不得 open_session 启动 runtime（与 rotation 打架的根因）', async () => {
-  const sandbox = createHarness();
-  loadStore(sandbox);
+  // 交互入口已迁 ESM（thread-store-domain）：真实模块 + 真实 classic 引擎。
+  // 「不得 open_session」的观察点改为真实网络面（open_session 的实体请求是
+  // activate），不再依赖 window.runWorkspaceAction 桩。
+  const requests = [];
   const now = Date.now();
-  vm.runInContext(`
-    focusedAgentId = 'programming-helper';
-    currentRuntimeAgentId = '';
-    allAgents = [{ id: 'programming-helper', source: 'prebuilt', active_workspace_session_id: 'sess-main' }];
-    window.ClawThreads.threads = [{
-      threadId: 'wt-relay', agentId: 'programming-helper', status: 'rotating',
-      handoffStartedAt: ${now}, headSessionId: 'sess-head-old',
-      sessionIds: ['sess-head-old'], title: 't', updatedAt: 2,
-    }];
-    _rebuildIndexes();
-  `, sandbox);
-  const result = await vm.runInContext(
-    'window.openConversationTarget({ threadId: "wt-relay" })', sandbox,
-  );
-  assert.equal(result?.ok, true, '挡板窗口点击应成功挂线程等待视图: ' + JSON.stringify(result));
-  assert.equal(sandbox.__actionLog.length, 0, '不得触发 open_session（activate 会给退役中的 head 启动 runtime）');
-  const conv = vm.runInContext('window.ClawThreads.activeConversation', sandbox);
-  assert.equal(conv?.threadId, 'wt-relay', '视图身份应挂到线程');
-  assert.equal(conv?.sessionId, 'sess-head-old', '会话指向挡板中的 head');
+  const thread = {
+    threadId: 'wt-relay', agentId: 'programming-helper', status: 'rotating',
+    handoffStartedAt: now, headSessionId: 'sess-head-old',
+    sessionIds: ['sess-head-old'], title: 't', updatedAt: 2,
+  };
+  await withThreadDomainCase({
+    threads: [thread],
+    fixtures: {
+      focusedAgentId: 'programming-helper',
+      currentRuntimeAgentId: '',
+      allAgents: [{ id: 'programming-helper', source: 'prebuilt', kind: 'workspace', active_workspace_session_id: 'sess-main' }],
+      getCurrentHostAgentRecord: () => ({ id: 'programming-helper', source: 'prebuilt', kind: 'workspace' }),
+      getRuntimeWorkspaceSessionId: () => '',
+      renderAgentList: () => {},
+      renderCurrentMainView: () => {},
+      updateQueueIndicator: () => {},
+      updateThreadHeaderIndicator: () => {},
+    },
+    fetch: async (url) => {
+      requests.push(String(url));
+      return { ok: true, json: async () => ({ ok: true, messages: [] }) };
+    },
+  }, async ({ c, domain }) => {
+    const result = await domain.openConversationTarget({ threadId: 'wt-relay' });
+    assert.equal(result?.ok, true, '挡板窗口点击应成功挂线程等待视图: ' + JSON.stringify(result));
+    assert.deepEqual(
+      requests.filter((url) => url.includes('/activate')),
+      [],
+      '不得触发 open_session / activate（会给退役中的 head 启动 runtime）',
+    );
+    assert.equal(c.read('window.ClawThreads.activeConversation?.threadId'), 'wt-relay', '视图身份应挂到线程');
+    assert.equal(c.read('window.ClawThreads.activeConversation?.sessionId'), 'sess-head-old', '会话指向挡板中的 head');
+  });
 });
 
 test('T018-D2（守卫）: 无挡板照常走 runtime 激活路径', async () => {
-  const sandbox = createHarness();
-  loadStore(sandbox);
-  vm.runInContext(`
-    focusedAgentId = 'programming-helper';
-    currentRuntimeAgentId = '';
-    allAgents = [
-      { id: 'programming-helper', source: 'prebuilt' },
-      { id: 'rt-live', source: 'child', parent_id: 'programming-helper',
-        sessionType: 'coder', runtime_session_id: 'rt-live',
-        active_workspace_session_id: 'sess-head' },
-    ];
-    window.ClawThreads.threads = [{
-      threadId: 'wt-open', agentId: 'programming-helper', status: 'open',
-      handoffStartedAt: 0, headSessionId: 'sess-head',
-      sessionIds: ['sess-head'], title: 't', updatedAt: 2,
-    }];
-    _rebuildIndexes();
-  `, sandbox);
-  await vm.runInContext('window.openConversationTarget({ threadId: "wt-open" })', sandbox);
-  assert.equal(sandbox.__switchLog.includes('rt-live'), true, '无挡板时照常切到 head runtime');
+  const thread = {
+    threadId: 'wt-open', agentId: 'programming-helper', status: 'open',
+    handoffStartedAt: 0, headSessionId: 'sess-head',
+    sessionIds: ['sess-head'], title: 't', updatedAt: 2,
+  };
+  await withThreadDomainCase({
+    threads: [thread],
+    fixtures: {
+      focusedAgentId: 'programming-helper',
+      currentRuntimeAgentId: '',
+      allAgents: [
+        { id: 'programming-helper', source: 'prebuilt' },
+        {
+          id: 'rt-live', source: 'child', parent_id: 'programming-helper',
+          sessionType: 'coder', runtime_session_id: 'rt-live',
+          active_workspace_session_id: 'sess-head',
+        },
+      ],
+      getCurrentHostAgentRecord: () => ({ id: 'programming-helper', source: 'prebuilt' }),
+      getRuntimeWorkspaceSessionId: (runtimeId) => (runtimeId === 'rt-live' ? 'sess-head' : ''),
+      setViewerSessionBinding: () => {},
+      renderAgentList: () => {},
+      renderCurrentMainView: () => {},
+      updateQueueIndicator: () => {},
+      updateThreadHeaderIndicator: () => {},
+    },
+    fetch: async () => ({ ok: true, json: async () => ({ ok: true, messages: [] }) }),
+  }, async ({ c, domain }) => {
+    const result = await domain.openConversationTarget({ threadId: 'wt-open' });
+    assert.equal(result?.ok, true, '无挡板时导航成功');
+    assert.equal(c.read('currentRuntimeAgentId'), 'rt-live', '无挡板时照常切到 head runtime');
+    assert.equal(c.read('window.ClawThreads.activeConversation?.runtimeId'), 'rt-live');
+  });
 });

@@ -12,10 +12,9 @@ app.get('/fixture', (_req, res) => res.type('html').send(body.replace('</body>',
 <script src="/src/modules/kernel-state.js"></script>
 <script src="/src/app-core.js"></script>
 <script src="/src/modules/action-dispatcher.js"></script>
-<script src="/src/modules/overview-data.js"></script>
+<script type="module" src="/src/modules/overview-data.js"></script>
 <script src="/src/modules/todo-plan.js"></script>
 <script src="/src/modules/session-view-state.js"></script>
-<script src="/src/modules/agent-data-loader.js"></script>
 <script>window.updateNotificationStatus = () => {}; window.getCurrentRuntimeRecord = () => allAgents[0]; window.getCurrentAgentRecord = () => allAgents[0];</script>
 <script src="/src/modules/runtime-status.js"></script>
 <script src="/src/modules/sidebar-render.js"></script>

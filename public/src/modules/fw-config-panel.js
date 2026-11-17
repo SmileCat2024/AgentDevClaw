@@ -10,31 +10,57 @@
  *   - Feature import dialog (fwOpenFeatureImport, fwConfirmFeatureImport, fwCancelFeatureImport)
  *   - Project picker / Create / Confirm / Prompt 对话框
  *
- * 依赖（全局变量/函数，声明于 app-core.js / app-ui.js / 其他模块）：
- *   - currentLanguage, escapeHtml, t (app-core.js)
- *   - renderCurrentMainView, currentWorkspaceTab, shouldAnimateWorkspaceSurface (app-ui.js)
- *   - getCurrentAgentRecord, getWorkspaceFormDraft, saveWorkspaceFormDraft (app-core.js / 其他模块)
- *   - canonicalizeAssemblyFeatureSelection, parseWorkspaceListField (assembly-data.js)
- *   - getSavedAssemblyConfigs, getWorkspaceSessionById, isAssemblySession (assembly-data.js)
- *   - formatWorkspaceDate, formatRepoFileSize, getFeatureTypeLabel (assembly-data.js)
- *   - getAssemblyPresetLabel, getAssemblySavedConfigSummary (assembly-data.js)
- *   - persistWorkspaceState, updateAssemblyDraftWithoutRender (assembly-actions.js)
- *   - isValidAgentCreatorName, normalizeAssemblyDraft (assembly-data.js)
- *   - window.toggleWorkspaceSelection, window.commitAssemblyDraftField (assembly-actions.js)
- *   - window.loadSavedAssemblyConfig, window.resetAssemblyDraft (assembly-actions.js)
- *   - window.PromptEditorUtils (prompt editor utils)
+ * ESM（P2 W2-10 装配工作台批次）：语言 / 转义 / 渲染状态与批内模块
+ * （assembly-data / assembly-actions / workspace-blocks）显式 import；
+ * 宿主仍是 classic 的部分（app-ui 的 renderCurrentMainView / renderFWList /
+ * renderFWDetail、getCurrentAgentRecord、app-core invoke、
+ * window.PromptEditorUtils / ClawFlowEditor）经 window 晚绑定并注明收敛批次；
+ * 已 ESM 的 session-ui（getWorkspaceSessionById）改为直接 import。
+ *
+ * 状态：本模块 11 个 UI 状态键 + featureScrollTop 是模块私有（原 IIFE 局部）。
+ * featureScrollTop 此前在 strict IIFE 内未声明——rememberFWFeatureScroll 一执行
+ * 即 ReferenceError（feature 开关动作必然踩到）。本次随 ESM 化定位为模块私有
+ * 滚动保存状态，交互语义（保存 .fw-feat-list 的 scrollTop，重渲染后按帧还原）
+ * 保持不变；回归用例 test/p2-w2-10-batch10.test.js「feature 开关保留滚动位置」。
+ *
+ * 兼容面：12 个 fw* 入口与 renderProjectListBlock 仍有 classic 消费方
+ * （app-ui 的 blocks.registerPrimitive / fw.* 动作、ctx-menu-handlers、
+ * workspace-actions），经 kernel-state 桥键暴露，逐键见文件末尾。
  */
 
+import { getCurrentLanguage } from './i18n-environment-state.js';
+import { escapeHtml } from './markdown-utils.js';
+import { formatWorkspaceDate } from './time-format-host.js';
+import { setCurrentWorkspaceTab, setShouldAnimateWorkspaceSurface } from './render-entry-state.js';
+import {
+  isAssemblySession,
+  isAssemblySessionRunning,
+  normalizeAssemblyDraft,
+  isValidAgentCreatorName,
+  persistWorkspaceState,
+  updateAssemblyDraftWithoutRender,
+  commitAssemblyDraftField,
+  getWorkspaceFormDraft,
+  saveWorkspaceFormDraft,
+} from './assembly-data.js';
+import {
+  getSavedAssemblyConfigs,
+  canonicalizeAssemblyFeatureSelection,
+  toggleWorkspaceSelection,
+  loadSavedAssemblyConfig,
+  resetAssemblyDraft,
+} from './assembly-actions.js';
+import { parseWorkspaceListField, formatRepoFileSize, getFeatureTypeLabel, getAssemblyPresetLabel } from './workspace-blocks.js';
+import { loadAgents } from './agent-snapshot-loader-host.js';
+import { getWorkspaceSessionById } from './session-ui.js';
+
 // ClawFW 是跨模块共享命名空间（见 AGENT.md 全局状态纪律），只能合并初始化，
-// 整体重建会抹掉其他模块先挂上去的属性（如 feature-catalog.js 的 featureCatalog）
-(function() {
-"use strict";
+// 整体重建会抹掉其他模块先挂上去的属性（如 feature-catalog.js 的 featureCatalog）。
 
 // fw 面板状态收敛为模块局部（Phase C 状态面批）：曾经借宿在 window.ClawFW 的
 // 11 个 UI 状态键不再上袋，跨模块读经显式函数导出（fwGetFeatureQuery）。
-// settingsOpen/settingsData/settingsEditing 与 _modelPresets 是其他模块的
-// 借宿键（model-settings / model-preset-cache 域），初始化保留在此以维持
-// 加载顺序兼容，不属本模块状态。
+// settingsOpen 仍留在 ClawFW（classic app-ui 读写），初值在此合并初始化；
+// settingsData / settingsEditing 已归 model-settings 模块私有，不再上袋。
 let mode = 'list';
 let section = 'features';
 let projectPickerOpen = false;
@@ -47,12 +73,10 @@ let driftDialog = null;
 let featureCapabilities = { key: '', loading: false, error: '', data: null };
 let fwSlashPicker = { open: false, query: '', startIndex: 0, activeIndex: 0, category: 'all', formId: '' };
 let _projectId = null; // detail 模式锚定的项目 id（list 模式为 null）
+let featureScrollTop = 0; // feature 列表滚动保存位置（重渲染后按帧还原）
 window.ClawFW = window.ClawFW || {};
 Object.assign(window.ClawFW, {
   settingsOpen: false,
-  settingsData: null,
-  settingsEditing: null,
-  _modelPresets: null,
 });
 
 function getFWFeatureCapabilityState() {
@@ -97,8 +121,8 @@ async function requestFWFeatureCapabilities(agent, draft = {}, options = {}) {
       cache.data = null;
     }
   }
-  shouldAnimateWorkspaceSurface = false;
-  renderCurrentMainView();
+  setShouldAnimateWorkspaceSurface(false);
+  window.renderCurrentMainView();
   return cache.data;
 }
 
@@ -151,8 +175,8 @@ async function inspectAssemblySessionDrift(agent, sessionId) {
   const configTime = parseWorkspaceTimeMs(savedConfig?.updatedAt);
   if (savedConfig && ((!sessionTime && configTime) || (sessionTime && configTime > sessionTime))) {
     reasons.push({
-      title: currentLanguage === 'zh' ? '能力装配已更新' : 'Assembly config changed',
-      detail: currentLanguage === 'zh'
+      title: getCurrentLanguage() === 'zh' ? '能力装配已更新' : 'Assembly config changed',
+      detail: getCurrentLanguage() === 'zh'
         ? '这个项目的 Feature 选择或基础配置在该对话保存之后发生过变化。'
         : 'The project feature selection or base configuration changed after this session was last saved.',
       updatedAt: savedConfig?.updatedAt || '',
@@ -162,8 +186,8 @@ async function inspectAssemblySessionDrift(agent, sessionId) {
   const graphTime = parseWorkspaceTimeMs(graph?.updatedAt);
   if (graph && ((!sessionTime && graphTime) || (sessionTime && graphTime > sessionTime))) {
     reasons.push({
-      title: currentLanguage === 'zh' ? '编排图已更新' : 'Flow graph changed',
-      detail: currentLanguage === 'zh'
+      title: getCurrentLanguage() === 'zh' ? '编排图已更新' : 'Flow graph changed',
+      detail: getCurrentLanguage() === 'zh'
         ? '该对话对应的编排图在会话保存之后被编辑过，恢复时可能出现定义与现场不一致。'
         : 'The orchestration graph was edited after this session was saved, so restoring it may resume with stale runtime state.',
       updatedAt: graph?.updatedAt || '',
@@ -201,7 +225,7 @@ async function confirmAssemblyDriftDialogProceed() {
       await pending.onConfirm();
     } catch (error) {
       console.error('Failed to continue after drift warning:', error);
-      window.alert((currentLanguage === 'zh' ? '继续打开旧对话失败：' : 'Failed to continue opening the older conversation: ') + (error?.message || error));
+      window.alert((getCurrentLanguage() === 'zh' ? '继续打开旧对话失败：' : 'Failed to continue opening the older conversation: ') + (error?.message || error));
     }
   }
 }
@@ -219,12 +243,12 @@ function renderAssemblyDriftDialog() {
     '<div class="feature-detail-window">',
     '<div class="feature-detail-head">',
     '<div>',
-    '<div class="feature-detail-title">' + escapeHtml(currentLanguage === 'zh' ? '检测到项目定义已经变化' : 'Project definition changed') + '</div>',
-    '<div class="feature-detail-subtitle">' + escapeHtml(currentLanguage === 'zh'
+    '<div class="feature-detail-title">' + escapeHtml(getCurrentLanguage() === 'zh' ? '检测到项目定义已经变化' : 'Project definition changed') + '</div>',
+    '<div class="feature-detail-subtitle">' + escapeHtml(getCurrentLanguage() === 'zh'
       ? '你正在打开一个较早保存的对话。当前项目的装配或编排图在此之后被修改过，恢复时可能继续沿用旧的运行时状态。'
       : 'You are opening an older saved conversation. The project assembly or flow graph changed after it was saved, so the resumed runtime may carry stale state.') + '</div>',
     '</div>',
-    '<button class="feature-detail-close" type="button" title="' + escapeHtml(t('panel_close')) + '" data-action="fw.closeDriftDialog">×</button>',
+    '<button class="feature-detail-close" type="button" title="' + escapeHtml(window.t('panel_close')) + '" data-action="fw.closeDriftDialog">×</button>',
     '</div>',
     reasons.length ? '<div class="fw-switch-modal-list">' + reasons.map((item) => [
       '<div class="fw-switch-modal-card active" style="cursor:default;">',
@@ -232,12 +256,12 @@ function renderAssemblyDriftDialog() {
       '<span>' + escapeHtml([item.detail || '', item.updatedAt ? formatWorkspaceDate(item.updatedAt) : ''].filter(Boolean).join(' · ')) + '</span>',
       '</div>',
     ].join('')).join('') + '</div>' : '',
-    '<div class="feature-detail-subtitle">' + escapeHtml(currentLanguage === 'zh'
+    '<div class="feature-detail-subtitle">' + escapeHtml(getCurrentLanguage() === 'zh'
       ? '这不是阻止项，但如果后续行为异常，优先考虑重启运行时或重置流程状态。'
       : 'This is not a blocker, but if behavior looks off, restart the runtime or reset the flow state first.') + '</div>',
     '<div class="workspace-actions" style="justify-content:flex-end;">',
-    '<button class="workspace-action secondary" type="button" data-action="fw.closeDriftDialog">' + escapeHtml(currentLanguage === 'zh' ? '先不打开' : 'Not now') + '</button>',
-    '<button class="workspace-action" type="button" data-action="fw.driftProceed">' + escapeHtml(currentLanguage === 'zh' ? '继续打开旧对话' : 'Open anyway') + '</button>',
+    '<button class="workspace-action secondary" type="button" data-action="fw.closeDriftDialog">' + escapeHtml(getCurrentLanguage() === 'zh' ? '先不打开' : 'Not now') + '</button>',
+    '<button class="workspace-action" type="button" data-action="fw.driftProceed">' + escapeHtml(getCurrentLanguage() === 'zh' ? '继续打开旧对话' : 'Open anyway') + '</button>',
     '</div>',
     '</div>',
     '</div>',
@@ -271,19 +295,19 @@ function renderProjectListBlock(agent, block) {
 
   if (mode === 'detail' && _projectId) {
     // renderFWDetail（app-ui.js）经参数接收状态快照，不共享本模块局部状态
-    return renderFWDetail(agent, block, formId, { section });
+    return window.renderFWDetail(agent, block, formId, { section }); // 桥接期：定义于 app-ui（渲染入口域收敛）
   }
-  return renderFWList(agent, block, formId);
+  return window.renderFWList(agent, block, formId); // 桥接期：定义于 app-ui（渲染入口域收敛）
 }
 
 function fwRerender() {
-  currentWorkspaceTab = 'workspace';
+  setCurrentWorkspaceTab('workspace');
   // When the prompt editor contentEditable dialog is open, skip full re-render
   // to preserve cursor position and input state.
   if (promptEditorOpen && document.querySelector('.fw-prompt-editor.fe-prompt-ce')) {
     return;
   }
-  if (typeof renderCurrentMainView === 'function') renderCurrentMainView();
+  if (typeof window.renderCurrentMainView === 'function') window.renderCurrentMainView();
 }
 
 function fwEnterDetail(projectId, nextSection) {
@@ -336,8 +360,8 @@ function fwClosePromptEditor() {
     const rawText = U ? U.htmlToPrompt(ce) : ce.innerText;
     const formId = ce.getAttribute('data-fw-form-id');
     if (formId) {
-      window.updateFWPromptDraft(formId, rawText);
-      window.commitAssemblyDraftField(formId, 'custom_system_prompt', rawText);
+      updateFWPromptDraft(formId, rawText);
+      commitAssemblyDraftField(formId, 'custom_system_prompt', rawText);
     }
   }
   promptEditorOpen = false;
@@ -350,9 +374,9 @@ function fwClosePromptEditor() {
 
 const FW_PICKER_CATEGORIES = ['all', 'template', 'variable'];
 const FW_PICKER_CAT_LABELS = {
-  all: currentLanguage === 'zh' ? '全部' : 'All',
-  template: currentLanguage === 'zh' ? '模板' : 'Templates',
-  variable: currentLanguage === 'zh' ? '变量' : 'Variables',
+  all: getCurrentLanguage() === 'zh' ? '全部' : 'All',
+  template: getCurrentLanguage() === 'zh' ? '模板' : 'Templates',
+  variable: getCurrentLanguage() === 'zh' ? '变量' : 'Variables',
 };
 
 function fwCollectPickerItems() {
@@ -412,7 +436,7 @@ function fwRenderPickerDropdown() {
   let searchEl = host.querySelector('.fw-picker-search');
   if (!host.querySelector('.fw-prompt-picker')) {
     host.innerHTML = '<div class="fw-prompt-picker">'
-      + '<div class="fw-picker-search-wrap"><input class="fw-picker-search" value="' + escapeHtml(query) + '" placeholder="' + escapeHtml(currentLanguage === 'zh' ? '搜索变量或片段…' : 'Search…') + '" data-action="fw.pickerSearch" data-event="input keydown"></div>'
+      + '<div class="fw-picker-search-wrap"><input class="fw-picker-search" value="' + escapeHtml(query) + '" placeholder="' + escapeHtml(getCurrentLanguage() === 'zh' ? '搜索变量或片段…' : 'Search…') + '" data-action="fw.pickerSearch" data-event="input keydown"></div>'
       + '<div class="fw-picker-tabs"></div>'
       + '<div class="fw-picker-list"></div>'
       + '</div>';
@@ -434,11 +458,11 @@ function fwRenderPickerDropdown() {
     tabsEl.innerHTML = tabsHtml;
   }
   if (!items.length) {
-    if (listEl) listEl.innerHTML = '<div class="fw-picker-empty">' + escapeHtml(currentLanguage === 'zh' ? '没有匹配项' : 'No matches') + '</div>';
+    if (listEl) listEl.innerHTML = '<div class="fw-picker-empty">' + escapeHtml(getCurrentLanguage() === 'zh' ? '没有匹配项' : 'No matches') + '</div>';
     return;
   }
   const grouped = {};
-  items.forEach(item => { const g = U.shortFeatureName(item.featureName) || (currentLanguage === 'zh' ? '其他' : 'Other'); if (!grouped[g]) grouped[g] = []; grouped[g].push(item); });
+  items.forEach(item => { const g = U.shortFeatureName(item.featureName) || (getCurrentLanguage() === 'zh' ? '其他' : 'Other'); if (!grouped[g]) grouped[g] = []; grouped[g].push(item); });
   let html = '';
   let idx = 0;
   Object.keys(grouped).forEach(group => {
@@ -448,7 +472,7 @@ function fwRenderPickerDropdown() {
       const isVar = item.type === 'variable';
       const isTpl = item.type === 'template';
       const icon = isVar ? '{ }' : (isTpl ? '&#9638;' : '&#9998;');
-      const label = isVar ? (currentLanguage === 'zh' ? '变量' : 'Var') : (isTpl ? (currentLanguage === 'zh' ? '模板' : 'Tpl') : (currentLanguage === 'zh' ? '片段' : 'Snip'));
+      const label = isVar ? (getCurrentLanguage() === 'zh' ? '变量' : 'Var') : (isTpl ? (getCurrentLanguage() === 'zh' ? '模板' : 'Tpl') : (getCurrentLanguage() === 'zh' ? '片段' : 'Snip'));
       const titleHtml = U.highlightMatch(item.title, query);
       const descHtml = item.description ? '<div class="fw-picker-item-preview">' + U.highlightMatch(item.description, query) + '</div>' : '';
       html += '<div class="fw-picker-item' + (i === sp.activeIndex ? ' active' : '') + '" data-picker-index="' + i + '" onmousedown="event.preventDefault()" data-action="fw.pickerItem" data-args="[' + i + ']">'
@@ -468,13 +492,13 @@ function fwRenderPickerDropdown() {
   }
 }
 
-window.fwHandlePromptInput = (e) => {
+function fwHandlePromptInput(e) {
   const U = window.PromptEditorUtils;
   if (!U) return;
   const ce = e.target;
   const rawText = U.htmlToPrompt(ce);
   const formId = ce.getAttribute('data-fw-form-id');
-  if (formId) window.updateFWPromptDraft(formId, rawText);
+  if (formId) updateFWPromptDraft(formId, rawText);
   const cursorOffset = U.getPromptCursorOffset(ce);
   const trigger = U.detectSlashTrigger(rawText, cursorOffset >= 0 ? cursorOffset : rawText.length);
   const sp = fwSlashPicker;
@@ -487,7 +511,7 @@ window.fwHandlePromptInput = (e) => {
   fwRenderPickerDropdown();
 };
 
-window.fwHandlePromptKeydown = (e) => {
+function fwHandlePromptKeydown(e) {
   const U = window.PromptEditorUtils;
   if (!U) return;
   const sp = fwSlashPicker;
@@ -501,7 +525,7 @@ window.fwHandlePromptKeydown = (e) => {
         chip.remove();
         const rawText = U.htmlToPrompt(ce);
         const formId = ce.getAttribute('data-fw-form-id');
-        if (formId) window.updateFWPromptDraft(formId, rawText);
+        if (formId) updateFWPromptDraft(formId, rawText);
         return;
       }
     }
@@ -546,7 +570,7 @@ function fwInsertPickerItem(item) {
   const after = rawText.substring(offset);
   const newText = before + item.insertText + after;
   const formId = ce.getAttribute('data-fw-form-id');
-  if (formId) window.updateFWPromptDraft(formId, newText);
+  if (formId) updateFWPromptDraft(formId, newText);
   const sp = fwSlashPicker;
   sp.open = false; sp.query = '';
   const savedOffset = before.length + item.insertText.length;
@@ -555,7 +579,7 @@ function fwInsertPickerItem(item) {
   fwRenderPickerDropdown();
 }
 
-window.fwClickPickerItem = (index) => {
+function fwClickPickerItem(index) {
   const sp = fwSlashPicker;
   const allItems = fwFilterPickerItems(fwCollectPickerItems(), sp.query);
   const items = fwApplyCategoryFilter(allItems);
@@ -563,20 +587,20 @@ window.fwClickPickerItem = (index) => {
   if (item) fwInsertPickerItem(item);
 };
 
-window.fwSetPickerCategory = (cat) => {
+function fwSetPickerCategory(cat) {
   fwSlashPicker.category = cat;
   fwSlashPicker.activeIndex = 0;
   fwRenderPickerDropdown();
 };
 
-window.fwSetPickerSearch = (value) => {
+function fwSetPickerSearch(value) {
   fwSlashPicker.query = value || '';
   fwSlashPicker.activeIndex = 0;
   fwRenderPickerDropdown();
 };
 
-window.updateFWPromptDraft = (formId, value) => {
-  const agent = getCurrentAgentRecord();
+function updateFWPromptDraft(formId, value) {
+  const agent = window.getCurrentAgentRecord();
   if (!agent?.id) return;
   const draft = getWorkspaceFormDraft(agent);
   draft[formId] = draft[formId] || {};
@@ -599,12 +623,12 @@ function restoreFWFeatureScroll() {
 
 async function fwToggleFeature(formId, token) {
   rememberFWFeatureScroll();
-  await window.toggleWorkspaceSelection(formId, 'selected_features', token);
+  await toggleWorkspaceSelection(formId, 'selected_features', token);
   restoreFWFeatureScroll();
 }
 
 function fwSetFeatureFilter(formId, value) {
-  window.commitAssemblyDraftField(formId, 'feature_source_filter', value);
+  commitAssemblyDraftField(formId, 'feature_source_filter', value);
 }
 
 function fwSetFeatureQuery(formId, value) {
@@ -616,7 +640,7 @@ function fwCommitFeatureQuery(formId, value) {
   const query = String(value || '');
   featureQuery = query;
   updateAssemblyDraftWithoutRender(formId, 'feature_query', query);
-  const agent = getCurrentAgentRecord();
+  const agent = window.getCurrentAgentRecord();
   if (!agent?.id) return;
   const draft = getWorkspaceFormDraft(agent);
   persistWorkspaceState(agent, draft).catch((error) => {
@@ -641,9 +665,9 @@ function fwFilterFeatureList() {
   if (head) {
     const total = Number(head.getAttribute('data-total') || 0);
     const mounted = Number(head.getAttribute('data-mounted') || 0);
-    head.textContent = (currentLanguage === 'zh' ? '当前显示 ' : 'Showing ')
+    head.textContent = (getCurrentLanguage() === 'zh' ? '当前显示 ' : 'Showing ')
       + visible + ' / ' + total
-      + (currentLanguage === 'zh' ? `，已挂载 ${mounted}` : `, mounted ${mounted}`);
+      + (getCurrentLanguage() === 'zh' ? `，已挂载 ${mounted}` : `, mounted ${mounted}`);
   }
 }
 
@@ -663,7 +687,7 @@ async function fwOpenFeatureImport(formId) {
       featureImport = { ...parsed, formId };
       fwRerender();
     } catch (error) {
-      window.alert((currentLanguage === 'zh' ? '解析 tgz 失败：' : 'Failed to parse tgz: ') + (error?.message || error));
+      window.alert((getCurrentLanguage() === 'zh' ? '解析 tgz 失败：' : 'Failed to parse tgz: ') + (error?.message || error));
     }
   };
   input.click();
@@ -702,7 +726,7 @@ async function fwConfirmFeatureImport(mode) {
       fwRerender();
     }
   } catch (error) {
-    window.alert((currentLanguage === 'zh' ? '导入失败：' : 'Import failed: ') + (error?.message || error));
+    window.alert((getCurrentLanguage() === 'zh' ? '导入失败：' : 'Import failed: ') + (error?.message || error));
   }
 }
 
@@ -718,15 +742,15 @@ function fwCloseProjectPicker() {
 
 function fwSelectProject(projectId) {
   projectPickerOpen = false;
-  window.loadSavedAssemblyConfig(projectId).then(function() { fwEnterDetail(projectId, section || 'features'); });
+  loadSavedAssemblyConfig(projectId).then(function() { fwEnterDetail(projectId, section || 'features'); });
 }
 
-window.fwCreateNewAgent = function() {
+function fwCreateNewAgent() {
   fwOpenCreateDialog();
 };
 
-window.fwOpenProjectDetail = async function(projectId) {
-  await window.loadSavedAssemblyConfig(projectId);
+async function fwOpenProjectDetail(projectId) {
+  await loadSavedAssemblyConfig(projectId);
   fwEnterDetail(projectId, 'features');
 };
 
@@ -739,20 +763,20 @@ function renderFWSwitchProjectDialog(agent, currentName) {
       return [
         '<button class="fw-switch-modal-card' + (active ? ' active' : '') + '" type="button" data-action="fw.selectProject" data-agent-id="' + escapeHtml(item.id) + '">',
         '<strong>' + escapeHtml(item.name || item.id) + '</strong>',
-        '<span>' + escapeHtml([item.features.length + (currentLanguage === 'zh' ? ' 个 Feature' : ' Features'), item.goal || getAssemblyPresetLabel(item.preset) || ''].filter(Boolean).join(' · ')) + '</span>',
+        '<span>' + escapeHtml([item.features.length + (getCurrentLanguage() === 'zh' ? ' 个 Feature' : ' Features'), item.goal || getAssemblyPresetLabel(item.preset) || ''].filter(Boolean).join(' · ')) + '</span>',
         '</button>',
       ].join('');
     }).join('')
-    : '<div class="feature-detail-subtitle">' + escapeHtml(currentLanguage === 'zh' ? '还没有可切换的项目。' : 'No saved projects yet.') + '</div>';
+    : '<div class="feature-detail-subtitle">' + escapeHtml(getCurrentLanguage() === 'zh' ? '还没有可切换的项目。' : 'No saved projects yet.') + '</div>';
   return [
     '<div class="feature-detail-overlay">',
     '<div class="feature-detail-window">',
     '<div class="feature-detail-head">',
     '<div>',
-    '<div class="feature-detail-title">' + escapeHtml(currentLanguage === 'zh' ? '切换 Agent 项目' : 'Switch Agent Project') + '</div>',
-    '<div class="feature-detail-subtitle">' + escapeHtml(currentLanguage === 'zh' ? '选择一个项目继续配置能力或编辑编排图。' : 'Choose a project to configure capabilities or edit its graph.') + '</div>',
+    '<div class="feature-detail-title">' + escapeHtml(getCurrentLanguage() === 'zh' ? '切换 Agent 项目' : 'Switch Agent Project') + '</div>',
+    '<div class="feature-detail-subtitle">' + escapeHtml(getCurrentLanguage() === 'zh' ? '选择一个项目继续配置能力或编辑编排图。' : 'Choose a project to configure capabilities or edit its graph.') + '</div>',
     '</div>',
-    '<button class="feature-detail-close" type="button" title="' + escapeHtml(t('panel_close')) + '" data-action="fw.closeProjectPicker">×</button>',
+    '<button class="feature-detail-close" type="button" title="' + escapeHtml(window.t('panel_close')) + '" data-action="fw.closeProjectPicker">×</button>',
     '</div>',
     '<div class="fw-switch-modal-list">' + cards + '</div>',
     '</div>',
@@ -774,35 +798,35 @@ function fwCloseCreateDialog() {
   fwRerender();
 }
 
-window.fwConfirmCreateAgent = async function() {
+async function fwConfirmCreateAgent() {
   const folderInput = document.getElementById('fw-create-folder-name');
   const displayInput = document.getElementById('fw-create-display-name');
   const folderName = String(folderInput?.value || '').trim();
   const displayName = String(displayInput?.value || '').trim();
   if (!isValidAgentCreatorName(folderName)) {
-    window.alert(currentLanguage === 'zh' ? '项目标识必须以小写字母开头，只允许小写字母、数字和连字符。' : 'Project ID must start with a lowercase letter and contain only lowercase letters, numbers, and hyphens.');
+    window.alert(getCurrentLanguage() === 'zh' ? '项目标识必须以小写字母开头，只允许小写字母、数字和连字符。' : 'Project ID must start with a lowercase letter and contain only lowercase letters, numbers, and hyphens.');
     return;
   }
-  const agent = getCurrentAgentRecord();
+  const agent = window.getCurrentAgentRecord();
   if (agent) {
     const configs = getSavedAssemblyConfigs(agent);
     if (configs.some(c => c.id === folderName)) {
-      window.alert(currentLanguage === 'zh' ? `项目 "${folderName}" 已存在，请使用其他标识。` : `Project "${folderName}" already exists. Choose a different ID.`);
+      window.alert(getCurrentLanguage() === 'zh' ? `项目 "${folderName}" 已存在，请使用其他标识。` : `Project "${folderName}" already exists. Choose a different ID.`);
       return;
     }
   }
   createDialogOpen = false;
-  await window.resetAssemblyDraft();
-  const draft = getWorkspaceFormDraft(getCurrentAgentRecord());
+  await resetAssemblyDraft();
+  const draft = getWorkspaceFormDraft(window.getCurrentAgentRecord());
   draft['assembly-form'] = normalizeAssemblyDraft({
     ...(draft['assembly-form'] || {}),
     assembly_name: folderName,
     display_name: displayName,
     editing_config_id: folderName,
   });
-  saveWorkspaceFormDraft(getCurrentAgentRecord().id, draft);
+  saveWorkspaceFormDraft(window.getCurrentAgentRecord().id, draft);
   try {
-    await persistWorkspaceState(getCurrentAgentRecord(), draft);
+    await persistWorkspaceState(window.getCurrentAgentRecord(), draft);
   } catch (error) {
     console.error('Failed to save new project:', error);
   }
@@ -816,26 +840,26 @@ function renderFWCreateDialog() {
     '<div class="feature-detail-window" style="width:min(100%,480px);">',
     '<div class="feature-detail-head">',
     '<div>',
-    '<div class="feature-detail-title">' + escapeHtml(currentLanguage === 'zh' ? '创建新 Agent 项目' : 'Create New Agent Project') + '</div>',
-    '<div class="feature-detail-subtitle">' + escapeHtml(currentLanguage === 'zh' ? '设置项目标识和显示名称后进入配置界面。标识创建后不可修改。' : 'Set the project ID and display name before entering the editor. The ID cannot be changed after creation.') + '</div>',
+    '<div class="feature-detail-title">' + escapeHtml(getCurrentLanguage() === 'zh' ? '创建新 Agent 项目' : 'Create New Agent Project') + '</div>',
+    '<div class="feature-detail-subtitle">' + escapeHtml(getCurrentLanguage() === 'zh' ? '设置项目标识和显示名称后进入配置界面。标识创建后不可修改。' : 'Set the project ID and display name before entering the editor. The ID cannot be changed after creation.') + '</div>',
     '</div>',
-    '<button class="feature-detail-close" type="button" title="' + escapeHtml(t('panel_close')) + '" data-action="fw.closeCreateDialog">×</button>',
+    '<button class="feature-detail-close" type="button" title="' + escapeHtml(window.t('panel_close')) + '" data-action="fw.closeCreateDialog">×</button>',
     '</div>',
     '<div class="fw-create-fields">',
     '<div class="fw-field">',
-    '<label>' + escapeHtml(currentLanguage === 'zh' ? '项目标识' : 'Project ID') + '</label>',
+    '<label>' + escapeHtml(getCurrentLanguage() === 'zh' ? '项目标识' : 'Project ID') + '</label>',
     '<input id="fw-create-folder-name" class="fw-input" placeholder="my-agent" pattern="[a-z][a-z0-9-]*" data-action="fw.confirmCreateAgent" data-event="keydown">',
-    '<span class="fw-name-lock-hint">' + escapeHtml(currentLanguage === 'zh' ? '用于文件夹名和环境绑定，创建后不可修改' : 'Used for directory and environment binding. Cannot be changed.') + '</span>',
+    '<span class="fw-name-lock-hint">' + escapeHtml(getCurrentLanguage() === 'zh' ? '用于文件夹名和环境绑定，创建后不可修改' : 'Used for directory and environment binding. Cannot be changed.') + '</span>',
     '</div>',
     '<div class="fw-field">',
-    '<label>' + escapeHtml(currentLanguage === 'zh' ? '显示名称' : 'Display Name') + '</label>',
+    '<label>' + escapeHtml(getCurrentLanguage() === 'zh' ? '显示名称' : 'Display Name') + '</label>',
     '<input id="fw-create-display-name" class="fw-input" placeholder="My Agent" data-action="fw.confirmCreateAgent" data-event="keydown">',
-    '<span class="fw-name-lock-hint">' + escapeHtml(currentLanguage === 'zh' ? '在对话和界面中展示，可随时修改' : 'Shown in conversations and UI. Can be changed anytime.') + '</span>',
+    '<span class="fw-name-lock-hint">' + escapeHtml(getCurrentLanguage() === 'zh' ? '在对话和界面中展示，可随时修改' : 'Shown in conversations and UI. Can be changed anytime.') + '</span>',
     '</div>',
     '</div>',
     '<div class="workspace-actions" style="margin-top:16px;justify-content:flex-end;">',
-    '<button class="workspace-action secondary" type="button" data-action="fw.closeCreateDialog">' + escapeHtml(currentLanguage === 'zh' ? '取消' : 'Cancel') + '</button>',
-    '<button class="workspace-action" type="button" data-action="fw.confirmCreateAgent">' + escapeHtml(currentLanguage === 'zh' ? '创建并继续' : 'Create & Continue') + '</button>',
+    '<button class="workspace-action secondary" type="button" data-action="fw.closeCreateDialog">' + escapeHtml(getCurrentLanguage() === 'zh' ? '取消' : 'Cancel') + '</button>',
+    '<button class="workspace-action" type="button" data-action="fw.confirmCreateAgent">' + escapeHtml(getCurrentLanguage() === 'zh' ? '创建并继续' : 'Create & Continue') + '</button>',
     '</div>',
     '</div>',
     '</div>',
@@ -846,8 +870,8 @@ function fwOpenConfirmDialog(opts) {
   confirmDialog = {
     title: opts.title || '',
     message: opts.message || '',
-    confirmLabel: opts.confirmLabel || (currentLanguage === 'zh' ? '确认' : 'Confirm'),
-    cancelLabel: opts.cancelLabel || (currentLanguage === 'zh' ? '取消' : 'Cancel'),
+    confirmLabel: opts.confirmLabel || (getCurrentLanguage() === 'zh' ? '确认' : 'Confirm'),
+    cancelLabel: opts.cancelLabel || (getCurrentLanguage() === 'zh' ? '取消' : 'Cancel'),
     danger: !!opts.danger,
     onConfirm: opts.onConfirm || null,
   };
@@ -878,7 +902,7 @@ function renderFWConfirmDialog() {
     '<div class="feature-detail-title">' + escapeHtml(dialog.title) + '</div>',
     '<div class="feature-detail-subtitle">' + escapeHtml(dialog.message) + '</div>',
     '</div>',
-    '<button class="feature-detail-close" type="button" title="' + escapeHtml(t('panel_close')) + '" data-action="fw.closeConfirmDialog">×</button>',
+    '<button class="feature-detail-close" type="button" title="' + escapeHtml(window.t('panel_close')) + '" data-action="fw.closeConfirmDialog">×</button>',
     '</div>',
     '<div class="workspace-actions" style="margin-top:16px;justify-content:flex-end;">',
     '<button class="workspace-action secondary" type="button" data-action="fw.closeConfirmDialog">' + escapeHtml(dialog.cancelLabel) + '</button>',
@@ -907,10 +931,10 @@ function renderFWPromptDialog(agent, formId, draft) {
     '<div class="feature-detail-window" style="width:min(100%,780px);max-height:min(100%,780px);">',
     '<div class="feature-detail-head">',
     '<div>',
-    '<div class="feature-detail-title">' + escapeHtml(currentLanguage === 'zh' ? '编辑系统提示词' : 'Edit System Prompt') + '</div>',
-    '<div class="feature-detail-subtitle">' + escapeHtml(currentLanguage === 'zh' ? '输入 / 插入变量或模板片段。变量以块显示，模板与片段插入后展开为纯文本。' : 'Type / to insert variables or template fragments. Variables appear as blocks, templates expand to plain text.') + '</div>',
+    '<div class="feature-detail-title">' + escapeHtml(getCurrentLanguage() === 'zh' ? '编辑系统提示词' : 'Edit System Prompt') + '</div>',
+    '<div class="feature-detail-subtitle">' + escapeHtml(getCurrentLanguage() === 'zh' ? '输入 / 插入变量或模板片段。变量以块显示，模板与片段插入后展开为纯文本。' : 'Type / to insert variables or template fragments. Variables appear as blocks, templates expand to plain text.') + '</div>',
     '</div>',
-    '<button class="feature-detail-close" type="button" title="' + escapeHtml(t('panel_close')) + '" data-action="fw.closePromptEditor">×</button>',
+    '<button class="feature-detail-close" type="button" title="' + escapeHtml(window.t('panel_close')) + '" data-action="fw.closePromptEditor">×</button>',
     '</div>',
     '<div class="fw-prompt-editor-wrap">',
     '<div class="fw-prompt-editor fe-prompt-ce" contenteditable="true" autofocus data-fw-form-id="' + escapeHtml(formId) + '" data-action="fw.promptEditor" data-event="input keydown">' + htmlContent + '</div>',
@@ -918,11 +942,11 @@ function renderFWPromptDialog(agent, formId, draft) {
     '</div>',
     '<div class="fe-prompt-footer">',
     '<div class="fe-prompt-footer-hint">',
-    '<span>' + escapeHtml(currentLanguage === 'zh' ? '输入 / 可插入 ' : 'Type / to insert ') + '</span><span class="fe-prompt-footer-count">' + varCount + '</span><span>' + escapeHtml(currentLanguage === 'zh' ? ' 个变量' : ' variables') + '</span>',
+    '<span>' + escapeHtml(getCurrentLanguage() === 'zh' ? '输入 / 可插入 ' : 'Type / to insert ') + '</span><span class="fe-prompt-footer-count">' + varCount + '</span><span>' + escapeHtml(getCurrentLanguage() === 'zh' ? ' 个变量' : ' variables') + '</span>',
     '<span class="fe-prompt-footer-sep">·</span>',
-    '<span class="fe-prompt-footer-count">' + tplCount + '</span><span>' + escapeHtml(currentLanguage === 'zh' ? ' 个模板/片段' : ' templates/fragments') + '</span>',
+    '<span class="fe-prompt-footer-count">' + tplCount + '</span><span>' + escapeHtml(getCurrentLanguage() === 'zh' ? ' 个模板/片段' : ' templates/fragments') + '</span>',
     '</div>',
-    '<button class="fe-prompt-footer-done" type="button" data-action="fw.closePromptEditor">' + escapeHtml(currentLanguage === 'zh' ? '完成编辑' : 'Done') + '</button>',
+    '<button class="fe-prompt-footer-done" type="button" data-action="fw.closePromptEditor">' + escapeHtml(getCurrentLanguage() === 'zh' ? '完成编辑' : 'Done') + '</button>',
     '</div>',
     '</div>',
     '</div>',
@@ -940,10 +964,10 @@ function renderFWFeatureImportDialog() {
     '<div class="feature-detail-window">',
     '<div class="feature-detail-head">',
     '<div>',
-    '<div class="feature-detail-title">' + escapeHtml(currentLanguage === 'zh' ? '解析 Feature 包' : 'Parsed Feature Package') + '</div>',
-    '<div class="feature-detail-subtitle">' + escapeHtml(currentLanguage === 'zh' ? '确认解析结果后再决定是否导入。' : 'Review the parsed metadata before importing.') + '</div>',
+    '<div class="feature-detail-title">' + escapeHtml(getCurrentLanguage() === 'zh' ? '解析 Feature 包' : 'Parsed Feature Package') + '</div>',
+    '<div class="feature-detail-subtitle">' + escapeHtml(getCurrentLanguage() === 'zh' ? '确认解析结果后再决定是否导入。' : 'Review the parsed metadata before importing.') + '</div>',
     '</div>',
-    '<button class="feature-detail-close" type="button" title="' + escapeHtml(t('panel_close')) + '" data-action="fw.cancelFeatureImport">×</button>',
+    '<button class="feature-detail-close" type="button" title="' + escapeHtml(window.t('panel_close')) + '" data-action="fw.cancelFeatureImport">×</button>',
     '</div>',
     '<div class="fw-import-result">',
     '<div class="fw-import-card">',
@@ -954,9 +978,9 @@ function renderFWFeatureImportDialog() {
     '</div>',
     warnings.length ? '<div class="fw-import-warning">' + warnings.map(item => escapeHtml(item)).join('<br>') + '</div>' : '',
     '<div class="workspace-actions" style="justify-content:flex-end;">',
-    '<button class="workspace-action secondary" type="button" data-action="fw.cancelFeatureImport">' + escapeHtml(currentLanguage === 'zh' ? '取消' : 'Cancel') + '</button>',
-    '<button class="workspace-action" type="button" data-action="fw.confirmFeatureImport" data-mode="mount">' + escapeHtml(currentLanguage === 'zh' ? '导入' : 'Import') + '</button>',
-    '<button class="workspace-action secondary" type="button" data-action="fw.confirmFeatureImport" data-mode="repo">' + escapeHtml(currentLanguage === 'zh' ? '导入并添加到仓库' : 'Import to Repository') + '</button>',
+    '<button class="workspace-action secondary" type="button" data-action="fw.cancelFeatureImport">' + escapeHtml(getCurrentLanguage() === 'zh' ? '取消' : 'Cancel') + '</button>',
+    '<button class="workspace-action" type="button" data-action="fw.confirmFeatureImport" data-mode="mount">' + escapeHtml(getCurrentLanguage() === 'zh' ? '导入' : 'Import') + '</button>',
+    '<button class="workspace-action secondary" type="button" data-action="fw.confirmFeatureImport" data-mode="repo">' + escapeHtml(getCurrentLanguage() === 'zh' ? '导入并添加到仓库' : 'Import to Repository') + '</button>',
     '</div>',
     '</div>',
     '</div>',
@@ -984,7 +1008,7 @@ window.ClawFW.actions.registerMany({
   // 键盘路径只在 Enter 时确认，其余键位忽略（原内联 if 语义）。
   'fw.confirmCreateAgent': (el, ev) => {
     if (ev.type === 'keydown' && ev.key !== 'Enter') return;
-    window.fwConfirmCreateAgent();
+    fwConfirmCreateAgent();
   },
   'fw.closeConfirmDialog': () => fwCloseConfirmDialog(),
   'fw.handleConfirm': () => fwHandleConfirm(),
@@ -998,19 +1022,101 @@ window.ClawFW.actions.registerMany({
 });
 
 
-// ── 显式导出面（IIFE 内部实现不进全局词法环境）──────────────────────────────
-// 消费方：app-ui 注册块的 window 转调（fw.* 动作）与 blocks.registerPrimitive。
-window.fwSwitchSection = fwSwitchSection;
-window.fwOpenPromptEditor = fwOpenPromptEditor;
-window.fwOpenProjectPicker = fwOpenProjectPicker;
-window.fwBackToList = fwBackToList;
-window.fwToggleFeature = fwToggleFeature;
-window.fwSetFeatureFilter = fwSetFeatureFilter;
-window.fwOpenFeatureImport = fwOpenFeatureImport;
-window.fwSetFeatureQuery = fwSetFeatureQuery;
-window.fwCommitFeatureQuery = fwCommitFeatureQuery;
-window.fwGetFeatureQuery = fwGetFeatureQuery;
-window.fwRerender = fwRerender;
-window.renderProjectListBlock = renderProjectListBlock;
+// ── 兼容桥（classic 消费方收敛后注销）────────────────────────────────
+// 消费面（grep public/src，排除本批文件）：
+//   renderProjectListBlock —— app-ui 的 blocks.registerPrimitive('project-list')
+//   fwRerender —— app-ui（4 处渲染后重绘）、ctx-menu-handlers（项目动作后刷新）
+//   fwBackToList —— app-ui 的 fw.* 动作、ctx-menu-handlers
+//   fwSwitchSection / fwOpenPromptEditor / fwOpenProjectPicker / fwToggleFeature /
+//   fwSetFeatureFilter / fwOpenFeatureImport / fwSetFeatureQuery /
+//   fwCommitFeatureQuery / fwGetFeatureQuery / fwCreateNewAgent /
+//   fwOpenProjectDetail —— app-ui 的 fw.* 动作注册与卡片模板动作
+//
+// 补充漏兼容（非新增能力，修复本模块 ESM 化时丢掉的隐式全局发布）：
+//   renderFWCreateDialog / renderFWConfirmDialog / renderFWPromptDialog /
+//   renderFWSwitchProjectDialog / renderFWFeatureImportDialog
+//     —— 唯一消费方是 classic app-ui 的 fw 渲染器：renderFWList（app-ui:475-476）
+//     与 renderFWDetail（app-ui:523-526）在拼 HTML 时以裸标识符调用这 5 个函数。
+//     它们原来是本文件的顶层 function（classic 相隐式成为 window 属性），ESM 化
+//     后这层发布消失 → app-ui 渲染 fw 列表/详情必 ReferenceError（对话框 DOM
+//     永远出不来）。app-ui 仍 classic（同步首屏渲染，不能 import），故按既有域
+//     补桥并同时保留具名导出，供 app-ui 迁移时改 import。
+//     时序（R1/R2/R4 + 同名不可配置）：
+//       - 这 5 个名字全仓无第二处顶层 function / window 赋值（仅本文件定义），
+//         不存在 classic 顶层函数属性带来的 non-configurable 冲突；
+//       - 调用点只在 app-ui 的 renderFWList / renderFWDetail 函数体内，无 classic
+//         顶层调用（R1 零触线）；
+//       - 二者唯一入口是本模块的 renderFWBody（ESM）→ window.renderFWList，即
+//         调用必然发生在模块图求值之后（R4：deferred 求值早于 DOMContentLoaded，
+//         而 fw 渲染只发生在 boot 之后的渲染路径里）；首屏冷态（app-main 顶层
+//         applyTheme/applyLanguage → renderCurrentMainView）不渲染 fw 工作台
+//         （无 current agent / 无 workspace tab），因此不会被提前调用。
+// 收敛条件：app-ui / ctx-menu-handlers / workspace-actions 迁入 ESM 后改 import。
+// 不上桥（消费方全部 ESM import）：maybeWarnAssemblySessionDrift —— assembly-actions /
+// workspace-actions 的「恢复旧对话前的漂移提示」已直接 import，桥注销、仍作命名导出。
+// 不上桥（零跨文件消费方，改回模块私有直调）：fwHandlePromptInput /
+// fwHandlePromptKeydown / fwClickPickerItem / fwSetPickerCategory /
+// fwSetPickerSearch / updateFWPromptDraft / fwConfirmCreateAgent —— 原 window
+// 发布只被本模块的 data-action 注册与内部调用使用。
+const bridgeState = {
+  fwSwitchSection,
+  fwOpenPromptEditor,
+  fwOpenProjectPicker,
+  fwBackToList,
+  fwToggleFeature,
+  fwSetFeatureFilter,
+  fwOpenFeatureImport,
+  fwSetFeatureQuery,
+  fwCommitFeatureQuery,
+  fwGetFeatureQuery,
+  fwRerender,
+  fwCreateNewAgent,
+  fwOpenProjectDetail,
+  renderProjectListBlock,
+  // classic app-ui 的 fw 列表/详情渲染器（逐键证据见上方「补充漏兼容」）
+  renderFWCreateDialog,
+  renderFWConfirmDialog,
+  renderFWPromptDialog,
+  renderFWSwitchProjectDialog,
+  renderFWFeatureImportDialog,
+};
+for (const [key, value] of Object.entries(bridgeState)) {
+  window.KernelState.defineKey('fw-config-panel', key, value);
+}
+window.KernelState.claim('fw-config-panel', {
+  get: (key) => bridgeState[key],
+  set: (key, value) => { bridgeState[key] = value; },
+});
 
-})();
+export {
+  // 批内消费（feature-config / assembly-actions）
+  requestFWFeatureCapabilities,
+  ensureFWFeatureCapabilities,
+  maybeWarnAssemblySessionDrift,
+  renderProjectListBlock,
+  // 桥键（app-ui / ctx-menu-handlers / workspace-actions 收敛后改 import）
+  fwSwitchSection,
+  fwOpenPromptEditor,
+  fwOpenProjectPicker,
+  fwBackToList,
+  fwToggleFeature,
+  fwSetFeatureFilter,
+  fwOpenFeatureImport,
+  fwSetFeatureQuery,
+  fwCommitFeatureQuery,
+  fwGetFeatureQuery,
+  fwRerender,
+  fwCreateNewAgent,
+  fwOpenProjectDetail,
+  // 跨模块具名导出（非桥键）：ctx-menu-handlers 的非编程小助手项目删除确认
+  // 直接 import；classic 相它靠顶层 function 声明隐式成为 window 属性，ESM 后
+  // 这层隐式发布不存在，故收成真实导出而不是消费方 window 死调用。
+  fwOpenConfirmDialog,
+  // fw 对话框渲染器：classic app-ui（renderFWList / renderFWDetail）经桥键取用，
+  // 同时作为具名导出交出，app-ui 迁 ESM 时可直接 import。
+  renderFWCreateDialog,
+  renderFWConfirmDialog,
+  renderFWPromptDialog,
+  renderFWSwitchProjectDialog,
+  renderFWFeatureImportDialog,
+};

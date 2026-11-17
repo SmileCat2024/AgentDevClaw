@@ -25,9 +25,12 @@ try {
   await page.addStyleTag({ content: '.follow-latest-btn { transition: none; }' });
   await page.addScriptTag({ content: await fs.readFile('node_modules/marked/lib/marked.umd.js', 'utf8') });
   await page.addScriptTag({ content: await fs.readFile('public/src/modules/kernel-state.js', 'utf8') });
-  for (const name of ['app-core', 'modules/action-dispatcher', 'modules/markdown-bootstrap', 'modules/session-view-state', 'modules/workspace-agents']) {
+  for (const name of ['app-core', 'modules/action-dispatcher', 'modules/markdown-bootstrap', 'modules/session-view-state']) {
     await page.addScriptTag({ content: await fs.readFile(`public/src/${name}.js`, 'utf8') });
   }
+  // workspace-agents 已迁 ESM：按真实模块 URL 加载（classic 消费方经
+  // window.ClawFW.workspaceAgents 命名空间调用，协议不变）。
+  await page.addScriptTag({ type: 'module', url: 'http://claw.test/src/modules/workspace-agents.js' });
   await page.evaluate(() => Promise.all([
     import('/src/modules/markdown-utils.js'),
     import('/src/modules/call-interrupt-host.js'),

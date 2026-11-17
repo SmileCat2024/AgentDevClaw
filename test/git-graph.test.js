@@ -1,8 +1,8 @@
 /**
  * git-graph.js 泳道算法测试
  *
- * 用 frontend-vm 沙箱加载 public/src/modules/git-graph.js，验证复刻 VS Code
- * SCM 图形视图（scmHistory.ts）后的槽位模型与 SVG 输出：
+ * 真实 import public/src/modules/git-graph.js（ESM 迁移 P2 批次 2），验证复刻
+ * VS Code SCM 图形视图（scmHistory.ts）后的槽位模型与 SVG 输出：
  *   - 槽位逐行传递：第一父继承被消费槽位的位置与颜色，其余父追加到行尾
  *   - 重复槽位（merge 的第二父已被追踪）存在一行后随消费归并
  *   - 父在窗口外时槽位保留到最后（无"截断线"概念）
@@ -10,24 +10,29 @@
  *   - SVG：HEAD 空心环、merge 双环、全无虚线、rowTops 偏移
  */
 
-import { describe, it, before } from 'node:test';
+import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { createFrontendSandbox } from './helpers/frontend-vm.js';
+import { loadModuleOnce } from './helpers/esm-module-loader.js';
 
-let ctx;
+let gitGraph;
+let cleanup;
 
-before(() => {
-  ctx = createFrontendSandbox();
-  ctx.loadSource('public/src/modules/git-graph.js');
+before(async () => {
+  const loaded = await loadModuleOnce('public/src/modules/git-graph.js');
+  gitGraph = loaded.module;
+  cleanup = loaded.cleanup;
 });
 
-// vm 沙箱与本 realm 的对象原型不同，assert 深比较会失败：
-// 结果一律 JSON 序列化跨越沙箱边界
+after(() => cleanup());
+
+// 表达式里的 window.GitGraph 绑定到模块的真实导出对象（不是沙箱变换）：
+// 断言值跨 realm 无原型差异，直接 JSON 序列化后深比较。
 function run(expr) {
-  return JSON.parse(ctx.run('JSON.stringify(' + expr + ')'));
+  const code = expr.replaceAll('window.GitGraph', '__gitGraph');
+  return JSON.parse(JSON.stringify(new Function('__gitGraph', `return (${code});`)(gitGraph)));
 }
 
-// 常量经沙箱导出（避免测试硬编码 ROW_H/LANE_W，改视觉参数不破坏断言）
+// 常量取自模块导出（避免测试硬编码 ROW_H/LANE_W，改视觉参数不破坏断言）
 function constants() {
   return run('window.GitGraph.constants');
 }

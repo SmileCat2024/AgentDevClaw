@@ -16,19 +16,31 @@
  * 实例化使用（事件委托，多实例互不干扰）：
  *   const editor = createFeatureConfigEditor({ host, scopeId });
  *   editor.open(); editor.close();
+ *
+ * ESM 化（P2 迁移批次 6）：两态判定与即时保存来自 feature-setup-core.js 命名
+ * 导出，语言经 i18n-environment-state.js 读取，下拉增强来自 claw-select.js。
+ * createFeatureConfigEditor 的桥已注销（ph-settings / dir-config-dialog 均为
+ * 静态 import，零 window 消费）。
  */
+
+import {
+  fsFieldStates, fsGetPathValue, fsControlValue, fsShowReset, fsPropFor, fsWithField,
+} from './feature-setup-core.js';
+import { getCurrentLanguage } from './i18n-environment-state.js';
+import { escapeHtml } from './markdown-utils.js';
+import { enhanceAll } from './claw-select.js';
 
 let _fceSeq = 0;
 
 const _FCE_GEAR_SVG = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>';
 
 function _fceT(zh, en) {
-  return (typeof currentLanguage !== 'undefined' && currentLanguage === 'zh') ? zh : en;
+  return getCurrentLanguage() === 'zh' ? zh : en;
 }
 
 // ── 实例工厂 ──────────────────────────────────────────────────
 
-function createFeatureConfigEditor(options = {}) {
+export function createFeatureConfigEditor(options = {}) {
   const instanceId = `fce-${++_fceSeq}`;
   const host = options.host;
   if (!host || typeof host.querySelector !== 'function') {
@@ -340,10 +352,10 @@ function createFeatureConfigEditor(options = {}) {
     applyShellAvailability();
   }
 
-  // select 下拉统一走 ClawSelect 增强（与模型配置页同款视觉）；组件未加载时
-  // 保留原生 select 的 fs-select 样式作为降级。enhance 幂等，局部重建安全。
+  // select 下拉统一走 ClawSelect 增强（与模型配置页同款视觉）；enhance 幂等，
+  // 局部重建安全。
   function enhanceSelects(container) {
-    if (container && window.ClawSelect?.enhanceAll) window.ClawSelect.enhanceAll(container);
+    if (container) enhanceAll(container);
   }
 
   // ── 控件 ────────────────────────────────────────────────────
@@ -853,3 +865,5 @@ function createFeatureConfigEditor(options = {}) {
 
   return { open, close, instanceId };
 }
+
+// 桥已注销：ph-settings.js 已直接 import createFeatureConfigEditor。

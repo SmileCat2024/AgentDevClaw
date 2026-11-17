@@ -5,20 +5,49 @@
  * Trim 对话框已由统一精简页面（trim-page.js）替代并删除；
  * 本模块只保留分支对话框。
  *
- * 依赖全局状态 (定义在 app-core.js):
- *   currentLanguage
- * 依赖全局函数:
- *   renderCurrentMainView, escapeHtml, closeCompactMenu,
- *   getCurrentAgentRecord, createCompactedResumeSession,
- *   loadAgents, applyManagedPrebuiltAgent, setPreferredUnitMode,
- *   markSessionLoading, clearSessionLoading, window.switchAgent,
- *   fmtPct (app-core.js，trim/branch 共用口径)
- * 导出全局函数 (window.*):
- *   openBranchDialog, phOpenRenameDialog（重命名对话框，动态 overlay）
+ * ESM 化（P2 W1-4 会话弹窗与精简浏览批次）：语言、转义、toast、状态 owner、
+ * 侧栏 operation 与会话变更（sidebar-operations / session-mutation）及已迁宿主
+ * 能力（agent-snapshot-loader / runtime-switch / chat-loading）显式 import；
+ * 仍为 classic 的渲染与身份查询函数经 window 晚绑定（行内标注定义域）。两个入口函数仍有 classic
+ * 消费方（右键菜单 / 会话上下文菜单），经 kernel-state 兼容桥暴露。
+ *
+ * 依赖全局函数（classic，经 window）:
+ *   renderCurrentMainView, fmtPct, renderAgentList,
+ *   getCurrentAgentRecord, setPreferredUnitMode, markSessionLoading,
+ *   clearSessionLoading, upsertConnectedAgent, getRuntimeId,
+ *   isRemoteNamespaceAgentId, bumpNavigationGuard, window.alert,
+ *   window.RemoteConnections
+ * ESM import（已迁域）: sidebar-operations（operation 生命周期 / 会话 delta /
+ *   waitForSidebarTargetRuntime）、session-mutation（归档乐观回滚与源 runtime
+ *   回收）、session-ui（getWorkspaceSessionById）、project-data（getPathLeaf）、
+ *   context-menu（closeCompactMenu）、toast-notify（ClawToast）
  * 分发器动作 (ClawFW.actions):
  *   sessionDialogs.closeBranch / submitBranch（index.html 分支弹窗按钮）
  *   sessionDialogs.closeRename（重命名对话框取消/关闭）
  */
+
+import { allAgents } from './agent-store-state.js';
+import { currentRuntimeAgentId, _navigationGuardEpoch } from './orchestration-state.js';
+import { setLastRenderedWorkspaceHtml } from './render-entry-state.js';
+import { getCurrentLanguage } from './i18n-environment-state.js';
+import { escapeHtml } from './markdown-utils.js';
+import { ClawToast } from './toast-notify.js';
+import {
+  beginSidebarOperation,
+  getSidebarOperation,
+  updateSidebarOperation,
+  finishSidebarOperation,
+  createSidebarOperationId,
+  applySessionMutationDelta,
+  waitForSidebarTargetRuntime,
+} from './sidebar-operations.js';
+import { markSessionArchivedForMutation, reconcileArchivedSourceRuntime } from './session-mutation.js';
+import { getWorkspaceSessionById } from './session-ui.js';
+import { getPathLeaf } from './project-data.js';
+import { closeCompactMenu } from './context-menu.js';
+import { loadAgents } from './agent-snapshot-loader-host.js';
+import { requestSwitch } from './runtime-switch-host.js';
+import { beginChatLoadingSession, clearChatLoadingSession } from './chat-loading-host.js';
 
 /* ── Branch dialog state ── */
 let branchDialogState = { agentId: '', sessionId: '', rounds: [], preamblePercent: 0, selectedIdx: -1, archiveAfter: false };
@@ -28,7 +57,7 @@ const branchFooterInfo = document.getElementById('branch-footer-info');
 
 function renderPreambleItem(preamblePercent) {
   if (preamblePercent <= 0) return '';
-  const pct = fmtPct(preamblePercent);
+  const pct = window.fmtPct(preamblePercent);
   return `<div class="trim-preamble-item"><span class="trim-preamble-label">系统上下文</span><span class="trim-preamble-pct">${pct}</span></div>`;
 }
 
@@ -41,7 +70,7 @@ function newIdempotencyKey() {
   return `key-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-window.openBranchDialog = async (agentId, sessionId, archiveAfter = false) => {
+export async function openBranchDialog(agentId, sessionId, archiveAfter = false) {
   // 线程宿主（ADR-0032）：分支即新线程，源会话留在原线程链内——「归档原
   // 会话」只对链中旧快照打不可见标志，与用户「归档这条对话」的预期错位，
   // 钳制关闭。远程会话不在本地线程索引（保守 false），归档透传契约不变。
@@ -55,11 +84,11 @@ window.openBranchDialog = async (agentId, sessionId, archiveAfter = false) => {
   const branchTitleEl = branchDialog.querySelector('.trim-title');
   const branchSubmitEl = document.getElementById('branch-submit');
   if (archiveAfter) {
-    if (branchTitleEl) branchTitleEl.textContent = currentLanguage === 'zh' ? '创建分支并归档原会话' : 'Branch & Archive Original';
-    if (branchSubmitEl) branchSubmitEl.textContent = currentLanguage === 'zh' ? '分支并归档' : 'Branch & Archive';
+    if (branchTitleEl) branchTitleEl.textContent = getCurrentLanguage() === 'zh' ? '创建分支并归档原会话' : 'Branch & Archive Original';
+    if (branchSubmitEl) branchSubmitEl.textContent = getCurrentLanguage() === 'zh' ? '分支并归档' : 'Branch & Archive';
   } else {
-    if (branchTitleEl) branchTitleEl.textContent = currentLanguage === 'zh' ? '分支' : 'Branch';
-    if (branchSubmitEl) branchSubmitEl.textContent = currentLanguage === 'zh' ? '创建分支' : 'Create Branch';
+    if (branchTitleEl) branchTitleEl.textContent = getCurrentLanguage() === 'zh' ? '分支' : 'Branch';
+    if (branchSubmitEl) branchSubmitEl.textContent = getCurrentLanguage() === 'zh' ? '创建分支' : 'Create Branch';
   }
   branchDialog.style.display = '';
   document.getElementById('branch-submit').disabled = true;
@@ -83,7 +112,7 @@ window.openBranchDialog = async (agentId, sessionId, archiveAfter = false) => {
     branchRoundList.innerHTML = '<div class="trim-loading">加载失败：' + escapeHtml(err.message || err) + '</div>';
     branchFooterInfo.textContent = '';
   }
-};
+}
 
 function closeBranchDialog() {
   branchDialog.style.display = 'none';
@@ -100,8 +129,8 @@ function renderBranchRoundList() {
   const preambleHtml = renderPreambleItem(branchDialogState.preamblePercent);
 
   const roundsHtml = rounds.map((r, idx) => {
-    const pctText = fmtPct(r.charPercent || 0);
-    const cumText = fmtPct(r.cumulativePercent || 0);
+    const pctText = window.fmtPct(r.charPercent || 0);
+    const cumText = window.fmtPct(r.cumulativePercent || 0);
 
     return [
       `<div class="trim-round-item branch-selectable" data-branch-index="${idx}">`,
@@ -149,15 +178,15 @@ function updateBranchFooterInfo() {
   const rounds = branchDialogState.rounds;
   const idx = branchDialogState.selectedIdx;
   if (idx < 0 || !rounds.length) {
-    branchFooterInfo.textContent = currentLanguage === 'zh'
+    branchFooterInfo.textContent = getCurrentLanguage() === 'zh'
       ? `共 ${rounds.length} 轮，点击选择分支点`
       : `${rounds.length} rounds, click to select branch point`;
     return;
   }
   const kept = idx + 1;
   const cut = rounds.length - kept;
-  const cumPct = fmtPct(rounds[idx].cumulativePercent || 0);
-  branchFooterInfo.innerHTML = currentLanguage === 'zh'
+  const cumPct = window.fmtPct(rounds[idx].cumulativePercent || 0);
+  branchFooterInfo.innerHTML = getCurrentLanguage() === 'zh'
     ? `保留 ${kept} 轮 · 截断 ${cut} 轮 · 占用约 <span class="trim-footer-pct">${cumPct}</span> 上下文`
     : `Keep ${kept} · cut ${cut} · ~<span class="trim-footer-pct">${cumPct}</span> context`;
 }
@@ -167,16 +196,16 @@ branchRoundList.addEventListener('click', handleBranchRoundClick);
 async function submitBranch() {
   const { agentId, sessionId, rounds, selectedIdx, archiveAfter, snapshotRevision } = branchDialogState;
   if (!agentId || !sessionId || selectedIdx < 0 || !rounds.length) return;
-  bumpNavigationGuard();
+  window.bumpNavigationGuard();
   const _navGuard = _navigationGuardEpoch;
 
   const cutMsgIndexEnd = rounds[selectedIdx].msgIndexEnd;
 
   closeBranchDialog();
-  markSessionLoading(agentId, sessionId);  const _oldRuntimeId = currentRuntimeAgentId;
+  window.markSessionLoading(agentId, sessionId);  const _oldRuntimeId = currentRuntimeAgentId;
   let archiveRollback = null;
   let branchSessionCommitted = false;
-  if (archiveAfter && typeof markSessionArchivedForMutation === 'function') {
+  if (archiveAfter) {
     archiveRollback = markSessionArchivedForMutation(agentId, sessionId, 'branch');
   }
   const sourceAgent = allAgents.find((item) => item.id === agentId) || null;
@@ -200,7 +229,7 @@ async function submitBranch() {
     // R2-02（ADR-0011）：远程命名空间 sessionId → 请求身份收敛为宿主级命名
     // 空间 id，服务端命名空间分支转发远程（新会话文件、checkpoint 提取全部
     // 发生在远程端）；本地身份原样。远程写强制幂等键（本地忽略）。
-    const isRemoteSession = typeof isRemoteNamespaceAgentId === 'function' && isRemoteNamespaceAgentId(sessionId);
+    const isRemoteSession = typeof window.isRemoteNamespaceAgentId === 'function' && window.isRemoteNamespaceAgentId(sessionId);
     const requestAgentId = isRemoteSession
       ? (window.RemoteConnections?.getHostNamespaceIdForSession?.(sessionId, agentId) || agentId)
       : agentId;
@@ -223,7 +252,7 @@ async function submitBranch() {
       // 远程响应中的裸新会话 id 数据层命名空间化（ADR-0012）。
       result = window.RemoteConnections?.namespaceMutationResult?.(sessionId, result) || result;
     }
-    if (typeof applySessionMutationDelta === 'function') applySessionMutationDelta(agentId, result);
+    applySessionMutationDelta(agentId, result);
     const archiveSucceeded = !archiveAfter || result?.archive?.succeeded === true;
     if (!archiveSucceeded && archiveRollback) {
       archiveRollback();
@@ -246,8 +275,8 @@ async function submitBranch() {
     // 远程目标：响应中的 agent 是远程端 runtime 形态（裸 id），不进入本地
     // allAgents——切换走目录轮询（R2-01 activate 同链路）。
     const readyAgent = (isRemoteSession ? null : result?.agent) || null;
-    const connectedTarget = readyAgent ? (upsertConnectedAgent(readyAgent) || readyAgent) : null;
-    const nextRuntimeId = connectedTarget ? (getRuntimeId(connectedTarget) || null) : null;
+    const connectedTarget = readyAgent ? (window.upsertConnectedAgent(readyAgent) || readyAgent) : null;
+    const nextRuntimeId = connectedTarget ? (window.getRuntimeId(connectedTarget) || null) : null;
     // 服务端早响应（runtimeStart: 'async'）：本地分支的 runtime 在服务端后台
     // 启动，响应不含 agent。侧栏 operation 占位持续呈现"启动中"，就绪后由
     // 本任务接管导航——与 replacement 流程同一条 waitForRuntimeReady 管道。
@@ -278,16 +307,16 @@ async function submitBranch() {
         ? await window.RemoteConnections.waitForRuntimeForSession(targetSessionId, 50)
         : null;
       if (runtimeRef && _navGuard === _navigationGuardEpoch) {
-        setPreferredUnitMode('chat', allAgents.find((agent) => agent.id === agentId) || getCurrentAgentRecord());
+        window.setPreferredUnitMode('chat', allAgents.find((agent) => agent.id === agentId) || window.getCurrentAgentRecord());
         beginChatLoadingSession();
         await requestSwitch(runtimeRef, 'branch');
         if (!archiveAfter) finishSidebarOperation(branchOperation?.operationId, 'settled');
       } else {
-        lastRenderedWorkspaceHtml = '';
-        renderCurrentMainView();
+        setLastRenderedWorkspaceHtml('');
+        window.renderCurrentMainView();
       }
     } else if (nextRuntimeId) {
-      setPreferredUnitMode('chat', allAgents.find((agent) => agent.id === agentId) || getCurrentAgentRecord());
+      window.setPreferredUnitMode('chat', allAgents.find((agent) => agent.id === agentId) || window.getCurrentAgentRecord());
       beginChatLoadingSession();
       await requestSwitch(nextRuntimeId, 'branch');
       if (!archiveAfter) finishSidebarOperation(branchOperation?.operationId, 'settled');
@@ -307,14 +336,14 @@ async function submitBranch() {
           updateSidebarOperation(branchOperation?.operationId, { phase: 'degraded', errorCode: 'target_runtime_stopped' });
           return;
         }
-        const runtimeTarget = upsertConnectedAgent(targetAgent) || targetAgent;
-        const runtimeId = getRuntimeId(runtimeTarget) || '';
+        const runtimeTarget = window.upsertConnectedAgent(targetAgent) || targetAgent;
+        const runtimeId = window.getRuntimeId(runtimeTarget) || '';
         if (!runtimeId) {
           updateSidebarOperation(branchOperation?.operationId, { phase: 'degraded', errorCode: 'target_runtime_stopped' });
           return;
         }
         updateSidebarOperation(branchOperation?.operationId, { phase: 'target-ready', targetRuntimeId: runtimeId });
-        setPreferredUnitMode('chat', allAgents.find((agent) => agent.id === agentId) || getCurrentAgentRecord());
+        window.setPreferredUnitMode('chat', allAgents.find((agent) => agent.id === agentId) || window.getCurrentAgentRecord());
         beginChatLoadingSession();
         return requestSwitch(runtimeId, 'branch').then(() => {
           finishSidebarOperation(branchOperation?.operationId, 'settled');
@@ -323,11 +352,11 @@ async function submitBranch() {
         updateSidebarOperation(branchOperation?.operationId, { phase: 'degraded', errorCode: 'target_runtime_stopped' });
       });
     } else {
-      lastRenderedWorkspaceHtml = '';
-      renderCurrentMainView();
+      setLastRenderedWorkspaceHtml('');
+      window.renderCurrentMainView();
     }
     if (archiveAfter && !archiveSucceeded) {
-      window.alert((currentLanguage === 'zh' ? '新分支已创建，但原会话归档失败：' : 'The branch was created, but the original could not be archived: ') + (result?.archive?.error || 'unknown error'));
+      window.alert((getCurrentLanguage() === 'zh' ? '新分支已创建，但原会话归档失败：' : 'The branch was created, but the original could not be archived: ') + (result?.archive?.error || 'unknown error'));
     }
     loadAgents().catch(e => console.warn(e));
     archiveRollback = null;
@@ -340,12 +369,12 @@ async function submitBranch() {
       } else if (branchOperation?.operationId) {
         finishSidebarOperation(branchOperation.operationId, 'failed', { errorCode: 'branch_failed' });
       }
-      window.alert((currentLanguage === 'zh' ? '分支失败：' : 'Branch failed: ') + (error?.message || error));
+      window.alert((getCurrentLanguage() === 'zh' ? '分支失败：' : 'Branch failed: ') + (error?.message || error));
     } else {
       finishSidebarOperation(branchOperation?.operationId, 'settled');
       archiveRollback = null;
     }
-    clearSessionLoading(agentId);
+    window.clearSessionLoading(agentId);
     clearChatLoadingSession();
   }
 }
@@ -365,12 +394,12 @@ function _closeRenameDialog() {
   _renameOverlay = null;
 }
 
-window.phOpenRenameDialog = async function (agentId, sessionId) {
+export async function phOpenRenameDialog(agentId, sessionId) {
   _closeRenameDialog();
   if (!agentId || !sessionId) return;
-  const isZh = currentLanguage === 'zh';
+  const isZh = getCurrentLanguage() === 'zh';
   // 当前标题：本地缓存优先，取不到时由列表行数据兜底
-  const agent = (typeof allAgents !== 'undefined' ? allAgents : []).find((item) => item.id === agentId) || null;
+  const agent = allAgents.find((item) => item.id === agentId) || null;
   const session = (agent?.workspace_sessions?.sessions || []).find((s) => s.id === sessionId) || null;
   const currentTitle = session?.title || sessionId;
 
@@ -421,10 +450,10 @@ window.phOpenRenameDialog = async function (agentId, sessionId) {
       const result = await resp.json();
       if (resp.ok && result.ok) {
         _closeRenameDialog();
-        if (typeof applySessionMutationDelta === 'function') applySessionMutationDelta(agentId, result);
-        if (typeof lastRenderedWorkspaceHtml !== 'undefined') lastRenderedWorkspaceHtml = '';
-        if (typeof renderCurrentMainView === 'function') renderCurrentMainView();
-        if (typeof renderAgentList === 'function') renderAgentList();
+        applySessionMutationDelta(agentId, result);
+        setLastRenderedWorkspaceHtml('');
+        window.renderCurrentMainView();
+        window.renderAgentList();
       } else {
         saved = false;
         saveBtn.disabled = false;
@@ -447,12 +476,15 @@ window.phOpenRenameDialog = async function (agentId, sessionId) {
   _renameOverlay = overlay;
   input.focus();
   input.select();
-};
+}
 
 window.ClawFW.actions.registerMany({
   'sessionDialogs.closeBranch': () => closeBranchDialog(),
   'sessionDialogs.submitBranch': () => submitBranch(),
   'sessionDialogs.closeRename': () => _closeRenameDialog(),
 });
+
+// 桥已注销：会话上下文菜单的两处入口（ctx-menu-handlers / ctx-menu-items）
+// 已直接 import openBranchDialog / phOpenRenameDialog。
 
 // ── End Session Dialogs ────────────────────────────────────────────

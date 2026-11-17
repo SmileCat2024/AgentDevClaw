@@ -2,12 +2,18 @@
  * persistent-input.js — Phase B-4
  * 持久输入框 / 队列系统
  *
- * 包含：
+ * 包含（P2 W2-3a 之后仍在现在这个 classic 文件里的部分）：
  * - 常驻输入框渲染与交互（renderPersistentInput, onPersistentBtnClick, handlePersistentInputKey）
- * - 队列气泡管理与后端同步（_renderQueueBubbles, _syncQueueFromBackend,
- *   _syncPersistentInputUi；投影经 rebindQueueProjectionForRuntime 按会话归属）
+ * - 提交路径（submitQueuedInput、发送反馈窗口、动作按钮状态机）
+ * - 排队气泡投影的会话重绑（rebindQueueProjectionForRuntime：首屏同步链直接
+ *   调用，保留唯一 classic 实现）
  * - 中断操作（interruptAgent）
+ * - 图片附件（按会话隔离的待发送桶与转存）
  * - 上次对话结束时间显示（_renderLastCallElapsed + setInterval）
+ *
+ * 已迁 ESM（P2 W2-3a）：队列气泡渲染与后端/SSE 队列快照同步 →
+ * p2-w2-3a-queue-projection.js；排队投影与结束时间状态 owner →
+ * p2-w2-3a-input-queue-state.js / p2-w2-3a-call-elapsed-state.js。
  *
  * 依赖（全局，由 app-core.js / app-main.js / 已有模块提供）：
  * - t, escapeHtml, currentLanguage (app-core.js)
@@ -23,7 +29,7 @@
  * - _voiceRecording, _voiceStopping, _voiceTranscribing, _voicePendingSend, stopVoiceRecording,
  *   _getSessionInputCacheKey, _restoreSessionInputDraft, _sessionInputCache,
  *   _cacheSessionInput, toggleVoiceRecording (voice-input.js)
- * - _clearRecapForNewMessage (recap-hint.js)
+ * - _clearRecapForNewMessage (recap-hint.js，已转 ESM，经 recap-hint 域桥键解析)
  * - _requestNotifyPermission (desktop-notify.js)
  * - beginFollowLatestEntryWindow, requestFollowLatest (chat-viewport.js)
  * - _lastRenderedNotificationRuntime (runtime-status.js)
@@ -31,17 +37,27 @@
  */
 
 // 渲染常驻输入框（agent 运行期间始终可见）
-let _pendingQueuedCount = 0;
-let _queuedTexts = []; // 仅用于气泡展示
-let _persistentUiSyncInFlight = false;
-let _localQueuedInputPending = false;
-let _lastQueueBubbleSignature = '';
+//
+// ESM 迁移（P2 W2-3a）：排队气泡投影的五个状态键与「上次对话结束时间」的
+// 状态 owner 已移到 ESM（p2-w2-3a-input-queue-state.js /
+// p2-w2-3a-call-elapsed-state.js）。这里保留**classic 相注册**：首屏同步链
+// （app-main 顶层 applyLanguage → renderCurrentMainView → renderInputRequests
+// → rebindQueueProjectionForRuntime / readInputSurfaceModeState）与 1s 胶囊
+// tick 在这些键上读写，必须带真初值早于 deferred 模块可用；ESM owner 装载时
+// claim 吸收现值，之后 classic 读写经访问器转发，无双存储。
+//
 // 排队气泡投影的归属（会话隔离）：_queuedTexts / _pendingQueuedCount /
 // _localQueuedInputPending 始终属于一个 runtime，与图片桶、草稿同属输入面
-// 会话态家族。会话切换经 rebindQueueProjectionForRuntime 重绑，写入路径
-// （applyQueuedInputsTexts / submitQueuedInput 乐观态）一律带归属校验，
+// 会话态家族。会话切换经 rebindQueueProjectionForRuntime（本文件，classic
+// 首屏同步边界）重绑，写入路径（p2-w2-3a-queue-projection 的
+// applyQueuedInputsTexts / submitQueuedInput 乐观态）一律带归属校验，
 // 旧会话的排队气泡不进入新会话的输入面。
-let _queuedProjectionRuntimeId = null;
+window.KernelState.defineKey('input-queue', '_pendingQueuedCount', 0);
+window.KernelState.defineKey('input-queue', '_queuedTexts', []); // 仅用于气泡展示
+window.KernelState.defineKey('input-queue', '_localQueuedInputPending', false);
+window.KernelState.defineKey('input-queue', '_lastQueueBubbleSignature', '');
+window.KernelState.defineKey('input-queue', '_queuedProjectionRuntimeId', null);
+window.KernelState.defineKey('input-call-elapsed', '_lastCallFinishTime', 0);
 let _submitInFlight = false;       // 发送重入保护：fetch 期间阻止二次提交/中断
 let _sendingStartedAt = 0;         // 发送反馈窗口起点（最短可见时长的计时基准）
 let _sendingHoldTimer = null;      // 最短可见保持定时器：hold 期间轮询同步不得清 spinner
@@ -81,7 +97,8 @@ function migratePendingInputImages(fromKey, toKey) {
 window.migratePendingInputImages = migratePendingInputImages;
 
 // ── 上次对话结束时间显示 ──────────────────────────────────────────
-let _lastCallFinishTime = 0;
+// _lastCallFinishTime 的 owner 已迁 ESM（p2-w2-3a-call-elapsed-state.js），
+// 注册行见上方状态区块。下面两个起始时间键零跨文件消费面，留在本文件。
 let _callFinishTimerInterval = null;
 let _runCapsuleStartAt = 0; // 运行期间胶囊使用的本轮 call 起始时间
 let _runCapsuleStartConfirmed = false; // 起始时间是否已由运行时快照确认（未确认前允许快照值回拨纠正）
@@ -599,60 +616,42 @@ function _syncPersistentActionButton() {
   }
 }
 
-function _renderQueueBubbles(container) {
-  // 交互面（选择卡/回退对话框）占用输入面期间，暂存/排队气泡不能出现在
-  // 交互卡上方。updateQueueIndicator() 可能与交互面状态变更交错调用，因此
-  // 这里也要做最后一道 DOM 侧守卫，而不能只依赖 input-render 的互斥清理。
-  if (_interactiveSurfaceOccupiesInput()) {
-    container.querySelectorAll('.queue-bubbles-stack').forEach(el => el.remove());
-    _lastQueueBubbleSignature = '';
-    return;
+// ── 排队气泡渲染 / 后端队列同步 / SSE 快照消费 →
+//     p2-w2-3a-queue-projection.js（P2 W2-3a，esm）────────────────────
+// 下面五个入口已迁 ESM，仍有 classic 消费方：按 input-queue 域的 behavior
+// 桥键解析（_renderQueueBubbles / updateQueueIndicator / _syncQueueFromBackend
+// / _syncPersistentInputUi / applyQueuedInputsTexts）。本文件只留
+// rebindQueueProjectionForRuntime——它在首屏同步渲染链里被直接调用。
+
+/**
+ * 排队气泡投影的会话重绑（幂等）：runtime 变化时旧投影立即失效。新会话
+ * 的队列优先从 SSE 快照缓存恢复（_lastQueuedSnapshots 本就按 runtime
+ * 缓存非焦点期间的队列变化）；缓存缺席时置空，由轮询 / SSE 事件在下个
+ * 周期补齐。
+ *
+ * 保留 classic 的唯一理由：`renderInputRequests`（classic input-render.js）
+ * 在首屏同步链与每次输入面渲染时直接调用本函数，早于 deferred 模块执行。
+ * 它读写的是 input-queue 域 owner（ESM）的状态，经访问器转发。
+ */
+function rebindQueueProjectionForRuntime(runtimeId) {
+  const next = String(runtimeId || '').trim();
+  if (String(_queuedProjectionRuntimeId || '').trim() === next) return;
+  _queuedProjectionRuntimeId = next || null;
+  _queuedTexts = [];
+  _pendingQueuedCount = 0;
+  _localQueuedInputPending = false;
+  if (_queuedProjectionRuntimeId) {
+    const cached = window.ClawFW?.SseClient?.getLastQueuedSnapshot?.(_queuedProjectionRuntimeId);
+    if (cached && Array.isArray(cached.items)) {
+      const texts = window.ClawFW?.SseClient?.reconcileQueuedTexts?.(
+        cached.items, Date.now(), _queuedProjectionRuntimeId) || [];
+      _queuedTexts = texts.slice();
+      // 待发送计数只认未被领取的用户输入：已 claim（inputLease）的项正在
+      // 执行，不是排队（与 reconcileQueuedTexts 的展示过滤同一语义）
+      _pendingQueuedCount = cached.items.filter((item) => item?.kind !== 'reminder' && !item?.inputLease).length;
+    }
   }
-
-  // 线程暂存（Thread Inbox pending）与 viewer 排队同栈渲染：
-  // 前者意图归属是「工作」（交接窗口/非 head 暂存，新会话就绪后投递），
-  // 后者归属是「runtime」（call 间排队）。样式变体区分，语义不混。
-  const threadPending = (typeof window.getThreadPendingTexts === 'function')
-    ? window.getThreadPendingTexts()
-    : [];
-  const signature = JSON.stringify({ q: _queuedTexts, t: threadPending });
-  const existingStack = container.querySelector('.queue-bubbles-stack');
-  if (signature === _lastQueueBubbleSignature && (
-    (_queuedTexts.length === 0 && threadPending.length === 0 && !existingStack)
-    || ((_queuedTexts.length > 0 || threadPending.length > 0) && existingStack)
-  )) {
-    return;
-  }
-  _lastQueueBubbleSignature = signature;
-
-  container.querySelectorAll('.queue-bubbles-stack').forEach(el => el.remove());
-  if (_queuedTexts.length === 0 && threadPending.length === 0) return;
-
-  const stack = document.createElement('div');
-  stack.className = 'queue-bubbles-stack';
-  for (const txt of threadPending) {
-    const b = document.createElement('div');
-    b.className = 'queue-bubble thread-staged';
-    b.textContent = txt.length > 80 ? txt.substring(0, 80) + '...' : txt;
-    b.title = txt;
-    stack.appendChild(b);
-  }
-  for (const txt of _queuedTexts) {
-    const b = document.createElement('div');
-    b.className = 'queue-bubble';
-    b.textContent = txt.length > 80 ? txt.substring(0, 80) + '...' : txt;
-    b.title = txt;
-    stack.appendChild(b);
-  }
-
-  const card = container.querySelector('.user-input-card');
-  if (card) container.insertBefore(stack, card);
-  else container.appendChild(stack);
-}
-
-// 查询后端真实队列余量，移除已被消费的气泡
-async function _syncQueueFromBackend() {
-  await _syncPersistentInputUi();
+  _lastQueueBubbleSignature = '';
 }
 
 function handlePersistentInputKey(event) {
@@ -925,125 +924,6 @@ async function submitQueuedInput() {
   } finally {
     _submitInFlight = false;
     _endSubmitFeedbackWindow();
-  }
-}
-
-function updateQueueIndicator() {
-  // 渲染入口守卫：投影先与当前查看的 runtime 对齐（幂等重绑），旧会话
-  // 残留的排队文本不得渲染进新会话的输入面。
-  rebindQueueProjectionForRuntime(currentRuntimeAgentId);
-  const container = document.getElementById('user-input-container');
-  if (container) _renderQueueBubbles(container);
-}
-
-/**
- * 排队气泡投影的会话重绑（幂等）：runtime 变化时旧投影立即失效。新会话
- * 的队列优先从 SSE 快照缓存恢复（_lastQueuedSnapshots 本就按 runtime
- * 缓存非焦点期间的队列变化）；缓存缺席时置空，由轮询 / SSE 事件在下个
- * 周期补齐。
- */
-function rebindQueueProjectionForRuntime(runtimeId) {
-  const next = String(runtimeId || '').trim();
-  if (String(_queuedProjectionRuntimeId || '').trim() === next) return;
-  _queuedProjectionRuntimeId = next || null;
-  _queuedTexts = [];
-  _pendingQueuedCount = 0;
-  _localQueuedInputPending = false;
-  if (_queuedProjectionRuntimeId) {
-    const cached = window.ClawFW?.SseClient?.getLastQueuedSnapshot?.(_queuedProjectionRuntimeId);
-    if (cached && Array.isArray(cached.items)) {
-      const texts = window.ClawFW?.SseClient?.reconcileQueuedTexts?.(
-        cached.items, Date.now(), _queuedProjectionRuntimeId) || [];
-      _queuedTexts = texts.slice();
-      // 待发送计数只认未被领取的用户输入：已 claim（inputLease）的项正在
-      // 执行，不是排队（与 reconcileQueuedTexts 的展示过滤同一语义）
-      _pendingQueuedCount = cached.items.filter((item) => item?.kind !== 'reminder' && !item?.inputLease).length;
-    }
-  }
-  _lastQueueBubbleSignature = '';
-}
-
-/**
- * 队列快照的同步消费（轮询路径与 SSE 事件路径共用）：更新 _queuedTexts /
- * _pendingQueuedCount / 队列气泡 / 输入面声明。texts 已由调用方完成乐观
- * 对账（SSE 路径经 SseClient.reconcileQueuedTexts）。
- */
-function applyQueuedInputsTexts(runtimeId, texts, snapshotCount) {
-  // 写入口归属守卫：投影只承载当前查看的 runtime；轮询 / SSE 异步竞态下
-  // 过期快照的写入直接丢弃，不污染新会话的排队气泡。
-  if (String(runtimeId || '').trim() !== String(currentRuntimeAgentId || '').trim()) return;
-  _queuedProjectionRuntimeId = String(runtimeId || '').trim() || null;
-  _queuedTexts = Array.isArray(texts) ? texts.slice() : [];
-  _pendingQueuedCount = Number.isFinite(snapshotCount) ? snapshotCount : _queuedTexts.length;
-  if (_queuedTexts.length === 0 && !isRuntimeCalling(runtimeId)) {
-    _localQueuedInputPending = false;
-  }
-  updateQueueIndicator();
-  notifyInputSurfaceChanged(currentInputRequests || []);
-}
-
-async function _syncPersistentInputUi(runtimeId = currentRuntimeAgentId) {
-  if (_persistentUiSyncInFlight) return;
-  _persistentUiSyncInFlight = true;
-  // Always update model switcher regardless of queue/runtime state
-  updateInputModelSwitcher();
-  updateThinkingEffortSwitcher();
-  const viewToken = captureSessionViewToken(runtimeId);
-  const queueClient = window.ClawFW?.SseClient;
-  const snapshotBeforeFetch = queueClient?.getLastQueuedSnapshot?.(runtimeId);
-  try {
-    if (!runtimeId) {
-      _queuedTexts = [];
-      _pendingQueuedCount = 0;
-      _queuedProjectionRuntimeId = null;
-      updateQueueIndicator();
-      _syncPersistentActionButton();
-      return;
-    }
-
-    const expectedRuntimeId = runtimeId;
-    _syncPersistentActionButton();
-
-    // SSE 激活时优先消费事件通道缓存的最新快照（零请求）；缓存缺席
-    // （首载/事件未达）时回退 fetch 一次补齐，等事件接管
-    if (typeof isSseActive === 'function' && isSseActive()) {
-      const cached = window.ClawFW?.SseClient?.getLastQueuedSnapshot?.(expectedRuntimeId);
-      if (cached && Array.isArray(cached.items)) {
-        const texts = window.ClawFW?.SseClient?.reconcileQueuedTexts?.(cached.items, Date.now(), expectedRuntimeId) || [];
-        // 待发送气泡/计数只认用户输入且未被领取：reminder（机器通报）同队
-        // 存放但不展示，已 claim（inputLease）的项正在执行、不算排队
-        applyQueuedInputsTexts(expectedRuntimeId, texts,
-          cached.items.filter((item) => item?.kind !== 'reminder' && !item?.inputLease).length);
-        return;
-      }
-    }
-
-    const res = await fetch(`/api/agents/${expectedRuntimeId}/queued-inputs`);
-    if (!res.ok || expectedRuntimeId !== currentRuntimeAgentId) return;
-    const data = await res.json();
-    if (!isSessionViewTokenCurrent(viewToken)) return;
-    // 请求期间 SSE 已带来更新的观察，HTTP 快照不再拥有队列写入权。
-    if (queueClient?.getLastQueuedSnapshot?.(expectedRuntimeId) !== snapshotBeforeFetch) return;
-    const queue = Array.isArray(data) ? data : (Array.isArray(data.inputs) ? data.inputs : []);
-    // 同上：reminder（机器通报）不进待发送气泡与待发送计数；已 claim
-    // （inputLease）的项正在执行、不算排队（与 SSE 路径同一投影语义）
-    const userQueue = queue.filter((item) => item?.kind !== 'reminder' && !item?.inputLease);
-    const viewerQueueTexts = userQueue
-      .map((item) => {
-        const t = typeof item?.text === 'string' ? item.text.trim() : '';
-        if (t) return t;
-        const imgCount = Array.isArray(item?.images) ? item.images.length : 0;
-        return imgCount > 0 ? '🖼' : '';
-      })
-      .filter(Boolean);
-
-    // 即使文本相同也消费权威计数与排空事实；DOM 去重由渲染器负责。
-    queueClient?.reconcileQueuedTexts?.(queue, Date.now(), expectedRuntimeId);
-    applyQueuedInputsTexts(expectedRuntimeId, viewerQueueTexts, userQueue.length);
-  } catch (e) {
-    // ignore transient queue sync failures
-  } finally {
-    _persistentUiSyncInFlight = false;
   }
 }
 

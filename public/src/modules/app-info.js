@@ -1,18 +1,18 @@
 /**
- * app-info.js — 左上角品牌版本标签 + 点击名片
+ * app-info.js — 左上角品牌版本标签 + 点击名片（ESM）
  * 从 /protoclaw/app_info 拉取版本与仓库信息：
  *   - 标题右侧版本 chip（数据就绪后才显示）
  *   - 点击 sidebar 标题展开名片（版本 / 框架 / GitHub 仓库），点击外部或 Esc 关闭
  *
- * 依赖全局状态（定义在 app-core.js）:
- *   currentLanguage
- * 依赖全局函数:
- *   escapeHtml (app-core.js)
- * 导出全局函数:
- *   renderBrandCard（applyLanguage 语言切换时重填文案）
+ * 依赖（ESM 直接 import）：
+ *   getCurrentLanguage（i18n 状态域）、escapeHtml（markdown-utils 域）
+ * 导出：
+ *   renderBrandCard（KernelState 桥键：theme-lang 语言切换时重填文案）
  * DOM 引用:
  *   #brand-version-chip / #brand-card 及其子节点（index.html sidebar-header）
  */
+import { getCurrentLanguage } from './i18n-environment-state.js';
+import { escapeHtml } from './markdown-utils.js';
 
 let _appInfo = null;
 
@@ -24,9 +24,9 @@ function _externalLinkSvg() {
   return '<svg class="brand-card-repo-arrow" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17 17 7M7 7h10v10"></path></svg>';
 }
 
-function renderBrandCard() {
+export function renderBrandCard() {
   if (!_appInfo) return;
-  const isZh = currentLanguage === 'zh';
+  const isZh = getCurrentLanguage() === 'zh';
 
   const chip = document.getElementById('brand-version-chip');
   if (chip) chip.textContent = 'v' + (_appInfo.version || '—');
@@ -103,5 +103,15 @@ if (_brandArea && _brandCard) {
     if (event.key === 'Escape') _setBrandCardOpen(false);
   });
 }
+
+// ── 兼容桥（ESM 域 claim）───────────────────────────────────────────
+// renderBrandCard 仍有 classic 消费方（theme-lang.js 的 applyLanguage 裸读，
+// i18n/theme 域收敛时改 import 后注销本桥）。域内其它键零消费面，保持私有。
+const bridged = { renderBrandCard };
+window.KernelState.defineKey('app-info', 'renderBrandCard', bridged.renderBrandCard);
+window.KernelState.claim('app-info', {
+  get: (key) => bridged[key],
+  set: (key, value) => { bridged[key] = value; },
+});
 
 _initAppInfo();

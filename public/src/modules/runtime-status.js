@@ -19,15 +19,51 @@
  * - _recapPendingTrigger, _maybeFetchRecap (recap-hint.js)
  * - _syncPersistentActionButton, _syncQueueFromBackend, _syncPersistentInputUi,
  *   _renderLastCallElapsed, _lastCallFinishTime, _pendingQueuedCount (persistent-input.js / app-main.js)
+ *
+ * ESM 迁移（P2 W2-2，部分）：本文件保留**唯一 classic 实现**。三个跨文件可变
+ * 状态键的 owner 已迁至 p2-w2-2-runtime-status-owner.js（本文件在原声明位置只
+ * 保留 defineKey 注册真初值）。其余部分按两类依据留在经典相：
+ *
+ * 一、真实同步首屏触线（R1/R4：`app-main` 顶层 `applyLanguage()` 起的同步链，
+ *     早于任何 deferred 模块执行）：
+ *   - 侧栏条目投影：`applyLanguage` → `renderAgentList` → sidebar-render 调
+ *     `collectRuntimeEntriesForPrebuilt` / `isSidebarRuntimeDisconnected` /
+ *     `isRuntimeSuspended` / `isSuspendedNotificationPayload` /
+ *     `resolveNotificationCallingState`；
+ *   - 对话区运行指示块：chat-renderer 与 input-helpers 调 `ensureChatRuntimeIndicator`；
+ *   - 200ms 通知时钟：文件尾部 `ensureNotificationClockTimer()` 在经典相启动，
+ *     其 tick 驱动 `refreshNotificationTimerDisplay` 与指示块；
+ *   - 上下文护栏的页面加载基准 `_contextGuardPageLoadedAt`：经典相 `Date.now()`
+ *     的常量语义，迁走会改变判定时点。
+ *
+ * 二、保守留在经典相（**不是**首屏触线，本批不迁，迁移边界留待集中收口）：
+ *   - `updateNotificationStatus` / `applyNotificationStatus` 及 snapshot/label
+ *     helper：首屏 `applyLanguage` 时 `lastNotificationStatusPayload` 为 null，
+ *     不会调用它；真实调用在语言切换（`app-ui` 再调 `applyLanguage`）与通知
+ *     到达后的重绘，消费方是 classic 裸标识符 + `typeof` 守卫；
+ *   - `resetRuntimeStatusForSwitch`：调用点全在运行期（thread-store 的接续
+ *     rebind、runtime-switch 的切换宿主面），与首屏无关，同样保守留 classic。
+ *
+ * 不在本批迁移面内的状态：`_agentSuspended` / `_runtimeStatusMemory` /
+ * `_threadSidebarEntries`。`_agentSuspended` 的 Map 引用经
+ * `createAgentCallStatesHost()` 交给 app-main 的 classic 同步引擎持有
+ * （agent-call-states ESM host 只做 late-bound 转发），另两个只在本文件闭包内
+ * 读写——迁出改变的是引用与生命周期边界，而不是「const 不能迁」。
  */
 
 // ─── 运行时状态变量 ───
 
-let currentRuntimeConnected = true;
-let lastNotificationStatusPayload = null;
+// 状态 owner 迁至 p2-w2-2-runtime-status-owner.js（P2 W2-2）：经典相在此原声明
+// 位置注册真初值，保证首屏同步链（app-main 顶层 applyLanguage →
+// renderCurrentMainView → readCurrentSessionViewState 读 connected）与 200ms
+// 通知时钟 / 1s 胶囊 tick 在 deferred 模块执行前就有可用值；owner 在 ESM 相
+// claim 时吸收现值（无双存储）。三个键都是 let（可替换语义），const Map 留在
+// 本文件原位、不注册为可替换槽。
+window.KernelState.defineKey('runtime-status', 'currentRuntimeConnected', true);
+window.KernelState.defineKey('runtime-status', 'lastNotificationStatusPayload', null);
 const _runtimeStatusMemory = new Map();
 const _threadSidebarEntries = new Map();
-let _lastRenderedNotificationRuntime = null;
+window.KernelState.defineKey('runtime-status', '_lastRenderedNotificationRuntime', null);
 let _notificationClockTimer = null;
 let _contextGuardToastKey = '';
 const _contextGuardPageLoadedAt = Date.now();
@@ -1148,6 +1184,14 @@ function shouldStatusUseQueueSync(runtime) {
  * 期间 chat-renderer 每次渲染都会用旧快照重建对话区指示块，导致新会话里
  * 残留上一会话的"模型正在思考…"文案，随后才被新数据替换/移除，并伴随
  * 指示块出现/消失带来的高度抖动。切换瞬间直接清空，等新数据到达后再渲染。
+ *
+ * 本批保守留在经典相（P2 W2-2）：调用点全在运行期——thread-store 的接续
+ * rebind（`_rebindConversationToThreadHead`）与 runtime-switch 的切换宿主面
+ * （经 `app-main` 的 `resetStatus`），两者都以**裸标识符**调用它，触发前提是
+ * 已有运行期会话或线程数据，不属于首屏同步触线。迁出不是做不到，而是本批
+ * 迁移边界由主助手后续集中收口，此处不改动其相位。函数内的
+ * `clearToolProgressState` 由 tool-progress 的桥键（`tool-progress` 域）在同一
+ * window 上提供，`typeof` 守卫语义不变。
  */
 function resetRuntimeStatusForSwitch() {
   if (typeof resetCallElapsedForSwitch === 'function') resetCallElapsedForSwitch();

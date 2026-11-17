@@ -21,17 +21,48 @@
  * 多选状态绑定 workspace + 浏览目标 + 当前切片：渲染期和解清理不可见 id；
  * 异步移动成功时若工作空间/浏览目标已切换，不重拉、不覆盖当前页面。
  * 只本地 PH：远程会话不进入多选与移动。
+ *
+ * ESM 化：P2 W2-8（2026-11-17）。原位转换，对话归属解析、竞态守卫与提示文案零变化。
+ *
+ * 依赖（ESM）: project-data（浏览目标 / 目录上下文 / 同目录项目）、
+ *   ph-project-actions（phLoadProjectSessions）、ph-session-list（phSearchRetry）、
+ *   session-ui（getWorkspaceSessions）、render-entry-state（渲染缓存失效）、
+ *   agent-snapshot-loader-host（loadAgents，侧栏重投影）、
+ *   toast-notify（ClawToast）、i18n-environment-state、markdown-utils、p2-bootstrap-ph-session。
+ * 仍 classic（window 晚绑定）: app-main / app-ui（getCurrentAgentRecord /
+ *   renderCurrentMainView / renderAgentList）、app-core（isPhStyleWorkspaceAgent）、
+ *   thread-store（refreshThreads）。
+ *
+ * 时序（R1/R2/R4）：首屏同步链零触达（实测探针）；顶层只初始化多选状态与
+ * 定义动作入口。
  */
 
-window.ClawFW = window.ClawFW || {};
-window.ClawFW.phSessionMove = {
+import { escapeHtml } from './markdown-utils.js';
+import { getCurrentLanguage } from './i18n-environment-state.js';
+import { ClawToast } from './toast-notify.js';
+import { getWorkspaceSessions } from './session-ui.js';
+import { setLastRenderedWorkspaceHtml } from './render-entry-state.js';
+import { phSessionUi } from './p2-bootstrap-ph-session.js';
+import {
+  getPhBrowsingTarget,
+  getPhCurrentDirectoryContext,
+  getPhProjectsInDirectory,
+  phProjectEntities,
+} from './project-data.js';
+import { phLoadProjectSessions } from './ph-project-actions.js';
+import { phSearchRetry } from './ph-session-list.js';
+import { loadAgents } from './agent-snapshot-loader-host.js';
+
+// 多选状态容器（session-list-render 的渲染期和解 import 同一对象读取；
+// 只变异现有字段、从不整体重赋值，故命名导出的对象身份恒定）
+export const phSessionMove = {
   selectMode: false,
   selected: new Set(),
   scopeKey: '',
 };
 
 function _phMoveState() {
-  return window.ClawFW.phSessionMove;
+  return phSessionMove;
 }
 
 function _phMoveScopeKey(agent, target) {
@@ -43,7 +74,7 @@ function _phMoveScopeKey(agent, target) {
 }
 
 /** 多选状态整体作废（目录/归属切换、移动完成、退出多选时调用）。 */
-window.phSessionMoveReset = () => {
+export const phSessionMoveReset = () => {
   const state = _phMoveState();
   state.selectMode = false;
   state.selected.clear();
@@ -54,12 +85,12 @@ window.phSessionMoveReset = () => {
  * 渲染期和解：多选状态绑定 workspace + 浏览目标 + 当前切片。切换目录/归属、
  * 轮询或切片更换后，不可见 id 在此清理——光靠切换回调 reset 不够。
  */
-window.phSessionMoveSyncScope = (agentId, viewId, visibleIds) => {
+export const phSessionMoveSyncScope = (agentId, viewId, visibleIds) => {
   const state = _phMoveState();
   if (!state.selectMode) return;
   const key = String(agentId || '') + '||' + String(viewId || '');
   if (state.scopeKey !== key) {
-    window.phSessionMoveReset();
+    phSessionMoveReset();
     return;
   }
   const visible = new Set(visibleIds || []);
@@ -68,21 +99,21 @@ window.phSessionMoveSyncScope = (agentId, viewId, visibleIds) => {
   }
 };
 
-window.phToggleSessionSelectMode = () => {
+export const phToggleSessionSelectMode = () => {
   const state = _phMoveState();
   if (!state.selectMode) {
-    const agent = getCurrentAgentRecord();
-    const target = (typeof getPhBrowsingTarget === 'function') ? getPhBrowsingTarget(agent) : null;
+    const agent = window.getCurrentAgentRecord();
+    const target = getPhBrowsingTarget(agent);
     state.scopeKey = _phMoveScopeKey(agent, target);
     state.selectMode = true;
   } else {
-    window.phSessionMoveReset();
+    phSessionMoveReset();
   }
-  lastRenderedWorkspaceHtml = '';
-  renderCurrentMainView();
+  setLastRenderedWorkspaceHtml('');
+  window.renderCurrentMainView();
 };
 
-window.phToggleSessionSelection = (sessionId, checked) => {
+export const phToggleSessionSelection = (sessionId, checked) => {
   const state = _phMoveState();
   const id = String(sessionId || '').trim();
   if (!id) return;
@@ -91,7 +122,7 @@ window.phToggleSessionSelection = (sessionId, checked) => {
   // 就地更新计数徽标（避免全量重渲染打断勾选交互）
   const count = state.selected.size;
   document.querySelectorAll('.ph-select-count').forEach((el) => {
-    el.textContent = count + ' ' + (currentLanguage === 'zh' ? '已选' : 'selected');
+    el.textContent = count + ' ' + (getCurrentLanguage() === 'zh' ? '已选' : 'selected');
   });
 };
 
@@ -101,16 +132,15 @@ window.phToggleSessionSelection = (sessionId, checked) => {
  * 返回 null，调用方显式失败，不猜测页面焦点。
  */
 function _phResolveSessionOwnership(sessionId) {
-  const agent = getCurrentAgentRecord();
+  const agent = window.getCurrentAgentRecord();
   // 内联等价查找（getWorkspaceSessions 语义）：避免依赖 session-ui.js 的
   // 加载顺序（本模块在任何只装部分模块的宿主里也应可用）。
-  const sessions = (typeof getWorkspaceSessions === 'function')
-    ? getWorkspaceSessions(agent) : (agent?.workspace_sessions?.sessions || []);
+  const sessions = getWorkspaceSessions(agent);
   const session = sessions.find((item) => item?.id === String(sessionId || '').trim()) || null;
   if (!session) return null;
   const projectId = String(session.projectId || '').trim();
   if (projectId) {
-    const entity = (window.ClawFW.phProjectEntities?.projects || [])
+    const entity = (phProjectEntities.projects || [])
       .find((p) => p.id === projectId && !p.archived);
     if (entity?.openDirectory) {
       return { directory: entity.openDirectory, ownerKey: 'project:' + entity.id };
@@ -138,7 +168,7 @@ function _phResolveSessionOwnership(sessionId) {
  */
 async function _phResolveSessionOwnershipFromServer(sessionId) {
   try {
-    const agent = getCurrentAgentRecord();
+    const agent = window.getCurrentAgentRecord();
     const params = new URLSearchParams({
       agentId: String(agent?.id || ''),
       sessionId: String(sessionId || ''),
@@ -163,10 +193,10 @@ async function _phResolveSessionOwnershipFromServer(sessionId) {
   }
 }
 
-window.phOpenSessionMoveDialog = async (sessionIds) => {
-  const agent = getCurrentAgentRecord();
-  if (!agent || typeof isPhStyleWorkspaceAgent !== 'function' || !isPhStyleWorkspaceAgent(agent)) return;
-  const isZh = currentLanguage === 'zh';
+export const phOpenSessionMoveDialog = async (sessionIds) => {
+  const agent = window.getCurrentAgentRecord();
+  if (!agent || typeof window.isPhStyleWorkspaceAgent !== 'function' || !window.isPhStyleWorkspaceAgent(agent)) return;
+  const isZh = getCurrentLanguage() === 'zh';
   // 无参调用 = 工具条批量入口：勾选状态在渲染后才变化（就地更新计数，
   // 不重渲染），渲染期冻结的 id 列表会过期——这里读实时选中集合。
   const source = (sessionIds === undefined || sessionIds === null)
@@ -188,7 +218,7 @@ window.phOpenSessionMoveDialog = async (sessionIds) => {
       ownership = await _phResolveSessionOwnershipFromServer(ids[0]);
       // 服务端解析是异步的：期间工作空间可能被切换，旧 agent 上下文不再
       // 适合作弹窗宿主，静默放弃（不弹窗不报错，切换后的链路自洽）。
-      const agentNow = getCurrentAgentRecord();
+      const agentNow = window.getCurrentAgentRecord();
       if (!agentNow || agentNow.id !== agent.id) return;
     }
     if (!ownership) {
@@ -198,8 +228,7 @@ window.phOpenSessionMoveDialog = async (sessionIds) => {
     sourceDirectory = ownership.directory;
     ownerKeys.push(ownership.ownerKey);
   } else {
-    const dirContext = (typeof getPhCurrentDirectoryContext === 'function')
-      ? getPhCurrentDirectoryContext(agent) : null;
+    const dirContext = getPhCurrentDirectoryContext(agent);
     if (!dirContext || !dirContext.openDirectory) {
       window.alert(isZh ? '当前视图无目录上下文，无法移动' : 'No directory context to move within');
       return;
@@ -213,8 +242,7 @@ window.phOpenSessionMoveDialog = async (sessionIds) => {
   const allSameOwner = (ownerKey) => ownerKeys.length > 0 && ownerKeys.every((k) => k === ownerKey);
 
   const directoryOwnerKey = 'directory:' + sourceDirectory.replace(/\\/g, '/').toLowerCase();
-  const projects = (typeof getPhProjectsInDirectory === 'function')
-    ? getPhProjectsInDirectory(sourceDirectory) : [];
+  const projects = getPhProjectsInDirectory(sourceDirectory);
   const moveTargets = {
     items: [
       {
@@ -309,7 +337,7 @@ window.phOpenSessionMoveDialog = async (sessionIds) => {
 
   // 提交前冻结上下文：异步竞态守卫的比对基准
   const submitAgentId = agent.id;
-  const targetAtOpen = (typeof getPhBrowsingTarget === 'function') ? getPhBrowsingTarget(agent) : null;
+  const targetAtOpen = getPhBrowsingTarget(agent);
   const submitTargetKey = _phMoveScopeKey(agent, targetAtOpen);
 
   overlay.querySelector('form').addEventListener('submit', async (event) => {
@@ -349,7 +377,7 @@ window.phOpenSessionMoveDialog = async (sessionIds) => {
         throw new Error(payload?.error || ('HTTP ' + response.status));
       }
       close();
-      window.phSessionMoveReset();
+      phSessionMoveReset();
       // 停靠在被移动对话上时无需离开：实例不被释放，视图继续可用（新归属
       // 配置下次打开时生效）。
       // 线程视图缓存随移动事实刷新（对齐 delete 链路）：移动的会话可能属
@@ -360,9 +388,8 @@ window.phOpenSessionMoveDialog = async (sessionIds) => {
       }
       // 异步竞态守卫：移动期间工作空间或浏览目标被切换，不再重拉/覆盖当前
       // 页面——侧栏与切片由切换后的正常链路负责。
-      const agentNow = getCurrentAgentRecord();
-      const targetNow = (agentNow && typeof getPhBrowsingTarget === 'function')
-        ? getPhBrowsingTarget(agentNow) : null;
+      const agentNow = window.getCurrentAgentRecord();
+      const targetNow = agentNow ? getPhBrowsingTarget(agentNow) : null;
       if (!agentNow || agentNow.id !== submitAgentId
         || _phMoveScopeKey(agentNow, targetNow) !== submitTargetKey) {
         return;
@@ -373,16 +400,14 @@ window.phOpenSessionMoveDialog = async (sessionIds) => {
         ? { projectId: targetNow.id }
         : { projectDir: targetNow?.openDirectory || '' };
       await phLoadProjectSessions(ownership);
-      if (String(phSearchQuery || '').trim() && typeof window.phSearchRetry === 'function') {
-        window.phSearchRetry();
+      if (String(phSessionUi.phSearchQuery || '').trim()) {
+        phSearchRetry();
       }
-      if (typeof window.loadAgents === 'function') {
-        try {
-          await window.loadAgents();
-          if (typeof renderAgentList === 'function') renderAgentList();
-        } catch { /* 侧栏刷新失败不阻断移动结果呈现 */ }
-      }
-      if (typeof ClawToast !== 'undefined' && ClawToast?.show) {
+      try {
+        await loadAgents();
+        if (typeof window.renderAgentList === 'function') window.renderAgentList();
+      } catch { /* 侧栏刷新失败不阻断移动结果呈现 */ }
+      if (ClawToast?.show) {
         ClawToast.show({
           id: 'ph-session-move',
           title: isZh ? '已移动 ' + (payload.movedSessionIds?.length ?? ids.length) + ' 个对话' : ('Moved ' + (payload.movedSessionIds?.length ?? ids.length) + ' conversation(s)'),
@@ -396,3 +421,7 @@ window.phOpenSessionMoveDialog = async (sessionIds) => {
     }
   });
 };
+
+// 桥已注销（本域零 window 消费方）：ph-project-actions 直接 import
+// phSessionMoveReset，session-list-render / ctx-menu-items 直接 import 其余入口。
+// ph-session-move ⇄ ph-project-actions 的静态环两侧只在函数体内引用对方。

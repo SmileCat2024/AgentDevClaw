@@ -11,17 +11,23 @@
  *   写入 data-tool-call-id）；结果落地（messages 中出现对应 tool 行）即清除；
  * - elapsed 由 startedAt 本地插值（200ms 时钟 tick），两次 poll 之间平滑增长。
  *
- * 导出全局函数：
- *   applyToolProgressNotification, clearToolProgressState,
- *   resolveToolProgressForCall, syncToolProgressDom
+ * ESM 迁移（P2 W2-2）：进度表与 owner 是模块私有状态（无跨文件读者），四个
+ * 跨文件函数经命名导出 + kernel-state 桥服务尚未迁移的 classic 消费方
+ * （runtime-status 的通知主逻辑、chat-renderer 的 call 卡片）。已迁 ESM 的
+ * 依赖走 import，其余按调用时点显式 window 晚绑定。
  */
+
+import { currentMessages } from './session-view-storage.js';
+import { escapeHtml } from './markdown-utils.js';
 
 // callId -> { callId, toolName, startedAt, timeoutMs, outputTail } for one SessionView identity.
 const _toolProgressByCallId = new Map();
 let _toolProgressOwner = null;
 
 function getToolProgressOwner() {
-  const view = typeof readCurrentSessionViewState === 'function' ? readCurrentSessionViewState() : null;
+  // 桥接期：readCurrentSessionViewState 定义于 session-view-state（classic，
+  // 会话视图域收敛时改 import）
+  const view = typeof window.readCurrentSessionViewState === 'function' ? window.readCurrentSessionViewState() : null;
   if (!view?.identity) return null;
   return {
     ...view.identity,
@@ -61,7 +67,7 @@ function normalizeToolProgressEntry(data) {
 }
 
 /** 由 notification 快照推进进度状态：tool.progress 入表；终态信号清除。 */
-function applyToolProgressNotification(payload) {
+export function applyToolProgressNotification(payload) {
   ensureToolProgressOwner();
   const state = payload && typeof payload === 'object' ? payload.state : null;
   const landed = new Set(
@@ -106,7 +112,7 @@ function applyToolProgressNotification(payload) {
 }
 
 /** 切换 runtime / 会话时整体复位。 */
-function clearToolProgressState() {
+export function clearToolProgressState() {
   _toolProgressOwner = getToolProgressOwner();
   if (_toolProgressByCallId.size === 0 && _toolProgressDomCount === 0) return;
   _toolProgressByCallId.clear();
@@ -114,7 +120,7 @@ function clearToolProgressState() {
 }
 
 /** 渲染 call 卡片时取该调用的插值后进度数据；无则返回 null（模板走既有行为）。 */
-function resolveToolProgressForCall(call) {
+export function resolveToolProgressForCall(call) {
   ensureToolProgressOwner();
   if (!call || !call.id) return null;
   const entry = _toolProgressByCallId.get(String(call.id));
@@ -183,7 +189,7 @@ function _escapeAttrSelector(value) {
  * - 清理不属于任何活跃 callId 的进度块（含全量重渲染后的历史卡片残留）；
  * - 为活跃 callId 的卡片补建 / 刷新进度块（innerHTML 比对，避免无谓重排）。
  */
-function syncToolProgressDom() {
+export function syncToolProgressDom() {
   // 快速路径：无活跃进度且 DOM 无残留块时零查询（关闭进度场景无渲染抖动）
   if (_toolProgressByCallId.size === 0 && _toolProgressDomCount === 0) return;
 
@@ -203,7 +209,9 @@ function syncToolProgressDom() {
       }
     });
     if (stale.length > 0) {
-      runWithSuppressedChatViewportObservers(() => {
+      // 桥接期：runWithSuppressedChatViewportObservers 定义于 chat-viewport
+      // （classic，视口域收敛时改 import）
+      window.runWithSuppressedChatViewportObservers(() => {
         for (const wrapper of stale) wrapper.remove();
       });
     }
@@ -222,13 +230,15 @@ function syncToolProgressDom() {
       if (!block) {
         block = document.createElement('div');
         block.className = 'bash-progress-live';
-        runWithSuppressedChatViewportObservers(() => {
+        // 桥接期：同上（chat-viewport classic）
+        window.runWithSuppressedChatViewportObservers(() => {
           content.appendChild(block);
           block.innerHTML = html;
         });
         liveCount += 1;
       } else if (block.innerHTML !== html) {
-        runWithSuppressedChatViewportObservers(() => {
+        // 桥接期：同上（chat-viewport classic）
+        window.runWithSuppressedChatViewportObservers(() => {
           block.innerHTML = html;
         });
         liveCount += 1;
@@ -240,3 +250,25 @@ function syncToolProgressDom() {
 
   _toolProgressDomCount = liveCount;
 }
+
+// ── 兼容桥（桥接期）─────────────────────────────────────────────────
+// 未迁移的 classic 消费方仍以裸标识符调用这四个函数：
+// - runtime-status：applyToolProgressNotification（通知主逻辑）、
+//   clearToolProgressState（会话/运行时切换复位）、syncToolProgressDom（200ms 时钟 tick）；
+// - chat-renderer：resolveToolProgressForCall（call 卡片渲染）。
+// 四处都是调用时点晚绑定（classic 顶层无触达点），注册行放在模块执行相即可；
+// 注销条件 = 上述两个 classic 消费方迁移到 import。
+const toolProgressBridge = {
+  applyToolProgressNotification,
+  clearToolProgressState,
+  resolveToolProgressForCall,
+  syncToolProgressDom,
+};
+window.KernelState.defineKey('tool-progress', 'applyToolProgressNotification', applyToolProgressNotification);
+window.KernelState.defineKey('tool-progress', 'clearToolProgressState', clearToolProgressState);
+window.KernelState.defineKey('tool-progress', 'resolveToolProgressForCall', resolveToolProgressForCall);
+window.KernelState.defineKey('tool-progress', 'syncToolProgressDom', syncToolProgressDom);
+window.KernelState.claim('tool-progress', {
+  get: (key) => toolProgressBridge[key],
+  set: (key, value) => { toolProgressBridge[key] = value; },
+});

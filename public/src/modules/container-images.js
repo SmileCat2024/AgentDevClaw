@@ -18,12 +18,15 @@
  * 生命周期：面板经 registerContainerImagesHost 声明挂载元素，元素在 DOM 中即
  * 页面激活（切 tab / 关弹窗会移除元素），轮询与删除确认态据此判断活跃。
  *
- * 依赖（全局）：escapeHtml, currentLanguage
+ * 依赖（ESM 直接 import）：getCurrentLanguage（i18n 状态域）、escapeHtml
+ *   （markdown-utils 域）。
  *
  * 事件接线：模板经 data-action="containerImages.*" 声明，处理器集中在文件尾部
- * 注册；面板生命周期入口（registerContainerImagesHost / loadContainerImagesPanel /
- * stopContainerImagesPanel）仍经 window 供 ph-settings 调用。
+ * 注册；面板生命周期入口（registerContainerImagesHost / loadContainerImagesPanel）
+ * 只经命名导出供 ph-settings 静态 import（全树零 window 消费方）。
  */
+import { getCurrentLanguage } from './i18n-environment-state.js';
+import { escapeHtml } from './markdown-utils.js';
 
 let _ciData = null;
 let _ciLoading = false;
@@ -39,17 +42,17 @@ const CI_ICON_REFRESH = '<svg width="14" height="14" viewBox="0 0 24 24" fill="n
 const CI_ICON_DELETE = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>';
 
 // 宿主声明：面板提供挂载元素 id 与域宿主 agentId
-window.registerContainerImagesHost = function (containerId, hostAgentId) {
+export function registerContainerImagesHost(containerId, hostAgentId) {
   _ciContainerId = String(containerId || 'ph-container-images-host');
   _ciHostAgentId = String(hostAgentId || 'programming-helper');
-};
+}
 
 function ciContainer() {
   return document.getElementById(_ciContainerId);
 }
 
 function ciIsZh() {
-  return currentLanguage === 'zh';
+  return getCurrentLanguage() === 'zh';
 }
 
 function ciEscape(value) {
@@ -486,15 +489,10 @@ function ciDisarmDelete() {
   }
 }
 
-window.loadContainerImagesPanel = function () {
+export function loadContainerImagesPanel() {
   ciDisarmDelete();
   void ciFetchOverview(true);
-};
-
-window.stopContainerImagesPanel = function () {
-  ciStopPoll();
-  ciDisarmDelete();
-};
+}
 
 function onCiRefresh() {
   void ciFetchOverview(true);

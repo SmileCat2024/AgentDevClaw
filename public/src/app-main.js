@@ -856,6 +856,179 @@ function _getSessionInputCacheKey() {
   return threadId ? `thread:${threadId}` : getRuntimeContextKey();
 }
 
+// ── agent-call-states 同步引擎（唯一实例）──────────────────────────
+// app-main 位于 runtime-status（_agentSuspended）与 sidebar-render（host 工厂）
+// 之后，是 classic 相里同时满足两者、又不破坏 runtime-status standalone 用例的
+// 组合点。工厂/实例全部在 IIFE 词法内部；ESM host 只做 late-bound 转发。
+// 原 visibilitychange 监听器保持原样：它在本 IIFE 之后注册。
+(function bootstrapAgentCallStates() {
+  // Sidebar call-state reconciliation. SSE-owned locals are not absent/idle;
+  // online remote runtimes still require polling. Maps are shared with classic UI.
+  function createAgentCallStates(host) {
+    let inProgress = false;
+    const { calling, suspended, interrupting, finished } = host;
+
+    function collectActiveCallRuntimeIds(agents) {
+      const ids = (Array.isArray(agents) ? agents : []).filter((agent) => agent?.connected)
+        .map((agent) => host.runtimeId(agent)).filter(Boolean);
+      for (const entry of host.remoteEntries()) {
+        if (entry.status === 'connected' && entry.runtimeId) ids.push(entry.runtimeId);
+      }
+      return Array.from(new Set(ids));
+    }
+
+    function applyAgentCallStateFromNotification(runtimeId, data) {
+      const payload = data && typeof data === 'object' ? data : null;
+      const backendCalling = host.resolveCalling(payload) === true;
+      const prevCalling = calling.get(runtimeId) === true;
+      const prevSuspended = suspended.get(runtimeId) === true;
+      const effectiveCalling = backendCalling && !host.isInterruptSuppressed(runtimeId, host.callStartedAt(payload));
+      let nextSuspended = prevSuspended;
+      if (effectiveCalling) {
+        host.markStarted(runtimeId);
+        calling.set(runtimeId, true);
+        suspended.delete(runtimeId);
+        nextSuspended = false;
+      } else {
+        calling.delete(runtimeId);
+        nextSuspended = host.isSuspended(payload);
+        if (nextSuspended) suspended.set(runtimeId, true);
+        else suspended.delete(runtimeId);
+      }
+      if (!backendCalling) host.clearInterrupt(runtimeId);
+      if (prevCalling && !effectiveCalling && host.normalize(runtimeId) !== host.normalize(host.currentRuntimeId())) {
+        finished.add(runtimeId);
+      }
+      if (prevCalling !== effectiveCalling && host.normalize(runtimeId) === host.normalize(host.currentRuntimeId())) {
+        host.syncActionButton();
+      }
+      return prevCalling !== effectiveCalling || prevSuspended !== nextSuspended;
+    }
+
+    function applyCallStateToAgentRecords(runtimeId, active, agents = host.agents()) {
+      let changed = false;
+      for (const agent of Array.isArray(agents) ? agents : []) {
+        if (agent?.source === 'prebuilt' || host.runtimeId(agent) !== runtimeId) continue;
+        const next = active === true;
+        if (agent.callActive !== next) { agent.callActive = next; changed = true; }
+      }
+      return changed;
+    }
+
+    function cleanupOrphanCallStates(activeIds) {
+      let changed = false;
+      for (const key of Array.from(calling.keys())) {
+        if (!activeIds.has(key)) {
+          calling.delete(key); interrupting.delete(key); finished.delete(key); suspended.delete(key);
+          changed = true;
+        }
+      }
+      for (const key of Array.from(suspended.keys())) {
+        if (!activeIds.has(key)) { suspended.delete(key); changed = true; }
+      }
+      return changed;
+    }
+
+    function cleanPrebuiltHostRows(agents) {
+      let changed = false;
+      for (const agent of Array.isArray(agents) ? agents : []) {
+        if (agent?.source === 'prebuilt' && agent.callActive) { agent.callActive = false; changed = true; }
+      }
+      return changed;
+    }
+
+    async function refreshAgentCallStates(agents = host.agents(), options = {}) {
+      const { force = false, reuseNotification = null, includeSseLocals = false } = options;
+      if (inProgress) return;
+      const now = host.now();
+      if (!force && now - host.lastRefresh() < 1000) return;
+      inProgress = true;
+      host.setLastRefresh(now);
+      try {
+        const ids = collectActiveCallRuntimeIds(agents);
+        const skipLocal = host.isSseActive() && !includeSseLocals;
+        const polled = skipLocal ? ids.filter((id) => host.isRemote(id)) : ids;
+        if (!polled.length) {
+          if (skipLocal) {
+            let changed = cleanupOrphanCallStates(new Set(ids));
+            changed = cleanPrebuiltHostRows(agents) || changed;
+            if (changed) host.render();
+            return;
+          }
+          let changed = false;
+          for (const key of Array.from(calling.keys())) {
+            calling.delete(key); interrupting.delete(key); suspended.delete(key); changed = true;
+          }
+          for (const key of Array.from(suspended.keys())) { suspended.delete(key); changed = true; }
+          if (changed) host.render();
+          return;
+        }
+        const payloads = new Map();
+        await Promise.all(polled.map(async (id) => {
+          try {
+            if (reuseNotification?.payload && host.normalize(reuseNotification.runtimeId) === host.normalize(id)) {
+              payloads.set(id, reuseNotification.payload);
+              return;
+            }
+            const response = await host.fetch(`/api/agents/${encodeURIComponent(id)}/notification`);
+            if (response.ok) payloads.set(id, await response.json());
+          } catch {
+            // Existing contract: a failed observation is applied as a null payload.
+          }
+        }));
+        let changed = false;
+        for (const id of polled) changed = applyAgentCallStateFromNotification(id, payloads.get(id) || null) || changed;
+        changed = cleanupOrphanCallStates(new Set(ids)) || changed;
+        const byPolled = new Map();
+        for (const id of polled) {
+          const payload = payloads.get(id) || null;
+          byPolled.set(id, host.resolveCalling(payload) === true
+            && !host.isInterruptSuppressed(id, host.callStartedAt(payload)));
+        }
+        const activeIds = new Set(ids);
+        for (const agent of Array.isArray(agents) ? agents : []) {
+          if (agent?.source === 'prebuilt') continue;
+          const id = host.runtimeId(agent);
+          if (!id || (skipLocal && activeIds.has(id) && !host.isRemote(id))) continue;
+          changed = applyCallStateToAgentRecords(id, byPolled.get(id) === true, agents) || changed;
+        }
+        changed = cleanPrebuiltHostRows(agents) || changed;
+        if (changed) host.render();
+      } finally {
+        inProgress = false;
+      }
+    }
+
+    return { collectActiveCallRuntimeIds, applyAgentCallStateFromNotification,
+      applyCallStateToAgentRecords, cleanupOrphanCallStates, cleanPrebuiltHostRows, refreshAgentCallStates };
+  }
+
+  // interrupt 的四个访问器由 app-core 尾部的同步引擎先注册（同一页内更早的
+  // classic 脚本）；缺任何一个都在装载期响亮失败，不静默跑半套。
+  const callStartedAt = window.getNotificationCallStartedAt;
+  const isInterruptSuppressed = window.isInterruptSuppressed;
+  const clearInterrupt = window.clearInterruptSuppression;
+  if (typeof callStartedAt !== 'function' || typeof isInterruptSuppressed !== 'function'
+    || typeof clearInterrupt !== 'function') {
+    throw new Error('[P2] call-interrupt classic sync owner missing');
+  }
+  const states = createAgentCallStates({
+    ...createAgentCallStatesHost(),
+    callStartedAt,
+    isInterruptSuppressed,
+    clearInterrupt,
+  });
+  window.ClawFW = window.ClawFW || {};
+  window.KernelState.defineKey('agent-call-states', 'collectActiveCallRuntimeIds', states.collectActiveCallRuntimeIds);
+  window.KernelState.defineKey('agent-call-states', 'refreshAgentCallStates', states.refreshAgentCallStates);
+  window.ClawFW.CallStates = Object.freeze({
+    collectActiveCallRuntimeIds: states.collectActiveCallRuntimeIds,
+    applyAgentCallStateFromNotification: states.applyAgentCallStateFromNotification,
+    applyCallStateToAgentRecords: states.applyCallStateToAgentRecords,
+    refreshAgentCallStates: states.refreshAgentCallStates,
+  });
+})();
+
 applyTheme(currentTheme);
 applyLanguage();
 
@@ -868,6 +1041,9 @@ document.addEventListener('visibilitychange', () => {
   // SSE 激活时本地条目也参与本轮对账，§5.3 includeSseLocals）
   refreshAgentCallStates(allAgents, { force: true, includeSseLocals: true });
   // Re-sync current runtime's notification status (button, status bar)
+  // 不变量：currentRuntimeAgentId 在 ESM 模块图求值前恒为 null（本监听器注册于
+  // 模块相之前），因此仅存在于 ESM 的 refreshCurrentRuntimeStatus 不会被裸调。
+  // 新增 classic 写入面必须重评该不变量（frontend-foreground-sync-owner 钉住）。
   if (currentRuntimeAgentId) {
     refreshCurrentRuntimeStatus(currentRuntimeAgentId);
   }

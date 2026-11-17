@@ -1,7 +1,37 @@
-import { describe, it } from 'node:test';
+import { describe, it, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { createFrontendSandbox } from './helpers/frontend-vm.js';
 import { loadEsmPluginInSandbox } from './helpers/load-esm-plugin.js';
+import { installBrowserStubs, loadModuleOnce } from './helpers/esm-module-loader.js';
+
+// context-guard-toggle 已迁 ESM（P2）：面板测试经真实 import 装载它，并把命名
+// 空间挂到沙箱 window 上供插件（沙箱内）取用。已迁 ESM 的状态域用 owner 模块
+// setter 驱动；每个用例的全局桩在 afterEach 统一还原。
+const GUARD_MODULE_PATH = 'public/src/modules/context-guard-toggle.js';
+let guardStateModules = null;
+let pendingGlobalCleanup = null;
+
+afterEach(() => {
+  if (pendingGlobalCleanup) {
+    pendingGlobalCleanup();
+    pendingGlobalCleanup = null;
+  }
+});
+
+/** 首次调用时装载状态域 owner（进程级单例，与生产一致）。 */
+async function ensureGuardStateModules() {
+  if (guardStateModules) return guardStateModules;
+  const baseCleanup = installBrowserStubs();
+  await loadModuleOnce('public/src/modules/kernel-state.js', { installGlobals: false });
+  guardStateModules = {
+    orchestration: await import('../public/src/modules/orchestration-state.js'),
+    agentStore: await import('../public/src/modules/agent-store-state.js'),
+    sessionViewStorage: await import('../public/src/modules/session-view-storage.js'),
+    i18n: await import('../public/src/modules/i18n-environment-state.js'),
+  };
+  baseCleanup();
+  return guardStateModules;
+}
 
 function panelSandbox(overrides = {}) {
   const fetchCalls = [];
@@ -387,9 +417,19 @@ describe('SessionControlsPanel output style (stylized-output)', () => {
 describe('SessionControlsPanel: guard rotation strategy selector', () => {
   const GUARD_STATUS = { mode: 'rotate', strategy: 'adaptive', allowRotation: true, trip: null, thresholdTokens: 160000 };
 
-  function guardPanelSandbox(overrides = {}) {
+  async function guardPanelSandbox(overrides = {}) {
     const calls = [];
     const guardState = { status: { ...GUARD_STATUS } };
+    // 面板显隐判据（inspector 快照）：沙箱与 ESM 模块两侧取同一份夹具
+    const inspector = overrides.currentHookInspector || {
+      lifecycleOrder: [],
+      features: [
+        { name: 'force-continuation' },
+        { name: 'step-rotating-model' },
+        { name: 'context-guard' },
+      ],
+      hooks: [],
+    };
     const ctx = createFrontendSandbox({
       focusedAgentId: 'programming-helper',
       currentRuntimeAgentId: 'runtime-a',
@@ -401,15 +441,7 @@ describe('SessionControlsPanel: guard rotation strategy selector', () => {
       getActiveWorkspaceSessionId: () => 'session-a',
       renderFeaturePanel() {},
       newIdempotencyKey: () => 'test-idem-key',
-      currentHookInspector: {
-        lifecycleOrder: [],
-        features: [
-          { name: 'force-continuation' },
-          { name: 'step-rotating-model' },
-          { name: 'context-guard' },
-        ],
-        hooks: [],
-      },
+      currentHookInspector: inspector,
       fetch: async (url, options = {}) => {
         calls.push({ url, options });
         if (String(url) === '/protoclaw/context_guard_control') {
@@ -436,15 +468,41 @@ describe('SessionControlsPanel: guard rotation strategy selector', () => {
       ...overrides,
     });
     ctx.window.setInterval = () => 0;
-    ctx.loadSource('public/src/modules/context-guard-toggle.js');
+
+    // 真实 import 装载 context-guard-toggle（classic 依赖面以 window 桩注入），
+    // 再把命名空间挂到沙箱 window 供插件取用。
+    const state = await ensureGuardStateModules();
+    const guardFetch = ctx.fetch;
+    const cleanupStubs = installBrowserStubs({
+      window: {
+        getRuntimeWorkspaceSessionId: () => 'session-a',
+        getActiveWorkspaceSessionId: () => 'session-a',
+        newIdempotencyKey: () => 'test-idem-key',
+        ClawToast: { show() {} },
+      },
+    });
+    const hadFetch = Object.hasOwn(globalThis, 'fetch');
+    const prevFetch = globalThis.fetch;
+    globalThis.fetch = guardFetch;
+    pendingGlobalCleanup = () => {
+      if (hadFetch) globalThis.fetch = prevFetch; else delete globalThis.fetch;
+      cleanupStubs();
+    };
+    state.orchestration.setCurrentRuntimeAgentId('runtime-a');
+    state.agentStore.setFocusedAgentId('programming-helper');
+    state.i18n.setCurrentLanguage('zh');
+    state.sessionViewStorage.setCurrentHookInspector(inspector);
+    const { module: guardModule } = await loadModuleOnce(GUARD_MODULE_PATH, { installGlobals: false });
+
+    ctx.window.ContextGuardToggle = guardModule.ContextGuardToggle;
     ctx.loadSource('public/src/modules/claw-host.js');
     loadEsmPluginInSandbox(ctx, 'public/src/panel-plugins/session-controls.js');
-    ctx.run(`window.ContextGuardToggle.applyStatus({ status: ${JSON.stringify(GUARD_STATUS)} }, "runtime-a")`);
+    guardModule.applyStatus({ status: GUARD_STATUS }, 'runtime-a');
     return { ctx, calls, guardState };
   }
 
   it('renders the segmented selector first with the current strategy active', async () => {
-    const { ctx } = guardPanelSandbox();
+    const { ctx } = await guardPanelSandbox();
     await ctx.run('window.__pluginModule.refreshStatus({ renderWhenDone: false })');
     const html = ctx.run('window.__pluginModule.render()');
     const selectorAt = html.indexOf('data-guard-strategy');
@@ -466,7 +524,7 @@ describe('SessionControlsPanel: guard rotation strategy selector', () => {
   });
 
   it('hides the selector when rotation is not allowed for the assembly', async () => {
-    const { ctx } = guardPanelSandbox();
+    const { ctx } = await guardPanelSandbox();
     ctx.run('window.ContextGuardToggle.applyStatus({ status: { mode: "interrupt", strategy: "adaptive", allowRotation: false, trip: null, thresholdTokens: 160000 } }, "runtime-a")');
     await ctx.run('window.__pluginModule.refreshStatus({ renderWhenDone: false })');
     const html = ctx.run('window.__pluginModule.render()');
@@ -475,7 +533,7 @@ describe('SessionControlsPanel: guard rotation strategy selector', () => {
   });
 
   it('posts the chosen strategy through context_guard_control and syncs the badge cache', async () => {
-    const { ctx, calls } = guardPanelSandbox();
+    const { ctx, calls } = await guardPanelSandbox();
     await ctx.run('window.__pluginModule.refreshStatus({ renderWhenDone: false })');
 
     await ctx.run('window.__pluginModule.updateGuardStrategy("summary")');
@@ -495,7 +553,7 @@ describe('SessionControlsPanel: guard rotation strategy selector', () => {
   });
 
   it('shows the write error inline without disturbing the badge cache', async () => {
-    const { ctx } = guardPanelSandbox({
+    const { ctx } = await guardPanelSandbox({
       fetch: async (url) => {
         if (String(url) === '/protoclaw/context_guard_control') {
           return { ok: false, status: 503, json: async () => ({ ok: false, error: 'not mounted' }) };

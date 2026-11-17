@@ -2,14 +2,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createFrontendSandbox } from './helpers/frontend-vm.js';
 import { loadModuleOnce } from './helpers/esm-module-loader.js';
+import { prepareClassicSandbox } from './p2-classic-hosts.js';
 
 test('call-state host coalesces overlapping refreshes, reuses focus payload and unlocks after failure', async () => {
   let release;
   let fail = false;
   const requests = [];
   const ctx = createFrontendSandbox({
-    // Runtime-status clock is unrelated to reconciliation; do not leave an interval.
-    setInterval: () => 0,
     _markAgentCallStartedForNotify() {},
     fetch: async (url) => {
       requests.push(url);
@@ -18,19 +17,19 @@ test('call-state host coalesces overlapping refreshes, reuses focus payload and 
       return { ok: true, json: async () => ({ callActive: true }) };
     },
   });
-  ctx.loadSource('public/src/app-core.js');
-  ctx.loadSource('public/src/modules/runtime-status.js');
-  ctx.loadSource('public/src/modules/sidebar-render.js');
+  // 真实 classic owner：app-main 的 bootstrap IIFE 创建唯一引擎实例。
+  prepareClassicSandbox(ctx);
   ctx.renderAgentList = () => {};
   ctx.run(`allAgents = [{ id: 'rt', source: 'child', parent_id: 'host', connected: true }];`);
   const previous = globalThis.window;
   globalThis.window = ctx;
   try {
     const { module } = await loadModuleOnce('public/src/modules/agent-call-states-host.js', { installGlobals: false });
-    assert.strictEqual(ctx.refreshAgentCallStates, module.refreshAgentCallStates);
+    assert.equal(typeof ctx.refreshAgentCallStates, 'function', 'classic accessor is the owner');
+    assert.equal(typeof module.refreshAgentCallStates, 'function', 'ESM adapter is late-bound');
     const first = ctx.refreshAgentCallStates(ctx.allAgents, { force: true });
-    await ctx.refreshAgentCallStates(ctx.allAgents, { force: true });
-    assert.equal(requests.length, 1, 'overlapping refresh must not issue duplicate requests');
+    await module.refreshAgentCallStates(ctx.allAgents, { force: true });
+    assert.equal(requests.length, 1, 'classic + adapter overlapping refresh must share the in-flight lock');
     release();
     await first;
     assert.equal(ctx.allAgents[0].callActive, true);

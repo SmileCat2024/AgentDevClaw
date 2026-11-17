@@ -1,6 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { withP2EsmCase } from './helpers/p2-esm-case.js';
 import { createCompactResume } from '../public/src/modules/compact-resume.js';
 
 const sessionRoutes = fs.readFileSync(new URL('../server/routes/session.js', import.meta.url), 'utf8');
@@ -11,6 +12,7 @@ const sessionMutation = fs.readFileSync(new URL('../public/src/modules/session-m
 const sidebarOperations = fs.readFileSync(new URL('../public/src/modules/sidebar-operations.js', import.meta.url), 'utf8');
 const sidebarRender = fs.readFileSync(new URL('../public/src/modules/sidebar-render.js', import.meta.url), 'utf8');
 const navigationCore = fs.readFileSync(new URL('../public/src/modules/navigation-core.js', import.meta.url), 'utf8');
+const NAVIGATION = 'public/src/modules/navigation-core.js';
 
 describe('archive-and-replace contract', () => {
   it('branches raw message objects so image attachments before the cut remain intact', () => {
@@ -123,21 +125,60 @@ describe('archive-and-replace contract', () => {
     assert.doesNotMatch(managedFlow, /waitForPrebuiltRuntimeSession/);
   });
 
-  it('keeps readiness observation bounded and separate from session-operation settlement', () => {
+  it('keeps readiness observation bounded and separate from session-operation settlement', async () => {
     // ADR-0014 Phase 1：有界就绪轮询收敛到 navigation-core 的
-    // waitForRuntimeReady；sidebar-render 的 waitForTargetRuntimeSession 仅保留
-    // 签名兼容的委托入口，不得回长内联轮询。
-    const navStart = navigationCore.indexOf('async function waitForRuntimeReady');
-    const navEnd = navigationCore.indexOf('\n  /**', navStart);
-    const readinessWait = navigationCore.slice(navStart, navEnd);
-    assert.match(readinessWait, /attempt < attempts/);
-    assert.match(readinessWait, /return null;/);
-    assert.doesNotMatch(readinessWait, /for \(;;\)/);
+    // waitForRuntimeReady（已迁 ESM，直接驱动真实命名导出）；sidebar-render 的
+    // waitForTargetRuntimeSession 仅保留签名兼容的委托入口，不得回长内联轮询。
+    const calls = [];
+    const stub = async (url) => {
+      calls.push(String(url));
+      // 一轮「未就绪」响应：ready=false 且无 starting，继续等待
+      return { ok: true, json: async () => ({ ready: false }) };
+    };
+    await withP2EsmCase({ globals: { fetch: stub } }, async (c) => {
+      const nav = await c.load(NAVIGATION);
+      assert.equal(typeof nav.waitForRuntimeReady, 'function', '就绪等待是命名导出');
+      const agent = await nav.waitForRuntimeReady({
+        agentId: 'agent-a', sessionId: 'session-a', attempts: 3, intervalMs: 1,
+      });
+      assert.equal(agent, null, '超出次数上限返回 null（不无限等待）');
+      assert.equal(calls.length, 3, '探测次数被 attempts 上限约束');
+      for (const url of calls) {
+        assert.match(url, /^\/protoclaw\/runtime_status\?/, '就绪探测只走有界状态端点');
+      }
+    });
+
+    // 就绪提前返回：第二次探测成功即停止（不把剩余次数跑完）
+    const readyCalls = [];
+    let probeIndex = 0;
+    const readyStub = async () => {
+      probeIndex += 1;
+      readyCalls.push(probeIndex);
+      const ready = probeIndex >= 2;
+      return {
+        ok: true,
+        json: async () => (ready
+          ? { ready: true, agent: { runtime_session_id: 'runtime-ready' } }
+          : { ready: false }),
+      };
+    };
+    await withP2EsmCase({ globals: { fetch: readyStub } }, async (c) => {
+      const nav = await c.load(NAVIGATION);
+      const agent = await nav.waitForRuntimeReady({
+        agentId: 'agent-a', sessionId: 'session-a', attempts: 5, intervalMs: 1,
+      });
+      assert.equal(agent.runtime_session_id, 'runtime-ready');
+      assert.equal(readyCalls.length, 2, '就绪后立即返回，不跑满上限');
+    });
+
+    // classic 侧的委托入口（sidebar-render 仍 classic）：只转调，不留内联轮询
     const delegateStart = sidebarRender.indexOf('async function waitForTargetRuntimeSession');
     const delegateEnd = sidebarRender.indexOf('\n// Synchronous rendering stays classic.', delegateStart);
     const delegate = sidebarRender.slice(delegateStart, delegateEnd);
     assert.match(delegate, /window\.NavigationCore\?\.waitForRuntimeReady/);
     assert.doesNotMatch(delegate, /attempt < attempts/);
+    // navigation-core 侧不得回退到无界轮询
+    assert.doesNotMatch(navigationCore, /for \(;;\)/);
   });
 
   it('settles a committed replacement before independently cleaning up its source runtime', () => {

@@ -1,8 +1,12 @@
 /**
- * speech-config-cache.js — window.ClawFW._speechModelConfig / _speechPresets
- * 的唯一写方（owner 模块）。
+ * speech-config-cache.js — 「语音识别模型配置」缓存的 owner 模块。
+ * ESM（P2 消费方批次 7）：命名导出 + 受控桥。
  *
- * 该键是「语音识别模型配置」的全局缓存。历史上写入分散在 5 个文件：
+ * 物理状态是模块私有（`speechModelConfig` / `speechPresets`）：原
+ * window.ClawFW._speechModelConfig / _speechPresets 两个袋键已撤除，
+ * 外部只能经命名导出读写，不做任何镜像。
+ *
+ * 历史上写入分散在 5 个文件：
  * model-settings（设置面板开/关时清写）、speech-settings（preset 编辑与
  * 保存）、voice-input / wg-voice-input / work-group-ui（三份逐字重复的
  * 懒加载：缓存 miss → GET speech_model_config → 写入）。现统一收敛到本模块：
@@ -14,25 +18,27 @@
  * 契约测试：test/speech-config-cache.test.js
  */
 
-window.ClawFW = window.ClawFW || {};
+// 唯一真相源（模块私有）：未写入前分别为 null（getter 归一行为与旧袋键一致，
+// null / undefined 都读成 null），presets 非数组一律归一为 []。
+let speechModelConfig = null;
+let speechPresets = null;
 
 function getClawSpeechModelConfig() {
-  return (window.ClawFW && window.ClawFW._speechModelConfig) ?? null;
+  return speechModelConfig ?? null;
 }
 
 function setClawSpeechModelConfig(config) {
-  window.ClawFW._speechModelConfig = config ?? null;
-  return config ?? null;
+  speechModelConfig = config ?? null;
+  return speechModelConfig;
 }
 
 function getClawSpeechPresets() {
-  const list = window.ClawFW && window.ClawFW._speechPresets;
-  return Array.isArray(list) ? list : [];
+  return Array.isArray(speechPresets) ? speechPresets : [];
 }
 
 function setClawSpeechPresets(presets) {
   const list = Array.isArray(presets) ? presets : [];
-  window.ClawFW._speechPresets = list;
+  speechPresets = list;
   return list;
 }
 
@@ -53,9 +59,24 @@ async function ensureClawSpeechModelConfig() {
   }
 }
 
-// ── window 导出（经典 script 全局调用）─────────────────────────────
-window.getClawSpeechModelConfig = getClawSpeechModelConfig;
-window.setClawSpeechModelConfig = setClawSpeechModelConfig;
-window.getClawSpeechPresets = getClawSpeechPresets;
-window.setClawSpeechPresets = setClawSpeechPresets;
-window.ensureClawSpeechModelConfig = ensureClawSpeechModelConfig;
+export {
+  getClawSpeechModelConfig,
+  setClawSpeechModelConfig,
+  getClawSpeechPresets,
+  setClawSpeechPresets,
+  ensureClawSpeechModelConfig,
+};
+
+// —— 桥接期兼容面（kernel-state 访问器桥）——
+// 只有 ensureClawSpeechModelConfig 仍有 classic 消费方：voice-input.js（录音开始时
+// 取配置）与悬置域的 wg-voice-input.js / work-group-ui.js，均在事件回调内调用
+// （classic 相无触达点）。其余四个函数键消费方全在本批 ESM 模块内，直接 import，
+// 不上桥。收敛条件：voice-input.js 迁移后改 import 只解决其中一处——悬置域
+// （wg-voice-input / work-group-ui）未迁或未重做前本键必须保留，三处消费方全部
+// 迁走才能注销本键。
+const bridgeApi = { ensureClawSpeechModelConfig };
+window.KernelState.defineKey('speech-config-cache', 'ensureClawSpeechModelConfig', ensureClawSpeechModelConfig);
+window.KernelState.claim('speech-config-cache', {
+  get: (key) => bridgeApi[key],
+  set: (key, value) => { bridgeApi[key] = value; },
+});
