@@ -110,6 +110,7 @@ runtime-status、remote-connections、bg-panel、rail-customize、voice-input、
 | `396e1709` | 时序切换：`modules/boot.js` 承接首屏渲染链；index.html 内联主题预读；script-tags gate 增加"boot 必须是最后一条 module 标签" | src 标签 69 → 70（新增即该入口） |
 | `89fa18e8` | i18n → ESM（`I18N` + `createTranslator` + 生产绑定 `t`），`modules/i18n-host.js` 注册 `i18n:t` 桥键；54 个沙箱用例改为经 `test/helpers/install-i18n.js` 装真实字典 | 台账 71 文件 / state 399 / behavior 972 → 70 / 398 / 971；桥债 256/85 → 257/86 |
 | `32c36d24` | theme-lang 并入 i18n-environment-state；sidebar-layout 迁 ESM（新增 `modules/p4-entry.js` 作为 P4 批次入口）；长尾四件（chat-context-bar / workspace-docset / todo-plan / panel-plugins）迁 ESM | 台账 → 65 / 384 / 933；src 标签 70 → 63；桥债 267/90 → 270/90 |
+| `a88238e1` | rail-customize / generative-ui-panel 迁 ESM。同批判定 `desktop-open` / `desktop-notify` **R4 触线不转**：顶层就是桌面壳 webview eval 的消费入口，`&&` 守卫是静默丢弃不是排队，迁到模块相会多出请求被吞的窗口（`test/frontend-desktop-open.test.js` 钉这条） | src 标签 63 → 61；桥债 270/90 → 272/92 |
 
 转换中确立的几条约定（后续批次沿用）：
 
