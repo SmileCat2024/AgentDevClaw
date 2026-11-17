@@ -859,3 +859,16 @@ agentList.addEventListener('contextmenu', (event) => {
   event.preventDefault();
   window.openAgentActions(event, agentId);
 });
+
+// ── P2 bootstrap 消费接口（本文件的 classic 词法状态）───────────────────────
+// 侧栏渲染签名是跨文件的 let：pin 点击 / 会话变更 / 侧栏操作在乐观更新后把它
+// 清空以强制下次重建，renderAgentList 用它去重。ESM 消费方经
+// modules/p2-bootstrap-sidebar.js 的 sidebarRender 适配对象读写。owner 仍是
+// 本文件的顶部声明（渲染去重语义不变）；消费方（sidebar-pin-color /
+// session-mutation / sidebar-operations / thread-store）全部迁移后随 P3 撤除。
+function createP2BootstrapSidebarRenderHost() {
+  return Object.freeze({
+    get lastAgentListRenderSignature() { return lastAgentListRenderSignature; },
+    set lastAgentListRenderSignature(value) { lastAgentListRenderSignature = value; },
+  });
+}

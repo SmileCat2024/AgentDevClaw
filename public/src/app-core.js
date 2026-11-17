@@ -1069,3 +1069,255 @@ function resolveWorkspaceFallbackAgentId(agent = getCurrentAgentRecord()) {
   if (allAgents.some((item) => item.id === 'home')) return 'home';
   return allAgents[0]?.id || null;
 }
+
+// ── P2 bootstrap 消费接口（classic 侧唯一实现）─────────────────────────────
+// 首屏同步边界内的 classic 词法状态（顶层 let/const）没有 window 可达形态：ESM
+// 消费方既不能裸读全局词法（那是门禁看不见的债务），也不能假装 window 可达。
+// 下面按职责分域的 host 工厂是这些键唯一的 classic 实现入口，ESM 侧经
+// modules/p2-bootstrap-*.js 适配模块取得读写接口（P1 的 createXHost 同款窄面）。
+//
+// 约束：
+// - owner 不变：状态仍在各自 classic 声明处——初始化时点、const 只读语义、
+//   Map/Set 引用身份、既有 classic 写方全部照旧。host 不持有副本，访问器实时
+//   转发；禁止在此另存一份状态，也禁止把状态搬到 classic 声明之外去持有。
+// - 只暴露已证实存在 P2 消费方（modules/ 下的文件）的键；新增键须附消费证据。
+// - 撤除条件（P3）：该域消费方全部改为 import 已迁 ESM 的 owner 后，删除对应
+//   工厂与适配模块；在此之前不得把它当作状态真相源。
+
+/**
+ * DOM 引用（DOM 域，只读）。全部是加载期 document.getElementById 得到的 const
+ * 引用，元素从不替换，因此按引用原样交出；写入口不存在（classic 侧也无写点）。
+ * 消费方：chat-* / input-* / debug-panel-host / ctx-menu-* / workspace-docset /
+ * theme-lang / sidebar-render。
+ */
+function createP2BootstrapDomHost() {
+  return Object.freeze({
+    container,
+    agentList,
+    externalAgentList,
+    externalGroup,
+    externalCount,
+    currentAgentTitle,
+    featurePanel,
+    featurePanelTitle,
+    featurePanelBody,
+    agentContextMenu,
+    restartAgentAction,
+    stopAgentAction,
+    deleteAgentAction,
+    compactContextMenu,
+    compactSummaryAction,
+    compactTrimAction,
+    compactBranchAction,
+    projectContextMenu,
+    deleteProjectAction,
+    featureRepoContextMenu,
+    deleteFeatureAction,
+    ctxMenu,
+    followLatestButton,
+    projectDocsetToggle,
+    projectDocsetOverlay,
+    projectDocsetSheet,
+    chatProcessToggle,
+    languageToggle,
+    themeToggle,
+  });
+}
+
+/**
+ * 聊天表面状态：跟随滚动开关、视口观察/结算句柄、过程可见性偏好。
+ * 消费方：chat-viewport / chat-scroll / chat-renderer / chat-row-visibility /
+ * lazy-tool-content / input-helpers / chat-context-bar / input-render /
+ * runtime-status / app-main。
+ * 注：followLatestEnabled 另经 createRuntimeViewCacheHost 供 runtime-view-cache
+ * ESM 使用——两处都是同一 classic 声明的转发，不构成双存储。
+ */
+function createP2BootstrapChatSurfaceHost() {
+  return Object.freeze({
+    CHAT_PROCESS_VISIBILITY_KEY, // 只读：localStorage 键名常量
+    get showChatProcess() { return showChatProcess; },
+    set showChatProcess(value) { showChatProcess = value; },
+    get followLatestEnabled() { return followLatestEnabled; },
+    set followLatestEnabled(value) { followLatestEnabled = value; },
+    get suppressFollowScrollEvent() { return suppressFollowScrollEvent; },
+    set suppressFollowScrollEvent(value) { suppressFollowScrollEvent = value; },
+    get lastManualScrollIntentAt() { return lastManualScrollIntentAt; },
+    set lastManualScrollIntentAt(value) { lastManualScrollIntentAt = value; },
+    get _progScrollCooldownUntil() { return _progScrollCooldownUntil; },
+    set _progScrollCooldownUntil(value) { _progScrollCooldownUntil = value; },
+    get followLatestEntryUntil() { return followLatestEntryUntil; },
+    set followLatestEntryUntil(value) { followLatestEntryUntil = value; },
+    get chatViewportObserversReady() { return chatViewportObserversReady; },
+    set chatViewportObserversReady(value) { chatViewportObserversReady = value; },
+    get chatViewportObserverSuppressDepth() { return chatViewportObserverSuppressDepth; },
+    set chatViewportObserverSuppressDepth(value) { chatViewportObserverSuppressDepth = value; },
+    get chatViewportObserverQuietUntil() { return chatViewportObserverQuietUntil; },
+    set chatViewportObserverQuietUntil(value) { chatViewportObserverQuietUntil = value; },
+    get chatViewportMutationObserver() { return chatViewportMutationObserver; },
+    set chatViewportMutationObserver(value) { chatViewportMutationObserver = value; },
+    get chatViewportResizeObserver() { return chatViewportResizeObserver; },
+    set chatViewportResizeObserver(value) { chatViewportResizeObserver = value; },
+    get chatViewportSettlementToken() { return chatViewportSettlementToken; },
+    set chatViewportSettlementToken(value) { chatViewportSettlementToken = value; },
+    get chatViewportSettlementRaf() { return chatViewportSettlementRaf; },
+    set chatViewportSettlementRaf(value) { chatViewportSettlementRaf = value; },
+    get chatViewportSettlementTimer() { return chatViewportSettlementTimer; },
+    set chatViewportSettlementTimer(value) { chatViewportSettlementTimer = value; },
+    get chatViewportSettlementContext() { return chatViewportSettlementContext; },
+    set chatViewportSettlementContext(value) { chatViewportSettlementContext = value; },
+    get chatViewportFollowRaf() { return chatViewportFollowRaf; },
+    set chatViewportFollowRaf(value) { chatViewportFollowRaf = value; },
+    get chatViewportFollowToken() { return chatViewportFollowToken; },
+    set chatViewportFollowToken(value) { chatViewportFollowToken = value; },
+    get chatViewportFollowTransition() { return chatViewportFollowTransition; },
+    set chatViewportFollowTransition(value) { chatViewportFollowTransition = value; },
+  });
+}
+
+/**
+ * call 活动状态：运行中/刚完成/已提醒的 runtime 容器（const Map/Set，按引用
+ * 交出，消费方沿用既有 .set/.delete/.add/.clear 语义与原引用身份）与打断动作
+ * 时间戳。_lastChoiceAlertCheckAt 不在此暴露：它已由 createPollCycleHost 转发
+ * 给 ESM 轮询，避免同一键出现第二个兼容面。
+ * 消费方：runtime-status / persistent-input / sidebar-render / app-main /
+ * input-helpers / voice-input / generative-ui-panel / remote-connections /
+ * sse-client / auto-title / desktop-notify / todo-plan / app-ui。
+ * 注：_agentCallActive / _recentlyFinishedRuntimes 另经
+ * createAgentCallStatesHost（sidebar-render）供 agent-call-states ESM 使用，
+ * 同一容器，不构成双存储。
+ */
+function createP2BootstrapCallActivityHost() {
+  return Object.freeze({
+    _agentCallActive,            // 只读引用：Map 变异走既有方法
+    _recentlyFinishedRuntimes,   // 只读引用：Set 变异走既有方法
+    _seenChoiceAlertIds,         // 只读引用
+    _autoTitleTriggered,         // 只读引用
+    get _lastInterruptUserActionAt() { return _lastInterruptUserActionAt; },
+    set _lastInterruptUserActionAt(value) { _lastInterruptUserActionAt = value; },
+  });
+}
+
+/**
+ * 编程小助手会话列表 UI 状态：排序偏好、检索词、检索防抖句柄、页签回放。
+ * 消费方：ph-session-list / ph-project-actions / session-list-render /
+ * ph-search-locate / ph-session-move / session-ui / app-ui。
+ * savedPhTabState 只读引用：classic 侧按 tabGroup 键就地改写（不整体替换）。
+ */
+function createP2BootstrapPhSessionHost() {
+  return Object.freeze({
+    get phSessionSortMode() { return phSessionSortMode; },
+    set phSessionSortMode(value) { phSessionSortMode = value; },
+    get phSearchQuery() { return phSearchQuery; },
+    set phSearchQuery(value) { phSearchQuery = value; },
+    get _phSearchTimer() { return _phSearchTimer; },
+    set _phSearchTimer(value) { _phSearchTimer = value; },
+    savedPhTabState,
+  });
+}
+
+/**
+ * 右栏 debug 面板状态：日志 / MCP / overview 生命周期选择 / feature 与仓库检索。
+ * 消费方：debug-logs / overview-data / debug-mcp / debug-overview /
+ * debug-features-hooks / workspace-blocks / debug-summary-upload。
+ * logFilters 只读引用：classic 侧按字段就地赋值（updateLogFilter）。
+ */
+function createP2BootstrapDebugPanelHost() {
+  return Object.freeze({
+    get currentLogs() { return currentLogs; },
+    set currentLogs(value) { currentLogs = value; },
+    get currentLogsSignature() { return currentLogsSignature; },
+    set currentLogsSignature(value) { currentLogsSignature = value; },
+    get currentLogsTruncation() { return currentLogsTruncation; },
+    set currentLogsTruncation(value) { currentLogsTruncation = value; },
+    logFilters,
+    get currentMcpInfo() { return currentMcpInfo; },
+    set currentMcpInfo(value) { currentMcpInfo = value; },
+    get selectedOverviewLifecycle() { return selectedOverviewLifecycle; },
+    set selectedOverviewLifecycle(value) { selectedOverviewLifecycle = value; },
+    get selectedFeatureName() { return selectedFeatureName; },
+    set selectedFeatureName(value) { selectedFeatureName = value; },
+    get selectedRepositoryPackageId() { return selectedRepositoryPackageId; },
+    set selectedRepositoryPackageId(value) { selectedRepositoryPackageId = value; },
+    get repoSearchQuery() { return repoSearchQuery; },
+    set repoSearchQuery(value) { repoSearchQuery = value; },
+    get repoSourceFilter() { return repoSourceFilter; },
+    set repoSourceFilter(value) { repoSourceFilter = value; },
+  });
+}
+
+/**
+ * assembly 工作台 UI 状态：控制面板开合、草稿重渲染句柄、启动在飞标志、
+ * 侧栏渐显句柄。消费方：assembly-actions / assembly-data / chat-viewport / app-ui。
+ */
+function createP2BootstrapAssemblyHost() {
+  return Object.freeze({
+    get assemblyControlPanelOpen() { return assemblyControlPanelOpen; },
+    set assemblyControlPanelOpen(value) { assemblyControlPanelOpen = value; },
+    get assemblyDraftRenderTimer() { return assemblyDraftRenderTimer; },
+    set assemblyDraftRenderTimer(value) { assemblyDraftRenderTimer = value; },
+    get assemblyLaunchInProgress() { return assemblyLaunchInProgress; },
+    set assemblyLaunchInProgress(value) { assemblyLaunchInProgress = value; },
+    get assemblySideRailRevealTimer() { return assemblySideRailRevealTimer; },
+    set assemblySideRailRevealTimer(value) { assemblySideRailRevealTimer = value; },
+  });
+}
+
+/**
+ * 侧栏交互态：重启中的 runtime 集合（const Set，按引用交出）与菜单期间抑制
+ * 全量重建标志。消费方：ctx-menu-handlers / ctx-menu-items / app-main /
+ * sidebar-render。渲染签名（lastAgentListRenderSignature）在 sidebar-render.js
+ * 自己的 host 里，见 createP2BootstrapSidebarRenderHost。
+ */
+function createP2BootstrapSidebarHost() {
+  return Object.freeze({
+    restartingRuntimeIds,        // 只读引用：Set 变异走既有方法
+    get suppressSidebarRerender() { return suppressSidebarRerender; },
+    set suppressSidebarRerender(value) { suppressSidebarRerender = value; },
+  });
+}
+
+/**
+ * 预制工作空间会话切换引导标志：模板预热代次（template-engine 递增并比较）、
+ * 会话切换在飞。消费方：template-engine / workspace-actions / app-main。
+ */
+function createP2BootstrapSessionSwitchHost() {
+  return Object.freeze({
+    get templateWarmupToken() { return templateWarmupToken; },
+    set templateWarmupToken(value) { templateWarmupToken = value; },
+    get prebuiltSessionSwitchInFlight() { return prebuiltSessionSwitchInFlight; },
+    set prebuiltSessionSwitchInFlight(value) { prebuiltSessionSwitchInFlight = value; },
+  });
+}
+
+/**
+ * 选择卡片输入草稿（按 requestId 就地读写的对象）。只读引用：classic 侧按
+ * requestId 键写/删，不整体替换。消费方：choice-input。
+ */
+function createP2BootstrapChoiceInputHost() {
+  return Object.freeze({
+    get state() { return choiceInputState; },
+  });
+}
+
+/**
+ * 上下文菜单待执行目标（6 个顶层 let）：打开菜单时写入、关闭时清空、动作
+ * handler 读取后执行。消费方：context-menu / ctx-menu-handlers——这对文件是
+ * 该 6 键当前唯一的读写方；菜单用到的 DOM 引用在 createP2BootstrapDomHost。
+ * 6 键都可写，因此 get/set 成对转发到原声明。
+ */
+function createP2BootstrapContextMenuHost() {
+  return Object.freeze({
+    get contextMenuAgentId() { return contextMenuAgentId; },
+    set contextMenuAgentId(value) { contextMenuAgentId = value; },
+    get contextMenuAgentMode() { return contextMenuAgentMode; },
+    set contextMenuAgentMode(value) { contextMenuAgentMode = value; },
+    get contextMenuCompactAction() { return contextMenuCompactAction; },
+    set contextMenuCompactAction(value) { contextMenuCompactAction = value; },
+    get contextMenuProjectAgentId() { return contextMenuProjectAgentId; },
+    set contextMenuProjectAgentId(value) { contextMenuProjectAgentId = value; },
+    get contextMenuProjectId() { return contextMenuProjectId; },
+    set contextMenuProjectId(value) { contextMenuProjectId = value; },
+    get contextMenuFeatureRepoPackageId() { return contextMenuFeatureRepoPackageId; },
+    set contextMenuFeatureRepoPackageId(value) { contextMenuFeatureRepoPackageId = value; },
+  });
+}
