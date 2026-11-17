@@ -1742,27 +1742,6 @@
       "wgToggleVoiceRecording"
     ]
   },
-  "public/src/modules/work-group-ui.js": {
-    "state": [
-      "_wgAddSelectedMember",
-      "_wgArchive",
-      "_wgChangeWorkDir",
-      "_wgDissolve",
-      "_wgEditGroupMd",
-      "_wgGetSettingsHtml",
-      "_wgOpenAddMemberModal",
-      "_wgOpenFilesPanel",
-      "_wgRemoveMember",
-      "_wgSettingsChange",
-      "_wgSettingsInit",
-      "_wgSettingsRefresh",
-      "_wgToggleAdminConfig",
-      "_wgUnarchive"
-    ],
-    "behavior": [
-      "WorkGroupUI"
-    ]
-  },
   "public/src/modules/workspace-agents.js": {
     "state": [],
     "behavior": [

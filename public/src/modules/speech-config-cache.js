@@ -8,7 +8,7 @@
  *
  * 历史上写入分散在 5 个文件：
  * model-settings（设置面板开/关时清写）、speech-settings（preset 编辑与
- * 保存）、voice-input / wg-voice-input / work-group-ui（三份逐字重复的
+ * 保存）、voice-input / wg-voice-input（两份逐字重复的
  * 懒加载：缓存 miss → GET speech_model_config → 写入）。现统一收敛到本模块：
  *
  * - 所有写入必须经 setClawSpeechModelConfig / setClawSpeechPresets；
@@ -69,10 +69,10 @@ export {
 
 // —— 桥接期兼容面（kernel-state 访问器桥）——
 // 只有 ensureClawSpeechModelConfig 仍有 classic 消费方：voice-input.js（录音开始时
-// 取配置）与悬置域的 wg-voice-input.js / work-group-ui.js，均在事件回调内调用
+// 取配置）与悬置域的 wg-voice-input.js，均在事件回调内调用
 // （classic 相无触达点）。其余四个函数键消费方全在本批 ESM 模块内，直接 import，
 // 不上桥。收敛条件：voice-input.js 迁移后改 import 只解决其中一处——悬置域
-// （wg-voice-input / work-group-ui）未迁或未重做前本键必须保留，三处消费方全部
+// （wg-voice-input）未迁或未重做前本键必须保留，两处消费方全部
 // 迁走才能注销本键。
 const bridgeApi = { ensureClawSpeechModelConfig };
 window.KernelState.defineKey('speech-config-cache', 'ensureClawSpeechModelConfig', ensureClawSpeechModelConfig);

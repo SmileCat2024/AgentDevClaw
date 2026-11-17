@@ -65,7 +65,7 @@
  *   消费方按形态分两类（「仍 classic」不等于「未迁 ESM」——桥键对两者同样生效）：
  *   仍 classic（真 window 调用）：app-main（capture 点击委托与
  *     runWorkspaceActionFromEvent）、app-ui、desktop-open、claw-host（插件宿主
- *     API）、thread-store、wg-core / work-group-ui / home-dashboard（悬置域）；
+ *     API）、thread-store、wg-core / home-dashboard（悬置域）；
  *   已 ESM 但经 window 晚绑定（可改 import 后撤桥）：session-list-render、
  *     workspace-blocks、p2-w2-10-workspace-docset、ctx-menu-handlers /
  *     ctx-menu-items、session-ui、app-chat-input、assembly-actions、
@@ -1525,7 +1525,7 @@ async function _waitForRemoteRuntimeForSession(namespacedSessionId, attempts = 5
 // ctx-menu-items、session-list-render、workspace-blocks、
 // p2-w2-10-workspace-docset、session-ui、app-chat-input、assembly-actions、
 // runtime-mode-menu、ph-thread-history、slash-commands 与悬置域
-// wg-core / work-group-ui / home-dashboard）。注销条件：上列消费方全部改 import
+// wg-core / home-dashboard）。注销条件：上列消费方全部改 import
 // 后删除对应 defineKey 并下调桥债基线。
 // 注册相位：模块求值相——R1/R2/R4 审计已证 classic 相无触达点（静态
 // data-workspace-action 元素为 0，元素全部由 boot 之后的渲染产出；桌面壳

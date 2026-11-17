@@ -36,7 +36,6 @@ const SUSPENDED_BASENAMES = new Set([
   'im-actions.js',
   'dispatch-ui.js',
   'dispatch-actions.js',
-  'work-group-ui.js',
   'flow-editor.js',
   'home-dashboard.js',
   'resources-viewer.js',

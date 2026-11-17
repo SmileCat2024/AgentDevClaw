@@ -11,7 +11,7 @@ import { installBrowserStubs, loadModuleOnce } from './helpers/esm-module-loader
  * 不经 ClawFW 袋读写。
  *
  * 收敛前写点分散在 5 个文件：model-settings（面板开/关）、speech-settings
- * （preset 编辑/保存）、voice-input / wg-voice-input / work-group-ui（三份
+ * （preset 编辑/保存）、voice-input / wg-voice-input（两份
  * 逐字重复的懒加载：缓存 miss → GET speech_model_config → 写入）。
  *
  * 装载路线（ESM 迁移配方第三节）：真实 import + 最小 window/document 桩；
