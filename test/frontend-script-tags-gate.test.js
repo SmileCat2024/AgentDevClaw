@@ -179,9 +179,10 @@ function importTargets(file) {
   const specs = [...source.matchAll(/^\s*(?:import|export)\s+(?:[^'"]*?\sfrom\s+)?["']([^"']+)["']/gm)]
     .map((m) => m[1])
     .filter((spec) => spec.startsWith('.'));
-  return specs.map((spec) => path.posix.normalize(
-    path.posix.join(path.posix.dirname(file), spec),
-  ));
+  // `file` is an OS path, while the import specifier is a POSIX-style URL
+  // path. Resolve the specifier with the host path module so Windows drive
+  // letters and separators compare canonically with `entryFiles`.
+  return specs.map((spec) => path.resolve(path.dirname(file), spec));
 }
 
 test('装载入口登记：必须真被登记 module 入口 import，且文件是 ESM 语法', async () => {

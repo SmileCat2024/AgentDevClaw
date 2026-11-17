@@ -952,14 +952,9 @@ describe('ctx-menu-items: dispatchCtxAction remote variants', () => {
     return { ctx, calls };
   }
 
-  async function settle(ctx) {
-    await ctx.run(`new Promise((resolve) => setTimeout(resolve, 10))`);
-  }
-
   it('restart on a remote leaf invokes restart_agent with the host namespace id and re-locates the new runtime', async () => {
     const { ctx, calls } = loadRemoteHarness();
-    ctx.run(`dispatchCtxAction('restart', { ns: '${REMOTE_NS}', id: 'remote:lab-b:rt-1', sessionId: 'remote:lab-b:sess-1', variant: 'remote' })`);
-    await settle(ctx);
+    await ctx.run(`dispatchCtxAction('restart', { ns: '${REMOTE_NS}', id: 'remote:lab-b:rt-1', sessionId: 'remote:lab-b:sess-1', variant: 'remote' })`);
     const restarts = activeCase.fetchCalls.filter((entry) => entry.url === '/protoclaw/restart_agent');
     assert.equal(restarts.length, 1, 'restart_agent must reach the server');
     assert.deepEqual(JSON.parse(restarts[0].body), {
@@ -981,8 +976,7 @@ describe('ctx-menu-items: dispatchCtxAction remote variants', () => {
 
   it('stop on a remote leaf invokes stop_agent with the host namespace id', async () => {
     const { ctx } = loadRemoteHarness();
-    ctx.run(`dispatchCtxAction('stop', { ns: '${REMOTE_NS}', id: 'remote:lab-b:rt-1', sessionId: 'remote:lab-b:sess-1', variant: 'remote' })`);
-    await settle(ctx);
+    await ctx.run(`dispatchCtxAction('stop', { ns: '${REMOTE_NS}', id: 'remote:lab-b:rt-1', sessionId: 'remote:lab-b:sess-1', variant: 'remote' })`);
     const stops = activeCase.fetchCalls.filter((entry) => entry.url === '/protoclaw/stop_agent');
     assert.equal(stops.length, 1, 'stop_agent must reach the server');
     assert.deepEqual(JSON.parse(stops[0].body), {

@@ -1103,13 +1103,11 @@ function dispatchCtxAction(action, target) {
 
     case 'restart':
       window.closeCtxMenu();
-      ctxRestartAgent(target);
-      break;
+      return ctxRestartAgent(target);
 
     case 'stop':
       window.closeCtxMenu();
-      ctxStopAgent(target);
-      break;
+      return ctxStopAgent(target);
 
     case 'delete-session':
       window.closeCtxMenu();
