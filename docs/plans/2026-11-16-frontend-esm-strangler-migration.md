@@ -1,7 +1,7 @@
 # 前端 classic-script 全局共享模式 ESM 渐进拆解（绞杀者路线）
 
 日期：2026-11-16
-状态：P0、P1、P2 业务迁移已交付，P3 未实施。同步首屏 bootstrap 按 R1/R2/R4 保留唯一 classic 实现；P2 已迁移其可迁消费方，保留原首屏与事件时点。最终全量测试仍有既有失败，不声明全量绿。当前入口、保留边界、基线审批与验证见 [P2 交付记录](2026-11-17-frontend-esm-p2-acceptance.md)；下文 P1 数字为当时快照，职责键清单以 [分桶定案](2026-11-16-esm-p1-domain-buckets.md) 为准
+状态：P0、P1、P2 业务迁移已交付；P3 按“保留同步首屏”路线收敛。必要 bootstrap、早期事件入口与悬置域仍保留唯一 classic 实现，因此原定“活跃域 classic=0、桥=0”终态不再适用；只撤除已证实无 classic 消费方的桥，并保留其他桥。全量测试限制与当前入口见 [P2 交付记录](2026-11-17-frontend-esm-p2-acceptance.md)；下文 P1 数字为当时快照，职责键清单以 [分桶定案](2026-11-16-esm-p1-domain-buckets.md) 为准
 
 ---
 
@@ -204,13 +204,15 @@
 - 禁区（每张工单）：悬置域文件、`kernel-state.js`、`action-dispatcher.js`、`index.html`、全部 ratchet 基线文件（frontend-globals / inline-events / import-cycles / kernel-bridge / script-tags）、对应 gate 测试、不属于本批清单的任何文件。
 - 预计 15–25 批；先跑 1–2 批试运行校准配方，确认节奏后再放量连续派发。
 
-### P3 终局
+### P3 收口（保留同步首屏）
 
-- 哑存储状态下沉进各 ESM 域模块，访问器桥全撤（`delete window.x`）；
-- `app-core.js` / `app-ui.js` / `app-main.js` 消解为薄壳（仅保留 bootstrap 级逻辑）或删除；
-- index.html 只剩：内联 bootstrap + 悬置域 classic 标签 + module 入口；
-- 门禁终态：活跃域 classic 文件数 = 0、桥键注册数 = 0、台账只剩悬置域条目；
-- 悬置域将来自行重做时直接以 ESM 起写，无缝消费已完成内核。
+P3 保持同步首屏和早期事件行为不变。内联 base-path bootstrap、首屏同步渲染、必须在模块执行前响应的事件入口，以及悬置域继续使用唯一 classic 实现；不得为达到全零指标而延迟这些入口、增加第二套实现或静默跳过行为。
+
+- 将无须在 classic 相提供的状态迁入 ESM 域模块；只在确认没有 classic、内联模板或悬置域消费方后撤除对应访问器桥。
+- `app-core.js` / `app-ui.js` / `app-main.js` 仅在同步调用链与首屏事件契约允许时拆薄；保留的实现必须是唯一实现，并记录其触发条件与消费面。
+- `index.html` 保留内联 bootstrap、必要 classic 同步入口、悬置域 classic 标签和 ESM 入口；各类 script 标签的边界由真实时序与消费面决定。
+- P3 验收以可证明的收敛为准：无消费者的桥键归零，静态台账中可迁移的活跃域键减少；同步 bootstrap、早期 classic 入口和悬置域所需桥不计作待强行清零的债务。具体剩余项须列出实现位置、消费方与解除条件。
+- 悬置域重做时直接以 ESM 起写，消费已完成的 ESM 内核；重做不属于本阶段范围。
 
 ---
 

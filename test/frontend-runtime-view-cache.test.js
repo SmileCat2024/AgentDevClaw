@@ -16,39 +16,39 @@ test('cache restores synchronously with session identity, follow mode and bounde
   globalThis.window = ctx;
   try {
     const { module } = await loadModuleOnce('public/src/modules/runtime-view-cache-host.js', { installGlobals: false });
-    assert.strictEqual(ctx.restoreRuntimeFromCache, module.restoreRuntimeFromCache);
+    assert.equal(typeof module.restoreRuntimeFromCache, 'function');
     ctx.run(`currentRuntimeAgentId = 'runtime'; focusedAgentId = 'host';
       applySessionViewPatch({ identity: { agentId: 'host', sessionId: 'a' } });
       applySessionViewPatch({ messages: [{ role: 'assistant', content: 'A' }],
         inputRequests: [{ requestId: 'a' }] });
       followLatestEnabled = false;`);
     const messages = ctx.currentMessages;
-    ctx.saveCurrentRuntimeToCache('runtime', 'host:host|session:a');
+    module.saveCurrentRuntimeToCache('runtime', 'host:host|session:a');
     ctx.run(`applySessionViewPatch({ identity: { agentId: 'host', sessionId: 'b' } });
       followLatestEnabled = true;`);
     events.length = 0;
-    const restored = ctx.restoreRuntimeFromCache('runtime', 'host:host|session:a');
+    const restored = module.restoreRuntimeFromCache('runtime', 'host:host|session:a');
     assert.strictEqual(restored, true, 'restoration is not a Promise');
     assert.strictEqual(ctx.currentMessages, messages);
     assert.equal(ctx.run('readCurrentSessionViewState().identity.sessionId'), 'a');
     assert.equal(ctx.currentInputRequests[0].requestId, 'a');
     assert.ok(events.length > 0, 'input notification observation is active');
     assert.ok(events.every((follow) => follow === false), 'notifications see restored follow mode');
-    assert.equal(ctx.restoreRuntimeFromCache('other-runtime', 'host:host|session:a'), false);
-    assert.equal(ctx.restoreRuntimeFromCache('runtime', 'host:host|session:a'), false, 'collision evicts invalid entry');
+    assert.equal(module.restoreRuntimeFromCache('other-runtime', 'host:host|session:a'), false);
+    assert.equal(module.restoreRuntimeFromCache('runtime', 'host:host|session:a'), false, 'collision evicts invalid entry');
 
     for (let i = 0; i < 5; i++) {
-      ctx.saveCurrentRuntimeToCache('runtime', `host:host|session:${i}`);
+      module.saveCurrentRuntimeToCache('runtime', `host:host|session:${i}`);
     }
-    assert.equal(ctx.restoreRuntimeFromCache('runtime', 'host:host|session:0'), false);
-    assert.equal(ctx.restoreRuntimeFromCache('runtime', 'host:host|session:1'), true);
-    ctx.clearAgentRuntimeCache('unrelated');
-    assert.equal(ctx.restoreRuntimeFromCache('runtime', 'host:host|session:1'), true);
-    ctx.clearAgentRuntimeCache('runtime');
-    assert.equal(ctx.restoreRuntimeFromCache('runtime', 'host:host|session:1'), false);
-    ctx.saveCurrentRuntimeToCache('runtime', 'runtime:runtime');
-    ctx.clearAgentRuntimeCache();
-    assert.equal(ctx.restoreRuntimeFromCache('runtime', 'runtime:runtime'), false);
+    assert.equal(module.restoreRuntimeFromCache('runtime', 'host:host|session:0'), false);
+    assert.equal(module.restoreRuntimeFromCache('runtime', 'host:host|session:1'), true);
+    module.clearAgentRuntimeCache('unrelated');
+    assert.equal(module.restoreRuntimeFromCache('runtime', 'host:host|session:1'), true);
+    module.clearAgentRuntimeCache('runtime');
+    assert.equal(module.restoreRuntimeFromCache('runtime', 'host:host|session:1'), false);
+    module.saveCurrentRuntimeToCache('runtime', 'runtime:runtime');
+    module.clearAgentRuntimeCache();
+    assert.equal(module.restoreRuntimeFromCache('runtime', 'runtime:runtime'), false);
   } finally {
     if (previous === undefined) delete globalThis.window;
     else globalThis.window = previous;

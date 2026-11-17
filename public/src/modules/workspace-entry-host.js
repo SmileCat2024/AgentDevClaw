@@ -19,7 +19,6 @@ const compatibility = { ...entry, ...request };
 export const { handlePrebuiltAgentClick } = entry;
 export const { openPrebuiltWorkspaceSession } = request;
 window.KernelState.defineKey('workspace-entry', 'handlePrebuiltAgentClick', handlePrebuiltAgentClick);
-window.KernelState.defineKey('workspace-entry', 'openPrebuiltWorkspaceSession', openPrebuiltWorkspaceSession);
 window.KernelState.claim('workspace-entry', {
   get: key => compatibility[key],
   set: (key, value) => { compatibility[key] = value; },

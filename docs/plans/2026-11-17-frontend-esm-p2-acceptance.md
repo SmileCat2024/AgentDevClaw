@@ -1,6 +1,6 @@
 # 前端 ESM P2 交付与保留边界
 
-日期：2026-11-17。范围：ADR-0051、迁移计划 §P2。业务迁移已完成；全量测试存在下述既有失败，不声明全量绿。P3 未实施。
+日期：2026-11-17。范围：ADR-0051、迁移计划 §P2 与后续 P3 收口。P2 业务迁移已完成；全量测试存在下述既有失败，不声明全量绿。P3 按保留同步首屏路线推进，P3 收口范围及验证状态见文末更新。
 
 ## 交付内容
 
@@ -120,6 +120,14 @@
 1. 删除 model-preset-cache 的 getClawModelPresets 命名导出：原契约测试 8 项失败，原因明确为接口不存在；说明调用方测试能发现接口退化。
 2. 将该域 claim setter 置空：兼容测试明确在“认领后写入应被接管”断言失败，exit 1；不是无关宿主异常。
 3. 从本次副本备份恢复并与生产文件逐字比较一致，原树缓存/兼容/门禁测试通过。变异只能证明以上两类错误可被捕获，不代表所有缺陷均已覆盖。
+
+## P3 收口状态（保留同步首屏）
+
+P3 以保持首屏与早期事件时点为约束，不追求活跃域 classic 文件和桥键归零。只有在实际 classic/悬置消费方清单中没有消费者的键才撤桥；同步 bootstrap、classic 事件入口、悬置域与旧模板协议继续按各自契约保留。
+
+本轮已移除纯 ESM 消费的桥：`saveCurrentRuntimeToCache`、`restoreRuntimeFromCache`、`clearAgentRuntimeCache`、`createCompactedResumeSession`、`openPrebuiltWorkspaceSession`。其定义模块与 ESM 消费方通过命名导出/import 通信。`handlePrebuiltAgentClick` 的桥仍保留：classic 侧栏、桌面唤起及悬置域仍通过 `window` 调用。
+
+桥债基线由 `registered=261 / claimed=87` 下调为 `registered=256 / claimed=85`。前端缓存测试现直接调用真实 ESM 模块导出，继续验证会话身份、同步恢复、通知状态与缓存淘汰契约。
 
 ## 接续与回滚
 
