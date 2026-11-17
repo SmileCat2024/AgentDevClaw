@@ -37,6 +37,7 @@
 ## 排查问题
 
 - [investigations/](investigations/) — 问题调查、分析与复盘（含 postmortem）
+- [TLA+ 历次发现：产品确认与裁决清单](investigations/2026-11-17-tla-product-decision-register.md) — 当前缺陷、已修复历史与模糊边界，按用户入口、业务影响及产品决定组织
 - [audits/](audits/) — 对抗性审查与审计报告
 - [Coder ACP 排障](reference/coder-acp-troubleshooting.md)
 
