@@ -26,3 +26,10 @@ import './chat-context-bar.js'; // 上下文栏与 hover 弹窗；桥 updateChat
 import './workspace-docset.js'; // project docset chrome；桥 ← app-ui / p2-w2-10
 import './todo-plan.js'; // 计划面板与 todo 控制；6 桥键 ← app-ui / app-core / app-main / session-view-state
 import './panel-plugins.js'; // 懒面板声明（纯副作用，无桥键）
+
+// ── L2 长尾编排层（T3 批次二）──
+import './rail-customize.js'; // rail 清单 / 配置 API；桥 applyRailConfig ← app-ui / debug-panel-host
+import './generative-ui-panel.js'; // GenUI 面板；桥 GenUIPanel ← agent-data-loader
+// desktop-open / desktop-notify 仍是 classic 唯一实现：壳侧 webview eval 在页面装载
+// 完成前就可能投递（`&&` 守卫是静默丢弃而非排队），迁到模块相会多出一段请求被吞
+// 的窗口。见 P4 计划「T2 早期事件窗口」与 test/frontend-desktop-open.test.js。

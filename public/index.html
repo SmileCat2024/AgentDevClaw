@@ -461,7 +461,8 @@
        入口由 app-ui 的面板注册闭包持有，rail 按钮在 classic 相就可点），标签保留。 -->
   <script src="./src/modules/debug-logs.js"></script>
   <script src="./src/modules/debug-features-hooks.js"></script>
-    <script src="./src/modules/generative-ui-panel.js"></script>
+    <!-- generative-ui-panel 已迁 ESM（P4 L2）：classic 标签删除，由 p4-entry 装载；
+         桥键 GenUIPanel 供 agent-data-loader 的 forceRefresh 使用。 -->
   <script src="./src/modules/debug-panel-host.js"></script>
   <!-- panel-plugins 已迁 ESM（P4 L1）：classic 标签删除，由 p4-entry 装载（纯声明，无桥键）。 -->
   <!-- 动态插件面板声明（ADR-0045 P1）：feature-ui-registry 从 server 声明 API
@@ -479,7 +480,8 @@
   <script src="./src/modules/right-panel-registry.js"></script>
   <script src="./src/app-ui.js"></script>
   <script src="./src/modules/resources-viewer.js"></script>
-  <script src="./src/modules/rail-customize.js"></script>
+  <!-- rail-customize 已迁 ESM（P4 L2）：classic 标签删除，由 p4-entry 装载；
+       桥键 applyRailConfig 供 app-ui 首屏尾部与 debug-panel-host 使用。 -->
   <script src="./src/modules/desktop-notify.js"></script>
   <!-- ↓↓↓ Phase A: 零风险子系统（自包含，无被 app-ui.js 调用的函数） ↓↓↓ -->
   <!-- 工单 036：常驻 composer（草稿缓存 + 模式判定 + 组件本体）。必须先于

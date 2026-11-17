@@ -47,7 +47,8 @@ const REGISTRATION_HOMES = [
     id: 'genui 自注册',
     file: 'public/src/modules/generative-ui-panel.js',
     start: "window.ClawHost.panels.register('genui'",
-    end: 'window.GenUIPanel = {',
+    // genui 已迁 ESM（P4 L2）：注册块止于模块命名导出对象的定义处。
+    end: 'const GenUIPanel = {',
     prefix: '',
     suffix: '',
   },
