@@ -4,10 +4,10 @@ import test from 'node:test';
 import vm from 'node:vm';
 import { installSessionViewCommit } from './helpers/session-view-commit.js';
 import { installRuntimeViewCache } from './helpers/runtime-view-cache.js';
+import { installI18n } from './helpers/install-i18n.js';
 
 /** Raw VM contexts install the real kernel with window/global unified. */
 const coreSource = fs.readFileSync(new URL('../public/src/app-core.js', import.meta.url), 'utf8');
-const i18nSource = fs.readFileSync(new URL('../public/src/i18n.js', import.meta.url), 'utf8');
 const inputRenderSource = fs.readFileSync(
   new URL('../public/src/modules/input-render.js', import.meta.url),
   'utf8',
@@ -78,14 +78,15 @@ function createCoreContext() {
   vm.createContext(context);
   context.window = context;
   vm.runInContext(fs.readFileSync(new URL('../public/src/modules/kernel-state.js', import.meta.url), 'utf8'), context);
+  // i18n 已迁 ESM（P4）：t 桥键按生产同款 defineKey + claim 装进裸 vm 上下文
+  installI18n(context);
   const cacheBlock = sourceBetween(
     coreSource,
     'const MAX_CACHED_RUNTIME_VIEWS = 4;',
     '\nfunction getFeatureStatus',
   );
   vm.runInContext(
-    `${i18nSource}
-${sessionViewStateSource}
+    `${sessionViewStateSource}
 ${cacheBlock}
 `, context);
   installSessionViewCommit(context);

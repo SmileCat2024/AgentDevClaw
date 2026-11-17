@@ -48,7 +48,6 @@ const CLASSIC_STACK = [
   'public/src/modules/right-panel-registry.js',
   'public/src/modules/markdown-bootstrap.js',
   'public/src/app-core.js',
-  'public/src/i18n.js',
   'public/src/modules/session-view-state.js',
   'public/src/modules/remote-connections.js',
   'public/src/modules/runtime-status.js',

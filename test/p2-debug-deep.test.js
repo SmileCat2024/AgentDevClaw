@@ -289,7 +289,7 @@ function createFetchStub(overrides = {}) {
 
 function loadClassicOwners(sandbox) {
   sandbox.loadSource('public/src/modules/action-dispatcher.js');
-  sandbox.loadSource('public/src/i18n.js');
+  // i18n 已迁 ESM（P4）：t 桥键由 createFrontendSandbox 自动装载，见 test/helpers/install-i18n.js
   sandbox.loadSource('public/src/app-core.js');
   sandbox.loadSource('public/src/modules/markdown-bootstrap.js');
   sandbox.loadSource('public/src/modules/session-view-state.js');

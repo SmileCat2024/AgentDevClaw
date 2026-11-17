@@ -559,7 +559,7 @@ test('probe fields are stripped from the snapshot and do not change the signatur
   return withP2EsmCase({
     classic: (sandbox) => {
       sandbox.loadSource('public/src/modules/action-dispatcher.js');
-      sandbox.loadSource('public/src/i18n.js');
+      // i18n 已迁 ESM（P4）：t 桥键由 createFrontendSandbox 自动装载，见 test/helpers/install-i18n.js
       sandbox.loadSource('public/src/app-core.js');
       sandbox.loadSource('public/src/modules/session-view-state.js');
     },
@@ -588,7 +588,7 @@ test('extractMessagesProbe validates fields and returns null when unusable', () 
   return withP2EsmCase({
     classic: (sandbox) => {
       sandbox.loadSource('public/src/modules/action-dispatcher.js');
-      sandbox.loadSource('public/src/i18n.js');
+      // i18n 已迁 ESM（P4）：t 桥键由 createFrontendSandbox 自动装载，见 test/helpers/install-i18n.js
       sandbox.loadSource('public/src/app-core.js');
       sandbox.loadSource('public/src/modules/session-view-state.js');
     },

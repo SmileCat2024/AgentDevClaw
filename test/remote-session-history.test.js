@@ -555,7 +555,6 @@ function createBranchDialogDom() {
  * 仅 app-main / app-ui 的 host 工厂走 seam（顶层是整条首屏 boot），按真实成员面补全。
  */
 const CLASSIC_BOOTSTRAP = [
-  'public/src/i18n.js',
   'public/src/modules/action-dispatcher.js',
   'public/src/app-core.js',
   'public/src/modules/runtime-status.js',

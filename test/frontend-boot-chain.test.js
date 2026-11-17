@@ -419,7 +419,6 @@ describe('前端加载链（index.html 真实入口 + P2 ESM 图，P2 子集）'
     const mainIdx = classicIndex('./src/app-main.js');
     assert.notEqual(mainIdx, -1, 'app-main 必须是 classic 标签（页面 boot 的唯一实现）');
     const classicRequirements = [
-      './src/i18n.js', // t()：applyLanguage 同步调用
       './src/modules/kernel-state.js', // 桥存储：状态访问器必须先于一切域模块
       './src/app-core.js', // DOM 引用与 createP2Bootstrap*Host 工厂
       './src/modules/sidebar-render.js', // renderAgentList：首屏同步调用

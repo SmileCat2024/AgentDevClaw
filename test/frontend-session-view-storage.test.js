@@ -34,7 +34,7 @@ const STORAGE_KEYS = [
 /** classic 相：app-core（桥键注册 + 宿主工厂）→ session-view-state → todo-plan。 */
 function loadClassicBootstrap(sandbox) {
   sandbox.loadSource('public/src/modules/action-dispatcher.js');
-  sandbox.loadSource('public/src/i18n.js');
+  // i18n 已迁 ESM（P4）：t 桥键由 createFrontendSandbox 自动装载，见 test/helpers/install-i18n.js
   sandbox.loadSource('public/src/app-core.js');
   sandbox.loadSource('public/src/modules/session-view-state.js');
   sandbox.loadSource('public/src/modules/todo-plan.js');

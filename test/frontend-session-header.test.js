@@ -98,7 +98,7 @@ async function withHeaderSandbox(fn) {
       ctx.loadSource('public/src/modules/sidebar-render.js');
       ctx.loadSource('public/src/modules/todo-plan.js');
       ctx.loadSource('public/src/modules/session-view-state.js');
-      ctx.loadSource('public/src/i18n.js');
+      // i18n 已迁 ESM（P4）：t 桥键由 createFrontendSandbox 装好（install-i18n.js）
       // app-main.js 底部的启动序列在沙箱里不执行；主题/语言应用与渲染函数以 stub 替身
       ctx.run(`
         window.__clawAuthReady = new Promise(() => {});

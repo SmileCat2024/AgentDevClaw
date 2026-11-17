@@ -419,7 +419,7 @@ test('动态：状态 owner 生效、ClawFW 纯 ESM 键缺席、保留桥可达'
   await withP2EsmCase({
     classic: (sandbox) => {
       sandbox.loadSource('public/src/modules/action-dispatcher.js');
-      sandbox.loadSource('public/src/i18n.js');
+      // i18n 已迁 ESM（P4）：t 桥键由 createFrontendSandbox 自动装载，见 test/helpers/install-i18n.js
       sandbox.loadSource('public/src/app-core.js');
       sandbox.loadSource('public/src/modules/session-view-state.js');
       sandbox.run(`

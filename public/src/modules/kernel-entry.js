@@ -14,6 +14,9 @@ import './call-interrupt-host.js';
 import './agent-call-states-host.js';
 import './agent-snapshot-loader-host.js';
 import './time-format-host.js';
+// P4 T1 原料层：i18n 域的 t 桥键（实现见 ../i18n.js）。模块相注册即可——
+// classic 相已无 t 的加载期调用（首屏由 boot 在模块相触发）。
+import './i18n-host.js';
 import './runtime-switch-host.js';
 import './workspace-session-navigation-host.js';
 import './workspace-entry-host.js';

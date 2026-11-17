@@ -328,7 +328,7 @@ async function withPollHarness({ blockStatus = true } = {}, fn) {
       sandbox.window.setTimeout = sandbox.setTimeout;
       sandbox.window.clearTimeout = sandbox.clearTimeout;
       sandbox.loadSource('public/src/modules/action-dispatcher.js');
-      sandbox.loadSource('public/src/i18n.js');
+      // i18n 已迁 ESM（P4）：t 桥键由 createFrontendSandbox 自动装载，见 test/helpers/install-i18n.js
       sandbox.loadSource('public/src/app-core.js');
       sandbox.loadSource('public/src/modules/session-view-state.js');
       // app-main 的 classic 同步引擎在装载期组合 sidebar-render 的
@@ -838,7 +838,7 @@ test('runtime-aware session projection uses the selected runtime session over st
       sandbox.loadSource('public/src/modules/claw-host.js');
       sandbox.loadSource('public/src/modules/plugin-manifest.js');
       sandbox.loadSource('public/src/modules/action-dispatcher.js');
-      sandbox.loadSource('public/src/i18n.js');
+      // i18n 已迁 ESM（P4）：t 桥键由 createFrontendSandbox 自动装载，见 test/helpers/install-i18n.js
       sandbox.loadSource('public/src/app-core.js');
       sandbox.loadSource('public/src/modules/session-view-state.js');
       sandbox.loadSource('public/src/modules/todo-plan.js');

@@ -13,6 +13,7 @@
 
 import fs from 'node:fs';
 import { installSessionViewCommit } from './session-view-commit.js';
+import { installI18n } from './install-i18n.js';
 import { installRuntimeSwitch } from './runtime-switch.js';
 import { createAgentSnapshotLoader } from '../../public/src/modules/agent-snapshot-loader.js';
 import { createRuntimeStatusLoader } from '../../public/src/modules/runtime-status-loader.js';
@@ -208,6 +209,9 @@ export function createFrontendSandbox(overrides = {}) {
 
   // Make the real kernel bridge available before classic modules register keys.
   installKernelState(context);
+  // i18n 已迁 ESM（P4）：t 是桥键，字典与翻译函数来自真实实现，沙箱不再
+  // loadSource('public/src/i18n.js')（classic 相解析 export 会直接 SyntaxError）。
+  installI18n(context);
 
   /**
    * Run an expression in the sandbox and return the result.

@@ -24,7 +24,6 @@
 
 /** index.html 的先行脚本序（classic 相在 deferred ESM 之前执行）。 */
 export const CLASSIC_BOOTSTRAP = [
-  'public/src/i18n.js',
   'public/src/modules/action-dispatcher.js',
   'public/src/modules/claw-host.js',
   'public/src/modules/right-panel-registry.js',

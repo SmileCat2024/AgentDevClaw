@@ -76,7 +76,6 @@ before(async () => {
   const classicBoot = createFrontendSandbox();
   classicBoot.setInterval = () => 0;
   classicBoot.loadSource('public/src/modules/action-dispatcher.js');
-  classicBoot.loadSource('public/src/i18n.js');
   classicBoot.loadSource('public/src/app-core.js');
   // agent-loader-host 的静态依赖含 sidebar-operations（B2b）：其 classic 宿主工厂
   // 由 sidebar-render 提供，sidebar-render 的调用状态宿主又读 runtime-status 的

@@ -186,7 +186,7 @@ async function withLocate(probe) {
     classic: (sandbox) => {
       sandbox.loadSource('public/src/modules/action-dispatcher.js');
       sandbox.loadSource('public/src/app-core.js');
-      sandbox.loadSource('public/src/i18n.js');
+      // i18n 已迁 ESM（P4）：t 桥键由 createFrontendSandbox 自动装载，见 test/helpers/install-i18n.js
       // 真实生产函数：错误组权威判定（chat-renderer.js 源码块，仍 classic）
       sandbox.run(sourceBetween(CHAT_RENDERER_SRC, 'function getAssistantErrorMeta(', '// 红框本体'));
       sandbox.run(sourceBetween(CHAT_RENDERER_SRC, 'function computeAssistantErrorGroups(', '// index 处的失败消息是否参与成组'));
@@ -611,7 +611,7 @@ async function withRemoteActionsCase({ bumpEpochDuringWait = false } = {}, probe
   return withP2EsmCase({
     classic: (sandbox) => {
       sandbox.loadSource('public/src/modules/action-dispatcher.js');
-      sandbox.loadSource('public/src/i18n.js');
+      // i18n 已迁 ESM（P4）：t 桥键由 createFrontendSandbox 自动装载，见 test/helpers/install-i18n.js
       sandbox.loadSource('public/src/app-core.js');
       sandbox.loadSource('public/src/modules/session-view-state.js');
       // runtime-status 是 classic 唯一实现：真实切换收尾的 loadAgentData 经

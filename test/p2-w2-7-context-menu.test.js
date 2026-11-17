@@ -335,7 +335,7 @@ async function withMenuCase(fn, { classicExtra } = {}) {
       sandbox.addEventListener = (type, handler) => addListener(windowListeners, type, handler);
       sandbox.removeEventListener = (type, handler) => removeListener(windowListeners, type, handler);
       sandbox.loadSource('public/src/modules/action-dispatcher.js');
-      sandbox.loadSource('public/src/i18n.js');
+      // i18n 已迁 ESM（P4）：t 桥键由 createFrontendSandbox 自动装载，见 test/helpers/install-i18n.js
       sandbox.loadSource('public/src/app-core.js');
       sandbox.loadSource('public/src/modules/session-view-state.js');
       installClassicHosts(sandbox, calls);

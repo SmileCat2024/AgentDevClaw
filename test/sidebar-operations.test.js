@@ -31,7 +31,7 @@ const OPS = 'public/src/modules/sidebar-operations.js';
  */
 function bootstrapClassic(sandbox) {
   sandbox.loadSource('public/src/modules/action-dispatcher.js');
-  sandbox.loadSource('public/src/i18n.js');
+  // i18n 已迁 ESM（P4）：t 桥键由 createFrontendSandbox 自动装载，见 test/helpers/install-i18n.js
   sandbox.loadSource('public/src/app-core.js');
   // 生产加载序：runtime-status 提供 sidebar-render 调用状态宿主读的容器，
   // session-view-state 提供会话快照提交宿主；通知时钟周期不属于本文件验收面。

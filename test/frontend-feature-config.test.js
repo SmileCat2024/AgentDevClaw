@@ -42,7 +42,6 @@ const I18N_STATE = 'public/src/modules/i18n-environment-state.js';
 
 /** classic 相真实装载链（顺序同 index.html：classic 先行于 deferred ESM）。 */
 const CLASSIC_BOOTSTRAP = [
-  'public/src/i18n.js',
   'public/src/modules/action-dispatcher.js',
   'public/src/app-core.js',
   'public/src/modules/runtime-status.js',

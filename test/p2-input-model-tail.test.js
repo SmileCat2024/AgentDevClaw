@@ -128,7 +128,7 @@ function classicGlobals(doc, fetchImpl) {
 /** 生产 classic 前缀（与 index.html 同序的关键段）。 */
 function loadClassicPrefix(sandbox) {
   sandbox.loadSource('public/src/modules/action-dispatcher.js');
-  sandbox.loadSource('public/src/i18n.js');
+  // i18n 已迁 ESM（P4）：t 桥键由 createFrontendSandbox 自动装载，见 test/helpers/install-i18n.js
   sandbox.loadSource('public/src/app-core.js');
   sandbox.loadSource('public/src/modules/session-view-state.js');
 }

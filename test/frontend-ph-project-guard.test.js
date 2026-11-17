@@ -131,7 +131,7 @@ async function withGuard(probe) {
     classic: (sandbox) => {
       sandbox.loadSource('public/src/modules/action-dispatcher.js');
       sandbox.loadSource('public/src/app-core.js');
-      sandbox.loadSource('public/src/i18n.js');
+      // i18n 已迁 ESM（P4）：t 桥键由 createFrontendSandbox 自动装载，见 test/helpers/install-i18n.js
       sandbox.loadSource('public/src/modules/remote-connections.js');
       // classic 宿主面：当前 agent 记录与主视图重绘（app-main / app-ui 仍 classic）。
       sandbox.__phAgent = phAgent;

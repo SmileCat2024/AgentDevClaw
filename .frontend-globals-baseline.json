@@ -321,14 +321,6 @@
       "upsertConnectedAgent"
     ]
   },
-  "public/src/i18n.js": {
-    "state": [
-      "I18N"
-    ],
-    "behavior": [
-      "t"
-    ]
-  },
   "public/src/modules/action-dispatcher.js": {
     "state": [],
     "behavior": [

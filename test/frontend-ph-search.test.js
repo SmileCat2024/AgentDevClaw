@@ -92,7 +92,7 @@ async function setup({ remoteConnections = false } = {}, probe) {
       sandbox.loadSource('public/src/modules/action-dispatcher.js');
       // app-core 提供 p2-bootstrap 工厂与 i18n 桥初值；i18n 提供 classic t()。
       sandbox.loadSource('public/src/app-core.js');
-      sandbox.loadSource('public/src/i18n.js');
+      // i18n 已迁 ESM（P4）：t 桥键由 createFrontendSandbox 自动装载，见 test/helpers/install-i18n.js
       if (remoteConnections) sandbox.loadSource('public/src/modules/remote-connections.js');
       // ESM 图求值期读取的 loader host 工厂与 classic 宿主函数（最小契约替身）。
       sandbox.run(`

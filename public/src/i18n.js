@@ -1,4 +1,21 @@
-const I18N = {
+/**
+ * i18n.js — 翻译字典与翻译函数（P4 T1 原料层，classic → ESM）。
+ *
+ * 本文件只含纯数据与纯函数，模块求值不触达任何宿主全局：
+ *   - `I18N` 两种语言的完整字典（唯一副本）；
+ *   - `createTranslator(getLanguage)` 按调用方提供的语言读取器生成翻译函数；
+ *   - `t` 是生产绑定（语言取自 `window.currentLanguage` 的桥访问器）。
+ *
+ * 桥键 `t`（domain i18n）由 [modules/i18n-host.js](modules/i18n-host.js) 注册，
+ * 供尚未迁移的 classic 消费方裸读；本文件不注册桥，以免 Node 侧真实 import
+ * （测试 helper / 变异检查）在求值期就需要 window。
+ *
+ * 为什么保留 `window.` 前缀读语言而不是 import i18n-environment-state：
+ * 那个域负责 localStorage 读取与主题/语言状态，把它拉进本文件的 import 链会让
+ * "纯字典模块"带上宿主依赖；桥访问器在模块相之后语义完全相同。
+ */
+
+export const I18N = {
   zh: {
     page_title: 'Agent 工作台',
     sidebar_toggle: '切换侧栏',
@@ -930,7 +947,17 @@ const I18N = {
   },
 };
 
-function t(key) {
-  const table = I18N[currentLanguage] || I18N.zh;
-  return table[key] || key;
+/**
+ * 生成翻译函数。`getLanguage()` 每次调用实时求值——语言切换后无需重建函数，
+ * 与迁移前 `t` 读全局 `currentLanguage` 的语义一致。
+ * @param {() => string} getLanguage
+ */
+export function createTranslator(getLanguage) {
+  return function t(key) {
+    const table = I18N[getLanguage()] || I18N.zh;
+    return table[key] || key;
+  };
 }
+
+/** 生产绑定：语言经 i18n-environment 的桥键读取（未迁移消费方同样裸读这个 t）。 */
+export const t = createTranslator(() => window.currentLanguage);

@@ -253,7 +253,7 @@ function createWireFetch(fixture) {
 function bootstrapClassic(sandbox, fixture) {
   const { doc } = fixture;
   sandbox.loadSource('public/src/modules/action-dispatcher.js');
-  sandbox.loadSource('public/src/i18n.js');
+  // i18n 已迁 ESM（P4）：t 桥键由 createFrontendSandbox 自动装载，见 test/helpers/install-i18n.js
   sandbox.loadSource('public/src/app-core.js');
   // 引擎（app-main）在装载期组合 sidebar-render 的**真实**
   // createAgentCallStatesHost（读 runtime-status 的 _agentSuspended）：按生产

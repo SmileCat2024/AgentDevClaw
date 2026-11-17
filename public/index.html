@@ -413,7 +413,8 @@
        ③ 悬置/大工程域（wg-* / im-* / dispatch-* / flow-editor / home-dashboard /
          resources-viewer）标签只许整体删除，随各自工程重做消亡，不许新增。 -->
   <script src="./flow-editor.js"></script>
-  <script src="./src/i18n.js"></script>
+  <!-- i18n 已迁 ESM（P4 T1 原料层）：classic 标签删除，由 kernel-entry 的
+       i18n-host 装载并注册 t 桥键。 -->
   <script src="./src/modules/kernel-state.js"></script>
   <script src="./src/app-core.js"></script>
   <script type="module" src="./src/modules/i18n-environment-state.js"></script>

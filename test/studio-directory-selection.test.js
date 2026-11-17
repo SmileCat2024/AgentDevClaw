@@ -32,7 +32,7 @@ async function withStudioCreateAction({ picker, agent = STUDIO_AGENT }, fn) {
   return withP2EsmCase({
     classic: (sandbox) => {
       sandbox.loadSource('public/src/modules/action-dispatcher.js');
-      sandbox.loadSource('public/src/i18n.js');
+      // i18n 已迁 ESM（P4）：t 桥键由 createFrontendSandbox 自动装载，见 test/helpers/install-i18n.js
       sandbox.loadSource('public/src/app-core.js');
       // 真实模块图求值相需要 classic 的宿主工厂 owner。其中 app-core 与
       // session-view-state 提供真实现；其余宿主（app-main / app-ui /

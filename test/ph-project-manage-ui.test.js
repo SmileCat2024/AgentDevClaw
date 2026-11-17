@@ -243,7 +243,7 @@ async function withManageCase(options = {}, probe) {
     classic: (sandbox) => {
       sandbox.loadSource('public/src/modules/action-dispatcher.js');
       sandbox.loadSource('public/src/app-core.js');
-      sandbox.loadSource('public/src/i18n.js');
+      // i18n 已迁 ESM（P4）：t 桥键由 createFrontendSandbox 自动装载，见 test/helpers/install-i18n.js
       sandbox.allAgents = [agent];
       sandbox.run(`
         // classic 宿主面（app-main / app-ui 仍 classic）：当前记录 + 重绘 + 侧栏。
