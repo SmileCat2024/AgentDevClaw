@@ -1,7 +1,7 @@
 # ADR 0051: 前端 ESM 绞杀者迁移
 
 日期：2026-11-16
-状态：实施中（P0 地基已完成；P1 内核域抽取已启动；P2–P3 未开始）
+状态：实施中（P0、P1 已完成；P2–P3 未开始）
 关联：[前端 classic-script 全局共享模式 ESM 渐进拆解计划](../plans/2026-11-16-frontend-esm-strangler-migration.md)（实施细节、阶段划分与工单组织的唯一权威）、[ADR-0044 右栏面板插件化与效果归属](0044-frontend-panel-plugins-and-effect-ownership.md)（P1 渲染入口域与其衔接；插件协议不在本决策改动范围）
 
 ## 背景与问题
