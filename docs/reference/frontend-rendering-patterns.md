@@ -1037,7 +1037,7 @@ return !!resolved && normalizeAgentIdentity(resolved) === normalizedCurrent;
 - `_agentRuntimeCache` 为切回会话保留完整消息数组，不是永久历史仓库；它按最近写入淘汰，只保留有限的会话视图。被淘汰的会话仍可从运行时重新加载，当前会话数据不依赖缓存项存活。多标签页/桌面窗口各有独立 DOM 和缓存；缓存上限不限制当前聊天 DOM、浏览器合成层或 agent 子进程占用。
 - 后台任务面板开启时从 `feature-comms` 订阅 **live-only** 流，再通过 `list` 请求读取任务现状；新打开的面板无需重放输出事件缓冲。SSE 自身重连带 `Last-Event-ID` 时仍从游标续接；游标落在缓冲外走 `resync` + `list`。服务端事件缓冲同时按条数与字节预算约束，所有实时事件仍直送已连接订阅者。
 - 面板运行任务的时长由本地秒钟只更新文本，不每秒对全部卡片重新排序、拼接与比对 HTML。`list` 返回可能晚于 SSE 新事件：面板按任务记事件版本，列表只填补未被更新的任务，不能把已结束状态或最新输出退回旧快照。引擎会淘汰较老的终态任务，面板在 `finalized` 后通过 `list` 对账并移除已退出登记表的卡片；不能只累积事件。会话切换、关闭和重开也必须让旧请求结果失效。面板未开启时徽标只走 `count` 请求，不能每隔数秒提取所有任务的输出尾巴；开启时由流内任务状态驱动徽标。`bg` 面板不依赖 hooks，主轮询不要额外拉 `/hooks`。
-- 后台任务面板自行消费事件并更新 DOM，注册时声明 `preserveOnReRender`，避免宿主重渲染再次替换输出区。进程输出与智能体摘要共用 `data-bgp-tail` 滚动恢复；摘要、更新时间走定点文本更新。结构重建前按完整任务键保存可见输出区的位置与贴底状态，折叠期间不从零尺寸元素覆盖记录；任务移除或会话切换时清理。上翻阅读保持位置，停在底部继续跟随。回归：`test/bg-panel-browser-check.mjs` 加载真实面板注册和宿主，覆盖事件更新后的宿主刷新、状态切换、折叠期间更新与重新展开。
+- 后台任务面板自行消费事件并更新 DOM（容器型面板：注册 `mountBody`，宿主轮询重渲染对它 no-op），避免宿主重渲染替换输出区。进程输出与智能体摘要共用 `data-bgp-tail` 滚动恢复；摘要、更新时间走定点文本更新。结构重建前按完整任务键保存可见输出区的位置与贴底状态，折叠期间不从零尺寸元素覆盖记录；任务移除或会话切换时清理。上翻阅读保持位置，停在底部继续跟随。回归：`test/bg-panel-browser-check.mjs` 装载真实 `index.html` 生产链（真实面板注册、宿主与样式表，外部 IO 由脚本内 HTTP 契约 mock 供出），覆盖事件更新后的宿主刷新、骨架变化触发的全量重建、折叠期间更新与重新展开。
 - 上述控制的是浏览器缓存、空闲徽标流量和事件回放。长会话仍保留整棵聊天 DOM；新模板与工具卡会增加单会话的原生渲染资源，不能用 JS heap 或少量任务样本推断多窗口压力。实测需分开记录 renderer/GPU 进程、消息和 DOM 量级、并行会话与面板订阅数。
 
 ## 12d. 常驻装饰动画与玻璃面叠加的 GPU 成本（2026-09-30）
@@ -1064,7 +1064,7 @@ return !!resolved && normalizeAgentIdentity(resolved) === normalizedCurrent;
 - **APP 身份与运行态可见性分离**：Coder APP 条目来自 metadata 声明，具体是否呈现由 `/api/agents` 的 `sidebarVisible` 决定。默认 `auto` 认「存活且绑定 Session 的 managed Runtime，或 rotating 接续挡板在途（删除事务窗口内除外）」——接续空窗（旧 head 退役、successor 未上线）期间入口保持，配合下方接续占位实现无感连续。未归档线程资产（open/hold/rotation_failed 等非终态）不代表运行态、不撑入口（ADR-0025 2026-10-18 回摆）；线程和历史仍可从 APP 首页查看；设置为 `always` 时 APP 入口常驻，但不合成运行会话叶子。相关合流见 `server/routes/agent-connected.js`，按接续帧覆盖的回归测试见 `test/sidebar-projection-succession.test.js`。
 - **`handoffStartedAt` 是 wire 字段（服务端投影，勿在前端另造）**：顶栏「接力中」指示器、输入路由守卫（交接窗口内输入改走 Thread Inbox 暂存）、侧栏交接占位共用 `thread.handoffStartedAt`（>0 且 <5min 视为交接中）。权威值 = `/protoclaw/threads` 对 `status='rotating'` 线程补读的 `pendingSuccession.startedAt`（`thread-routes.js` `_attachLifeState`）。历史事故（2026-10-10）：前端三处消费一个服务端从未下发的字段名，指示器永不亮、自动轮换窗口内输入被判 direct 直投已退役 runtime。
 
-回归测试：`test/frontend-sidebar-freshness.test.js`（归档 / 重命名 / 后台线程事件 / 编辑保护与去重跨模块链路）；`node test/sidebar-freshness-browser-check.mjs`（隔离 Chromium 的 Enter 保存与虚影退场）；`test/frontend-runtime-status.test.js`（coder live session projection：head 推进 / zombie 并存 / head 空窗全时间线）；`test/frontend-thread-store-t006.test.js`（thread 事件消费：handoff-started 状态刷新 / head-advanced 原地重绑）；`test/sidebar-projection-succession.test.js`（宿主层：接续窗口投影条目逐帧存续）；`test/thread-routes-command-fields.test.js`（wire：handoffStartedAt 挡板投影与收敛）；`test/thread-control.test.js`（挡板身份镜像的立/清对称）。
+回归测试：`test/frontend-sidebar-freshness.test.js`（归档 / 重命名 / 后台线程事件 / 编辑保护与去重跨模块链路，含 Enter 保存后重绘保持标题、虚影退场与编辑期挂起重绘）；`test/frontend-runtime-status.test.js`（coder live session projection：head 推进 / zombie 并存 / head 空窗全时间线）；`test/frontend-thread-store-t006.test.js`（thread 事件消费：handoff-started 状态刷新 / head-advanced 原地重绑）；`test/sidebar-projection-succession.test.js`（宿主层：接续窗口投影条目逐帧存续）；`test/thread-routes-command-fields.test.js`（wire：handoffStartedAt 挡板投影与收敛）；`test/thread-control.test.js`（挡板身份镜像的立/清对称）。
 
 ---
 

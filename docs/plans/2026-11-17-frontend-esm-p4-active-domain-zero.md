@@ -174,6 +174,8 @@ app-ui.js 是最后一件大文件（2281 行）。时序审计的结论是「�
 
 **遗留债务（本批未修，需单独立项）**：11 个 `test/*browser-check.mjs` 手工拼页面，把已迁 ESM 的文件当 classic `<script src>` 装入，另有一个引用了 P4 T1 起已删除的 `markdown-bootstrap.js`（`p2-w2-7-context-menu-chromium-browser-check`）。它们不在 `npm test` 里，所以没有红灯信号，属于「看似可用的回归脚本」。清单：agent-loader / agent-snapshot / bg-panel / message-probe / metadata-commit / p2-w2-7-context-menu / runtime-poll / runtime-view-cache / session-data / session-view-commit / sidebar-freshness。修法是改为装载真实 `index.html` 链（与 `p2-production-boot-browser-check` 同路），或退役。
 
+**债务处置（已收口）**：只有 `bg-panel` 有独占的、针对真实布局与滚动的断言（`scrollTop` / `scrollHeight` / 计算色，单元测试面没有真值），改写为装载真实 `index.html` 生产链（feature-comms 通道发现 / 请求面 / SSE 全由脚本内 HTTP 契约 mock 供出），断言集合保留并补了两条路径取证（轻量更新同节点、骨架变化新节点）。其余 10 个脚本的断言各有单元测试承接，已退役——逐条对照见 `test/frontend-agent-loader-host.test.js` / `frontend-agent-loader.test.js` / `frontend-agent-snapshot-loader.test.js` / `frontend-msg-probe.test.js` / `frontend-metadata-commit.test.js` / `p2-w2-7-context-menu.test.js` / `frontend-runtime-poll.test.js`（及 switch / handoff-409 / compact-resume / chat-loading 各自的专测）/ `frontend-runtime-view-cache.test.js` / `frontend-agent-load-latency.test.js` / `frontend-session-view-commit.test.js` / `frontend-sidebar-freshness.test.js`。
+
 验收（实跑）：`test:core` 6647 项 / 6640 通过 / 3 失败（已知平台项）/ 4 跳过；浏览器回归主链 + 7 面板 + work-group 面板断言 PASS、零 pageerror；`check-import-cycles` 零新增环；三个门禁通过。
 
 ### 剩余核心批次的阻断清单（2026-11-17 实测）
