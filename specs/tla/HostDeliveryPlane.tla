@@ -2,251 +2,426 @@
 EXTENDS Naturals, Sequences, Integers
 
 (***************************************************************************)
-(* 宿主投递面模型：Thread Inbox 指令从 pending 到 delivered 的最后一跳，  *)
-(* 建模 2026-11-18 构造性复现的永久滞留死锁所在的层。                        *)
+(* 宿主投递面模型（2026-11-18 大幅细化版）：Thread Inbox 指令从 pending     *)
+(* 到 delivered 的最后一跳，按本日调查钉死的真实机制建模。                   *)
 (*                                                                         *)
-(* 与既有模型的分工：ReceiptBoundary* 建模框架域（领取→保存→ack 回执边界、  *)
-(* runtime 单抽象节点）；SuccessionWindow 建模交接窗口。本模型补上它们显式  *)
-(* 留白的一层（DEEP-MODELS.md：「真实轮询、失败退避、runtime-ready 事件     *)
-(* 是否满足公平假设尚未验证」）：                                            *)
+(* 相对首版（H2 死锁验证用）新增的表达能力——首版明确留白、本版补齐：        *)
 (*                                                                         *)
-(*   1. 双真相源：hostEntry（宿主注册表：进程在位且绑定当前 head）与        *)
-(*      adoptedGen（runtime 实际采纳的 head 代际）是两个可分离的事实。      *)
-(*      错位态 hostEntry="present" ∧ adoptedGen ≠ hostHead 下，投递被       *)
-(*      viewer fencing 永拒（可重试失败：指令保持 pending 且盘上无痕）。    *)
-(*   2. 投递触发票 tickets：投递不是自由 action——它由触发点驱动（gateway   *)
-(*      append 即时投、runtime-ready 补投）。票耗尽即「没人再调投递」，    *)
-(*      这正是死锁的触发面形态。                                             *)
-(*   3. janitor 自愈：EnableReconcile=FALSE 对应修复前语义（条目在位即      *)
-(*      跳过，死锁无自愈）；TRUE 对应修复后语义（滞留时强制重投 + 身份      *)
-(*      采纳重试，不消费票——自驱动新触发源）。                              *)
+(*   1. 双投递路径：用户输入有两条互不相通的路——线程队列（appendCommand    *)
+(*      + FIFO 消费）与直投（submitUserTurn 直达 runtime 当前绑定会话）。  *)
+(*      路由由注册表事实决定（input-gateway）：runtime 在位且绑定 head →    *)
+(*      入箱；绑定历史成员 → 409 拒收；其余（缺位/漂移）→ 直投，直投       *)
+(*      成功 = 消息落在 runtime 当前会话，可能根本不是线程 head（wt-        *)
+(*      1ab8a75b「两个世界」形态的直接表达）。                              *)
+(*   2. 诚实的投递触发面：消费只有四个触发点——入箱即试（非 force，受退避   *)
+(*      约束）、runtime 就绪补投（force，一次性，信号可丢失）、接续换头     *)
+(*      导流（force，commit 事务内）、janitor 扫描（force 对账 / 唤醒）。   *)
+(*      没有周期性投递轮询：触发点不来，指令就躺着。首版的「票池」抽象      *)
+(*      由这四个显式触发点取代。                                            *)
+(*   3. 线程级退避（delivery-consumer）：一次失败消费（attempted>0 且       *)
+(*      delivered<attempted）冷却整个线程——之后所有非 force 消费直接       *)
+(*      no-op，不只挡失败条目；退避到期没有任何内部重试，等外部触发点。     *)
+(*      force 消费跳过退避检查，但失败后同样置退避。                        *)
+(*   4. runtime 三态生命周期与绑定漂移：absent → starting（activate 拉起    *)
+(*      但不等 READY——用户此刻已能输入）→ running；runtime 绑定会话可      *)
+(*      漂移（shared-by-project / 用户切会话）：head（在位服务 head）、     *)
+(*      member（历史成员——resolve(AGENT,HEAD) 为 null，队列不可达）、       *)
+(*      foreign（无关会话——直投会静默落错地方）。                           *)
+(*   5. spawn 身份注入开关（ADR-0047 构造性保证）：spawn-for-head 是否      *)
+(*      携带线程身份；FALSE = legacy spawn（采纳缺口 = H2 死锁入口之一）。  *)
+(*   6. ready 信号丢失开关：11-16 迟到就绪补偿之前的语义（信号无人消费     *)
+(*      即丢，wt-a258c93b 事故类）；重启收割也丢信号（进程内内存语义）。    *)
+(*   7. 采纳反复失败探针：adopt-thread-head 可无限失败（活 runtime 永不     *)
+(*      采纳）——投递活性对此的依赖显式化。                                  *)
 (*                                                                         *)
-(* 不建模（诚实边界）：deliverPendingCommands 的 FIFO 细节、退避数值、      *)
-(* failed 终态（回执边界模型已覆盖）、多线程并发、多 runtime 进程、         *)
-(* runtime-ready 补投的无限重复（票池封顶 TicketCap，重启循环下补投票      *)
-(* 合并表达）。                                                             *)
+(* 保留首版的骨架：双真相源（宿主事实 vs viewer 采纳身份）、fencing 拒收、  *)
+(* janitor 对账修复开关、换头/崩溃干扰预算、变异辨别力。                    *)
+(*                                                                         *)
+(* 不建模（诚实边界）：deliverPendingCommands 循环内的中途事实变化（K20，  *)
+(* 单次消费抽象为全有或全无）、failed 终态（回执边界模型域）、多线程、     *)
+(* 多 runtime 进程（单 runtime + 绑定漂移近似 shared-by-project）、        *)
+(* 退避/滞留阈值的数值时间（TLA 无秒）、滞留水位告警（D11 观感域）。       *)
 (***************************************************************************)
 
-CONSTANTS CommandCount,       \* 1..CommandCount 条指令
+CONSTANTS CommandCount,       \* 1..CommandCount 条用户输入（索引序 = 发送序）
            MaxGen,             \* head 代际上限 1..MaxGen
-           TicketCap,          \* 投递触发票池上限（状态空间有界化）
-           EnableReconcile,    \* janitor 对「条目在位 + 滞留」的对账（修复开关）
-           EnableHandoff,      \* 允许换头（CommitHead 推进 head 代际）
-           EnableRuntimeExit,  \* 允许 runtime 退出/重启（宿主清表）
-           InjectAdoptFail,    \* 一次性身份采纳失败注入（死锁入口）
-           JanitorFairness,    \* janitor 弱公平（15s 周期扫描持续发生的假设）
-           DeliverFairness,    \* 触发点投递弱公平（gateway 即时投总会执行）
-           MutateStaleDeliver, \* 变异：故意放行错位投递（验证不变式辨别力）
-           BoundHandoff,        \* TRUE=换头尝试受预算约束（活性假设显式化）；
-                               \* FALSE=无限干扰且不递减计数器——饥饿 lasso 的
-                               \* 精确环要求状态可重复，递减计数器会消灭环
-           BoundExit,           \* 同上，runtime 退出预算
-           HandoffBudget,       \* 换头尝试次数预算（BoundHandoff=TRUE 时生效）
-           ExitBudget           \* runtime 退出次数预算（BoundExit=TRUE 时生效）
+           EnableReconcile,    \* janitor 对账（2026-11-18 修复开关）
+           EnableHandoff,      \* 允许换头（BeginHandoff / CommitHead / Abort）
+           EnableCrash,        \* 允许 runtime 退出与宿主重启收割
+           InjectAdoptFail,    \* 一次性身份采纳失败注入（H2 死锁入口）
+           AdoptFailForever,   \* 采纳可反复失败（饥饿探针；TRUE 时永不成功采纳）
+           SpawnInjectsIdentity, \* spawn-for-head 注入线程身份（ADR-0047；FALSE=legacy）
+           EnableReadyDrop,    \* ready 信号可无人消费而丢（TRUE=11-16 补偿前语义）
+           EnableBindDrift,    \* 共享 runtime 绑定可漂移到无关会话
+           MutateStaleDeliver, \* 变异：错位也放行（验证不变式辨别力）
+           JanitorFairness,    \* janitor 弱公平（15s 周期扫描持续发生）
+           DeliverFairness,    \* 就绪补投弱公平（ready 信号总会被消费）
+           SpawnFairness,      \* spawn 终局弱公平（starting 必然 Ok 或 Fail）
+            BoundHandoff,       \* TRUE=换头受预算约束（活性假设显式化）
+            HandoffBudget,
+            BoundCrash,         \* TRUE=崩溃/收割受预算（崩溃循环饥饿的边界）
+            CrashBudget,
+            BoundDrift,         \* TRUE=绑定漂移受预算（漂移风暴饥饿的边界：
+            DriftBudget         \*   janitor 两拍收敛下，漂移快于扫描即饿死对账）
 
 Commands == 1..CommandCount
 
-Min(a, b) == IF a < b THEN a ELSE b
-
 (***************************************************************************)
-(* cmd[i]  ∈ {"none","pending","delivered"}                                 *)
-(* dgen[i] ∈ 0..MaxGen  ghost：指令投出时刻的 head 代际（0=未投出）         *)
-(* hostHead   ：线程 head 代际（单调递增，CommitHead 推进）                  *)
-(* hostEntry  ：宿主注册表条目（"present"=进程在位且绑定当前 head）          *)
-(* adoptedGen ：runtime 采纳的 head 代际（0=不持有线程身份）                 *)
-(* barrier    ：交接挡板（竖起期间投递被 handoff_in_progress 挡）            *)
-(* tickets    ：投递触发票（gateway append / runtime-ready 发放）            *)
-(* adoptFailUsed：一次性注入已烧掉                                           *)
+(* cmd[i] ∈ {"none","pending","delivered","direct","lost"}                 *)
+(*   pending   ：已入 Thread Inbox 待投                                     *)
+(*   delivered ：经线程队列 FIFO 送达 head runtime（唯一受 fencing 保证）   *)
+(*   direct    ：经直投路径落在 runtime 当前绑定会话（可能不是 head——       *)
+(*              不经线程队列、不受 fencing、不清偿任何 pending）            *)
+(*   lost      ：响亮失败（session_not_head 409 / 直投无 runtime 可达），   *)
+(*              用户立即看到错误——与 pending 的静默滞留形成可见性对比      *)
+(* dgen/daligned：ghost，队列送达时刻的 head 代际与对齐事实                 *)
+(* hostHead  ：线程 head 代际（CommitHead 单调推进）                        *)
+(* rt        ∈ {"absent","starting","running"}（absent=无进程；starting=   *)
+(*             已拉起未就绪——activate 返回而 READY 未至的窗口）            *)
+(* rtBound   ∈ {"head","member","foreign"}：runtime 绑定会话与线程的关系    *)
+(* adoptedGen：runtime 采纳的 head 代际（0=不持线程身份）                   *)
+(* barrier   ：交接挡板（竖起期间消费 gated no-op——等待不是失败）           *)
+(* backoff   ：线程级退避中（非 force 消费直接 no-op；到期无内部重试）       *)
+(* readySignal：未消费的 runtime-ready 补投信号（进程内，收割即丢）         *)
 (***************************************************************************)
-VARIABLES cmd, dgen, daligned, hostHead, hostEntry, adoptedGen, barrier,
-          tickets, adoptFailUsed, handoffLeft, exitLeft
 
-vars == <<cmd, dgen, daligned, hostHead, hostEntry, adoptedGen, barrier,
-          tickets, adoptFailUsed, handoffLeft, exitLeft>>
+VARIABLES cmd, dgen, daligned, hostHead, rt, rtBound, adoptedGen, barrier,
+          backoff, readySignal, adoptFailUsed, handoffLeft, crashLeft, sweepTick,
+          driftLeft
+
+vars == <<cmd, dgen, daligned, hostHead, rt, rtBound, adoptedGen, barrier,
+          backoff, readySignal, adoptFailUsed, handoffLeft, crashLeft, sweepTick,
+          driftLeft>>
 
 TypeOK ==
-  /\ cmd \in [Commands -> {"none","pending","delivered"}]
+  /\ cmd \in [Commands -> {"none","pending","delivered","direct","lost"}]
   /\ dgen \in [Commands -> 0..MaxGen]
-  /\ daligned \in [Commands -> {FALSE, TRUE}]
+  /\ daligned \in [Commands -> BOOLEAN]
   /\ hostHead \in 1..MaxGen
-  /\ hostEntry \in {"present","absent"}
+  /\ rt \in {"absent","starting","running"}
+  /\ rtBound \in {"head","member","foreign"}
   /\ adoptedGen \in 0..MaxGen
-  /\ barrier \in {FALSE, TRUE}
-  /\ tickets \in 0..TicketCap
-  /\ adoptFailUsed \in {FALSE, TRUE}
+  /\ barrier \in BOOLEAN
+  /\ backoff \in BOOLEAN
+  /\ readySignal \in BOOLEAN
+  /\ adoptFailUsed \in BOOLEAN
   /\ handoffLeft \in 0..HandoffBudget
-  /\ exitLeft \in 0..ExitBudget
+  /\ crashLeft \in 0..CrashBudget
+  /\ sweepTick \in BOOLEAN
+  /\ driftLeft \in 0..DriftBudget
 
 PendingSet == {i \in Commands : cmd[i] = "pending"}
+NoneSet == {i \in Commands : cmd[i] = "none"}
 
-\* FIFO：一轮投递处理队首一条（deliverPendingCommands 逐条循环的最小化）
-MinPending == CHOOSE i \in PendingSet : \A k \in PendingSet : i <= k
+(* 发送序 = 索引序（WLOG：UserSend 总取最小 none 索引） *)
+MinNone == CHOOSE i \in NoneSet : \A k \in NoneSet : i <= k
 
-\* 身份对齐：runtime 采纳的代际等于宿主侧线程 head 代际
+(* 队列投递的客观门禁（bridge.deliver）：挡板关 + runtime 就绪且绑定 head *)
+QueueGatesOpen == ~barrier
+RuntimeOnHead == rt = "running" /\ rtBound = "head"
+ViewerPresent == RuntimeOnHead
 Aligned == adoptedGen = hostHead
+CanDeliver == QueueGatesOpen /\ RuntimeOnHead /\ (Aligned \/ MutateStaleDeliver)
 
-\* 投递单条的公共门：客观门禁（bridge enabled + 挡板关闭 + 条目在位）
-CanAttemptDelivery ==
-  /\ hostEntry = "present"
-  /\ barrier = FALSE
-  /\ PendingSet # {}
-
-\* 投递结果判定：对齐 → 送达；错位 → viewer fencing 永拒（可重试失败，
-\* 指令保持 pending、盘上无痕——模型中体现为状态不变）
-\* MutateStaleDeliver 变异：错位也放行（验证 DeliveredAtOrBeforeHead 辨别力）
-DeliveryAccepted == Aligned \/ MutateStaleDeliver
-
-\* 发放触发票（封顶）
-GrantTicket == Min(tickets + 1, TicketCap)
+(* 身份采纳成功的条件（换头后显式采纳 / 重启收敛通道）：
+   runtime 在位且绑定 head（采纳目标必须存在），注入未烧且无永久失败 *)
+CanAdopt == rt # "absent" /\ rtBound = "head"
+    /\ (~InjectAdoptFail \/ adoptFailUsed) /\ ~AdoptFailForever
 
 (*************************** actions ***************************************)
 
-\* 用户输入入箱（gateway：head 指令一律入箱 + 即时投递尝试发一张票）
-EnqueueInput ==
-  /\ \E i \in Commands :
-       /\ cmd[i] = "none"
-       /\ cmd' = [cmd EXCEPT ![i] = "pending"]
-  /\ tickets' = GrantTicket
-  /\ UNCHANGED <<dgen, daligned, hostHead, hostEntry, adoptedGen, barrier, adoptFailUsed,
-             handoffLeft, exitLeft>>
+(* 用户输入 —— 线程路由（thread 寻址入口恒走此路；runtime 寻址命中 head 同）：
+   入箱 + 非 FORCE 即时投递尝试（唯一受退避约束的触发点） *)
+SendEnqueue ==
+  /\ NoneSet # {}
+  /\ LET i == MinNone IN
+     IF ~QueueGatesOpen
+       THEN /\ cmd' = [cmd EXCEPT ![i] = "pending"]
+            /\ UNCHANGED <<dgen, daligned, backoff>>     \* gated no-op：等待不是失败
+       ELSE IF CanDeliver
+         THEN /\ cmd' = [c \in Commands |->
+                          IF c \in PendingSet \/ c = i THEN "delivered" ELSE cmd[c]]
+              /\ dgen' = [c \in Commands |->
+                          IF c \in PendingSet \/ c = i THEN hostHead ELSE dgen[c]]
+              /\ daligned' = [c \in Commands |->
+                          IF c \in PendingSet \/ c = i THEN Aligned ELSE daligned[c]]
+              /\ backoff' = FALSE                        \* delivered>0 清退避
+         ELSE /\ cmd' = [cmd EXCEPT ![i] = "pending"]
+              /\ backoff' = TRUE                         \* 队首 retryable 失败 → 线程退避
+              /\ UNCHANGED <<dgen, daligned>>
+  /\ UNCHANGED <<hostHead, rt, rtBound, adoptedGen, barrier, readySignal,
+                 adoptFailUsed, handoffLeft, crashLeft, sweepTick, driftLeft>>
 
-\* 消费一张票的投递轮：身份匹配送达队首；错位被拒（只烧票，无其他状态
-\* 变化——这正是「触发点烧掉了但投不进」）
-TryDeliver ==
-  /\ tickets > 0
-  /\ CanAttemptDelivery
-  /\ tickets' = tickets - 1
-  /\ IF DeliveryAccepted
-       THEN /\ cmd' = [cmd EXCEPT ![MinPending] = "delivered"]
-            /\ dgen' = [dgen EXCEPT ![MinPending] = hostHead]
-            /\ daligned' = [daligned EXCEPT ![MinPending] = Aligned]
-            /\ UNCHANGED <<hostHead, hostEntry, adoptedGen, barrier, adoptFailUsed, handoffLeft, exitLeft>>
-       ELSE /\ UNCHANGED <<cmd, dgen, daligned, hostHead, hostEntry, adoptedGen, barrier, adoptFailUsed,
-             handoffLeft, exitLeft>>
+(* 用户输入 —— runtime 寻址未命中 head（缺位 / 历史成员 / 绑定漂移）：
+   member → 409 响亮拒收；foreign 且 running → 直投静默落在非 head 会话；
+   其余 → 直投无 runtime 可达，响亮失败。不经线程队列，不清偿 pending。 *)
+SendRuntimeMiss ==
+  /\ NoneSet # {}
+  /\ rt = "absent" \/ rtBound # "head"
+  /\ LET i == MinNone IN
+     /\ cmd' = [cmd EXCEPT ![i] =
+                  IF rtBound = "foreign" /\ rt = "running" THEN "direct" ELSE "lost"]
+  /\ UNCHANGED <<dgen, daligned, hostHead, rt, rtBound, adoptedGen, barrier,
+                 backoff, readySignal, adoptFailUsed, handoffLeft, crashLeft, sweepTick, driftLeft>>
 
-\* 一次性身份采纳失败注入（死锁入口）：需要采纳（错位）且注入未烧时，
-\* 采纳尝试失败且无任何其他效果
+UserSend == SendEnqueue \/ SendRuntimeMiss
+
+(* 打开会话 / C2 恢复 / ensureHead 的统一抽象：为 head 拉起或重绑 runtime。
+   activate 语义：拉起立即返回不等 READY（starting 窗口内用户已可输入）。
+   重绑（在位进程切回 head）不产生新的 ready 信号——补投只能等下一触发点。 *)
+ActivateHead ==
+  /\ IF rt = "absent"
+       THEN /\ rt' = "starting" /\ rtBound' = "head"
+       ELSE /\ rt' = rt /\ rtBound' = "head"
+  /\ UNCHANGED <<cmd, dgen, daligned, hostHead, adoptedGen, barrier, backoff,
+                 readySignal, adoptFailUsed, handoffLeft, crashLeft, sweepTick, driftLeft>>
+
+(* spawn 终局 —— 成功：就绪 + 补投信号 + （按开关）身份注入 *)
+SpawnOk ==
+  /\ rt = "starting"
+  /\ rt' = "running"
+  /\ adoptedGen' = IF SpawnInjectsIdentity THEN hostHead ELSE 0
+  /\ readySignal' = TRUE
+  /\ UNCHANGED <<cmd, dgen, daligned, hostHead, rtBound, barrier, backoff,
+                 adoptFailUsed, handoffLeft, crashLeft, sweepTick, driftLeft>>
+
+(* spawn 终局 —— 失败（崩溃循环轴） *)
+SpawnFail ==
+  /\ EnableCrash
+  /\ ~BoundCrash \/ crashLeft > 0
+  /\ rt = "starting"
+  /\ rt' = "absent"
+  /\ adoptedGen' = 0
+  /\ readySignal' = FALSE
+  /\ crashLeft' = IF BoundCrash THEN crashLeft - 1 ELSE crashLeft
+  /\ UNCHANGED <<cmd, dgen, daligned, hostHead, rtBound, barrier, backoff,
+                 adoptFailUsed, handoffLeft, sweepTick, driftLeft>>
+
+(* 单次 runtime 退出（进程死亡） *)
+RtExit ==
+  /\ EnableCrash
+  /\ ~BoundCrash \/ crashLeft > 0
+  /\ rt = "running"
+  /\ rt' = "absent"
+  /\ adoptedGen' = 0
+  /\ readySignal' = FALSE
+  /\ crashLeft' = IF BoundCrash THEN crashLeft - 1 ELSE crashLeft
+  /\ UNCHANGED <<cmd, dgen, daligned, hostHead, rtBound, barrier, backoff,
+                 adoptFailUsed, handoffLeft, sweepTick, driftLeft>>
+
+(* 宿主重启收割：整棵进程树全灭（service-lifecycle 契约）。与单次退出的
+   差别：进程内消费面状态一并丢失——退避清空、未消费 ready 信号丢弃。
+   盘上事实（挡板/指令）不受影响。 *)
+RestartHarvest ==
+  /\ EnableCrash
+  /\ ~BoundCrash \/ crashLeft > 0
+  /\ rt # "absent"
+  /\ rt' = "absent"
+  /\ adoptedGen' = 0
+  /\ readySignal' = FALSE
+  /\ backoff' = FALSE
+  /\ crashLeft' = IF BoundCrash THEN crashLeft - 1 ELSE crashLeft
+  /\ UNCHANGED <<cmd, dgen, daligned, hostHead, rtBound, barrier,
+                 adoptFailUsed, handoffLeft, sweepTick, driftLeft>>
+
+(* 共享 runtime 绑定漂移：用户在同进程切到无关会话（selectedSessionId 漂移，
+    shared-by-project 注册键漂移的同类事实）。预算模式与换头/崩溃一致：
+    无界漂移风暴饿死 janitor 两拍收敛（唤醒拍永远追不上漂移速度，
+    对账拍永不发生）——D12 之外的第三条饥饿轴。 *)
+BindDrift ==
+  /\ EnableBindDrift
+  /\ ~BoundDrift \/ driftLeft > 0
+  /\ rt # "absent"
+  /\ rtBound = "head"
+  /\ rtBound' = "foreign"
+  /\ driftLeft' = IF BoundDrift THEN driftLeft - 1 ELSE driftLeft
+  /\ UNCHANGED <<cmd, dgen, daligned, hostHead, rt, adoptedGen, barrier,
+                 backoff, readySignal, adoptFailUsed, handoffLeft, crashLeft, sweepTick>>
+
+(* 退避到期：时间抽象——到期本身不触发任何投递（无内部重试），只是
+   解除对后续非 force 消费的短路 *)
+BackoffExpires ==
+  /\ backoff
+  /\ backoff' = FALSE
+  /\ UNCHANGED <<cmd, dgen, daligned, hostHead, rt, rtBound, adoptedGen,
+                 barrier, readySignal, adoptFailUsed, handoffLeft, crashLeft, sweepTick, driftLeft>>
+
+(* ready 信号丢失（11-16 迟到就绪补偿之前的语义） *)
+ReadyDrop ==
+  /\ EnableReadyDrop
+  /\ readySignal
+  /\ readySignal' = FALSE
+  /\ UNCHANGED <<cmd, dgen, daligned, hostHead, rt, rtBound, adoptedGen,
+                 barrier, backoff, adoptFailUsed, handoffLeft, crashLeft, sweepTick, driftLeft>>
+
+(* runtime 就绪补投（handleRuntimeReady）：force 消费——跳过退避检查，
+   但失败同样置退避（delivery-consumer 语义）。一次性信号。 *)
+ReadyReplenish ==
+  /\ readySignal
+  /\ readySignal' = FALSE
+  /\ IF ~QueueGatesOpen \/ PendingSet = {}
+       THEN UNCHANGED <<cmd, dgen, daligned, backoff>>
+       ELSE IF CanDeliver
+         THEN /\ cmd' = [c \in Commands |->
+                          IF c \in PendingSet THEN "delivered" ELSE cmd[c]]
+              /\ dgen' = [c \in Commands |->
+                          IF c \in PendingSet THEN hostHead ELSE dgen[c]]
+              /\ daligned' = [c \in Commands |->
+                          IF c \in PendingSet THEN Aligned ELSE daligned[c]]
+              /\ backoff' = FALSE
+         ELSE /\ UNCHANGED <<cmd, dgen, daligned>>
+              /\ backoff' = TRUE
+  /\ UNCHANGED <<hostHead, rt, rtBound, adoptedGen, barrier, adoptFailUsed,
+                 handoffLeft, crashLeft, sweepTick, driftLeft>>
+
+(* 一次性采纳失败注入（H2 死锁入口）：只烧注入，无其他效果 *)
 AdoptAttemptFail ==
   /\ InjectAdoptFail
   /\ ~adoptFailUsed
   /\ adoptedGen # hostHead
   /\ adoptFailUsed' = TRUE
-  /\ UNCHANGED <<cmd, dgen, daligned, hostHead, hostEntry, adoptedGen, barrier, tickets,
-             handoffLeft, exitLeft>>
+  /\ UNCHANGED <<cmd, dgen, daligned, hostHead, rt, rtBound, adoptedGen, barrier, backoff,
+                 readySignal, handoffLeft, crashLeft, sweepTick, driftLeft>>
 
-\* 身份采纳成功（换头提交后 / 新线程锚定后 / janitor 重试 / spawn 注入后
-\* 的显式采纳通道）：注入未烧时被拒（失败不烧注入——烧注入只经
-\* AdoptAttemptFail / JanitorReconcile 的失败拍）
+(* 显式身份采纳成功（换头后通道 / 重启收敛；采纳目标必须在 head 在位） *)
 AdoptSuccess ==
   /\ adoptedGen # hostHead
-  /\ ~InjectAdoptFail \/ adoptFailUsed
+  /\ CanAdopt
   /\ adoptedGen' = hostHead
-  /\ UNCHANGED <<cmd, dgen, daligned, hostHead, hostEntry, barrier, tickets, adoptFailUsed,
-             handoffLeft, exitLeft>>
+  /\ UNCHANGED <<cmd, dgen, daligned, hostHead, rt, rtBound, barrier, backoff,
+                 readySignal, adoptFailUsed, handoffLeft, crashLeft, sweepTick, driftLeft>>
 
-\* 交接窗口：竖挡板（生产 beginSessionHandoff）。BoundHandoff=TRUE 时预算
-\* 把「换头尝试收敛」这一活性假设显式化——无限换头风暴会饿死一切依赖挡板
-\* 关闭的对账/投递（starve-handoff-toggle 场景的发现）。FALSE = 无限干扰：
-\* 不递减计数器（饥饿 lasso 需要精确状态环，递减会消灭环并使状态空间
-\* 随预算数线性爆炸）。
+(* 交接窗口：竖挡板。BoundHandoff 把「换头尝试收敛」活性假设显式化——
+   无限换头风暴饿死一切依赖挡板关闭的消费（饥饿 lasso 需要精确状态环，
+   预算递减会消灭环，故 FALSE 时不递减计数器） *)
 BeginHandoff ==
   /\ EnableHandoff
   /\ ~BoundHandoff \/ handoffLeft > 0
   /\ ~barrier
   /\ barrier' = TRUE
-  /\ handoffLeft' = (IF BoundHandoff THEN handoffLeft - 1 ELSE handoffLeft)
-  /\ UNCHANGED <<cmd, dgen, daligned, hostHead, hostEntry, adoptedGen, tickets,
-                adoptFailUsed, exitLeft>>
+  /\ handoffLeft' = IF BoundHandoff THEN handoffLeft - 1 ELSE handoffLeft
+  /\ UNCHANGED <<cmd, dgen, daligned, hostHead, rt, rtBound, adoptedGen,
+                 backoff, readySignal, adoptFailUsed, crashLeft, sweepTick, driftLeft>>
 
-\* 换头提交：head 推进、挡板清除；身份不在此对齐（生产语义：采纳靠后续
-\* adopt-thread-head，失败不回滚换头——错位态的来源之一）
+(* 换头提交（applySessionSuccession 的事务抽象）：
+   head 推进 + 挡板清除 + 在位 runtime 重绑为新 head（successor READY 门
+   的单 runtime 抽象）+ 身份归零（successor spawn 不含线程身份，ADR-0047
+   阶段 5）+ 事务内采纳尝试（失败不回滚换头——H2 语义保留）+ force 导流。 *)
 CommitHead ==
   /\ EnableHandoff
   /\ barrier
   /\ hostHead < MaxGen
-  /\ hostHead' = hostHead + 1
-  /\ barrier' = FALSE
-  /\ UNCHANGED <<cmd, dgen, daligned, hostEntry, adoptedGen, tickets, adoptFailUsed,
-             handoffLeft, exitLeft>>
+  /\ LET newHead == hostHead + 1
+         newRtBound == IF rt # "absent" THEN "head" ELSE rtBound
+         burn == InjectAdoptFail /\ ~adoptFailUsed /\ rt # "absent"
+         newAdopted ==
+           IF rt = "absent" THEN 0
+           ELSE IF burn THEN 0
+           ELSE IF AdoptFailForever THEN 0
+           ELSE newHead
+         deliverable == rt = "running" /\ newRtBound = "head"
+                          /\ (newAdopted = newHead \/ MutateStaleDeliver)
+     IN
+     /\ hostHead' = newHead
+     /\ barrier' = FALSE
+     /\ rtBound' = newRtBound
+     /\ adoptedGen' = newAdopted
+     /\ adoptFailUsed' = (adoptFailUsed \/ burn)
+     /\ IF deliverable /\ PendingSet # {}
+          THEN /\ cmd' = [c \in Commands |->
+                           IF c \in PendingSet THEN "delivered" ELSE cmd[c]]
+               /\ dgen' = [c \in Commands |->
+                           IF c \in PendingSet THEN newHead ELSE dgen[c]]
+               /\ daligned' = [c \in Commands |->
+                           IF c \in PendingSet THEN (newAdopted = newHead \/ MutateStaleDeliver)
+                           ELSE daligned[c]]
+               /\ backoff' = FALSE
+          ELSE /\ UNCHANGED <<cmd, dgen, daligned>>
+               /\ backoff' = IF PendingSet # {} THEN TRUE ELSE backoff
+  /\ UNCHANGED <<rt, readySignal, handoffLeft, crashLeft, sweepTick, driftLeft>>
 
-\* 交接失败收敛：挡板清除、head 不动（abortPendingSuccession；挡板不会
-\* 永久竖起，避免活性反例来自挡板而非死锁本身）
+(* 交接失败收敛：挡板清除、head 不动（挡板不会永久竖起） *)
 AbortHandoff ==
   /\ EnableHandoff
   /\ barrier
   /\ barrier' = FALSE
-  /\ UNCHANGED <<cmd, dgen, daligned, hostHead, hostEntry, adoptedGen, tickets, adoptFailUsed,
-             handoffLeft, exitLeft>>
+  /\ UNCHANGED <<cmd, dgen, daligned, hostHead, rt, rtBound, adoptedGen,
+                 backoff, readySignal, adoptFailUsed, handoffLeft, crashLeft, sweepTick, driftLeft>>
 
-\* runtime 退出（进程死亡 / 宿主重启清表）：条目与身份一起消失。
-\* 预算同换头：BoundExit=TRUE 时有限预算 = 「runtime 不无限崩溃循环」
-\* 假设的显式化（starve-crash-loop 场景的发现：无限崩溃循环饿死投递，
-\* 与死锁无关）；FALSE = 无限干扰（不递减，保留精确环）。
-RuntimeExit ==
-  /\ EnableRuntimeExit
-  /\ ~BoundExit \/ exitLeft > 0
-  /\ hostEntry = "present"
-  /\ hostEntry' = "absent"
-  /\ adoptedGen' = 0
-  /\ exitLeft' = (IF BoundExit THEN exitLeft - 1 ELSE exitLeft)
-  /\ UNCHANGED <<cmd, dgen, daligned, hostHead, barrier, tickets, adoptFailUsed,
-                handoffLeft>>
+(* janitor 唤醒与对账的语义已并入 JanitorActs（单 action 按状态分流）。 *)
 
-\* runtime 拉起（janitor 唤醒 / 重启恢复）：条目重建 + spawn 注入身份对齐
-\* + runtime-ready 补投发一张票
-RuntimeSpawn ==
-  /\ hostEntry = "absent"
-  /\ hostEntry' = "present"
-  /\ adoptedGen' = hostHead
-  /\ tickets' = GrantTicket
-  /\ UNCHANGED <<cmd, dgen, daligned, hostHead, barrier, adoptFailUsed, handoffLeft, exitLeft>>
+(* janitor 扫描的两半（15s 周期定时器，按状态分流——与生产同构）。
+   两个 action 都携带 sweepTick' = ~sweepTick 专属哑效果（定时器人格化）：
+   生产的定时器扫描绝对发生，不依赖「是否被用户操作代偿」；但 TLA+ 的
+   action 是状态对谓词——用户切回（ActivateHead）的重绑效果与 Wake 完全
+   重合，重合转移即算 ⟨Wake⟩ 发生，WF 会被无限漂移/切回环代偿满足
+   （实测：BindDrift↔ActivateHead 环饿死滞留指令而活性不守）。哑效果使
+   任何不带 tick 翻转的转移无法代偿 WF(JanitorActs)（方法论坑 #2，
+   与 #1 并列记录于 PendingLeadsToDelivered 注记）。 *)
 
-(* janitor 对「条目缺位 + 滞留」的唤醒（修复前后语义相同：requeue 的
- * ensureHead 路径）。效果 = 拉起 runtime（spawn 注入对齐身份）+ runtime-ready
- * 补投发一张票——修复前生产代码对缺位形态也具备的完整自愈链。 *)
+(* janitor 唤醒（requeue 的 ensureHead 路径，修复前后语义相同）：
+   条目缺位（runtime 不在 head：缺进程 / 未就绪 / 绑定漂移）时为 head
+   拉起或重绑。重绑不产生 ready 信号——本轮不投递，下一轮对账接管
+   （两拍收敛结构是真实的：唤醒拍只管把 runtime 带回 head）。 *)
 JanitorWake ==
-  /\ hostEntry = "absent"
+  /\ sweepTick' = ~sweepTick
   /\ PendingSet # {}
-  /\ hostEntry' = "present"
-  /\ adoptedGen' = hostHead
-  /\ tickets' = GrantTicket
-  /\ UNCHANGED <<cmd, dgen, daligned, hostHead, barrier, adoptFailUsed, handoffLeft, exitLeft>>
+  /\ ~ViewerPresent
+  /\ IF rt = "absent"
+       THEN /\ rt' = "starting" /\ rtBound' = "head"
+       ELSE /\ rt' = rt /\ rtBound' = "head"
+  /\ UNCHANGED <<cmd, dgen, daligned, hostHead, adoptedGen, barrier, backoff,
+                 readySignal, adoptFailUsed, handoffLeft, crashLeft, driftLeft>>
 
-(***************************************************************************)
-(* janitor 对「条目在位 + 滞留」的对账（2026-11-18 修复引入）：             *)
-(* 组合 action，一拍内完成「强制重投 → 仍有滞留则身份采纳重试 → 复投」。     *)
-(* 不消费票（自驱动新触发源）。注入未烧时这一拍的采纳被拒、本拍无进展       *)
-(* （仅烧掉注入，下一拍重试——与生产「失败下一轮扫描自然重试」一致）。        *)
-(* EnableReconcile=FALSE 时此 action 不使能 = 修复前语义：条目在位即跳过。   *)
-(***************************************************************************)
+(* janitor 对账（2026-11-18 修复引入）：条目在位且滞留 → 强制重投
+   （force）；仍有滞留且错位 → 重试身份采纳 → 复投。组合 action 一拍
+   完成（reconcileStalledDelivery 的抽象）。挡板中 gated no-op。
+   修复前语义：EnableReconcile=FALSE 时此 action 不存在。 *)
 JanitorReconcile ==
+  /\ sweepTick' = ~sweepTick
   /\ EnableReconcile
-  /\ CanAttemptDelivery
-  /\ IF Aligned
-       THEN /\ cmd' = [cmd EXCEPT ![MinPending] = "delivered"]
-            /\ dgen' = [dgen EXCEPT ![MinPending] = hostHead]
-            /\ daligned' = [daligned EXCEPT ![MinPending] = TRUE]
-            /\ UNCHANGED <<hostHead, hostEntry, adoptedGen, barrier,
-                           tickets, adoptFailUsed, handoffLeft, exitLeft>>
-       ELSE IF ~InjectAdoptFail \/ adoptFailUsed
-              THEN /\ adoptedGen' = hostHead
-                   /\ cmd' = [cmd EXCEPT ![MinPending] = "delivered"]
-                   /\ dgen' = [dgen EXCEPT ![MinPending] = hostHead]
-                   /\ daligned' = [daligned EXCEPT ![MinPending] = TRUE]
-                   /\ UNCHANGED <<hostHead, hostEntry, barrier,
-                                  tickets, adoptFailUsed, handoffLeft, exitLeft>>
-              ELSE /\ adoptFailUsed' = TRUE
-                   /\ UNCHANGED <<cmd, dgen, daligned, hostHead, hostEntry,
-                                  adoptedGen, barrier, tickets, handoffLeft, exitLeft>>
+  /\ PendingSet # {}
+  /\ ViewerPresent
+  /\ IF ~QueueGatesOpen
+       THEN UNCHANGED <<cmd, dgen, daligned, adoptedGen, backoff, adoptFailUsed>>
+       ELSE IF Aligned \/ MutateStaleDeliver
+         THEN /\ cmd' = [c \in Commands |->
+                          IF c \in PendingSet THEN "delivered" ELSE cmd[c]]
+              /\ dgen' = [c \in Commands |->
+                          IF c \in PendingSet THEN hostHead ELSE dgen[c]]
+              /\ daligned' = [c \in Commands |->
+                          IF c \in PendingSet THEN Aligned ELSE daligned[c]]
+              /\ backoff' = FALSE
+              /\ UNCHANGED <<adoptedGen, adoptFailUsed>>
+         ELSE IF InjectAdoptFail /\ ~adoptFailUsed
+           THEN /\ adoptFailUsed' = TRUE        \* 烧注入，本轮无进展，下轮重试
+                /\ backoff' = TRUE              \* 首次 force 失败已置退避
+                /\ UNCHANGED <<cmd, dgen, daligned, adoptedGen>>
+           ELSE IF AdoptFailForever
+             THEN /\ backoff' = TRUE
+                  /\ UNCHANGED <<cmd, dgen, daligned, adoptedGen, adoptFailUsed>>
+             ELSE /\ adoptedGen' = hostHead     \* 采纳成功 → 复投全清
+                  /\ cmd' = [c \in Commands |->
+                              IF c \in PendingSet THEN "delivered" ELSE cmd[c]]
+                  /\ dgen' = [c \in Commands |->
+                              IF c \in PendingSet THEN hostHead ELSE dgen[c]]
+                  /\ daligned' = [c \in Commands |->
+                              IF c \in PendingSet THEN TRUE ELSE daligned[c]]
+                  /\ backoff' = FALSE
+                  /\ UNCHANGED <<adoptFailUsed>>
+  /\ UNCHANGED <<hostHead, rt, rtBound, barrier, readySignal, handoffLeft, crashLeft, driftLeft>>
 
 JanitorActs == JanitorWake \/ JanitorReconcile
 
 Next ==
-  \/ EnqueueInput
-  \/ TryDeliver
+  \/ UserSend
+  \/ ActivateHead
+  \/ SpawnOk \/ SpawnFail
+  \/ RtExit \/ RestartHarvest
+  \/ BindDrift \/ BackoffExpires \/ ReadyDrop
+  \/ ReadyReplenish
   \/ AdoptAttemptFail \/ AdoptSuccess
   \/ BeginHandoff \/ CommitHead \/ AbortHandoff
-  \/ RuntimeExit \/ RuntimeSpawn
   \/ JanitorActs
 
 Init ==
@@ -254,70 +429,93 @@ Init ==
   /\ dgen = [i \in Commands |-> 0]
   /\ daligned = [i \in Commands |-> FALSE]
   /\ hostHead = 1
-  /\ hostEntry = "absent"
+  /\ rt = "absent"
+  /\ rtBound = "head"
   /\ adoptedGen = 0
   /\ barrier = FALSE
-  /\ tickets = 0
+  /\ backoff = FALSE
+  /\ readySignal = FALSE
   /\ adoptFailUsed = FALSE
   /\ handoffLeft = HandoffBudget
-  /\ exitLeft = ExitBudget
+  /\ crashLeft = CrashBudget
+  /\ sweepTick = FALSE
+  /\ driftLeft = DriftBudget
 
 Spec == Init /\ [][Next]_vars
-\* 挡板收敛是无条件弱公平：生产语义里交接事务最终 commit 或超时 abort，
-\* 挡板不会永久竖起（SuccessionWindow 已建模该窗口）。缺此假设，换头开启的
-\* 活性场景会被「挡板永竖」污染，反例指向错误的对象。
+
+(* 公平性假设（显式化）：
+    - 挡板收敛：交接事务最终 commit 或 abort（SuccessionWindow 域）
+    - janitor 周期扫描持续发生（15s 一拍）——由 sweepTick 翻转人格化：
+      生产的定时器扫描是绝对发生的机制，不依赖「是否被用户操作代偿」；
+      但 TLA+ 的 action 是状态对谓词——用户切回（ActivateHead）的重绑
+      效果与 Wake 完全重合，重合转移即算 ⟨JanitorActs⟩ 发生，WF 会被
+      无限漂移/切回环代偿满足（实测：BindDrift↔ActivateHead 环饿死滞留
+      指令而活性不守）。两个 janitor action 都携带 tick 翻转哑效果，
+      代偿通道即被切断（方法论坑 #2，与 #1 并列记录于 PendingLeadsToDelivered）
+    - ready 信号总会被补投消费（事件循环不丢拍；ReadyDrop 关掉此假设的
+      历史形态另由 EnableReadyDrop 表达）
+    - spawn 终局必然发生（starting 不悬停）；Ok 还是 Fail 由环境决定 *)
 Fairness ==
   /\ WF_vars(AbortHandoff)
   /\ (JanitorFairness => WF_vars(JanitorActs))
-  /\ (DeliverFairness => WF_vars(TryDeliver))
+  /\ (DeliverFairness => WF_vars(ReadyReplenish))
+  /\ (SpawnFairness => WF_vars(SpawnOk \/ SpawnFail))
 LiveSpec == Spec /\ Fairness
 
 (*************************** properties ************************************)
 
-\* 安全不变式 2：指令只在投出时刻的 head 代际上投出（ghost dgen 记录），
-\* head 单调不回退——捕获「投给旧头」类违规（MutateStaleDeliver 应击穿）
+(* 安全：队列送达只在投出时刻的 head 代际上（ghost dgen 记录） *)
 DeliveredAtOrBeforeHead ==
   \A i \in Commands :
-    cmd[i] = "delivered" => /\ dgen[i] >= 1
-                            /\ dgen[i] <= hostHead
+    cmd[i] = "delivered" => /\ dgen[i] >= 1 /\ dgen[i] <= hostHead
 
-\* 安全不变式 3：投出的指令必有投出时刻的身份记录（fencing 语义存在性）
-NoDeliveryWithoutAdoption ==
-  \A i \in Commands :
-    cmd[i] = "delivered" => dgen[i] # 0
-
-\* 安全不变式 4：投出时刻身份必须对齐（fencing 语义；MutateStaleDeliver
-\* 放行错位投递时此不变式给出反例——辨别力证据）
+(* 安全：队列送达时刻身份对齐（fencing 语义；MutateStaleDeliver 击穿） *)
 DeliveredOnlyWhenAligned ==
   \A i \in Commands :
     cmd[i] = "delivered" => daligned[i]
 
-(***************************************************************************)
-(* 死锁可达性（安全形式的死锁证明）：                                       *)
-(* DeadlockStalled 描述永久滞留现场——条目在位、身份错位、指令滞留、       *)
-(* 触发票耗尽、且修复前语义（janitor 对此无 action）。                      *)
-(*   deadlock-pre-fix 场景：NotDeadlockStalled 被违反（exit 12）= 死锁     *)
-(*     状态可达——把构造性复现提升到模型层（无需活性假设）。                *)
-(*   deadlock-post-fix 场景：该状态仍可能瞬时可达（对账下一拍才行动），     *)
-(*     其不可持续性由活性性质保证（见 EventuallyAllDelivered）。            *)
-(***************************************************************************)
-DeadlockStalled ==
-  /\ hostEntry = "present"
-  /\ adoptedGen # hostHead
+(* 安全：队列内 FIFO 无超车——后发指令经队列送达时，更早的入箱指令
+   不可能仍 pending（FIFO + retryable break 的数学后果；应恒成立） *)
+QueueFIFO ==
+  \A i, j \in Commands :
+    (i < j /\ cmd[j] = "delivered") => cmd[i] # "pending"
+
+(* 探针（预期可达 = 不变式被击穿）：跨路径超车——更早入箱的指令还在
+   pending，更晚的输入已经直投落在 runtime 当前会话（wt-1ab8a75b 的
+   「10:09 新消息秒达而旧 4 条纹丝不动」形态）。暴露的是：线程 FIFO
+   保证不跨路径成立，直投既不清偿也不保序。 *)
+NoCrossPathOvertake ==
+  \A i, j \in Commands :
+    (i < j /\ cmd[i] = "pending") => cmd[j] # "direct"
+
+(* 探针（预期可达）：输入静默落错地方——用户对着线程 head 会话发言，
+   消息经直投落在漂移后的无关会话（"direct" 终态即证据） *)
+NoOffThreadDirect ==
+  \A j \in Commands : cmd[j] # "direct"
+
+(* 死锁可达性（安全形式）：fencing 错位现场——runtime 在位绑定 head、
+   身份错位、指令滞留、修复前语义（janitor 对此无 action） *)
+DeadlockFencing ==
   /\ PendingSet # {}
-  /\ tickets = 0
+  /\ rt = "running" /\ rtBound = "head"
+  /\ ~Aligned
   /\ ~EnableReconcile
+NotDeadlockFencing == ~DeadlockFencing
 
-NotDeadlockStalled == ~DeadlockStalled
+(* 全绿滞留现场（安全形式）：一切客观条件健康（runtime 在位绑定 head、
+   身份对齐、挡板关、退避已过、无待消费信号）而指令滞留、修复前语义
+   ——触发面上没有任何 action 会对这条指令负责。这是 wt-1ab8a75b
+   09:52→11:24 静默窗口的精确形状：不是门敲不开，是没有人再敲门。 *)
+StalledHealthy ==
+  /\ PendingSet # {}
+  /\ rt = "running" /\ rtBound = "head"
+  /\ Aligned /\ ~barrier /\ ~backoff /\ ~readySignal
+  /\ ~EnableReconcile
+NotStalledHealthy == ~StalledHealthy
 
-\* 活性：每条指令一旦 pending 必达 delivered（leads-to）。
-\* 假设：JanitorFairness（周期扫描持续发生）+ DeliverFairness（触发点投递
-\* 总会执行）+ 挡板收敛 + 无 runtime 退出（聚焦投递面）+ 用户输入可停。
-\* 修复前该性质在滞留 lasso 失守；修复后 janitor 对账打破死锁，应通过。
-\*
-\* 方法论注记：不要写成 <>(\A i : cmd[i] # "pending")——其否定是
-\* 「从首状态起恒有 pending」，而 Init 无 pending，否定式不可满足，
-\* TLC 会永远报告通过（空转检查）。这一陷阱在本模型调试中实测踩过。
+(* 活性：每条 pending 指令终达 delivered（leads-to）。
+   方法论注记（首版踩过的坑）：不要写成 <>(\A i : cmd[i] # "pending")
+   ——其否定从 Init 起不可满足，TLC 会永远报告通过。 *)
 PendingLeadsToDelivered ==
   \A i \in Commands : (cmd[i] = "pending" ~> cmd[i] = "delivered")
 
