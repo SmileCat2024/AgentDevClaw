@@ -1,5 +1,6 @@
 import express from 'express';
 import compression from 'compression';
+import zlib from 'node:zlib';
 import { execFile } from 'child_process';
 import { existsSync, readFileSync, promises as fs } from 'fs';
 import os from 'os';
@@ -224,8 +225,13 @@ app.disable('x-powered-by');
 // 上游（ViewerWorker / 远程 Claw）不压缩，压缩统一在出口完成，公网隧道段直接受益；
 // 若反向代理剥离 Accept-Encoding 自行压缩，这里收到空 Accept-Encoding 会自动跳过，不会双重压缩。
 // SSE 事件流（text/event-stream）必须排除：压缩缓冲会滞留事件帧。
+// brotli：compression 1.8 起在客户端声明 br 时自动优先于 gzip，但默认 quality=4。
+// 实测 4 个首屏文件的合计 gzip 147.7K / br(q4) 149.5K / br(q6) 130.3K / br(q9) 123.2K：
+// 默认档在这批未压缩源码上反而比 gzip 大 1.2%，提到 6 才拿到 11.8% 的收益（9 再省 5 个点
+// 但 CPU 明显更贵）。只对声明 br 的客户端生效，其余仍走 gzip，无额外回退逻辑。
 app.use(compression({
   filter: createSseCompressionFilter(compression.filter),
+  brotli: { params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 6 } },
 }));
 app.use(securityHeadersMiddleware);
 // 排队输入持久接管（ADR-0047 阶段 3a）：ViewerWorker 重启后排队输入与
