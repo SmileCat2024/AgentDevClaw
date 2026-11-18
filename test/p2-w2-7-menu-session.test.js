@@ -222,21 +222,32 @@ test('桥键与命名导出同源、私有 helper 不上桥；菜单条目、声
     delete c.window.getThreadById;
     delete c.window.getThreadForSession;
 
-    // 5) 工作空间条目族（ADR-0050）：声明即能力，wire 合流值优先
+    // 5) 工作空间条目族（ADR-0050）：sidebarSessions 声明即能力，wire 合流值
+    //    优先；设置直达族（编程小助手域三个 phTab 落点）在前，未声明呈现
+    //    策略时独立成菜单
     assert.deepEqual(mod.items.getCtxMenuItems('workspace', 'programming-helper', 'prebuilt', 'programming-helper'), [
+      { label: '模型设置', action: 'claw:open-settings:model' },
+      { label: '插件及配置', action: 'claw:open-settings:feature' },
+      { label: 'Coder设置', action: 'claw:open-settings:coder' },
+      { type: 'separator' },
       { label: '隐藏对话条目', action: 'claw:toggle-sidebar-sessions' },
     ]);
     mod.store.setAllAgents([makePhAgent({ sidebarSessionsPolicy: 'hidden' })]);
-    assert.deepEqual(labels(mod.items.getCtxMenuItems('workspace', 'programming-helper', 'prebuilt', 'programming-helper')), ['显示对话条目']);
+    assert.deepEqual(labels(mod.items.getCtxMenuItems('workspace', 'programming-helper', 'prebuilt', 'programming-helper')),
+      ['模型设置', '插件及配置', 'Coder设置', '显示对话条目']);
     mod.store.setAllAgents([makePhAgent({ sidebarSessions: undefined })]);
-    assert.deepEqual(mod.items.getCtxMenuItems('workspace', 'programming-helper', 'prebuilt', 'programming-helper'), []);
+    assert.deepEqual(mod.items.getCtxMenuItems('workspace', 'programming-helper', 'prebuilt', 'programming-helper'), [
+      { label: '模型设置', action: 'claw:open-settings:model' },
+      { label: '插件及配置', action: 'claw:open-settings:feature' },
+      { label: 'Coder设置', action: 'claw:open-settings:coder' },
+    ]);
 
     // 6) 语言切换经 live 语言 owner（i18n-environment 桥）即时生效
     mod.store.setAllAgents([makePhAgent()]);
     c.read('currentLanguage = "en"');
     const enItems = nonSeparator(mod.items.getCtxMenuItems('runtime', 'programming-helper', 'child', 'rt-1', 'sess-active'));
     assert.equal(enItems[0].label, 'Rename');
-    assert.equal(labels(mod.items.getCtxMenuItems('workspace', 'programming-helper', 'prebuilt', 'programming-helper'))[0], 'Hide conversations');
+    assert.equal(labels(mod.items.getCtxMenuItems('workspace', 'programming-helper', 'prebuilt', 'programming-helper'))[0], 'Model Settings');
     c.read('currentLanguage = "zh"');
   });
 });
@@ -281,9 +292,14 @@ test('动作分发身份参数（agentId · sessionId）与声明能力过期拒
       `移动入口应携带被右键的会话 id 做归属解析：${moveLookups.join(', ')}`);
     assert.equal(alerts.filter((m) => m.includes('无法确定')).length, 1, '归属不可解析时显式失败一次');
 
-    // 声明能力过期（呈现策略字段消失）：菜单为空，动作不发请求、无副作用
+    // 声明能力过期（呈现策略字段消失）：呈现策略族从菜单消失（设置直达族
+    // 仍在），toggle 动作不发请求、无副作用
     mod.store.setAllAgents([makePhAgent({ sidebarSessions: undefined })]);
-    assert.deepEqual(mod.items.getCtxMenuItems('workspace', 'programming-helper', 'prebuilt', 'programming-helper'), []);
+    assert.deepEqual(mod.items.getCtxMenuItems('workspace', 'programming-helper', 'prebuilt', 'programming-helper'), [
+      { label: '模型设置', action: 'claw:open-settings:model' },
+      { label: '插件及配置', action: 'claw:open-settings:feature' },
+      { label: 'Coder设置', action: 'claw:open-settings:coder' },
+    ]);
     const requestsBefore = boot.fetchStub.calls.length;
     const callsBefore = calls.length;
     mod.items.dispatchCtxAction('toggle-sidebar-sessions', { ns: 'programming-helper', id: 'programming-helper' });

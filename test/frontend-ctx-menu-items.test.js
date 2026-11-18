@@ -40,6 +40,12 @@ const CTX_MENU = 'public/src/modules/ctx-menu-items.js';
  */
 const TEST_AGENT = {
   id: 'programming-helper',
+  // 真实声明形态：metadata `kind: "workspace"`（prebuilt-agents/official/
+  // programming-helper/metadata.json），source 是服务端扫描身份。切换事务
+  // （runtime-switch.js）按 isWorkspaceSurfaceUnit 走 selectWorkspace 分支，
+  // 夹具缺这两个字段会静默走 runtime 分支（空 runtimeId 早退、不切换）。
+  source: 'prebuilt',
+  kind: 'workspace',
   // ADR-0049：sessionOps 是声明驱动的产品事实（metadata.json），夹具镜像声明；
   // 「移动到…」同为 PH 的声明项（claw:move-session），菜单从声明合成。
   sessionOps: true,
@@ -171,8 +177,19 @@ function createRuntimeSwitchHost(sandbox, switchCalls, bindCalls) {
     isRemote: (id) => String(id || '').startsWith('remote:'),
     remote: () => sandbox.window.RemoteConnections,
     closeReadOnlySession: () => {},
-    isWorkspaceSurface: () => false,
-    selectWorkspace: () => {},
+    // workspace surface 判定委托 app-core 真实现（isWorkspaceSurfaceUnit，
+    // 本 harness 真实装载 app-core）：编程小助手等 kind=workspace 宿主记录
+    // 应为真，transaction 才会走 selectWorkspace 分支（生产语义）。
+    isWorkspaceSurface: (agent) => (typeof sandbox.isWorkspaceSurfaceUnit === 'function'
+      ? sandbox.isWorkspaceSurfaceUnit(agent) : false),
+    // 切换到 workspace surface = 切换事务的实质动作，记入 switchCalls
+    //（requestSwitch 路径经 host.switchAgent 记录同一数组，语义一致）。
+    // 生产：selectWorkspace → bindWorkspace 同步写 focusedAgentId（app-ui.js），
+    // 替身镜像该语义——后续经 getCurrentAgentRecord 的消费方据此读到新焦点。
+    selectWorkspace: (agentId) => {
+      switchCalls.push(agentId);
+      sandbox.focusedAgentId = agentId;
+    },
     storeDraft: () => {},
     saveWorkspaceScroll: () => {},
     saveCache: () => {},
@@ -1159,10 +1176,12 @@ describe('ctx-menu-items: copy-id action', () => {
 const MEMO_DECLARED = { id: 'memo', sidebarSessions: 'visible' };
 
 describe('ctx-menu-items: workspace role menu composition', () => {
-  it('declared app with author default visible offers the hide action', () => {
+  it('declared app with author default visible offers the hide action after its settings entry', () => {
     const { ctx } = loadCtxMenuItems({ allAgents: [TEST_AGENT, MEMO_DECLARED] });
     const items = ctx.run(`getCtxMenuItems('workspace', 'memo', 'prebuilt', 'memo')`);
     deepLoose(items, [
+      { label: '设置', action: 'claw:open-settings:app:memo' },
+      { type: 'separator' },
       { label: '隐藏对话条目', action: 'claw:toggle-sidebar-sessions' },
     ]);
   });
@@ -1170,19 +1189,120 @@ describe('ctx-menu-items: workspace role menu composition', () => {
   it('effective policy from the wire projection wins over the author default', () => {
     const { ctx } = loadCtxMenuItems({ allAgents: [TEST_AGENT, { id: 'memo', sidebarSessions: 'visible', sidebarSessionsPolicy: 'hidden' }] });
     const items = ctx.run(`getCtxMenuItems('workspace', 'memo', 'prebuilt', 'memo')`);
-    assert.equal(items[0].label, '显示对话条目');
+    const toggle = items.find((item) => item.action === 'claw:toggle-sidebar-sessions');
+    assert.equal(toggle.label, '显示对话条目');
   });
 
   it('labels follow the UI language', () => {
     const { ctx } = loadCtxMenuItems({ currentLanguage: 'en', allAgents: [MEMO_DECLARED] });
     const items = ctx.run(`getCtxMenuItems('workspace', 'memo', 'prebuilt', 'memo')`);
-    assert.equal(items[0].label, 'Hide conversations');
+    assert.equal(items[0].label, 'Settings');
+    const toggle = items.find((item) => item.action === 'claw:toggle-sidebar-sessions');
+    assert.equal(toggle.label, 'Hide conversations');
   });
 
-  it('undeclared app yields an empty menu (no entry point)', () => {
-    const { ctx } = loadCtxMenuItems({ allAgents: [TEST_AGENT] });
-    const items = ctx.run(`getCtxMenuItems('workspace', 'programming-helper', 'prebuilt', 'programming-helper')`);
+  it('app outside every fact family yields an empty menu (no entry point)', () => {
+    const { ctx } = loadCtxMenuItems({ allAgents: [TEST_AGENT, { id: 'work-group' }] });
+    const items = ctx.run(`getCtxMenuItems('workspace', 'work-group', 'prebuilt', 'work-group')`);
     deepLoose(items, []);
+  });
+
+  it('settings shortcuts family: ph-tab entries for programming-helper, app panel entry for memo', () => {
+    // 真实声明形态：未声明 sidebarSessions（metadata.json），设置直达独立成菜单
+    const { ctx } = loadCtxMenuItems({ allAgents: [TEST_AGENT] });
+    deepLoose(ctx.run(`getCtxMenuItems('workspace', 'programming-helper', 'prebuilt', 'programming-helper')`), [
+      { label: '模型设置', action: 'claw:open-settings:model' },
+      { label: '插件及配置', action: 'claw:open-settings:feature' },
+      { label: 'Coder设置', action: 'claw:open-settings:coder' },
+    ]);
+    // 两族并存时：设置组在前，呈现策略项在后，中间以分隔符分组
+    const both = loadCtxMenuItems({ allAgents: [{ id: 'programming-helper', sidebarSessions: 'visible' }] });
+    deepLoose(both.ctx.run(`getCtxMenuItems('workspace', 'programming-helper', 'prebuilt', 'programming-helper')`), [
+      { label: '模型设置', action: 'claw:open-settings:model' },
+      { label: '插件及配置', action: 'claw:open-settings:feature' },
+      { label: 'Coder设置', action: 'claw:open-settings:coder' },
+      { type: 'separator' },
+      { label: '隐藏对话条目', action: 'claw:toggle-sidebar-sessions' },
+    ]);
+    // memo 走 appSettings 落点：动作编码目标键，分发经通用 open_app_settings
+    // 入口查 appSettingsPanels 注册表（可拔插，不按 APP ID 分支）
+    const memo = loadCtxMenuItems({ allAgents: [MEMO_DECLARED] });
+    deepLoose(memo.ctx.run(`getCtxMenuItems('workspace', 'memo', 'prebuilt', 'memo')`), [
+      { label: '设置', action: 'claw:open-settings:app:memo' },
+      { type: 'separator' },
+      { label: '隐藏对话条目', action: 'claw:toggle-sidebar-sessions' },
+    ]);
+  });
+});
+
+describe('ctx-menu-items: dispatch open-settings (workspace settings shortcuts)', () => {
+  // 纯动作语义（上下文承载型菜单项）：设置面板是工作空间内嵌页面，内部
+  // 切页 / 保存 / 刷新路径都取当前激活 agent（getCurrentAgentRecord）——
+  // 动作必须「先切到被右键的工作空间，再打开」，原地弹面板会缺工作空间
+  // 上下文（tab 无响应、深层字段缺失、保存回写断链）。断言钉在两个可观察
+  // 效果上：切换事务以被右键 workspace 为目标且先于打开；面板以该工作
+  // 空间身份渲染。替身 selectWorkspace 镜像生产 bindWorkspace 的同步写
+  // 焦点语义（app-ui.js），切换后的焦点态由动作真实带来，不由用例预设。
+  it('switches into the right-clicked workspace first, then opens settings on the model tab', async () => {
+    const wire = activeCase.fetchRef.current;
+    const { ctx, doc } = loadCtxMenuItems({
+      allAgents: [TEST_AGENT],
+      fetch: async (url, options) => {
+        if (String(url).includes('/protoclaw/model_config')) {
+          // 顺序断言放在打开时刻：设置面板开始取数时，切换事务必须已发生
+          // （原地弹面板 = 此处失败）
+          assert.ok(activeCase.switchCalls.includes('programming-helper'),
+            '设置面板打开前，切换事务必须已切到被右键的工作空间');
+        }
+        return wire(url, options);
+      },
+    });
+    // 场景：焦点停在别的工作空间（memo），右键编程小助手。切换焦点
+    // 不由用例预设——它必须是 dispatch 动作本身带来的（替身 selectWorkspace
+    // 镜像生产 bindWorkspace 同步写 focusedAgentId），否则下方断言无意义。
+    ctx.focusedAgentId = 'memo';
+    ctx.run(`dispatchCtxAction('claw:open-settings:model', { role: 'workspace', ns: 'programming-helper', id: 'programming-helper', variant: 'prebuilt' })`);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.deepEqual(activeCase.switchCalls, ['programming-helper'], '切换事务恰以被右键的 workspace 为目标');
+    const host = doc.elements.get('ph-settings-host');
+    assert.ok(host, '设置弹窗宿主已创建');
+    const html = String(host.innerHTML);
+    // 落页契约：initialTab='model' 必须让「模型配置」页处于 active 态——
+    // tab 列表恒渲染全部页签，仅存在不算落对页
+    assert.ok(html.includes('ph-settings-tab active" data-action="phSettings.switchTab" data-tab="model"'),
+      '模型配置页必须是当前激活页');
+    // 面板身份 = 编程小助手（logicalAgentId）：coder 预置代管行才会拉取
+    assert.equal(activeCase.fetchCalls.filter((call) => String(call.url).includes('agent_model_presets')).length, 1);
+  });
+
+  it('app panel entry (memo): switch first, then dispatch the generic open_app_settings action', async () => {
+    const actionCalls = [];
+    const MEMO_WS = { id: 'memo', source: 'prebuilt', kind: 'workspace' };
+    const { ctx } = loadCtxMenuItems({ allAgents: [TEST_AGENT, MEMO_WS] });
+    ctx.window.runWorkspaceAction = (raw) => {
+      // 顺序断言放在调用时刻：通用入口被触达时，切换事务必须已发生
+      // （原地打开 = 此处失败）
+      assert.ok(activeCase.switchCalls.includes('memo'),
+        'open_app_settings 分发前，切换事务必须已切到被右键的工作空间');
+      actionCalls.push(JSON.parse(raw));
+    };
+    // 场景与上例对称：焦点停在编程小助手，右键 memo
+    ctx.focusedAgentId = 'programming-helper';
+    ctx.run(`dispatchCtxAction('claw:open-settings:app:memo', { role: 'workspace', ns: 'memo', id: 'memo', variant: 'prebuilt' })`);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.deepEqual(activeCase.switchCalls, ['memo'], '切换事务恰以被右键的 workspace 为目标');
+    // 契约：经通用 open_app_settings 入口、settings 键取自动作编码——
+    // 直连 appSettingsPanels 或在分发里写死 APP ID 分支都会在此露馅
+    assert.deepEqual(actionCalls, [{ type: 'open_app_settings', settings: 'memo' }]);
+  });
+
+  it('no-op for an app with no record: no switch, no overlay', async () => {
+    const { ctx, calls, doc } = loadCtxMenuItems({ allAgents: [TEST_AGENT] });
+    ctx.run(`dispatchCtxAction('claw:open-settings:model', { role: 'workspace', ns: 'missing-app', id: 'missing-app', variant: 'prebuilt' })`);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.deepEqual(activeCase.switchCalls, [], '无记录目标不得触发切换事务');
+    assert.equal(doc.elements.get('ph-settings-host'), undefined, '不弹设置');
+    assert.deepEqual(calls, [{ fn: 'closeCtxMenu' }], '仅菜单收尾，无其他动作');
   });
 });
 

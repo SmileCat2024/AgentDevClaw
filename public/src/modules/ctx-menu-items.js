@@ -76,6 +76,7 @@ import {
 import { sessionOpsAllowed, getDeclaredSessionMenuItems } from './session-menu-decls.js';
 import { phThreadArchiveCount } from './session-list-render.js';
 import { phOpenSessionMoveDialog } from './ph-session-move.js';
+import { phOpenSettings } from './ph-project-actions.js';
 import { openBranchDialog, phOpenRenameDialog } from './session-dialogs.js';
 import { openTrimPage } from './trim-page.js';
 import { openThreadHistory } from './ph-thread-history.js';
@@ -119,22 +120,50 @@ function resolveSidebarSessionsPolicy(ns) {
   return declared === 'visible' || declared === 'hidden' ? declared : null;
 }
 
+// 工作空间「设置直达」事实族（ADR-0050 宿主操作面的设置入口事实族）：
+// 每个 APP 一组设置快捷项（label + 落点），落点两类：
+//   - phTab：ph-settings 分类页。模型配置 / 插件及配置 / Coder设置页当前
+//     只服务编程小助手域（coder 槽位由其代管行承载）；
+//   - appSettings：APP 自有设置面板，经 window.ClawFW.appSettingsPanels
+//     注册表查表调用（可拔插约束：不按 APP ID 分支）。
+// 新 APP 接入时在此登记，族成员多到需要声明化时再收敛成 wire 事实
+// （对齐 ADR-0050「待真实需求出现再启动」的后置纪律）。
+const WORKSPACE_SETTINGS_SHORTCUTS = {
+  'programming-helper': [
+    { phTab: 'model', label: { zh: '模型设置', en: 'Model Settings' } },
+    { phTab: 'feature', label: { zh: '插件及配置', en: 'Plugins & Config' } },
+    { phTab: 'coder', label: { zh: 'Coder设置', en: 'Coder Settings' } },
+  ],
+  'memo': [
+    { appSettings: 'memo', label: { zh: '设置', en: 'Settings' } },
+  ],
+};
+
 function getCtxMenuItems(role, ns, variant, id, sessionId = '', threadId = '') {
   // 工作空间条目宿主操作面（ADR-0050）：事实选族——菜单项由 agent 记录
-  // 上的事实派生（v1 唯一族是 sidebarSessions 呈现策略切换，声明即能力）。
-  // 未声明 → 空菜单；侧栏门控（右键与 ⋯ 按钮同一条件）= 菜单非空。
+  // 上的事实派生。两族：设置直达（上表登记即能力）与 sidebarSessions
+  // 呈现策略切换。设置组在前、呈现策略在后，中间以分隔符分组。未命中
+  // 任何族 → 空菜单；侧栏门控（右键与 ⋯ 按钮同一条件）= 菜单非空。
   if (role === 'workspace') {
-    const policy = resolveSidebarSessionsPolicy(ns);
-    if (!policy) return [];
     const isZh = getCurrentLanguage() === 'zh';
-    return [
-      {
+    const items = [];
+    for (const shortcut of (WORKSPACE_SETTINGS_SHORTCUTS[ns] || [])) {
+      items.push({
+        label: isZh ? shortcut.label.zh : shortcut.label.en,
+        action: 'claw:open-settings:' + (shortcut.phTab || ('app:' + shortcut.appSettings)),
+      });
+    }
+    const policy = resolveSidebarSessionsPolicy(ns);
+    if (policy) {
+      if (items.length > 0) items.push({ type: 'separator' });
+      items.push({
         label: policy === 'visible'
           ? (isZh ? '隐藏对话条目' : 'Hide conversations')
           : (isZh ? '显示对话条目' : 'Show conversations'),
         action: 'claw:toggle-sidebar-sessions',
-      },
-    ];
+      });
+    }
+    return items;
   }
   // 线程宿主的侧栏线程叶子：自动接续 APP（coder / memo）走线程语义菜单
   // （与线程视图行动作同源——plugins/coder 前端插件）。中断只在执行/待投递时
@@ -1054,6 +1083,30 @@ function dispatchCtxAction(action, target) {
   // 引用不存在的名字落到 default 告警（边界校验在服务端扫描，此处兜底不吞）。
   if (typeof action === 'string' && action.startsWith('claw:')) {
     action = action.slice('claw:'.length);
+  }
+  // 工作空间「设置直达」（参数化动作，见 WORKSPACE_SETTINGS_SHORTCUTS）：
+  // open-settings:<phTab> 落 ph-settings 分类页；open-settings:app:<key>
+  // 经通用 open_app_settings 入口查 appSettingsPanels 注册表（可拔插，
+  // 不按 APP ID 分支）。纯动作语义：先切到被右键的工作空间再打开——
+  // 设置界面是工作空间内嵌页面，面板内切页 / 保存 / 刷新的数据路径都取
+  // 当前激活 agent（getCurrentAgentRecord），焦点不在时面板缺工作空间
+  // 上下文（tab 切换无响应、深层字段缺失、保存回写断链）。APP 插件装载
+  // 是渲染路径的异步幂等操作，open_app_settings 侧对注册表未就绪做就绪
+  // 等待（workspace-actions），此处只负责切换焦点与调用。
+  if (typeof action === 'string' && action.startsWith('open-settings:')) {
+    window.closeCtxMenu();
+    const dest = action.slice('open-settings:'.length);
+    if (ns && allAgents.some((item) => item.id === ns)) {
+      (async () => {
+        await switchAgent(ns);
+        if (dest.startsWith('app:')) {
+          window.runWorkspaceAction(JSON.stringify({ type: 'open_app_settings', settings: dest.slice('app:'.length) }));
+        } else {
+          phOpenSettings({ initialTab: dest });
+        }
+      })();
+    }
+    return;
   }
   const resolveCtxThread = () => {
     if (threadId && typeof window.getThreadById === 'function') {

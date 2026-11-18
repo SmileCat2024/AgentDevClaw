@@ -19,8 +19,8 @@ import {
  * ph-settings.js — 编程小助手「工作空间设置」面板（UI 标题：工作空间设置）
  *
  * IDE 式布局：左侧分类列表 + 右侧配置区域。
- * 分类页：插件及配置、Coder智能体、模型配置、运行环境，以及通知。
- * 插件及配置页内部区分功能配置（装配清单）与参数配置；Coder智能体页
+ * 分类页：插件及配置、Coder设置、模型配置、运行环境，以及通知。
+ * 插件及配置页内部区分功能配置（装配清单）与参数配置；Coder设置页
  * 另含策略分页（原「Coder 策略」独立页签并入，默认落策略）；运行环境页
  * 含本地运行设置与容器运行设置分页（原「进程模式」「容器镜像」独立页签并入，
  * 默认落本地运行设置）。历史名 ph-model-config：面板早期只有模型选择器，
@@ -445,7 +445,7 @@ function _renderProcessModeContent(agent) {
   ].join('');
 }
 
-// ── Coder 策略（Coder智能体页「策略」分页）：关联工作空间配置面 ────
+// ── Coder 策略（Coder设置页「策略」分页）：关联工作空间配置面 ────
 
 async function _phLoadCoderPolicy() {
   const host = document.getElementById('ph-coder-policy-host');
@@ -896,7 +896,7 @@ export function renderPhSettingsOverlay(agent, presets, { initialTab } = {}) {
   }
   const host = ensurePhSettingsHost();
   if (!agent) { host.innerHTML = ''; _closePhFeatureEditor(); return; }
-  // 旧版「Coder 策略」独立页签的记忆值归一到 Coder智能体页的策略分页
+  // 旧版「Coder 策略」独立页签的记忆值归一到 Coder设置页的策略分页
   if (_phSettingsTab === 'coder-policy') {
     _phSettingsTab = 'coder';
     _phFeatureSubTab = 'policy';
@@ -929,7 +929,7 @@ export function renderPhSettingsOverlay(agent, presets, { initialTab } = {}) {
   const tabs = [
     ...(getPhSettingsAgentId() === 'programming-helper' ? [
       { key: 'feature', label: isZh ? '插件及配置' : 'Plugins & Config', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3"/></svg>' },
-      { key: 'coder', label: isZh ? 'Coder智能体' : 'Coder Agent', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m8 8-4 4 4 4M16 8l4 4-4 4M14 4l-4 16"/></svg>' },
+      { key: 'coder', label: isZh ? 'Coder设置' : 'Coder Settings', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m8 8-4 4 4 4M16 8l4 4-4 4M14 4l-4 16"/></svg>' },
     ] : []),
     { key: 'model', label: isZh ? '模型配置' : 'Model Config', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>' },
     { key: 'runtime', label: isZh ? '运行环境' : 'Runtime Environment', icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></svg>' },
@@ -1057,7 +1057,7 @@ export function renderPhSettingsOverlay(agent, presets, { initialTab } = {}) {
 }
 const _phSwitchSettingsTab = (tab) => {
   // 插件清单与能力参数只属于主工作空间插件页；Coder 使用独立配置页；
-  // 各页进入时回到自己的默认分页（Coder智能体默认落策略、运行环境默认落本地）。
+  // 各页进入时回到自己的默认分页（Coder设置默认落策略、运行环境默认落本地）。
   if (PH_FEATURE_PAGES[tab]) {
     _phFeatureSubTab = PH_FEATURE_PAGES[tab].defaultSubTab || 'mounts';
     _phFeatureConfigTarget = null;
@@ -1074,7 +1074,7 @@ const _phSwitchSettingsTab = (tab) => {
 const _phSwitchFeatureSubTab = (sub) => {
   const page = PH_FEATURE_PAGES[_phSettingsTab];
   if (!page) return;
-  // 策略分页仅 Coder智能体页持有
+  // 策略分页仅 Coder设置页持有
   if (sub !== 'config' && sub !== 'mounts' && !(sub === 'policy' && page.policy)) return;
   if (sub !== 'config') _phFeatureConfigTarget = null;
   _phFeatureSubTab = sub;

@@ -15,6 +15,8 @@
  * 入口注册：mount 时写 window.ClawFW.appSettingsPanels.memo（unmount 摘除）
  * ——首页 hero 的「设置」按钮声明通用 action type 'open_app_settings' +
  * settings: 'memo'，公共分发器查注册表调用，不按 APP ID 分支（可拔插约束）。
+ * 侧栏工作空间右键菜单的「设置」项经同一入口（跨工作空间调用时分发器
+ * 等插件装载落定后再查表，见 workspace-actions 的就绪等待）。
  *
  * 宿主能力经 mount(presenter) 注入（presenter 由插件 index.js 收敛）：
  *   escapeHtml / getLanguage / workspace.agentById / modelPresets.get,set /

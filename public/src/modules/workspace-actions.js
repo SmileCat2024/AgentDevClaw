@@ -16,7 +16,8 @@
  *   视图切换: show_chat, resume_session, show_home,
  *            show_workspace_tab, show_block
  *   APP 对话事务: start_app_conversation（ADR-0024，端点由 APP block action 声明）
- *   APP 设置面板: open_app_settings（settings 键经 ClawFW.appSettingsPanels 查表）
+ *   APP 设置面板: open_app_settings（settings 键经 ClawFW.appSettingsPanels 查表，
+ *                  注册未就绪时等插件装载落定——跨工作空间入口用）
  *
  * ESM 化（P2 长尾批次 · workspace-actions 域，原位转换，行为零变化）：
  *   - 跨文件能力一律显式 import：状态 owner（i18n-environment / agent-store /
@@ -175,6 +176,50 @@ async function resolveStudioSessionDirectory(agent, action) {
   }
 }
 
+// ── APP 设置面板就绪等待 ───────────────────────────────────────────────
+// 面板由 APP 插件 mount 时注册进 window.ClawFW.appSettingsPanels，而插件
+// 装载是渲染路径的异步幂等操作（claw-host ensurePlugin）。首页 hero 按钮
+// 在已装载的插件内触发，注册必已就绪；跨工作空间入口（侧栏右键菜单，先
+// switchAgent 再调用）在切换落定后立即调用时，插件可能仍在装载——等
+// 装载落定通知（mount 先于落定通知执行）后查表，超时（装载失败 / APP
+// 未注册面板）明确报错，不静默吞。模块私有——验证经公开 runWorkspaceAction。
+const APP_SETTINGS_PANEL_READY_TIMEOUT_MS = 4000;
+
+async function openAppSettingsPanelWhenReady(key) {
+  const lookup = () => window.ClawFW?.appSettingsPanels?.[key];
+  const openPanel = (panel) => {
+    if (panel && typeof panel.open === 'function') { panel.open(); return true; }
+    return false;
+  };
+  if (openPanel(lookup())) return;
+  await new Promise((resolve) => {
+    let cancelSettle = null;
+    let timer = null;
+    const finish = () => {
+      if (cancelSettle) cancelSettle();
+      clearTimeout(timer);
+      resolve();
+    };
+    cancelSettle = window.ClawHost?.onPluginLoadSettled?.(() => {
+      if (lookup()) finish();
+    });
+    // 订阅后复查：落定发生在订阅之前（含订阅间隙）的窗口由此关掉
+    if (lookup()) { finish(); return; }
+    timer = setTimeout(finish, APP_SETTINGS_PANEL_READY_TIMEOUT_MS);
+  });
+  if (!openPanel(lookup())) {
+    console.error('[workspace-actions] no settings panel registered for:', key);
+    ClawToast.show({
+      id: 'app-settings-' + key,
+      status: 'error',
+      title: getCurrentLanguage() === 'zh' ? '设置面板打开失败' : 'Failed to open settings panel',
+      description: getCurrentLanguage() === 'zh'
+        ? '该应用的设置面板未能就绪（插件装载失败或未注册）'
+        : 'The app settings panel is unavailable (plugin failed to load or not registered)',
+    });
+  }
+}
+
 export async function runWorkspaceAction(rawAction, triggerButton = undefined) {
   // 桥接期：bumpNavigationGuard 定义于 app-core（导航编排域收敛时改 import）。
   window.bumpNavigationGuard();
@@ -246,16 +291,12 @@ export async function runWorkspaceAction(rawAction, triggerButton = undefined) {
 
   // ── APP 设置面板入口（注册表查表，公共代码不按 APP ID 分支）──────────
   // 首页 block action 只声明通用 type + settings 键；面板实现由各 APP 的
-  // 前端模块经 window.ClawFW.appSettingsPanels 注册（如 memo-settings.js），
-  // 可拔插约束与 start_app_conversation 的端点声明同构。
+  // 前端模块经 window.ClawFW.appSettingsPanels 注册（如 memo 插件），
+  // 可拔插约束与 start_app_conversation 的端点声明同构。跨工作空间入口
+  // 经 openAppSettingsPanelWhenReady 等插件装载就绪（hero 路径零等待直通）。
   if (action.type === 'open_app_settings') {
     const key = String(action.settings || '').trim();
-    const panel = window.ClawFW?.appSettingsPanels?.[key];
-    if (panel && typeof panel.open === 'function') {
-      panel.open();
-    } else {
-      console.error('[workspace-actions] no settings panel registered for:', key);
-    }
+    await openAppSettingsPanelWhenReady(key);
     return;
   }
 
