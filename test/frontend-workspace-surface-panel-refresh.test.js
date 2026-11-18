@@ -19,11 +19,10 @@
  *     函数）；不再把 ESM 源码切片喂给 vm。
  *   - 导航编排 selectWorkspaceSurface 来自 ESM（workspace-surface.js，以上条
  *     真实 import 的 createWorkspaceSurface(host) 产出）。
- *   - app-ui.js 仍是 classic（首屏同步边界）→ 继续按标记取片段执行，只贡献两段
- *     classic 实现：宿主工厂 createWorkspaceSurfaceHost()（把 classic 状态与函数
- *     适配成 workspace-surface 的 host 契约）与面板刷新分发
- *     refreshVisibleWorkspacePanelData()（按 block 可见性调 ClawHost refresher）。
- *     全文装载需要 index.html 的整套脚本序，非本用例关注面。
+ *   - app-ui.js 已迁 ESM（P4 T2 末件）→ 仍按标记切取两段真实源码（宿主工厂
+ *     createWorkspaceSurfaceHost 与面板刷新分发 refreshVisibleWorkspacePanelData）
+ *     在 vm 沙箱里与自备桩一起求值：转换后这两段改用 ESM 状态 owner 的 setter
+ *     与 p2-bootstrap 适配面，切片只需补这些名字的桩（见 classic 回调）。
  *   - claw-host.js 仍是 classic → loadSource（面板刷新经它的 blocks 注册表）。
  */
 
@@ -45,19 +44,20 @@ function sourceBetween(source, startMarker, endMarker) {
   return source.slice(start, end);
 }
 
-// classic 片段一：宿主工厂（workspace-surface 的 host 契约适配），随
-// selectWorkspaceSurface 的 ESM 实现一起被取用。
+// 片段一：宿主工厂（workspace-surface 的 host 契约适配），随 selectWorkspaceSurface
+// 的 ESM 实现一起被取用。片段里的 `export ` 前缀在沙箱里去掉（vm 无模块语义）。
 const selectSurfaceSource = sourceBetween(
   uiSource,
   'function createWorkspaceSurfaceHost() {',
   'function upsertConnectedAgent(',
-);
-// classic 片段二：面板刷新分发（按 block 可见性查 ClawHost refresher 表）。
+).replace(/^export /gm, '');
+// 片段二：面板刷新分发（按 block 可见性查 ClawHost refresher 表）。
 const refresherSource = sourceBetween(
   uiSource,
-  'function refreshVisibleWorkspacePanelData(agent = getCurrentAgentRecord()) {',
+  'function refreshVisibleWorkspacePanelData',
   'function getPassiveWorkspaceSurfaceMode(',
-);
+).replace(/^export /gm, '');
+
 
 const MEMO_AGENT = {
   id: 'memo',
@@ -269,6 +269,39 @@ async function surfaceCase({
       sandbox.loadedAgentDetailIds = loadedDetailIds;
       sandbox.allAgents = allAgents;
       sandbox._recentlyFinishedRuntimes = new Set();
+      // app-ui 迁 ESM 后，切片里的写点改用 ESM 状态 owner 的 setter、读点改用
+      // 具名导入的活绑定（render-entry-state / agent-store-state / panel-layout-state）
+      // 与 p2-bootstrap 适配面。这里按这些入口的语义给最小桩：写回上面的沙箱状态，
+      // 读值即沙箱现值——与切片原先直接读写全局是同一份状态。
+      const setters = {
+        setCurrentWorkspaceTab: (value) => { sandbox.currentWorkspaceTab = value; },
+        setActiveFeaturePanel: (value) => { sandbox.activeFeaturePanel = value; },
+        setShouldAnimateWorkspaceSurface: (value) => { sandbox.shouldAnimateWorkspaceSurface = value; },
+        setFocusedAgentId: (value) => { sandbox.focusedAgentId = value; },
+        setReadOnlyMode: (value) => { sandbox.readOnlyMode = value; },
+        setCurrentRuntimeAgentId: (value) => { sandbox.currentRuntimeAgentId = value; },
+        setCurrentWorkspaceArtifactDetail: (value) => { sandbox.currentWorkspaceArtifactDetail = value; },
+        setCurrentWorkspaceDocsetDetail: (value) => { sandbox.currentWorkspaceDocsetDetail = value; },
+        setCurrentProjectDocsetOpen: (value) => { sandbox.currentProjectDocsetOpen = value; },
+        setCurrentProjectRequirementEdit: (value) => { sandbox.currentProjectRequirementEdit = value; },
+        setCurrentProjectDocsetPage: (value) => { sandbox.currentProjectDocsetPage = value; },
+        setLastRenderedWorkspaceHtml: () => {},
+        setLastRenderedWorkspaceScrollKey: () => {},
+        setWorkspaceSurfaceScrollSaveRaf: () => {},
+        getFeaturePanelWidth: () => 400,
+        setFeaturePanelWidth: () => {},
+      };
+      for (const [name, value] of Object.entries(setters)) sandbox[name] = value;
+      // appUiState：app-core 的 app-ui 状态 seam（生产由 classic app-core 提供）。
+      sandbox.appUiState = {
+        workspaceSurfaceModePreferences: sandbox.workspaceSurfaceModePreferences,
+        workspaceSurfaceScrollCache: new Map(),
+        _workGroupEventsWired: false,
+      };
+      // callActivity / AgentLoaderHost：切片读的适配面（同一份容器引用）。
+      sandbox.callActivity = { _recentlyFinishedRuntimes: sandbox._recentlyFinishedRuntimes };
+      sandbox.AgentLoaderHost = { loadedAgentDetailIds: loadedDetailIds };
+      sandbox.window.AgentLoaderHost = sandbox.AgentLoaderHost;
       // 刷新分发经 ClawHost 注册表：加载时登记 refresher，渲染路径按 block type 查表调用。
       // 编排依赖 stub：本测试关注 selectWorkspaceSurface 的导航编排与
       // refreshVisibleWorkspacePanelData 的分发（均为真实源码），其余按

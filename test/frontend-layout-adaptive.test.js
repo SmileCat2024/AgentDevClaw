@@ -35,7 +35,9 @@ function extractCeilingsSource() {
   const end = uiSource.indexOf('/** 纯适配动作', start);
   assert.notEqual(start, -1, 'sidebar ceiling start marker should exist');
   assert.notEqual(end, -1, 'cascade comment marker should exist');
-  return uiSource.slice(start, end);
+  // app-ui 已迁 ESM：片段里的顶层声明带 `export`，而本用例在 vm 沙箱里与自备的
+  // 桩一起求值（被测的仍是真实源码，只是去掉模块化关键字）。
+  return uiSource.slice(start, end).replace(/^export /gm, '');
 }
 
 // ── Splitter drag ceilings ─────────────────────────────────

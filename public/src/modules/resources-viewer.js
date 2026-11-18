@@ -374,8 +374,13 @@
   // ═══════════════════════════════════════════════════════════════
 
   function registerResourcesViewerPanels() {
-    if (typeof window.registerFeaturePanel !== 'function') return;
-    window.registerFeaturePanel('resources', {
+    // 直接走注册表本体（right-panel-registry 的 ClawPanels，早于本文件装载）。
+    // 不转经 app-ui 的 registerFeaturePanel：那是注册表的一行转发，而 P4 把
+    // app-ui 迁进模块相后，本文件在解析期（classic 脚本）读不到它——守卫会
+    // 静默跳过，work-group 的「资料 / 文档」两个面板随之消失。
+    const register = window.ClawPanels?.register;
+    if (typeof register !== 'function') return;
+    register('resources', {
       when: { agentIds: ['work-group'] },
       label: { zh: '资料', en: 'Resources' },
       description: { zh: '群聊共享资料文件', en: 'Shared resource files' },
@@ -387,7 +392,7 @@
       },
         icon: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"> <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"></path> </svg>',
   });
-    window.registerFeaturePanel('viewer', {
+    register('viewer', {
       when: { agentIds: ['work-group'] },
       label: { zh: '文档', en: 'Documents' },
       description: { zh: '群聊文档查看', en: 'Document viewer' },

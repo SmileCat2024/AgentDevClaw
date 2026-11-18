@@ -30,7 +30,7 @@
  * 首屏 DOM，也不需要真实轮询）。
  */
 import assert from 'node:assert/strict';
-import { prepareClassicSandbox } from './p2-classic-hosts.js';
+import { APP_UI_DOMAIN, prepareClassicSandbox, prepareEsmModules } from './p2-classic-hosts.js';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
 
 const DOMAIN = 'public/src/modules/thread-store-domain.js';
@@ -151,6 +151,10 @@ export function threadCaseOptions({ classic, fetch: fetchImpl, globals = {}, lab
  */
 export function prepareThreadClassicSandbox(sandbox, overrides = {}) {
   prepareClassicSandbox(sandbox);
+  // app-ui（P4 T2 末件）已迁 ESM：导航宿主的 createWorkspaceSurfaceHost、主视图
+  // shouldRenderWorkspaceSurface / isChatSurfaceActive、upsertConnectedAgent 等
+  // 由它在模块相提供；classic 链不再有它。
+  prepareEsmModules(sandbox, APP_UI_DOMAIN);
   // 真实 invoke（app-core）会走网络；默认回答空集，避免把 /protoclaw/invoke
   // 的形状当成用例前提。
   // 工作空间宿主快照：真实 loadAgents 链路需要一条「已连接条目」，否则会按
@@ -259,6 +263,9 @@ export const THREAD_BASE_ENDPOINTS = [
   /^\/protoclaw\/app_info$/,
   /^\/protoclaw\/auth\/status$/,
   /^\/protoclaw\/invoke(\?|$)/,
+  // app-ui（P4 T2 末件）进入整图后带来的装载期拉取：model-preset-cache 的模型
+  // 预置清单（ensureClawModelPresets / getClawModelPresets 的真实端点）。
+  /^\/protoclaw\/model_config$/,
   /^\/api\/agents$/,
   // 运行时数据加载链（真实 switchAgent → loadAgentData）读的同一组端点：
   // 会话、消息、工具、钩子、overview、todo、输入请求与通知预热。

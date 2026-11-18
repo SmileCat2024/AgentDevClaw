@@ -602,7 +602,8 @@ test('main render boundary consumes one captured session view', () => {
   const renderBlock = sourceBetween(
     uiSource,
     'function renderCurrentMainView',
-    '\nfunction resetRuntimeBackedSurfaceState',
+    // app-ui 已迁 ESM：下一段起点带 `export`（切片只用于正则断言，不求值）。
+    '\nexport function resetRuntimeBackedSurfaceState',
   );
 
   assert.match(renderBlock, /viewState\s*=\s*readCurrentSessionViewState\(\)/);

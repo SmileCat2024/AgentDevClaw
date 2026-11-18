@@ -493,7 +493,10 @@
   <!-- bg-panel 已迁 ESM（P4 L3）：classic 标签删除，由 p4-entry 装载；
        桥键 BgPanel ← agent-data-loader 的 refreshBadge。 -->
   <script src="./src/modules/right-panel-registry.js"></script>
-  <script src="./src/app-ui.js"></script>
+  <!-- app-ui 已迁 ESM（P4 T2 末件，活跃域 classic 清零）：classic 标签删除，由
+       p4-entry 装载（排在 p4 各域之后、p2-entry 之前）。宿主 block primitive 注册、
+       scroll / resize / actions 监听与面板注册都在模块求值相完成，早于 boot.js 的
+       首屏渲染；对外符号仍是 domain `app-ui` 的桥键。 -->
   <script src="./src/modules/resources-viewer.js"></script>
   <!-- rail-customize 已迁 ESM（P4 L2）：classic 标签删除，由 p4-entry 装载；
        桥键 applyRailConfig 供 app-ui 首屏尾部与 debug-panel-host 使用。 -->

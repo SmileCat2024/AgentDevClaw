@@ -17,7 +17,6 @@ import { installI18n } from './install-i18n.js';
 import { installRuntimeSwitch } from './runtime-switch.js';
 import { createRuntimeStatusLoader } from '../../public/src/modules/runtime-status-loader.js';
 import { createSessionDataLoader } from '../../public/src/modules/session-data-loader.js';
-import { createWorkspaceSurface } from '../../public/src/modules/workspace-surface.js';
 import { createChatLoading } from '../../public/src/modules/chat-loading.js';
 import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
@@ -134,6 +133,11 @@ export function createFrontendSandbox(overrides = {}) {
   const windowStub = {
     document: documentStub,
     localStorage: localStorageStub,
+    // 浏览器全局：模块相就要求的真实必备面。app-ui 顶层建窄栏 ResizeObserver，
+    // 渲染链用 CSS.escape / CSS.supports（selector 转义与能力探测）。沙箱缺它们
+    // 会让迁进模块相的代码在求值期抛 ReferenceError（stub 是 no-op，不模拟回调）。
+    ResizeObserver: class { observe() {} unobserve() {} disconnect() {} },
+    CSS: { escape: (value) => String(value), supports: () => false },
     marked: createMarkedStub(),
     // 浏览器全局；部分生产模块（如 ph-project-actions.js）失败路径会调用 alert
     alert() {},
@@ -244,7 +248,10 @@ export function createFrontendSandbox(overrides = {}) {
       Object.assign(context, createSessionDataLoader(vm.runInContext('createSessionDataLoaderHost()', context)));
     }
     if (relativePath === 'public/src/app-main.js') installRuntimeSwitch(context);
-    if (relativePath === 'public/src/app-ui.js') Object.assign(context, createWorkspaceSurface(vm.runInContext('createWorkspaceSurfaceHost()', context)));
+    // app-ui 已迁 ESM（P4 T2 末件）：本沙箱路线只剩 classic script，不再有
+    // loadSource('public/src/app-ui.js') 的入口（classic 相解析 export 直接
+    // SyntaxError）。需要它的导航宿主时走 withP2EsmCase + APP_UI_DOMAIN
+    // （p2-classic-hosts），桥键与模块导出都装到同一沙箱 window 上。
   };
 
   // Make the real kernel bridge available before classic modules register keys.

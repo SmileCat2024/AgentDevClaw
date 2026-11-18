@@ -94,8 +94,13 @@ describe('right panel registry', () => {
     assert.match(registrations, /when: \{ agentIds: \['work-group'\] \}/);
 
     const resourceModule = fs.readFileSync(new URL('../public/src/modules/resources-viewer.js', import.meta.url), 'utf8');
-    assert.match(resourceModule, /window\.registerFeaturePanel\('resources'/);
-    assert.match(resourceModule, /window\.registerFeaturePanel\('viewer'/);
+    // resources-viewer 是 classic 解析期自注册，必须直接经注册表本体登记；
+    // 转经 app-ui 的 registerFeaturePanel 会依赖「app-ui 已求值」，而 app-ui
+    // 是模块相装载（晚于解析期）——那条路只会静默不注册。
+    assert.match(resourceModule, /window\.ClawPanels\?\.register/);
+    assert.match(resourceModule, /register\('resources'/);
+    assert.match(resourceModule, /register\('viewer'/);
+    assert.doesNotMatch(resourceModule, /window\.registerFeaturePanel\s*\(/);
   });
 
   it('filters the rail from registered panel availability and closes an unavailable active panel', () => {

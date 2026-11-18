@@ -40,7 +40,11 @@ const REGISTRATION_HOMES = [
     file: 'public/src/modules/resources-viewer.js',
     start: 'function registerResourcesViewerPanels()',
     end: '// window 导出',
-    prefix: 'registerFeaturePanel = window.registerFeaturePanel = (id, panel) => window.ClawPanels.register(id, panel);',
+    // 该文件是 classic 脚本、在解析期自注册，因此直接调注册表本体
+    // （window.ClawPanels.register）。不再注入 app-ui 的 registerFeaturePanel
+    // 转发——P4 把 app-ui 迁进模块相后，生产侧在解析期读不到它（静默丢面板），
+    // 金样本也不再依赖那份不可得的可用性。
+    prefix: '',
     suffix: 'registerResourcesViewerPanels();',
   },
   {

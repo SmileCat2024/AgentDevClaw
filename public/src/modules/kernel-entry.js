@@ -21,7 +21,8 @@ import './runtime-switch-host.js';
 import './workspace-session-navigation-host.js';
 import './workspace-entry-host.js';
 import './compact-resume-host.js';
-import './workspace-surface-host.js';
+// workspace-surface-host 随 app-ui 批进入 p4-entry（求值期取 app-ui 的宿主工厂，
+// 必须在 app-ui 之后求值）。
 import './application-startup-host.js';
 import './stream-draft-logic.js';
 import './trim-ratio-core.js';

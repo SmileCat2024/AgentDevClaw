@@ -2,11 +2,12 @@
  * p2-classic-hosts.js — P2 用例的 classic 相装载链（测试支撑，不是产品代码）。
  *
  * 为什么需要：ESM 化后，一个域模块的静态依赖链可能触达 agent-loader-host /
- * sidebar-render / app-ui / app-main，这些模块在**装载期**就调用 classic 相提供的
- * 宿主工厂：
+ * sidebar-render / app-main，这些模块在**装载期**就调用 classic 相提供的宿主工厂：
  *   - createAgentCallStatesHost        ← sidebar-render.js（读 runtime-status 的词法容器）
  *   - createRuntimeSwitchHost / createCompactResumeHost ← app-main.js
- *   - createWorkspaceSurfaceHost       ← app-ui.js
+ * （app-ui 在 P4 T2 末件迁 ESM 后不再属于这条 classic 链：它的宿主工厂
+ * createWorkspaceSurfaceHost 由 workspace-surface-host 具名 import，见
+ * APP_UI_DOMAIN。）
  * （session-view-state 在 P4 T2 批次迁 ESM 后不再取 classic 工厂：提交策略宿主
  * 由 session-view-commit-host 具名 import，见 SESSION_VIEW_DOMAIN 的注释。）
  * 手写同形桩会把「宿主工厂契约」复制到测试里，生产改动无法被用例发现；
@@ -18,7 +19,7 @@
  * 相共享同一全局对象（不存在第二个 KernelState，也不存在把工厂引用搬到另一个
  * 全局对象的用法）。
  *
- * 首屏 boot 体（app-ui / app-main 顶层）挂在 `window.__clawAuthReady` 之后：
+ * 首屏 boot 体（app-main 顶层）与模块相的 app-ui 求值挂在 `window.__clawAuthReady` 之后：
  * 这里给它一个永不 resolve 的 promise，用例不驱动首屏 DOM 渲染。周期排程
  * （通知时钟 / 轮询 / rAF）一并关掉——用例不测它们，开着会让进程留下句柄。
  */
@@ -40,7 +41,8 @@ export const CLASSIC_BOOTSTRAP = [
   // session-view-state 在 P4 T2 批次进模块相（原 classic 标签已从 index.html 删除）：
   // 它在 SESSION_VIEW_DOMAIN 里、排在 SIDEBAR_DOMAIN 之前装载——classic 消费方
   // （app-ui / app-main / app-core）按桥键晚绑定取用，不需要 classic 相实现。
-  'public/src/app-ui.js',
+  // app-ui 在 P4 T2 末件迁 ESM（原 classic 标签已删除）：本体在 APP_UI_DOMAIN，
+  // 排在各域之后装载；它的桥面（domain `app-ui`）随之注册到沙箱 window。
   'public/src/app-main.js',
 ];
 
@@ -69,7 +71,20 @@ export const SIDEBAR_DOMAIN = [
   'public/src/modules/agent-call-states-engine.js',
 ];
 
-/** 全部 P4 域模块（装载序：会话视图边界 → 侧栏 / 运行时状态 / call 引擎）。 */
+/**
+ * 工作空间主视图渲染域（P4 T2 末件）。装载期消费方 workspace-surface-host 是本
+ * 模块具名 import 的依赖（求值期取 createWorkspaceSurfaceHost），随本域一起进图。
+ */
+export const APP_UI_DOMAIN = ['public/src/app-ui.js'];
+
+/**
+ * 全部 P4 域模块（装载序：会话视图边界 → 侧栏 / 运行时状态 / call 引擎）。
+ *
+ * app-ui 有意**不**进默认清单：它的静态依赖覆盖 workspace-blocks / assembly-* /
+ * fw-config-panel / debug-* 等整片域，逐 case 实例化约 50ms，默认装载会把每个
+ * P2 用例的墙钟推高一个量级。需要它的用例显式
+ * `prepareEsmModules(sandbox, [...P4_DOMAINS, ...APP_UI_DOMAIN])`。
+ */
 export const P4_DOMAINS = [...SESSION_VIEW_DOMAIN, ...SIDEBAR_DOMAIN];
 
 /**
@@ -122,11 +137,13 @@ function applyEsmDomain(sandbox, loaded) {
   // 域命名空间出口（测试支撑）：迁出 classic 词法面的状态（如 runtime-status 的
   // `_agentSuspended`、引擎实例）在 classic 沙箱里没有 window 形态，用例经
   // `__esmDomain.<域>` 取真实模块实例——与 `c.load(...)` 同一实例，不建第二份状态。
+  const appUi = loaded.get('public/src/app-ui.js');
   sandbox.__esmDomain = Object.freeze({
     sessionViewState: loaded.get('public/src/modules/session-view-state.js'),
     runtimeStatus: loaded.get('public/src/modules/runtime-status.js'),
     sidebarRender,
     agentCallStatesEngine: loaded.get('public/src/modules/agent-call-states-engine.js'),
+    appUi,
   });
   // 夹具投影（**测试支撑面，生产没有这些全局**）：迁移前这些名字是 classic 顶层
   // 函数，夹具有大量 `sandbox.run('renderSidebarChildItems(...)')` 式的经典字符串
@@ -145,6 +162,22 @@ function applyEsmDomain(sandbox, loaded) {
     isSidebarRuntimeDisconnected: sandbox.__esmDomain.runtimeStatus?.isSidebarRuntimeDisconnected,
     isSuspendedNotificationPayload: sandbox.__esmDomain.runtimeStatus?.isSuspendedNotificationPayload,
     resolveNotificationCallingState: sandbox.__esmDomain.runtimeStatus?.resolveNotificationCallingState,
+    // app-ui（P4 T2 末件）：桥面之外的测试支撑面——单元模式判定与布局适配的
+    // 纯函数 / 常量投影（生产里只有桥键那几个，这些名字的消费方全在测试）。
+    // 桥键（renderCurrentMainView / isChatSurfaceActive / …）由模块自身注册到
+    // 沙箱 window，不经本投影。
+    createWorkspaceSurfaceHost: appUi?.createWorkspaceSurfaceHost,
+    getUnitPreferenceKey: appUi?.getUnitPreferenceKey,
+    getDefaultUnitMode: appUi?.getDefaultUnitMode,
+    getPassiveWorkspaceSurfaceMode: appUi?.getPassiveWorkspaceSurfaceMode,
+    getUnitTabs: appUi?.getUnitTabs,
+    getWorkspaceSurfaceScrollKey: appUi?.getWorkspaceSurfaceScrollKey,
+    _isNarrowScreen: appUi?._isNarrowScreen,
+    _getSidebarOccupiedWidth: appUi?._getSidebarOccupiedWidth,
+    _getPanelOccupiedWidth: appUi?._getPanelOccupiedWidth,
+    _sidebarDragCeiling: appUi?._sidebarDragCeiling,
+    _panelDragCeiling: appUi?._panelDragCeiling,
+    renderWorkspaceBlock: appUi?.renderWorkspaceBlock,
   };
   for (const [name, value] of Object.entries(projection)) {
     if (typeof value === 'function' && typeof sandbox[name] !== 'function') sandbox[name] = value;
@@ -152,6 +185,10 @@ function applyEsmDomain(sandbox, loaded) {
   // 状态容器同款投影：`_agentSuspended`（B4 具名导出的同一 Map 引用）。
   if (sandbox.__esmDomain.runtimeStatus && sandbox._agentSuspended === undefined) {
     sandbox._agentSuspended = sandbox.__esmDomain.runtimeStatus._agentSuspended;
+  }
+  // 布局适配常量（app-ui 的模块级 const，非桥）：测试按原顶层 const 的读法取值。
+  for (const key of ['CENTRAL_MIN_WIDTH', 'SIDEBAR_MAX_WIDTH']) {
+    if (appUi?.[key] !== undefined && sandbox[key] === undefined) sandbox[key] = appUi[key];
   }
   ensureSidebarRenderHostSeam(sandbox);
   return sandbox.__esmDomain;

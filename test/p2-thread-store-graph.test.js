@@ -50,7 +50,64 @@ const HOST = {
   },
 };
 
-function graphCase({ requests, mode, document }) {
+/**
+ * 惰性元素树：本文件求值整张生产图（含 app-ui），其宿主面直接调用 sidebar-render
+ * 的具名导出（模块相之后 `window.renderAgentList` 的夹具覆盖对它无效），因此
+ * 等待表面的切换会真的走一遍侧栏渲染。本文件的断言是图 / 网络 / 线程事实，
+ * 不看侧栏 DOM——这里给一条链路自洽的惰性元素树，让真实渲染跑完不抛错，
+ * 而不是把渲染器短路掉（渲染路径必须保持真实）。
+ */
+function createInertElement() {
+  const element = {
+    dataset: {},
+    style: { setProperty() {}, getPropertyValue() { return ''; } },
+    classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
+    children: [],
+    innerHTML: '',
+    textContent: '',
+    value: '',
+    scrollTop: 0,
+    appendChild() {},
+    removeChild() {},
+    insertBefore() {},
+    insertAdjacentHTML() {},
+    remove() {},
+    setAttribute() {},
+    removeAttribute() {},
+    addEventListener() {},
+    removeEventListener() {},
+    focus() {},
+    closest() { return null; },
+    matches() { return false; },
+    contains() { return false; },
+    getBoundingClientRect() { return { top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0 }; },
+    querySelector() { return createInertElement(); },
+    querySelectorAll() { return []; },
+  };
+  return element;
+}
+
+function createInertDocument() {
+  const inert = () => createInertElement();
+  return {
+    getElementById: (id) => (id === 'rail-cust-overlay' ? null : inert()),
+    querySelector: () => inert(),
+    querySelectorAll: () => [],
+    createElement: () => inert(),
+    createTextNode: (text) => ({ textContent: String(text ?? '') }),
+    addEventListener() {},
+    removeEventListener() {},
+    body: inert(),
+    head: inert(),
+    documentElement: inert(),
+    activeElement: { dataset: {} },
+    contains: () => false,
+    readyState: 'complete',
+    fonts: { ready: Promise.resolve(), addEventListener() {} },
+  };
+}
+
+function graphCase({ requests, mode, document = createInertDocument() }) {
   const thread = {
     threadId: 'wt-graph', agentId: 'coder', headSessionId: 'sess-head',
     sessionIds: ['sess-head'], status: 'rotating', handoffStartedAt: Date.now(),
@@ -240,6 +297,9 @@ function createRecordingDom() {
     title: '',
     children: [],
     style: {},
+    // dataset 是真实元素的必备面：整图求值时 debug-logs 的列表滚动绑定读
+    // featurePanelBody.dataset.logScrollBound（幂等标记）。
+    dataset: {},
     classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
     appendChild(child) { this.children.push(child); return child; },
     insertBefore(child) { this.children.push(child); return child; },

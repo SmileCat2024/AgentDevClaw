@@ -37,7 +37,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
-import { prepareClassicSandbox } from './p2-classic-hosts.js';
+import { APP_UI_DOMAIN, prepareClassicSandbox, prepareEsmModules } from './p2-classic-hosts.js';
 
 const CHAT_RENDERER = 'public/src/modules/chat-renderer.js';
 const CHAT_VIEWPORT = 'public/src/modules/chat-viewport.js';
@@ -219,6 +219,9 @@ async function withRenderHarness({ domContextKey = null } = {}, fn) {
   return withP2EsmCase({
     classic: (sandbox) => {
       prepareClassicSandbox(sandbox);
+      // app-ui（P4 T2 末件）已迁 ESM：被渲染链调用的 shouldRenderWorkspaceSurface /
+      // isChatSurfaceActive 等桥键由它在模块相注册，classic 链不再提供。
+      prepareEsmModules(sandbox, APP_UI_DOMAIN);
     },
     globals: {
       document,

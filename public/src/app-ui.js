@@ -1,43 +1,205 @@
+/**
+ * app-ui.js — 工作空间主视图渲染域（P4 活跃域 classic 清零的最后一件）。
+ *
+ * 迁 ESM 的时序结论（R1–R4 + S 审计，见 P4 计划实施记录）：
+ *   - classic 侧对本文件对外符号的触达点全部在函数体 / 默认参数 / 宿主闭包内，
+ *     没有解析相（装载期）调用；因此不存在「classic 加载期读它的状态」的顺序
+ *     依赖（R1 零触线）。
+ *   - 本文件顶层语句都是注册 / 监听 / 查询类（ClawHost primitive 注册、scroll /
+ *     resize 监听、面板注册、actions 注册、DOM 查询），从「加载序」推迟到
+ *     「模块求值相」等价：DOM 与 classic 宿主工厂由先行脚本建好，deferred 模块
+ *     求值早于 DOMContentLoaded，更早于 boot.js 的首屏渲染。
+ *   - 唯一的装载期消费方是 workspace-surface-host（导航宿主装配）：它与本文件
+ *     互为静态环的一端（app-ui → assembly-actions / workspace-blocks → 本模块），
+ *     因此改为**首调惰性**经桥键 createWorkspaceSurfaceHost 取宿主工厂——求值期
+ *     零解引用，导航只发生在模块相之后（见该文件头注）。
+ *
+ * 状态归属（不搬移、不双存储）：
+ *   - 渲染槽位 / 单元模式偏好 → render-entry-state（具名 import + setter）
+ *   - 身份、选中、只读、展开项目 → agent-store-state；运行时身份 →
+ *     orchestration-state；消息列表 → session-view-storage
+ *   - 面板宽度 → panel-layout-state
+ *   - classic 仍持有的三处（workspaceSurfaceModePreferences /
+ *     workspaceSurfaceScrollCache / _workGroupEventsWired）经 app-core 的
+ *     createP2BootstrapAppUiStateHost() 最小 host seam 取用
+ *   - 其余外来能力：已 ESM 的目标一律具名 import；仍是 classic 的目标
+ *     （app-core 的单元 / 导航 / 空态 helper、app-main 的身份解析、悬置域）
+ *     经显式 window.X 晚绑定，行尾注释标注定义域。
+ *
+ * 对外符号仍按桥接期口径发布（domain `app-ui`，见文件末尾）：classic 消费方与
+ * 仍走 window 晚绑定的 ESM 消费方语义不变。
+ */
+import { t } from './i18n.js';
+import { escapeHtml } from './modules/markdown-utils.js';
+import { getCurrentLanguage } from './modules/i18n-environment-state.js';
+import { allAgents, expandedProjectIds, focusedAgentId, readOnlyMode,
+  setFocusedAgentId, setReadOnlyMode } from './modules/agent-store-state.js';
+import { currentRuntimeAgentId, setCurrentRuntimeAgentId } from './modules/orchestration-state.js';
+import { currentMessages } from './modules/session-view-storage.js';
+import {
+  activeFeaturePanel,
+  currentWorkspaceTab,
+  lastRenderedWorkspaceHtml,
+  lastRenderedWorkspaceScrollKey,
+  setActiveFeaturePanel,
+  setCurrentProjectDocsetOpen,
+  setCurrentProjectDocsetPage,
+  setCurrentProjectRequirementEdit,
+  setCurrentWorkspaceArtifactDetail,
+  setCurrentWorkspaceDocsetDetail,
+  setCurrentWorkspaceTab,
+  setLastRenderedChatSig,
+  setLastRenderedWorkspaceHtml,
+  setLastRenderedWorkspaceScrollKey,
+  setShouldAnimateWorkspaceSurface,
+  setWorkspaceSurfaceScrollSaveRaf,
+  shouldAnimateWorkspaceSurface,
+  unitModePreferences,
+  workspaceSurfaceScrollSaveRaf,
+} from './modules/render-entry-state.js';
+import { getFeaturePanelWidth, setFeaturePanelWidth } from './modules/panel-layout-state.js';
+import { applySessionViewPatch, readCurrentSessionViewState } from './modules/session-view-state.js';
+import { beginChatLoadingSession, clearChatLoadingSession } from './modules/chat-loading-host.js';
+import { notifyInputSurfaceChanged } from './modules/input-render.js';
+import { updateChatProcessToggle } from './modules/input-helpers.js';
+import { updateChatContextBar } from './modules/chat-context-bar.js';
+import { updateProjectDocsetChrome } from './modules/workspace-docset.js';
+import { render, renderChatEmptyState } from './modules/chat-renderer.js';
+import {
+  applyChatViewportAnchor,
+  captureChatViewportAnchor,
+  resumeChatViewportObservers,
+  runWithSuppressedChatViewportObservers,
+  scheduleFollowLatestSettlePass,
+  setFollowLatest,
+  setPendingChatViewportAnchor,
+  getRememberedChatViewportAnchorForContext,
+  rememberChatViewportAnchorForContext,
+  suppressChatViewportObservers,
+  ensureChatViewportObservers,
+  cancelChatScrollSettlement,
+  updateAssemblySideRailPosition,
+  updateFollowLatestButton,
+} from './modules/chat-viewport.js';
+import { freezeProcessWindowing, unfreezeProcessWindowing } from './modules/lazy-tool-content.js';
+import { domRefs } from './modules/p2-bootstrap-dom.js';
+import { callActivity } from './modules/p2-bootstrap-call-activity.js';
+import { assemblyUi } from './modules/p2-bootstrap-assembly.js';
+import { phSessionUi } from './modules/p2-bootstrap-ph-session.js';
+import { debugPanel } from './modules/p2-bootstrap-debug-panel.js';
+import {
+  ASSEMBLY_BUNDLE_FEATURES,
+  ASSEMBLY_PRESET_FEATURES,
+  buildAssemblyGeneratedPrompt,
+  getAssemblyFeatureLabel,
+  getAssemblyPresetDescription,
+  getAssemblyPresetLabel,
+  getAssemblyPromptValue,
+  getAssemblyStageLabel,
+  getFeatureRepositoryData,
+  getFeatureTypeLabel,
+  getRepoLocaleText,
+  parseWorkspaceListField,
+  renderAssemblyWorkbenchBlock,
+  renderFeatureRepositoryBlock,
+  renderFlowEditorBlock,
+  renderWorkspaceActionGroup,
+  renderWorkspaceForm,
+  renderWorkspaceHero,
+  renderWorkspaceLauncherGrid,
+  renderWorkspaceStatusGrid,
+  shouldRenderBlock,
+} from './modules/workspace-blocks.js';
+import {
+  getAssemblyDisplayName,
+  getAssemblyEditorMode,
+  getAssemblyEnvironmentState,
+  getAssemblyEnvironmentStatusLabel,
+  getAssemblyEnvironmentStatusTone,
+  getAssemblySavedConfigSummary,
+  getAssemblySessionStatus,
+  getWorkspaceFormDraft,
+  isAssemblySession,
+  isAssemblySessionRunning,
+  normalizeAssemblyDraft,
+  renderAssemblyStatusChip,
+} from './modules/assembly-data.js';
+import { getSavedAssemblyConfigs } from './modules/assembly-actions.js';
+import { getWorkspaceSessions } from './modules/session-ui.js';
+import { canEnterWorkspaceChat, getAgentWorkspaceState } from './modules/project-data.js';
+import { renderWorkspaceSessionList } from './modules/session-list-render.js';
+import { renderProjectDocsetBlock, renderWorkspaceArtifactsBlock } from './modules/p2-w2-10-workspace-docset.js';
+import { renderAgentList } from './modules/sidebar-render.js';
+import {
+  fwRerender,
+  renderFWConfirmDialog,
+  renderFWCreateDialog,
+  renderFWFeatureImportDialog,
+  renderFWPromptDialog,
+  renderFWSwitchProjectDialog,
+} from './modules/fw-config-panel.js';
+import { renderFWFeatureSettings } from './modules/feature-config.js';
+import { ensureClawModelPresets, getClawModelPresets } from './modules/model-preset-cache.js';
+import { formatWorkspaceDate } from './modules/time-format-host.js';
+import { saveCurrentRuntimeToCache } from './modules/runtime-view-cache-host.js';
+import { getEmptyTodoPlan, renderPlanPanel } from './modules/todo-plan.js';
+import { getEmptyOverviewSnapshot } from './modules/overview-data.js';
+import { renderMonitorPanel, renderStructurePanel } from './modules/debug-overview.js';
+import { renderFeaturesPanel, renderReverseHooksPanel } from './modules/debug-features-hooks.js';
+import { loadLogs, renderLogsPanel } from './modules/debug-logs.js';
+import { loadMcpInfo, renderMcpPanel } from './modules/debug-mcp.js';
+import { renderPreflightPanel } from './modules/debug-preflight.js';
+import { renderFeaturePanel, syncRailButtons } from './modules/debug-panel-host.js';
+import { openSettings, renderSettingsOverlay } from './modules/model-settings.js';
+import { openProxySettings } from './modules/proxy-overlay.js';
+import { openRemoteClawSettings } from './modules/remote-claw-settings.js';
+import { openRemoteConnectionsManager } from './modules/remote-connections.js';
+import { openUsageInfo } from './modules/usage-info-overlay.js';
+import { openMcpGateway } from './modules/mcp-gateway-ui.js';
 
-function createWorkspaceSurfaceHost() {
+// classic 仍持有的 app-ui 残余状态（app-core 的最小 host seam；app-core 是先行
+// 脚本，模块相求值时工厂已就绪，与 p2-bootstrap-* 适配模块同型）。
+const appUiState = window.createP2BootstrapAppUiStateHost();
+
+export function createWorkspaceSurfaceHost() {
   return {
-    bumpNavigationGuard: () => bumpNavigationGuard(),
+    bumpNavigationGuard: () => window.bumpNavigationGuard(),
     closeReadOnlySession: () => { if (typeof window.closeReadOnlySession === 'function') window.closeReadOnlySession(); },
-    hasDetail: (id) => loadedAgentDetailIds.has(id),
+    hasDetail: (id) => window.AgentLoaderHost.loadedAgentDetailIds.has(id),
     loadDetail: (id) => window.loadAgentDetail(id),
     findAgent: (id) => allAgents.find((item) => item.id === id) || null,
-    currentAgent: () => getCurrentAgentRecord(),
+    currentAgent: () => window.getCurrentAgentRecord(),
     preferenceKey: (agent) => getUnitPreferenceKey(agent),
     tabs: (agent) => getUnitTabs(agent),
-    surfacePreference: (key) => workspaceSurfaceModePreferences[key],
+    surfacePreference: (key) => appUiState.workspaceSurfaceModePreferences[key],
     defaultMode: (agent) => getDefaultUnitMode(agent),
-    ui: (agent) => getCurrentUnitUi(agent),
+    ui: (agent) => window.getCurrentUnitUi(agent),
     focusedAgentId: () => focusedAgentId,
     runtimeId: () => currentRuntimeAgentId,
-    contextKey: (id) => getRuntimeContextKey(id),
+    contextKey: (id) => window.getRuntimeContextKey(id),
     saveScroll: () => saveCurrentWorkspaceSurfaceScroll(),
     readOnlyMode: () => readOnlyMode,
     saveCache: (id, key) => saveCurrentRuntimeToCache(id, key),
     bindWorkspace: (agentId, tab, previousAgentId, previousRuntimeId) => {
-      focusedAgentId = agentId || null;
+      setFocusedAgentId(agentId || null);
       applySessionViewPatch({ identity: { agentId: agentId || '', sessionId: '' } });
-      if (previousRuntimeId) _recentlyFinishedRuntimes.delete(previousRuntimeId);
-      currentRuntimeAgentId = null;
-      readOnlyMode = false;
-      currentWorkspaceArtifactDetail = null;
-      currentWorkspaceDocsetDetail = null;
-      currentProjectDocsetOpen = false;
-      currentProjectRequirementEdit = null;
-      currentProjectDocsetPage = 'requirement';
-      currentWorkspaceTab = tab;
-      shouldAnimateWorkspaceSurface = previousAgentId !== agentId;
+      if (previousRuntimeId) callActivity._recentlyFinishedRuntimes.delete(previousRuntimeId);
+      setCurrentRuntimeAgentId(null);
+      setReadOnlyMode(false);
+      setCurrentWorkspaceArtifactDetail(null);
+      setCurrentWorkspaceDocsetDetail(null);
+      setCurrentProjectDocsetOpen(false);
+      setCurrentProjectRequirementEdit(null);
+      setCurrentProjectDocsetPage('requirement');
+      setCurrentWorkspaceTab(tab);
+      setShouldAnimateWorkspaceSurface(previousAgentId !== agentId);
     },
     setFollowLatest: (value) => setFollowLatest(value),
     resetRuntimeState: () => resetRuntimeBackedSurfaceState(),
-    beginPending: (...args) => beginPendingSessionNavigation(...args),
-    setTab: (tab) => { currentWorkspaceTab = tab; },
+    beginPending: (...args) => window.beginPendingSessionNavigation(...args),
+    setTab: (tab) => { setCurrentWorkspaceTab(tab); },
     beginLoading: () => beginChatLoadingSession(),
-    clearPending: () => clearPendingSessionNavigation(),
+    clearPending: () => window.clearPendingSessionNavigation(),
     renderAgents: () => renderAgentList(),
     render: () => renderCurrentMainView(),
     renderPanel: () => renderFeaturePanel(),
@@ -45,7 +207,7 @@ function createWorkspaceSurfaceHost() {
   };
 }
 
-function upsertConnectedAgent(agent) {
+export function upsertConnectedAgent(agent) {
   if (!agent?.id) return null;
   const index = allAgents.findIndex((item) => item.id === agent.id);
   const nextAgent = index >= 0
@@ -59,17 +221,17 @@ function upsertConnectedAgent(agent) {
   return nextAgent;
 }
 
-function getUnitPreferenceKey(agent = getCurrentAgentRecord()) {
+export function getUnitPreferenceKey(agent = window.getCurrentAgentRecord()) {
   if (!agent) return null;
   return agent.source === 'prebuilt' ? agent.id : (agent.id || null);
 }
 
-function getPreferredUnitMode(agent = getCurrentAgentRecord()) {
+function getPreferredUnitMode(agent = window.getCurrentAgentRecord()) {
   const key = getUnitPreferenceKey(agent);
   return key ? (unitModePreferences[key] || null) : null;
 }
 
-function setPreferredUnitMode(mode, agent = getCurrentAgentRecord()) {
+export function setPreferredUnitMode(mode, agent = window.getCurrentAgentRecord()) {
   if (mode !== 'chat' && currentWorkspaceTab === 'chat'
       && typeof rememberChatViewportAnchorForContext === 'function') {
     rememberChatViewportAnchorForContext();
@@ -81,14 +243,14 @@ function setPreferredUnitMode(mode, agent = getCurrentAgentRecord()) {
   }
   const key = getUnitPreferenceKey(agent);
   if (!key) {
-    currentWorkspaceTab = mode;
+    setCurrentWorkspaceTab(mode);
     return;
   }
   unitModePreferences[key] = mode;
-  if (mode && mode !== 'chat' && !isTablessHostSurface(agent)) {
-    workspaceSurfaceModePreferences[key] = mode;
+  if (mode && mode !== 'chat' && !window.isTablessHostSurface(agent)) {
+    appUiState.workspaceSurfaceModePreferences[key] = mode;
   }
-  currentWorkspaceTab = mode;
+  setCurrentWorkspaceTab(mode);
   // 数据加载挂导航事件而非渲染（渲染规范 §1）：单元模式切换后，对当前
   // 模式下可见的自刷新面板发起后台重取（面板缓存先显 SWR，取回自行 repaint）。
   if (mode && mode !== 'chat') {
@@ -99,8 +261,8 @@ function setPreferredUnitMode(mode, agent = getCurrentAgentRecord()) {
 /** 自刷新面板分发表：block.type → 后台重取入口。
  *  插件块的刷新器由插件在 loadPlugin 时经 ClawHost 注册；宿主基础块的
  *  自刷新入口在此登记。 */
-function refreshVisibleWorkspacePanelData(agent = getCurrentAgentRecord()) {
-  const ui = getCurrentUnitUi(agent);
+export function refreshVisibleWorkspacePanelData(agent = window.getCurrentAgentRecord()) {
+  const ui = window.getCurrentUnitUi(agent);
   const blocks = Array.isArray(ui?.home?.blocks) ? ui.home.blocks : [];
   for (const block of blocks) {
     if (!shouldRenderBlock(block)) continue;
@@ -108,8 +270,8 @@ function refreshVisibleWorkspacePanelData(agent = getCurrentAgentRecord()) {
   }
 }
 
-function getPassiveWorkspaceSurfaceMode(agent = getCurrentAgentRecord()) {
-  const ui = getCurrentUnitUi(agent);
+export function getPassiveWorkspaceSurfaceMode(agent = window.getCurrentAgentRecord()) {
+  const ui = window.getCurrentUnitUi(agent);
   const tabs = getUnitTabs(agent);
   const nonChatTabs = tabs.filter((tab) => tab.id !== 'chat');
   if (ui?.entry && ui.entry !== 'chat' && nonChatTabs.some((tab) => tab.id === ui.entry)) {
@@ -118,10 +280,10 @@ function getPassiveWorkspaceSurfaceMode(agent = getCurrentAgentRecord()) {
   return nonChatTabs[0]?.id || 'home';
 }
 
-function getDefaultUnitMode(agent = getCurrentAgentRecord()) {
-  const ui = getCurrentUnitUi(agent);
+export function getDefaultUnitMode(agent = window.getCurrentAgentRecord()) {
+  const ui = window.getCurrentUnitUi(agent);
   if (!ui) return 'chat';
-  if (isTablessHostSurface(agent)) {
+  if (window.isTablessHostSurface(agent)) {
     if (readOnlyMode || currentRuntimeAgentId) {
       return 'chat';
     }
@@ -154,33 +316,33 @@ function getDefaultUnitMode(agent = getCurrentAgentRecord()) {
   return fallbackTab;
 }
 
-function ensureUnitMode(agent = getCurrentAgentRecord()) {
-  const ui = getCurrentUnitUi(agent);
+export function ensureUnitMode(agent = window.getCurrentAgentRecord()) {
+  const ui = window.getCurrentUnitUi(agent);
   if (!ui) {
-    currentWorkspaceTab = null;
+    setCurrentWorkspaceTab(null);
     return null;
   }
 
-  if (isTablessHostSurface(agent)) {
-    currentWorkspaceTab = (readOnlyMode || currentRuntimeAgentId || hasPendingSessionNavigation(agent))
+  if (window.isTablessHostSurface(agent)) {
+    setCurrentWorkspaceTab((readOnlyMode || currentRuntimeAgentId || window.hasPendingSessionNavigation(agent))
       ? 'chat'
-      : getPassiveWorkspaceSurfaceMode(agent);
+      : getPassiveWorkspaceSurfaceMode(agent));
     return currentWorkspaceTab;
   }
 
   if (!currentWorkspaceTab) {
-    currentWorkspaceTab = getDefaultUnitMode(agent);
+    setCurrentWorkspaceTab(getDefaultUnitMode(agent));
   }
 
   if (currentWorkspaceTab === 'chat' && !canEnterWorkspaceChat(agent)) {
-    currentWorkspaceTab = getPassiveWorkspaceSurfaceMode(agent);
+    setCurrentWorkspaceTab(getPassiveWorkspaceSurfaceMode(agent));
   }
 
   return currentWorkspaceTab;
 }
 
-function getUnitTabs(agent = getCurrentAgentRecord()) {
-  const ui = getCurrentUnitUi(agent);
+export function getUnitTabs(agent = window.getCurrentAgentRecord()) {
+  const ui = window.getCurrentUnitUi(agent);
   const tabs = Array.isArray(ui?.tabs) ? ui.tabs : [];
   return tabs
     .map((tab) => typeof tab === 'string' ? { id: tab, label: tab } : tab)
@@ -188,12 +350,12 @@ function getUnitTabs(agent = getCurrentAgentRecord()) {
 }
 
 function getUnitTabLabel(tab) {
-  if (tab?.id === 'home') return localizeWorkspaceValue(tab?.label, t('workspace_tab_welcome'));
-  if (tab?.id === 'chat') return localizeWorkspaceValue(tab?.label, t('workspace_tab_chat'));
-  return localizeWorkspaceValue(tab?.label, String(tab?.id || ''));
+  if (tab?.id === 'home') return window.localizeWorkspaceValue(tab?.label, t('workspace_tab_welcome'));
+  if (tab?.id === 'chat') return window.localizeWorkspaceValue(tab?.label, t('workspace_tab_chat'));
+  return window.localizeWorkspaceValue(tab?.label, String(tab?.id || ''));
 }
 
-function getWorkspaceSurfaceScrollKey(agent = getCurrentAgentRecord(), mode = currentWorkspaceTab) {
+function getWorkspaceSurfaceScrollKey(agent = window.getCurrentAgentRecord(), mode = currentWorkspaceTab) {
   const key = getUnitPreferenceKey(agent);
   if (!key) return '';
   const safeMode = mode || getPassiveWorkspaceSurfaceMode(agent) || 'home';
@@ -218,23 +380,23 @@ function getWorkspaceSurfaceScrollKey(agent = getCurrentAgentRecord(), mode = cu
   return [key, safeMode, scope].join('|');
 }
 
-function saveCurrentWorkspaceSurfaceScroll() {
-  const agent = getCurrentAgentRecord();
+export function saveCurrentWorkspaceSurfaceScroll() {
+  const agent = window.getCurrentAgentRecord();
   if (!agent || !shouldRenderWorkspaceSurface(agent)) return;
-  if (!container || !container.querySelector('.workspace-surface')) return;
+  if (!domRefs.container || !domRefs.container.querySelector('.workspace-surface')) return;
   const key = getWorkspaceSurfaceScrollKey(agent);
   if (!key) return;
-  workspaceSurfaceScrollCache.set(key, container.scrollTop || 0);
-  lastRenderedWorkspaceScrollKey = key;
+  appUiState.workspaceSurfaceScrollCache.set(key, domRefs.container.scrollTop || 0);
+  setLastRenderedWorkspaceScrollKey(key);
 }
 
-container.addEventListener('scroll', () => {
+domRefs.container.addEventListener('scroll', () => {
   if (workspaceSurfaceScrollSaveRaf || !shouldRenderWorkspaceSurface()
-    || !container.querySelector('.workspace-surface')) return;
-  workspaceSurfaceScrollSaveRaf = requestAnimationFrame(() => {
-    workspaceSurfaceScrollSaveRaf = 0;
+    || !domRefs.container.querySelector('.workspace-surface')) return;
+  setWorkspaceSurfaceScrollSaveRaf(requestAnimationFrame(() => {
+    setWorkspaceSurfaceScrollSaveRaf(0);
     saveCurrentWorkspaceSurfaceScroll();
-  });
+  }));
 }, { passive: true });
 
 /**
@@ -262,10 +424,10 @@ function _mergeWorkspaceSessions(primary, fallback) {
   };
 }
 
-function getRuntimeAwareAgentRecord() {
-  let hostRecord = typeof getCurrentAgentRecord === 'function' ? getCurrentAgentRecord() : null;
-  if (typeof getCurrentRuntimeRecord === 'function') {
-    const runtimeRecord = getCurrentRuntimeRecord();
+export function getRuntimeAwareAgentRecord() {
+  let hostRecord = typeof window.getCurrentAgentRecord === 'function' ? window.getCurrentAgentRecord() : null;
+  if (typeof window.getCurrentRuntimeRecord === 'function') {
+    const runtimeRecord = window.getCurrentRuntimeRecord();
     if (runtimeRecord) {
       const runtimeHasWorkspaceState = !!(
         runtimeRecord.workspace_sessions
@@ -319,7 +481,7 @@ function getRuntimeAwareAgentRecord() {
   return hostRecord;
 }
 
-function getRuntimeAwareAgentName() {
+export function getRuntimeAwareAgentName() {
   const agent = getRuntimeAwareAgentRecord();
   if (!agent) return t('active_none');
   return agent.active_workspace_display_name
@@ -341,25 +503,25 @@ function getRuntimeAwareAgentName() {
 
 // ── IM Workspace Data -> modules/im-ui.js ──
 
-function shouldRenderWorkspaceSurface(agent = getCurrentAgentRecord()) {
-  const ui = getCurrentUnitUi(agent);
+export function shouldRenderWorkspaceSurface(agent = window.getCurrentAgentRecord()) {
+  const ui = window.getCurrentUnitUi(agent);
   if (!ui) {
     return false;
   }
 
-  if (isTablessHostSurface(agent)) {
-    return !(readOnlyMode || currentRuntimeAgentId || hasPendingSessionNavigation(agent));
+  if (window.isTablessHostSurface(agent)) {
+    return !(readOnlyMode || currentRuntimeAgentId || window.hasPendingSessionNavigation(agent));
   }
 
   const mode = ensureUnitMode(agent);
   return mode && mode !== 'chat';
 }
 
-function isChatSurfaceActive(agent = getCurrentAgentRecord()) {
-  const ui = getCurrentUnitUi(agent);
+export function isChatSurfaceActive(agent = window.getCurrentAgentRecord()) {
+  const ui = window.getCurrentUnitUi(agent);
   if (!ui) return true;
-  if (isTablessHostSurface(agent)) {
-    return !!(readOnlyMode || currentRuntimeAgentId || hasPendingSessionNavigation(agent));
+  if (window.isTablessHostSurface(agent)) {
+    return !!(readOnlyMode || currentRuntimeAgentId || window.hasPendingSessionNavigation(agent));
   }
   return ensureUnitMode(agent) === 'chat';
 }
@@ -396,7 +558,7 @@ function groupAssemblyRunsByProject(agent, configs, runs) {
     if (!groups.has(key)) {
       groups.set(key, {
         id: key,
-        name: key === 'unknown' ? (currentLanguage === 'zh' ? '未归档运行' : 'Unsorted Runs') : key,
+        name: key === 'unknown' ? (getCurrentLanguage() === 'zh' ? '未归档运行' : 'Unsorted Runs') : key,
         goal: '',
         features: [],
         runs: [],
@@ -410,21 +572,21 @@ function groupAssemblyRunsByProject(agent, configs, runs) {
     .sort((left, right) => String(right.runs[0]?.updatedAt || right.updatedAt || '').localeCompare(String(left.runs[0]?.updatedAt || left.updatedAt || '')));
 }
 
-function renderFWList(agent, block, formId) {
+export function renderFWList(agent, block, formId) {
   const configs = getSavedAssemblyConfigs(agent).slice(0, 20);
   const runs = getWorkspaceSessions(agent)
     .filter(s => String(s?.formId || '') === 'assembly-form');
 
   let html = '<div class="fw">';
   html += '<div class="fw-banner"><div>';
-  html += '<div class="fw-banner-title">' + escapeHtml(currentLanguage === 'zh' ? 'Agent 工作空间' : 'Agent Workspace') + '</div>';
-  html += '<div class="fw-banner-desc">' + escapeHtml(currentLanguage === 'zh' ? '创建 Agent 项目、配置能力、编排工作流、启动测试。' : 'Create Agent projects, configure capabilities, orchestrate workflows, and launch tests.') + '</div>';
+  html += '<div class="fw-banner-title">' + escapeHtml(getCurrentLanguage() === 'zh' ? 'Agent 工作空间' : 'Agent Workspace') + '</div>';
+  html += '<div class="fw-banner-desc">' + escapeHtml(getCurrentLanguage() === 'zh' ? '创建 Agent 项目、配置能力、编排工作流、启动测试。' : 'Create Agent projects, configure capabilities, orchestrate workflows, and launch tests.') + '</div>';
   html += '</div>';
-  html += '<button class="fw-btn" data-action="fw.createNewAgent">' + escapeHtml(currentLanguage === 'zh' ? '新建 Agent' : 'New Agent') + '</button>';
+  html += '<button class="fw-btn" data-action="fw.createNewAgent">' + escapeHtml(getCurrentLanguage() === 'zh' ? '新建 Agent' : 'New Agent') + '</button>';
   html += '</div>';
 
   if (configs.length) {
-    html += '<div class="fw-section"><h3>' + escapeHtml(currentLanguage === 'zh' ? '项目' : 'Projects') + '</h3>';
+    html += '<div class="fw-section"><h3>' + escapeHtml(getCurrentLanguage() === 'zh' ? '项目' : 'Projects') + '</h3>';
     html += '<div class="fw-grid">';
     configs.forEach(item => {
       const summary = getAssemblySavedConfigSummary(agent, item);
@@ -432,38 +594,38 @@ function renderFWList(agent, block, formId) {
       html += '<div class="fw-card' + (running ? ' fw-live' : '') + '" data-prebuilt-project-agent-id="' + escapeHtml(agent.id) + '" data-prebuilt-project-id="' + escapeHtml(item.id) + '" data-action="fw.openProjectDetail" data-agent-id="' + escapeHtml(item.id) + '">';
       html += '<div class="fw-card-name">' + escapeHtml(item.name) + '</div>';
       html += '<div class="fw-card-desc">' + escapeHtml(item.goal || getAssemblyPresetLabel(item.preset) || '-') + '</div>';
-      html += '<div class="fw-card-meta"><span>' + item.features.length + (currentLanguage === 'zh' ? ' Feature' : ' Features') + '</span>';
-      if (running) html += '<span class="fw-green">' + escapeHtml(currentLanguage === 'zh' ? '运行中' : 'Running') + '</span>';
+      html += '<div class="fw-card-meta"><span>' + item.features.length + (getCurrentLanguage() === 'zh' ? ' Feature' : ' Features') + '</span>';
+      if (running) html += '<span class="fw-green">' + escapeHtml(getCurrentLanguage() === 'zh' ? '运行中' : 'Running') + '</span>';
       html += '</div>';
       html += '<div class="fw-card-act">';
-      html += '<button class="fw-btn fw-btn-primary" data-action="fw.launchConfig" data-agent-id="' + escapeHtml(item.id) + '">' + escapeHtml(currentLanguage === 'zh' ? '启动' : 'Launch') + '</button>';
-      html += '<button class="fw-btn" data-action="fw.openProjectDetail" data-agent-id="' + escapeHtml(item.id) + '">' + escapeHtml(currentLanguage === 'zh' ? '编辑' : 'Edit') + '</button>';
+      html += '<button class="fw-btn fw-btn-primary" data-action="fw.launchConfig" data-agent-id="' + escapeHtml(item.id) + '">' + escapeHtml(getCurrentLanguage() === 'zh' ? '启动' : 'Launch') + '</button>';
+      html += '<button class="fw-btn" data-action="fw.openProjectDetail" data-agent-id="' + escapeHtml(item.id) + '">' + escapeHtml(getCurrentLanguage() === 'zh' ? '编辑' : 'Edit') + '</button>';
       html += '</div></div>';
     });
     html += '</div></div>';
   } else {
-    html += '<div class="fw-section"><h3>' + escapeHtml(currentLanguage === 'zh' ? '项目' : 'Projects') + '</h3><div class="fw-empty"><div>' + escapeHtml(currentLanguage === 'zh' ? '还没有项目' : 'No projects yet') + '</div>';
-    html += '<button class="fw-btn" data-action="fw.createNewAgent">' + escapeHtml(currentLanguage === 'zh' ? '创建第一个' : 'Create first') + '</button></div></div>';
+    html += '<div class="fw-section"><h3>' + escapeHtml(getCurrentLanguage() === 'zh' ? '项目' : 'Projects') + '</h3><div class="fw-empty"><div>' + escapeHtml(getCurrentLanguage() === 'zh' ? '还没有项目' : 'No projects yet') + '</div>';
+    html += '<button class="fw-btn" data-action="fw.createNewAgent">' + escapeHtml(getCurrentLanguage() === 'zh' ? '创建第一个' : 'Create first') + '</button></div></div>';
   }
 
   if (runs.length) {
     const runGroups = groupAssemblyRunsByProject(agent, configs, runs);
-    html += '<div class="fw-section"><h3>' + escapeHtml(currentLanguage === 'zh' ? '对话记录' : 'Conversations') + '</h3><div class="fw-run-list">';
+    html += '<div class="fw-section"><h3>' + escapeHtml(getCurrentLanguage() === 'zh' ? '对话记录' : 'Conversations') + '</h3><div class="fw-run-list">';
     runGroups.forEach((group, gi) => {
       const runningCount = group.runs.filter(item => isAssemblySessionRunning(agent, item)).length;
       html += '<details class="fw-run-project' + (gi % 2 === 1 ? ' fw-run-alt' : '') + '" open>';
       html += '<summary><div class="fw-run-head"><div><div class="fw-run-title">' + escapeHtml(group.name) + '</div>';
-      html += '<div class="fw-run-meta">' + escapeHtml([runningCount ? (currentLanguage === 'zh' ? runningCount + ' 个运行中' : runningCount + ' running') : '', group.goal, group.features.length ? group.features.length + ' Feature' : ''].filter(Boolean).join(' · ')) + '</div></div>';
+      html += '<div class="fw-run-meta">' + escapeHtml([runningCount ? (getCurrentLanguage() === 'zh' ? runningCount + ' 个运行中' : runningCount + ' running') : '', group.goal, group.features.length ? group.features.length + ' Feature' : ''].filter(Boolean).join(' · ')) + '</div></div>';
       html += '<span class="fw-run-count">' + escapeHtml(String(group.runs.length)) + '</span></div></summary>';
       html += '<div class="fw-run-body">';
       group.runs.forEach(item => {
         const running = isAssemblySessionRunning(agent, item);
         html += '<div class="fw-run-item" data-prebuilt-session-agent-id="' + escapeHtml(agent.id) + '" data-prebuilt-session-id="' + escapeHtml(item.id) + '" data-ctx-role="session" data-ctx-ns="' + escapeHtml(agent.id) + '" data-ctx-id="' + escapeHtml(item.id) + '" data-ctx-variant="' + escapeHtml(isAssemblySession(item) ? 'assembly' : 'default') + '">';
         html += '<div><div class="fw-run-item-title">' + escapeHtml(item.title || item.agentName || item.id) + '</div>';
-        html += '<div class="fw-run-item-meta">' + escapeHtml([running ? (currentLanguage === 'zh' ? '运行中' : 'Running') : (currentLanguage === 'zh' ? '已停止' : 'Stopped'), formatWorkspaceDate(item.updatedAt || item.createdAt), item.openDirectory || ''].filter(Boolean).join(' · ')) + '</div></div>';
+        html += '<div class="fw-run-item-meta">' + escapeHtml([running ? (getCurrentLanguage() === 'zh' ? '运行中' : 'Running') : (getCurrentLanguage() === 'zh' ? '已停止' : 'Stopped'), formatWorkspaceDate(item.updatedAt || item.createdAt), item.openDirectory || ''].filter(Boolean).join(' · ')) + '</div></div>';
         html += '<div class="fw-card-act">';
-        html += '<button class="fw-btn fw-btn-primary" data-action="fw.resumeRun" data-agent-id="' + escapeHtml(item.id) + '">' + escapeHtml(currentLanguage === 'zh' ? '继续' : 'Continue') + '</button>';
-        if (running) html += '<button class="fw-btn" data-action="assembly.stopRuntime" data-agent-id="' + escapeHtml(item.id) + '">' + escapeHtml(currentLanguage === 'zh' ? '停止' : 'Stop') + '</button>';
+        html += '<button class="fw-btn fw-btn-primary" data-action="fw.resumeRun" data-agent-id="' + escapeHtml(item.id) + '">' + escapeHtml(getCurrentLanguage() === 'zh' ? '继续' : 'Continue') + '</button>';
+        if (running) html += '<button class="fw-btn" data-action="assembly.stopRuntime" data-agent-id="' + escapeHtml(item.id) + '">' + escapeHtml(getCurrentLanguage() === 'zh' ? '停止' : 'Stop') + '</button>';
         html += '</div></div>';
       });
       html += '</div></details>';
@@ -477,7 +639,7 @@ function renderFWList(agent, block, formId) {
   return html;
 }
 
-function renderFWDetail(agent, block, formId, st) {
+export function renderFWDetail(agent, block, formId, st) {
   // 模型预置懒加载统一走 owner 模块（model-preset-cache.js）
   ensureClawModelPresets().then(function() { fwRerender(); });
   const draft = normalizeAssemblyDraft(getWorkspaceFormDraft(agent)?.[formId] || {});
@@ -490,19 +652,19 @@ function renderFWDetail(agent, block, formId, st) {
 
   html += '<div class="fw-detail-head">';
   html += '<div class="fw-detail-nav">';
-  html += '<button class="fw-btn fw-btn-ghost fw-back-btn" title="' + escapeHtml(currentLanguage === 'zh' ? '返回项目列表' : 'Back to projects') + '" data-action="fw.backToList">&lt;</button>';
-  html += '<button class="fw-btn fw-project-switch" type="button" data-action="fw.openProjectPicker">' + escapeHtml(currentLanguage === 'zh' ? '切换项目' : 'Switch Project') + '</button>';
+  html += '<button class="fw-btn fw-btn-ghost fw-back-btn" title="' + escapeHtml(getCurrentLanguage() === 'zh' ? '返回项目列表' : 'Back to projects') + '" data-action="fw.backToList">&lt;</button>';
+  html += '<button class="fw-btn fw-project-switch" type="button" data-action="fw.openProjectPicker">' + escapeHtml(getCurrentLanguage() === 'zh' ? '切换项目' : 'Switch Project') + '</button>';
   html += '</div>';
   html += '<div class="fw-detail-toggle">';
-  html += '<button class="fw-toggle' + (section === 'features' ? ' active' : '') + '" data-action="fw.switchSection" data-section="features">' + escapeHtml(currentLanguage === 'zh' ? '通用设置' : 'General') + '</button>';
-  html += '<button class="fw-toggle' + (isConfig ? ' active' : '') + '" data-action="fw.switchSection" data-section="config">' + escapeHtml(currentLanguage === 'zh' ? '能力配置' : 'Features') + '</button>';
-  html += '<button class="fw-toggle' + (isOrchestrate ? ' active' : '') + '" data-action="fw.switchSection" data-section="orchestrate">' + escapeHtml(currentLanguage === 'zh' ? '协作蓝图' : 'Blueprint') + '</button>';
+  html += '<button class="fw-toggle' + (section === 'features' ? ' active' : '') + '" data-action="fw.switchSection" data-section="features">' + escapeHtml(getCurrentLanguage() === 'zh' ? '通用设置' : 'General') + '</button>';
+  html += '<button class="fw-toggle' + (isConfig ? ' active' : '') + '" data-action="fw.switchSection" data-section="config">' + escapeHtml(getCurrentLanguage() === 'zh' ? '能力配置' : 'Features') + '</button>';
+  html += '<button class="fw-toggle' + (isOrchestrate ? ' active' : '') + '" data-action="fw.switchSection" data-section="orchestrate">' + escapeHtml(getCurrentLanguage() === 'zh' ? '协作蓝图' : 'Blueprint') + '</button>';
   html += '</div>';
   html += '<div class="fw-detail-actions">';
   const _launchBusy = ['creating', 'installing', 'starting'].includes(String(draft.env_status || ''));
   const _launchLabel = _launchBusy
-    ? (currentLanguage === 'zh' ? '启动中...' : 'Launching...')
-    : (currentLanguage === 'zh' ? '启动' : 'Launch');
+    ? (getCurrentLanguage() === 'zh' ? '启动中...' : 'Launching...')
+    : (getCurrentLanguage() === 'zh' ? '启动' : 'Launch');
   html += '<button class="fw-btn fw-btn-primary' + (_launchBusy ? ' fw-btn-busy' : '') + '"' + (_launchBusy ? ' disabled' : '') + ' data-action="assembly.launch">' + escapeHtml(_launchLabel) + '</button>';
   html += '</div>';
   html += '</div>';
@@ -527,7 +689,7 @@ function renderFWDetail(agent, block, formId, st) {
   return html;
 }
 
-function renderFWFeatures(agent, block, formId, draft) {
+export function renderFWFeatures(agent, block, formId, draft) {
   const repository = getFeatureRepositoryData(agent, block);
   const packages = Array.isArray(repository?.packages) ? repository.packages : [];
   const selected = parseWorkspaceListField(draft.selected_features);
@@ -560,52 +722,52 @@ function renderFWFeatures(agent, block, formId, draft) {
 
   let html = '<div class="fw-cols">';
   html += '<div class="fw-left">';
-  html += '<div class="fw-group-label">' + escapeHtml(currentLanguage === 'zh' ? '基本信息' : 'General') + '</div>';
-  html += '<div class="fw-field"><label>' + escapeHtml(currentLanguage === 'zh' ? '标识' : 'ID') + '</label>';
+  html += '<div class="fw-group-label">' + escapeHtml(getCurrentLanguage() === 'zh' ? '基本信息' : 'General') + '</div>';
+  html += '<div class="fw-field"><label>' + escapeHtml(getCurrentLanguage() === 'zh' ? '标识' : 'ID') + '</label>';
   if (draft.env_created === '1') {
     html += '<input class="fw-input" value="' + escapeHtml(draft.assembly_name || '') + '" readonly>';
   } else {
     html += '<input class="fw-input" value="' + escapeHtml(draft.assembly_name || '') + '" placeholder="my-agent" data-action="assembly.draftField" data-event="input focusout" data-form-id="' + escapeHtml(formId) + '" data-field="assembly_name">';
   }
   html += '</div>';
-  html += '<div class="fw-field"><label>' + escapeHtml(currentLanguage === 'zh' ? '名称' : 'Name') + '</label>';
+  html += '<div class="fw-field"><label>' + escapeHtml(getCurrentLanguage() === 'zh' ? '名称' : 'Name') + '</label>';
   html += '<input class="fw-input" value="' + escapeHtml(draft.display_name || '') + '" placeholder="' + escapeHtml(draft.assembly_name || 'My Agent') + '" data-action="assembly.draftField" data-event="input focusout" data-form-id="' + escapeHtml(formId) + '" data-field="display_name">';
   html += '</div>';
-  html += '<div class="fw-field"><label>' + escapeHtml(currentLanguage === 'zh' ? '目标' : 'Goal') + '</label>';
-  html += '<textarea class="fw-textarea" placeholder="' + escapeHtml(currentLanguage === 'zh' ? '这个 Agent 帮用户做什么？' : 'What does this Agent do?') + '" data-action="assembly.draftField" data-event="input focusout" data-form-id="' + escapeHtml(formId) + '" data-field="goal">' + escapeHtml(draft.goal || '') + '</textarea></div>';
-  html += '<div class="fw-field"><label>' + escapeHtml(currentLanguage === 'zh' ? 'LLM 预设' : 'LLM Preset') + '</label>';
+  html += '<div class="fw-field"><label>' + escapeHtml(getCurrentLanguage() === 'zh' ? '目标' : 'Goal') + '</label>';
+  html += '<textarea class="fw-textarea" placeholder="' + escapeHtml(getCurrentLanguage() === 'zh' ? '这个 Agent 帮用户做什么？' : 'What does this Agent do?') + '" data-action="assembly.draftField" data-event="input focusout" data-form-id="' + escapeHtml(formId) + '" data-field="goal">' + escapeHtml(draft.goal || '') + '</textarea></div>';
+  html += '<div class="fw-field"><label>' + escapeHtml(getCurrentLanguage() === 'zh' ? 'LLM 预设' : 'LLM Preset') + '</label>';
   const _modelPresets = getClawModelPresets();
   html += '<select class="flow-editor-select" data-action="assembly.draftField" data-event="change focusout" data-form-id="' + escapeHtml(formId) + '" data-field="model_preset">';
-  html += '<option value="">' + escapeHtml(currentLanguage === 'zh' ? '使用全局默认模型' : 'Use global default model') + '</option>';
+  html += '<option value="">' + escapeHtml(getCurrentLanguage() === 'zh' ? '使用全局默认模型' : 'Use global default model') + '</option>';
   _modelPresets.forEach(function(p) {
     html += '<option value="' + escapeHtml(p.name || '') + '"' + (draft.model_preset === p.name ? ' selected' : '') + '>' + escapeHtml(p.name + ' (' + (p.model || '—') + ')') + '</option>';
   });
   html += '</select></div>';
-  html += '<div class="fw-field"><label>' + escapeHtml(currentLanguage === 'zh' ? '工作目录' : 'Workdir') + '</label>';
+  html += '<div class="fw-field"><label>' + escapeHtml(getCurrentLanguage() === 'zh' ? '工作目录' : 'Workdir') + '</label>';
   html += '<div style="display:flex;gap:8px;align-items:center;">';
-  html += '<input class="fw-input" style="flex:1;" value="' + escapeHtml(draft.workdir || '') + '" placeholder="' + escapeHtml(currentLanguage === 'zh' ? '留空沿用运行环境目录' : 'Use environment directory by default') + '" data-action="assembly.draftField" data-event="input focusout" data-form-id="' + escapeHtml(formId) + '" data-field="workdir">';
-  html += '<button class="fw-btn fw-btn-subtle" type="button" data-action="assembly.chooseDirectory" data-form-id="' + escapeHtml(formId) + '" data-field="workdir">' + escapeHtml(currentLanguage === 'zh' ? '选择' : 'Browse') + '</button>';
+  html += '<input class="fw-input" style="flex:1;" value="' + escapeHtml(draft.workdir || '') + '" placeholder="' + escapeHtml(getCurrentLanguage() === 'zh' ? '留空沿用运行环境目录' : 'Use environment directory by default') + '" data-action="assembly.draftField" data-event="input focusout" data-form-id="' + escapeHtml(formId) + '" data-field="workdir">';
+  html += '<button class="fw-btn fw-btn-subtle" type="button" data-action="assembly.chooseDirectory" data-form-id="' + escapeHtml(formId) + '" data-field="workdir">' + escapeHtml(getCurrentLanguage() === 'zh' ? '选择' : 'Browse') + '</button>';
   html += '</div></div>';
   html += '<button class="fw-prompt-card" type="button" data-action="fw.openPromptEditor">';
-  html += '<span class="fw-prompt-title">' + escapeHtml(currentLanguage === 'zh' ? '系统提示词' : 'System Prompt') + '</span>';
-  html += '<span class="fw-prompt-preview">' + escapeHtml(draft.custom_system_prompt || (currentLanguage === 'zh' ? '使用自动生成的系统提示词。点击打开大编辑器。' : 'Use the generated system prompt. Click to open the large editor.')) + '</span>';
+  html += '<span class="fw-prompt-title">' + escapeHtml(getCurrentLanguage() === 'zh' ? '系统提示词' : 'System Prompt') + '</span>';
+  html += '<span class="fw-prompt-preview">' + escapeHtml(draft.custom_system_prompt || (getCurrentLanguage() === 'zh' ? '使用自动生成的系统提示词。点击打开大编辑器。' : 'Use the generated system prompt. Click to open the large editor.')) + '</span>';
   html += '</button>';
-  html += '<div class="fw-group-label">' + escapeHtml(currentLanguage === 'zh' ? '运行环境' : 'Environment') + '</div>';
+  html += '<div class="fw-group-label">' + escapeHtml(getCurrentLanguage() === 'zh' ? '运行环境' : 'Environment') + '</div>';
   html += '<div class="fw-env">';
   html += '<div class="fw-env-head"><span class="fw-dot" style="background:' + escapeHtml(getAssemblyEnvironmentStatusTone(env.status)) + '"></span><span class="fw-env-status">' + escapeHtml(getAssemblyEnvironmentStatusLabel(env.status)) + '</span></div>';
   if (env.status === 'ready') {
     if (env.directory) html += '<div class="fw-env-dir"><code>' + escapeHtml(env.directory) + '</code></div>';
-    html += '<div class="fw-env-note">' + escapeHtml(currentLanguage === 'zh' ? '环境已就绪，可直接启动。' : 'Environment ready. You can launch directly.') + '</div>';
-    html += '<div class="fw-env-actions"><button class="fw-btn fw-btn-subtle" data-action="assembly.ensureEnv" data-rerender="300">' + escapeHtml(currentLanguage === 'zh' ? '重建环境' : 'Rebuild') + '</button></div>';
+    html += '<div class="fw-env-note">' + escapeHtml(getCurrentLanguage() === 'zh' ? '环境已就绪，可直接启动。' : 'Environment ready. You can launch directly.') + '</div>';
+    html += '<div class="fw-env-actions"><button class="fw-btn fw-btn-subtle" data-action="assembly.ensureEnv" data-rerender="300">' + escapeHtml(getCurrentLanguage() === 'zh' ? '重建环境' : 'Rebuild') + '</button></div>';
   } else if (env.status === 'missing' || env.status === 'missing-name') {
     html += '<div class="fw-env-note">' + escapeHtml(env.status === 'missing-name'
-      ? (currentLanguage === 'zh' ? '填写标识后创建运行环境。' : 'Set an ID first, then create the environment.')
-      : (currentLanguage === 'zh' ? '尚未创建运行环境，首次启动前需要准备。' : 'No runtime environment yet. Create one before launch.')) + '</div>';
-    html += '<div class="fw-env-actions"><button class="fw-btn fw-btn-primary" data-action="assembly.ensureEnv" data-rerender="300"' + (env.status === 'missing-name' ? ' disabled' : '') + '>' + escapeHtml(currentLanguage === 'zh' ? '创建环境' : 'Create') + '</button></div>';
+      ? (getCurrentLanguage() === 'zh' ? '填写标识后创建运行环境。' : 'Set an ID first, then create the environment.')
+      : (getCurrentLanguage() === 'zh' ? '尚未创建运行环境，首次启动前需要准备。' : 'No runtime environment yet. Create one before launch.')) + '</div>';
+    html += '<div class="fw-env-actions"><button class="fw-btn fw-btn-primary" data-action="assembly.ensureEnv" data-rerender="300"' + (env.status === 'missing-name' ? ' disabled' : '') + '>' + escapeHtml(getCurrentLanguage() === 'zh' ? '创建环境' : 'Create') + '</button></div>';
   } else if (env.status === 'stale') {
     if (env.directory) html += '<div class="fw-env-dir"><code>' + escapeHtml(env.directory) + '</code></div>';
-    html += '<div class="fw-env-note">' + escapeHtml(env.message || (currentLanguage === 'zh' ? '能力配置已变更，需要更新环境。' : 'Capabilities changed. Update the environment to match.')) + '</div>';
-    html += '<div class="fw-env-actions"><button class="fw-btn fw-btn-accent" data-action="assembly.ensureEnv" data-rerender="300">' + escapeHtml(currentLanguage === 'zh' ? '更新环境' : 'Update') + '</button></div>';
+    html += '<div class="fw-env-note">' + escapeHtml(env.message || (getCurrentLanguage() === 'zh' ? '能力配置已变更，需要更新环境。' : 'Capabilities changed. Update the environment to match.')) + '</div>';
+    html += '<div class="fw-env-actions"><button class="fw-btn fw-btn-accent" data-action="assembly.ensureEnv" data-rerender="300">' + escapeHtml(getCurrentLanguage() === 'zh' ? '更新环境' : 'Update') + '</button></div>';
   } else {
     if (env.directory) html += '<div class="fw-env-dir"><code>' + escapeHtml(env.directory) + '</code></div>';
     if (env.message) html += '<div class="fw-env-note">' + escapeHtml(env.message) + '</div>';
@@ -617,23 +779,23 @@ function renderFWFeatures(agent, block, formId, draft) {
   html += '<div class="fw-feat-toolbar">';
   html += '<div class="fw-feat-tabs">';
   [
-    ['all', currentLanguage === 'zh' ? '全部' : 'All', packages.length],
-    ['mounted', currentLanguage === 'zh' ? '已挂载' : 'Mounted', selected.length],
-    ['official', currentLanguage === 'zh' ? '官方' : 'Official', officialCount],
-    ['custom', currentLanguage === 'zh' ? '自定义' : 'Custom', customCount],
+    ['all', getCurrentLanguage() === 'zh' ? '全部' : 'All', packages.length],
+    ['mounted', getCurrentLanguage() === 'zh' ? '已挂载' : 'Mounted', selected.length],
+    ['official', getCurrentLanguage() === 'zh' ? '官方' : 'Official', officialCount],
+    ['custom', getCurrentLanguage() === 'zh' ? '自定义' : 'Custom', customCount],
   ].forEach(tab => {
     html += '<button class="fw-feat-tab' + (sourceFilter === tab[0] ? ' active' : '') + '" type="button" data-action="fw.setFeatureFilter" data-form-id="' + escapeHtml(formId) + '" data-filter="' + escapeHtml(tab[0]) + '">' + escapeHtml(tab[1] + ' ' + tab[2]) + '</button>';
   });
   html += '</div>';
-  html += '<input class="fw-feat-search" value="' + escapeHtml(searchValue) + '" placeholder="' + escapeHtml(currentLanguage === 'zh' ? '搜索 Feature' : 'Search Features') + '" data-action="fw.featureSearch" data-event="input focusout" data-form-id="' + escapeHtml(formId) + '">';
-  html += '<button class="fw-btn" type="button" data-action="fw.openFeatureImport" data-form-id="' + escapeHtml(formId) + '">' + escapeHtml(currentLanguage === 'zh' ? '上传 tgz' : 'Upload tgz') + '</button>';
+  html += '<input class="fw-feat-search" value="' + escapeHtml(searchValue) + '" placeholder="' + escapeHtml(getCurrentLanguage() === 'zh' ? '搜索 Feature' : 'Search Features') + '" data-action="fw.featureSearch" data-event="input focusout" data-form-id="' + escapeHtml(formId) + '">';
+  html += '<button class="fw-btn" type="button" data-action="fw.openFeatureImport" data-form-id="' + escapeHtml(formId) + '">' + escapeHtml(getCurrentLanguage() === 'zh' ? '上传 tgz' : 'Upload tgz') + '</button>';
   html += '</div>';
-  html += '<div class="fw-feat-head" data-fw-feature-count data-total="' + escapeHtml(String(sourcePackages.length)) + '" data-mounted="' + escapeHtml(String(selected.length)) + '">' + escapeHtml((currentLanguage === 'zh' ? '当前显示 ' : 'Showing ') + visiblePackages.length + ' / ' + sourcePackages.length + (currentLanguage === 'zh' ? `，已挂载 ${selected.length}` : `, mounted ${selected.length}`)) + '</div>';
+  html += '<div class="fw-feat-head" data-fw-feature-count data-total="' + escapeHtml(String(sourcePackages.length)) + '" data-mounted="' + escapeHtml(String(selected.length)) + '">' + escapeHtml((getCurrentLanguage() === 'zh' ? '当前显示 ' : 'Showing ') + visiblePackages.length + ' / ' + sourcePackages.length + (getCurrentLanguage() === 'zh' ? `，已挂载 ${selected.length}` : `, mounted ${selected.length}`)) + '</div>';
   html += '<div class="fw-feat-list">';
   if (!packages.length) {
-    html += '<div style="padding:20px;color:var(--text-secondary);font-size:13px;">' + escapeHtml(currentLanguage === 'zh' ? '插件仓库加载中...' : 'Loading plugins...') + '</div>';
+    html += '<div style="padding:20px;color:var(--text-secondary);font-size:13px;">' + escapeHtml(getCurrentLanguage() === 'zh' ? '插件仓库加载中...' : 'Loading plugins...') + '</div>';
   } else if (!sourcePackages.length) {
-    html += '<div style="padding:20px;color:var(--text-secondary);font-size:13px;">' + escapeHtml(currentLanguage === 'zh' ? '没有匹配的 Feature。' : 'No matching Features.') + '</div>';
+    html += '<div style="padding:20px;color:var(--text-secondary);font-size:13px;">' + escapeHtml(getCurrentLanguage() === 'zh' ? '没有匹配的 Feature。' : 'No matching Features.') + '</div>';
   } else {
     sourcePackages.forEach(pkg => {
       const token = pkg.packageName || pkg.name || pkg.id || '';
@@ -644,15 +806,15 @@ function renderFWFeatures(agent, block, formId, draft) {
       const matched = !searchQuery || searchText.toLowerCase().includes(searchQuery);
       html += '<div class="fw-feat' + (enabled ? ' on' : '') + '" data-fw-feature-search="' + escapeHtml(searchText) + '" data-action="fw.toggleFeature" data-form-id="' + escapeHtml(formId) + '" data-token="' + escapeHtml(token) + '"' + (matched ? '' : ' hidden') + '>';
       html += '<div class="fw-feat-top"><div class="fw-feat-name">' + escapeHtml(shortName) + '</div>';
-      html += '<span class="fw-feat-badge mount">' + escapeHtml(enabled ? (currentLanguage === 'zh' ? '已挂载' : 'Mounted') : (currentLanguage === 'zh' ? '未挂载' : 'Off')) + '</span></div>';
-      html += '<div class="fw-feat-desc">' + escapeHtml(pkg.description || (currentLanguage === 'zh' ? '暂无说明。' : 'No description.')) + '</div>';
+      html += '<span class="fw-feat-badge mount">' + escapeHtml(enabled ? (getCurrentLanguage() === 'zh' ? '已挂载' : 'Mounted') : (getCurrentLanguage() === 'zh' ? '未挂载' : 'Off')) + '</span></div>';
+      html += '<div class="fw-feat-desc">' + escapeHtml(pkg.description || (getCurrentLanguage() === 'zh' ? '暂无说明。' : 'No description.')) + '</div>';
       html += '<div class="fw-feat-meta">';
-      html += '<span class="fw-feat-badge">' + escapeHtml(pkg.source === 'official' ? (currentLanguage === 'zh' ? '官方' : 'Official') : (currentLanguage === 'zh' ? '自定义' : 'Custom')) + '</span>';
+      html += '<span class="fw-feat-badge">' + escapeHtml(pkg.source === 'official' ? (getCurrentLanguage() === 'zh' ? '官方' : 'Official') : (getCurrentLanguage() === 'zh' ? '自定义' : 'Custom')) + '</span>';
       if (pkg.latestVersion || pkg.version) html += '<span class="fw-feat-badge">v' + escapeHtml(pkg.latestVersion || pkg.version) + '</span>';
       featureTypes.slice(0, 2).forEach(type => { html += '<span class="fw-feat-badge">' + escapeHtml(getFeatureTypeLabel(type)) + '</span>'; });
       html += '</div></div>';
     });
-    html += '<div data-fw-feature-empty style="padding:20px;color:var(--text-secondary);font-size:13px;"' + (visiblePackages.length ? ' hidden' : '') + '>' + escapeHtml(currentLanguage === 'zh' ? '没有匹配的 Feature。' : 'No matching Features.') + '</div>';
+    html += '<div data-fw-feature-empty style="padding:20px;color:var(--text-secondary);font-size:13px;"' + (visiblePackages.length ? ' hidden' : '') + '>' + escapeHtml(getCurrentLanguage() === 'zh' ? '没有匹配的 Feature。' : 'No matching Features.') + '</div>';
   }
   html += '</div></div></div>';
   return html;
@@ -663,8 +825,8 @@ function renderFWConfigPane(agent, block, formId, draft) {
   const packages = Array.isArray(repository?.packages) ? repository.packages : [];
   let html = '<div class="fw-config-pane">';
   html += '<div class="fw-config-hero">';
-  html += '<span class="fw-config-hero-title">' + escapeHtml(currentLanguage === 'zh' ? 'Feature 配置' : 'Feature Config') + '</span>';
-  html += '<span class="fw-config-hero-note">' + escapeHtml(currentLanguage === 'zh'
+  html += '<span class="fw-config-hero-title">' + escapeHtml(getCurrentLanguage() === 'zh' ? 'Feature 配置' : 'Feature Config') + '</span>';
+  html += '<span class="fw-config-hero-note">' + escapeHtml(getCurrentLanguage() === 'zh'
     ? '静态参数，流程节点中的 Mode 只负责切换运行时状态'
     : 'Static params. Flow modes only switch runtime state') + '</span>';
   html += '</div>';
@@ -681,41 +843,41 @@ function renderFWOrchestrate(agent, block) {
 function renderFlowWorkspaceProjectHero(agent, options = {}) {
   const draft = normalizeAssemblyDraft(getWorkspaceFormDraft(agent)?.['assembly-form'] || {});
   const name = String(draft.assembly_name || '').trim();
-  const projectName = getAssemblyDisplayName(draft) || (currentLanguage === 'zh' ? '未命名 Agent 项目' : 'Untitled Agent Project');
+  const projectName = getAssemblyDisplayName(draft) || (getCurrentLanguage() === 'zh' ? '未命名 Agent 项目' : 'Untitled Agent Project');
   const features = parseWorkspaceListField(draft.selected_features);
   const envState = getAssemblyEnvironmentState(draft);
   const sessions = getWorkspaceSessions(agent).filter((session) => String(session?.formId || '') === 'assembly-form');
   const runningCount = sessions.filter((session) => isAssemblySessionRunning(agent, session)).length;
   const graphBinding = name
     ? `${currentLanguage === 'zh' ? '编排图绑定' : 'Graph'}: ~/.agentdev/AgentDevClaw/flows/${name}/agent-flow-graph.json`
-    : (currentLanguage === 'zh' ? '先命名 Agent 后，编排图会绑定到该项目。' : 'Name the Agent first; the graph will bind to that project.');
+    : (getCurrentLanguage() === 'zh' ? '先命名 Agent 后，编排图会绑定到该项目。' : 'Name the Agent first; the graph will bind to that project.');
   const active = options.active || '';
   return [
     '<section class="flow-project-hero">',
     '<div class="flow-project-hero-main">',
-    '<div class="assembly-workbench-kicker">' + escapeHtml(currentLanguage === 'zh' ? '当前 Agent 项目' : 'Current Agent Project') + '</div>',
+    '<div class="assembly-workbench-kicker">' + escapeHtml(getCurrentLanguage() === 'zh' ? '当前 Agent 项目' : 'Current Agent Project') + '</div>',
     '<div class="flow-project-title">' + escapeHtml(projectName) + '</div>',
     '<div class="flow-project-subtitle">' + escapeHtml(graphBinding) + '</div>',
     '<div class="assembly-card-meta">',
-    renderAssemblyStatusChip(name ? (currentLanguage === 'zh' ? '已绑定项目' : 'Project Bound') : (currentLanguage === 'zh' ? '待命名' : 'Needs Name'), name ? 'var(--success-color)' : 'var(--warning-color)'),
-    renderAssemblyStatusChip(currentLanguage === 'zh' ? `${features.length} 个 Feature` : `${features.length} Features`, 'var(--text-secondary)'),
+    renderAssemblyStatusChip(name ? (getCurrentLanguage() === 'zh' ? '已绑定项目' : 'Project Bound') : (getCurrentLanguage() === 'zh' ? '待命名' : 'Needs Name'), name ? 'var(--success-color)' : 'var(--warning-color)'),
+    renderAssemblyStatusChip(getCurrentLanguage() === 'zh' ? `${features.length} 个 Feature` : `${features.length} Features`, 'var(--text-secondary)'),
     renderAssemblyStatusChip(getAssemblyEnvironmentStatusLabel(envState.status), getAssemblyEnvironmentStatusTone(envState.status)),
-    renderAssemblyStatusChip(currentLanguage === 'zh' ? `${runningCount} 个运行中` : `${runningCount} Running`, runningCount > 0 ? 'var(--success-color)' : 'var(--text-secondary)'),
+    renderAssemblyStatusChip(getCurrentLanguage() === 'zh' ? `${runningCount} 个运行中` : `${runningCount} Running`, runningCount > 0 ? 'var(--success-color)' : 'var(--text-secondary)'),
     '</div>',
     '</div>',
     '<div class="flow-project-actions">',
-    '<button class="workspace-action' + (active === 'projects' ? ' secondary' : '') + '" type="button" data-action="wsAction.showTab" data-tab="projects">' + escapeHtml(currentLanguage === 'zh' ? '项目总览' : 'Overview') + '</button>',
-    '<button class="workspace-action' + (active === 'assemble' ? ' secondary' : '') + '" type="button" data-action="wsAction.showTab" data-tab="assemble">' + escapeHtml(currentLanguage === 'zh' ? '能力配置' : 'Features') + '</button>',
-    '<button class="workspace-action' + (active === 'orchestrate' ? ' secondary' : '') + '" type="button" data-action="wsAction.showTab" data-tab="orchestrate">' + escapeHtml(currentLanguage === 'zh' ? '协作蓝图' : 'Blueprint') + '</button>',
-    '<button class="workspace-action" type="button" data-action="assembly.launch">' + escapeHtml(currentLanguage === 'zh' ? '快速运行测试' : 'Quick Test Run') + '</button>',
+    '<button class="workspace-action' + (active === 'projects' ? ' secondary' : '') + '" type="button" data-action="wsAction.showTab" data-tab="projects">' + escapeHtml(getCurrentLanguage() === 'zh' ? '项目总览' : 'Overview') + '</button>',
+    '<button class="workspace-action' + (active === 'assemble' ? ' secondary' : '') + '" type="button" data-action="wsAction.showTab" data-tab="assemble">' + escapeHtml(getCurrentLanguage() === 'zh' ? '能力配置' : 'Features') + '</button>',
+    '<button class="workspace-action' + (active === 'orchestrate' ? ' secondary' : '') + '" type="button" data-action="wsAction.showTab" data-tab="orchestrate">' + escapeHtml(getCurrentLanguage() === 'zh' ? '协作蓝图' : 'Blueprint') + '</button>',
+    '<button class="workspace-action" type="button" data-action="assembly.launch">' + escapeHtml(getCurrentLanguage() === 'zh' ? '快速运行测试' : 'Quick Test Run') + '</button>',
     '</div>',
     '</section>',
   ].join('');
 }
 
 function renderAssemblyLibraryBlock(agent, block) {
-  const title = localizeWorkspaceValue(block.title, currentLanguage === 'zh' ? 'Agent 项目' : 'Agent Projects');
-  const desc = localizeWorkspaceValue(block.description, '');
+  const title = window.localizeWorkspaceValue(block.title, getCurrentLanguage() === 'zh' ? 'Agent 项目' : 'Agent Projects');
+  const desc = window.localizeWorkspaceValue(block.description, '');
   const savedConfigs = getSavedAssemblyConfigs(agent).slice(0, 12);
   const recentRuns = getWorkspaceSessions(agent)
     .filter((session) => String(session?.formId || '') === 'assembly-form')
@@ -726,48 +888,48 @@ function renderAssemblyLibraryBlock(agent, block) {
     ? savedConfigs.map((item) => {
         const summary = getAssemblySavedConfigSummary(agent, item);
         return '<div class=”workspace-history-item”><div class=”workspace-history-main”><div class=”assembly-card-head”><div class=”assembly-card-copy”><div class=”workspace-history-title”>' + escapeHtml(item.name) + '</div><div class=”assembly-card-meta”>'
-          + renderAssemblyStatusChip(currentLanguage === 'zh' ? `${item.features.length} 个 Feature` : `${item.features.length} Features`, 'var(--text-secondary)')
+          + renderAssemblyStatusChip(getCurrentLanguage() === 'zh' ? `${item.features.length} 个 Feature` : `${item.features.length} Features`, 'var(--text-secondary)')
           + renderAssemblyStatusChip(summary.runningCount > 0
-            ? (currentLanguage === 'zh' ? `${summary.runningCount} 个运行中实例` : `${summary.runningCount} Running`)
-            : (currentLanguage === 'zh' ? '当前无运行实例' : 'No Running Instance'),
+            ? (getCurrentLanguage() === 'zh' ? `${summary.runningCount} 个运行中实例` : `${summary.runningCount} Running`)
+            : (getCurrentLanguage() === 'zh' ? '当前无运行实例' : 'No Running Instance'),
           summary.runningCount > 0 ? 'var(--success-color)' : 'var(--text-secondary)')
           + '</div></div></div><div class=”workspace-history-preview”>' + escapeHtml(item.goal || getAssemblyPresetLabel(item.preset)) + '</div><div class=”workspace-history-meta”>' + escapeHtml([
             item.updatedAt ? new Date(item.updatedAt).toLocaleString() : '',
             summary.sessionCount > 0
-              ? (currentLanguage === 'zh' ? `共 ${summary.sessionCount} 次实例记录` : `${summary.sessionCount} instance record(s)`)
-              : (currentLanguage === 'zh' ? '尚未启动过实例' : 'No instances launched yet'),
+              ? (getCurrentLanguage() === 'zh' ? `共 ${summary.sessionCount} 次实例记录` : `${summary.sessionCount} instance record(s)`)
+              : (getCurrentLanguage() === 'zh' ? '尚未启动过实例' : 'No instances launched yet'),
           ].filter(Boolean).join(' · ')) + '</div></div><div class=”workspace-actions stacked”><button class=”workspace-action” type=”button” onclick=”window.loadSavedAssemblyConfig(&quot;' + escapeHtml(item.id) + '&quot;)”>' + escapeHtml(getRepoLocaleText('编辑配置', 'Edit Setup')) + '</button><button class=”workspace-action secondary” type=”button” onclick=”window.launchAssemblyConfig(&quot;' + escapeHtml(item.id) + '&quot;)”>' + escapeHtml(getRepoLocaleText('启动实例', 'Launch Instance')) + '</button><button class=”workspace-action secondary” type=”button” onclick=”window.deleteSavedAssemblyConfig(&quot;' + escapeHtml(item.id) + '&quot;)”>' + escapeHtml(getRepoLocaleText('删除', 'Delete')) + '</button></div></div>';
       }).join('')
-    : '<div class=”assembly-empty-note”>' + escapeHtml(currentLanguage === 'zh' ? '还没有 Agent 项目。点击”新建 Agent 项目”，命名后就会绑定一张编排图。' : 'No Agent projects yet. Create one, name it, and a graph will bind to it.') + '</div>';
+    : '<div class=”assembly-empty-note”>' + escapeHtml(getCurrentLanguage() === 'zh' ? '还没有 Agent 项目。点击”新建 Agent 项目”，命名后就会绑定一张编排图。' : 'No Agent projects yet. Create one, name it, and a graph will bind to it.') + '</div>';
   const recentRunHtml = recentRuns.length > 0
     ? recentRuns.map((item) => {
         const status = getAssemblySessionStatus(agent, item);
         const running = isAssemblySessionRunning(agent, item);
         const isCurrent = activeSessionId && item.id === activeSessionId;
-        return '<div class="workspace-history-item" data-prebuilt-session-agent-id="' + escapeHtml(agent.id) + '" data-prebuilt-session-id="' + escapeHtml(item.id) + '" data-ctx-role="session" data-ctx-ns="' + escapeHtml(agent.id) + '" data-ctx-id="' + escapeHtml(item.id) + '" data-ctx-variant="' + escapeHtml(isAssemblySession(item) ? 'assembly' : 'default') + '"><div class="workspace-history-main"><div class="assembly-card-head"><div class="assembly-card-copy"><div class="workspace-history-title">' + escapeHtml(item.agentName || item.title || item.id) + (isCurrent ? ' <span class="workspace-history-active">' + escapeHtml(currentLanguage === 'zh' ? '当前' : 'Current') + '</span>' : '') + '</div><div class="assembly-card-meta">'
+        return '<div class="workspace-history-item" data-prebuilt-session-agent-id="' + escapeHtml(agent.id) + '" data-prebuilt-session-id="' + escapeHtml(item.id) + '" data-ctx-role="session" data-ctx-ns="' + escapeHtml(agent.id) + '" data-ctx-id="' + escapeHtml(item.id) + '" data-ctx-variant="' + escapeHtml(isAssemblySession(item) ? 'assembly' : 'default') + '"><div class="workspace-history-main"><div class="assembly-card-head"><div class="assembly-card-copy"><div class="workspace-history-title">' + escapeHtml(item.agentName || item.title || item.id) + (isCurrent ? ' <span class="workspace-history-active">' + escapeHtml(getCurrentLanguage() === 'zh' ? '当前' : 'Current') + '</span>' : '') + '</div><div class="assembly-card-meta">'
           + renderAssemblyStatusChip(status.label, status.tone)
-          + renderAssemblyStatusChip(currentLanguage === 'zh' ? '运行实例' : 'Runtime Instance', 'var(--text-secondary)')
+          + renderAssemblyStatusChip(getCurrentLanguage() === 'zh' ? '运行实例' : 'Runtime Instance', 'var(--text-secondary)')
           + '</div></div></div><div class=”workspace-history-preview”>' + escapeHtml(item.preview || item.goal || item.agentName || '') + '</div><div class=”workspace-history-meta”>' + escapeHtml([item.createdAt ? new Date(item.createdAt).toLocaleString() : '', item.openDirectory || ''].filter(Boolean).join(' · ')) + '</div></div><div class=”workspace-actions stacked”><button class=”workspace-action” type=”button” onclick=”window.launchSavedAssemblyRun(&quot;' + escapeHtml(item.id) + '&quot;)”>' + escapeHtml(getRepoLocaleText('继续聊天', 'Continue Chat')) + '</button><button class=”workspace-action secondary” type=”button” onclick=”window.loadAssemblySessionIntoDraft(&quot;' + escapeHtml(item.id) + '&quot;)”>' + escapeHtml(getRepoLocaleText('回到编辑', 'Back To Editor')) + '</button>' + (running ? '<button class=”workspace-action secondary” type=”button” onclick=”window.stopAssemblySessionRuntime(&quot;' + escapeHtml(item.id) + '&quot;)”>' + escapeHtml(getRepoLocaleText('关闭实例', 'Stop Instance')) + '</button>' : '') + '<button class=”workspace-action secondary” type=”button” onclick=”window.deleteAssemblySessionRecord(&quot;' + escapeHtml(item.id) + '&quot;)”>' + escapeHtml(getRepoLocaleText('删除记录', 'Delete Record')) + '</button></div></div>';
       }).join('')
-    : '<div class=”assembly-empty-note”>' + escapeHtml(currentLanguage === 'zh' ? '还没有启动过测试实例。' : 'No test runtime instances launched yet.') + '</div>';
+    : '<div class=”assembly-empty-note”>' + escapeHtml(getCurrentLanguage() === 'zh' ? '还没有启动过测试实例。' : 'No test runtime instances launched yet.') + '</div>';
 
   return [
     '<div class=”assembly-flow”>',
     renderFlowWorkspaceProjectHero(agent, { active: 'my-chatbots' }),
     '<section class=”assembly-intro compact”>',
-    '<div class=”workspace-section-title”>' + escapeHtml(currentLanguage === 'zh' ? '项目管理与快速测试' : 'Project Management And Quick Testing') + '</div>',
-    '<div class=”assembly-workbench-note”>' + escapeHtml(desc || (currentLanguage === 'zh'
+    '<div class=”workspace-section-title”>' + escapeHtml(getCurrentLanguage() === 'zh' ? '项目管理与快速测试' : 'Project Management And Quick Testing') + '</div>',
+    '<div class=”assembly-workbench-note”>' + escapeHtml(desc || (getCurrentLanguage() === 'zh'
       ? '这里先回答三个问题：正在编辑谁、它绑定哪张编排图、有没有可运行实例。配置、编排图和运行时都围绕当前 Agent 项目展开。'
       : 'This view answers three things first: who you are editing, which graph is bound, and whether a runtime exists. Setup, graph, and runtime all revolve around the current Agent project.')) + '</div>',
     '<div class=”assembly-history-actions”>',
-    '<button class=”workspace-action” type=”button” onclick=”window.resetAssemblyDraft()”>' + escapeHtml(currentLanguage === 'zh' ? '新建 Agent 项目' : 'New Agent Project') + '</button>',
-    '<button class=”workspace-action secondary” type=”button” onclick=”window.runWorkspaceAction(JSON.stringify({type: \'show_workspace_tab\', tab: \'assembly\'}))”>' + escapeHtml(currentLanguage === 'zh' ? '配置能力' : 'Configure Capabilities') + '</button>',
-    '<button class=”workspace-action secondary” type=”button” onclick=”window.runWorkspaceAction(JSON.stringify({type: \'show_workspace_tab\', tab: \'flows\'}))”>' + escapeHtml(currentLanguage === 'zh' ? '打开编排图' : 'Open Graph') + '</button>',
+    '<button class=”workspace-action” type=”button” onclick=”window.resetAssemblyDraft()”>' + escapeHtml(getCurrentLanguage() === 'zh' ? '新建 Agent 项目' : 'New Agent Project') + '</button>',
+    '<button class=”workspace-action secondary” type=”button” onclick=”window.runWorkspaceAction(JSON.stringify({type: \'show_workspace_tab\', tab: \'assembly\'}))”>' + escapeHtml(getCurrentLanguage() === 'zh' ? '配置能力' : 'Configure Capabilities') + '</button>',
+    '<button class=”workspace-action secondary” type=”button” onclick=”window.runWorkspaceAction(JSON.stringify({type: \'show_workspace_tab\', tab: \'flows\'}))”>' + escapeHtml(getCurrentLanguage() === 'zh' ? '打开编排图' : 'Open Graph') + '</button>',
     '</div>',
     '</section>',
     '<section class=”assembly-library-stack”>',
-    '<div class=”assembly-history-card assembly-library-card”><div class=”assembly-card-title”>' + escapeHtml(currentLanguage === 'zh' ? 'Agent 项目配置' : 'Agent Project Setups') + '</div><div class=”assembly-card-body”>' + escapeHtml(currentLanguage === 'zh' ? '每个配置代表一个 Agent 项目：身份、Feature、环境和唯一编排图都围绕它组织。' : 'Each setup is an Agent project: identity, Features, environment, and the unique graph are organized around it.') + '</div>' + savedConfigHtml + '</div>',
-    '<div class=”assembly-history-card assembly-library-card”><div class=”assembly-card-title”>' + escapeHtml(currentLanguage === 'zh' ? '运行中的测试实例 / 最近会话' : 'Running Test Instances / Recent Sessions') + '</div><div class=”assembly-card-body”>' + escapeHtml(currentLanguage === 'zh' ? '这些实例会按对应 Agent 项目读取 Feature 配置和绑定编排图。' : 'These instances load the corresponding Agent project Feature setup and bound graph.') + '</div>' + recentRunHtml + '</div>',
+    '<div class=”assembly-history-card assembly-library-card”><div class=”assembly-card-title”>' + escapeHtml(getCurrentLanguage() === 'zh' ? 'Agent 项目配置' : 'Agent Project Setups') + '</div><div class=”assembly-card-body”>' + escapeHtml(getCurrentLanguage() === 'zh' ? '每个配置代表一个 Agent 项目：身份、Feature、环境和唯一编排图都围绕它组织。' : 'Each setup is an Agent project: identity, Features, environment, and the unique graph are organized around it.') + '</div>' + savedConfigHtml + '</div>',
+    '<div class=”assembly-history-card assembly-library-card”><div class=”assembly-card-title”>' + escapeHtml(getCurrentLanguage() === 'zh' ? '运行中的测试实例 / 最近会话' : 'Running Test Instances / Recent Sessions') + '</div><div class=”assembly-card-body”>' + escapeHtml(getCurrentLanguage() === 'zh' ? '这些实例会按对应 Agent 项目读取 Feature 配置和绑定编排图。' : 'These instances load the corresponding Agent project Feature setup and bound graph.') + '</div>' + recentRunHtml + '</div>',
     '</section>',
     '</div>',
   ].join('');
@@ -778,7 +940,7 @@ function renderAssemblyStageHeader(formId, activeStage, stageKey, index, summary
     '<button class="assembly-stage-header" type="button" data-action="assembly.toggleStage" data-form-id="' + escapeHtml(formId) + '" data-stage="' + escapeHtml(stageKey) + '">',
     '<span class="assembly-stage-number">' + escapeHtml(String(index)) + '</span>',
     '<span><div class="assembly-stage-title">' + escapeHtml(getAssemblyStageLabel(stageKey)) + '</div><div class="assembly-stage-summary">' + escapeHtml(summary) + '</div></span>',
-    '<span class="assembly-stage-indicator">' + escapeHtml(activeStage === stageKey ? (currentLanguage === 'zh' ? '当前阶段' : 'Current Step') : (currentLanguage === 'zh' ? '展开' : 'Expand')) + '</span>',
+    '<span class="assembly-stage-indicator">' + escapeHtml(activeStage === stageKey ? (getCurrentLanguage() === 'zh' ? '当前阶段' : 'Current Step') : (getCurrentLanguage() === 'zh' ? '展开' : 'Expand')) + '</span>',
     '</button>',
   ].join('');
 }
@@ -819,9 +981,9 @@ function renderAssemblyFeatureCards(featuredPackages, selectedFeatures, formId, 
   }).join('');
 }
 
-function renderAssemblyWorkbenchStageFlow(agent, block) {
-  const title = localizeWorkspaceValue(block.title, currentLanguage === 'zh' ? 'Agent 装配台' : 'Agent Assembly Workbench');
-  const desc = localizeWorkspaceValue(block.description, '');
+export function renderAssemblyWorkbenchStageFlow(agent, block) {
+  const title = window.localizeWorkspaceValue(block.title, getCurrentLanguage() === 'zh' ? 'Agent 装配台' : 'Agent Assembly Workbench');
+  const desc = window.localizeWorkspaceValue(block.description, '');
   const repository = getFeatureRepositoryData(agent, block);
   const packages = Array.isArray(repository?.packages) ? repository.packages : [];
   const formId = String(block?.assemblySelection?.formId || 'assembly-form');
@@ -879,26 +1041,26 @@ function renderAssemblyWorkbenchStageFlow(agent, block) {
     .slice(0, 6);
   const generatedPrompt = buildAssemblyGeneratedPrompt(draft, packages);
   const effectivePrompt = getAssemblyPromptValue(draft, packages);
-  const assemblyName = getAssemblyDisplayName(draft) || (currentLanguage === 'zh' ? '未命名 Agent' : 'Untitled Agent');
+  const assemblyName = getAssemblyDisplayName(draft) || (getCurrentLanguage() === 'zh' ? '未命名 Agent' : 'Untitled Agent');
   const goalSummary = String(draft.goal || '').trim();
   const selectedFeatureChips = selectedFeatures.length > 0
     ? selectedFeatures.map((item) => '<span class="workspace-tag">' + escapeHtml(getAssemblyFeatureLabel(item, packages)) + '</span>').join('')
-    : '<span class="workspace-tag">' + escapeHtml(currentLanguage === 'zh' ? '还没有启用 Feature' : 'No features enabled yet') + '</span>';
+    : '<span class="workspace-tag">' + escapeHtml(getCurrentLanguage() === 'zh' ? '还没有启用 Feature' : 'No features enabled yet') + '</span>';
   const selectedToolkitChips = selectedToolkits.length > 0
     ? selectedToolkits.map((item) => '<span class="workspace-tag">' + escapeHtml(item) + '</span>').join('')
-    : '<span class="workspace-tag">' + escapeHtml(currentLanguage === 'zh' ? '还没有选择套件' : 'No bundles selected yet') + '</span>';
+    : '<span class="workspace-tag">' + escapeHtml(getCurrentLanguage() === 'zh' ? '还没有选择套件' : 'No bundles selected yet') + '</span>';
   const savedSetupExists = !!getSavedAssemblyConfigs(agent).find((item) => item.id === assemblyName);
   const editorMode = getAssemblyEditorMode(draft, savedSetupExists);
   const goalStageSummary = [
     assemblyName,
-    goalSummary || (currentLanguage === 'zh' ? '还没有写主要目标' : 'No goal yet'),
+    goalSummary || (getCurrentLanguage() === 'zh' ? '还没有写主要目标' : 'No goal yet'),
   ].filter(Boolean).join(' | ');
   const capabilityStageSummary = [
     getAssemblyPresetLabel(preset),
-    currentLanguage === 'zh' ? `${selectedFeatures.length} 个 Feature 已启用` : `${selectedFeatures.length} features enabled`,
-    selectedToolkits.length > 0 ? (currentLanguage === 'zh' ? `${selectedToolkits.length} 个套件` : `${selectedToolkits.length} bundles`) : '',
+    getCurrentLanguage() === 'zh' ? `${selectedFeatures.length} 个 Feature 已启用` : `${selectedFeatures.length} features enabled`,
+    selectedToolkits.length > 0 ? (getCurrentLanguage() === 'zh' ? `${selectedToolkits.length} 个套件` : `${selectedToolkits.length} bundles`) : '',
   ].filter(Boolean).join(' | ');
-  const reviewStageSummary = currentLanguage === 'zh'
+  const reviewStageSummary = getCurrentLanguage() === 'zh'
     ? '核对当前配置，然后启动'
     : 'Review the current setup, then launch';
   const envState = getAssemblyEnvironmentState(draft);
@@ -909,7 +1071,7 @@ function renderAssemblyWorkbenchStageFlow(agent, block) {
   const envStatusTone = getAssemblyEnvironmentStatusTone(envStatus);
   const envStatusMessage = envState.message
     || (envStatus === 'stale'
-      ? (currentLanguage === 'zh'
+      ? (getCurrentLanguage() === 'zh'
         ? '当前名称与上次配置的环境不一致，需要重新配置环境目录。'
         : 'The current name no longer matches the configured environment. Reconfigure the environment directory.')
       : '');
@@ -921,7 +1083,7 @@ function renderAssemblyWorkbenchStageFlow(agent, block) {
     '    tts/',
     '  CLAUDE.md',
   ].join('\n');
-  const environmentStageSummary = currentLanguage === 'zh'
+  const environmentStageSummary = getCurrentLanguage() === 'zh'
     ? (envDir ? `${envStatusLabel}: ${envDir}` : '需要先填写 Agent 名称')
     : (envDir ? `${envStatusLabel}: ${envDir}` : 'Agent name required');
   const runningInstancesForDraft = recentRuns.filter((session) => (
@@ -930,13 +1092,13 @@ function renderAssemblyWorkbenchStageFlow(agent, block) {
   )).length;
   const switcherValue = editorMode === 'editing-saved' ? assemblyName : '__new__';
   const switcherOptions = [
-    '<option value="__new__"' + (switcherValue === '__new__' ? ' selected' : '') + '>' + escapeHtml(currentLanguage === 'zh' ? '新建配置' : 'New Setup') + '</option>',
+    '<option value="__new__"' + (switcherValue === '__new__' ? ' selected' : '') + '>' + escapeHtml(getCurrentLanguage() === 'zh' ? '新建配置' : 'New Setup') + '</option>',
     ...savedConfigs.map((item) => '<option value="' + escapeHtml(item.id) + '"' + (switcherValue === item.id ? ' selected' : '') + '>' + escapeHtml(item.name) + '</option>'),
   ].join('');
   const targetListHtml = [
     '<button class="assembly-target-item' + (editorMode !== 'editing-saved' ? ' active' : '') + '" type="button" data-action="assembly.switchEditingTarget" data-target-id="__new__">',
-    '<span class="assembly-target-item-title">' + escapeHtml(currentLanguage === 'zh' ? '新建配置' : 'New Setup') + '</span>',
-    '<span class="assembly-target-item-meta">' + escapeHtml(currentLanguage === 'zh' ? '开始一个新的 chatbot 配置。' : 'Start a fresh chatbot setup.') + '</span>',
+    '<span class="assembly-target-item-title">' + escapeHtml(getCurrentLanguage() === 'zh' ? '新建配置' : 'New Setup') + '</span>',
+    '<span class="assembly-target-item-meta">' + escapeHtml(getCurrentLanguage() === 'zh' ? '开始一个新的 chatbot 配置。' : 'Start a fresh chatbot setup.') + '</span>',
     '</button>',
     ...savedConfigs.map((item) => (
       '<button class="assembly-target-item' + (switcherValue === item.id ? ' active' : '') + '" type="button" data-action="assembly.switchEditingTarget" data-target-id="' + escapeHtml(item.id) + '">' +
@@ -946,10 +1108,10 @@ function renderAssemblyWorkbenchStageFlow(agent, block) {
     )),
   ].join('');
   const stageListHtml = [
-    { key: 'goal', title: currentLanguage === 'zh' ? '目标' : 'Goal', meta: goalStageSummary || (currentLanguage === 'zh' ? '明确这个 chatbot 要解决什么问题。' : 'Define what this chatbot should do.') },
-    { key: 'capabilities', title: currentLanguage === 'zh' ? '能力' : 'Capabilities', meta: capabilityStageSummary },
-    { key: 'environment', title: currentLanguage === 'zh' ? '环境' : 'Environment', meta: environmentStageSummary },
-    { key: 'review', title: currentLanguage === 'zh' ? '启动' : 'Launch', meta: reviewStageSummary },
+    { key: 'goal', title: getCurrentLanguage() === 'zh' ? '目标' : 'Goal', meta: goalStageSummary || (getCurrentLanguage() === 'zh' ? '明确这个 chatbot 要解决什么问题。' : 'Define what this chatbot should do.') },
+    { key: 'capabilities', title: getCurrentLanguage() === 'zh' ? '能力' : 'Capabilities', meta: capabilityStageSummary },
+    { key: 'environment', title: getCurrentLanguage() === 'zh' ? '环境' : 'Environment', meta: environmentStageSummary },
+    { key: 'review', title: getCurrentLanguage() === 'zh' ? '启动' : 'Launch', meta: reviewStageSummary },
   ].map((item, index) => (
     '<button class="assembly-target-item' + (stage === item.key ? ' active' : '') + '" type="button" data-action="assembly.jumpStage" data-stage="' + escapeHtml(item.key) + '">' +
     '<span class="assembly-target-item-title">' + escapeHtml(`${index + 1}. ${item.title}`) + '</span>' +
@@ -971,18 +1133,18 @@ function renderAssemblyWorkbenchStageFlow(agent, block) {
   const bundleCards = [
     {
       key: 'web-retrieval',
-      title: currentLanguage === 'zh' ? '联网检索套件' : 'Web Retrieval',
-      body: currentLanguage === 'zh' ? 'websearch + visual + audit' : 'websearch + visual + audit',
+      title: getCurrentLanguage() === 'zh' ? '联网检索套件' : 'Web Retrieval',
+      body: getCurrentLanguage() === 'zh' ? 'websearch + visual + audit' : 'websearch + visual + audit',
     },
     {
       key: 'memory-copilot',
-      title: currentLanguage === 'zh' ? '记忆陪跑套件' : 'Memory Copilot',
-      body: currentLanguage === 'zh' ? 'memory + audit' : 'memory + audit',
+      title: getCurrentLanguage() === 'zh' ? '记忆陪跑套件' : 'Memory Copilot',
+      body: getCurrentLanguage() === 'zh' ? 'memory + audit' : 'memory + audit',
     },
     {
       key: 'dev-operator',
-      title: currentLanguage === 'zh' ? '开发执行套件' : 'Dev Operator',
-      body: currentLanguage === 'zh' ? 'shell + lsp + websearch' : 'shell + lsp + websearch',
+      title: getCurrentLanguage() === 'zh' ? '开发执行套件' : 'Dev Operator',
+      body: getCurrentLanguage() === 'zh' ? 'shell + lsp + websearch' : 'shell + lsp + websearch',
     },
   ].map((item) => [
     '<div class="assembly-bundle-card' + (bundleFilter === item.key ? ' active' : '') + '" data-action="assembly.setBundleFilter" data-form-id="' + escapeHtml(formId) + '" data-filter="' + escapeHtml(item.key) + '">',
@@ -998,41 +1160,41 @@ function renderAssemblyWorkbenchStageFlow(agent, block) {
     '<div class="assembly-flow">',
     renderFlowWorkspaceProjectHero(agent, { active: 'assemble' }),
     '<section class="assembly-intro compact">',
-    '<div class="workspace-section-title">' + escapeHtml(currentLanguage === 'zh' ? '组装当前 Agent 项目' : 'Assemble Current Agent Project') + '</div>',
-    '<div class="assembly-workbench-note">' + escapeHtml(currentLanguage === 'zh'
+    '<div class="workspace-section-title">' + escapeHtml(getCurrentLanguage() === 'zh' ? '组装当前 Agent 项目' : 'Assemble Current Agent Project') + '</div>',
+    '<div class="assembly-workbench-note">' + escapeHtml(getCurrentLanguage() === 'zh'
       ? '配置 Agent 身份、选择 Feature 能力、准备运行环境，然后启动测试。编排图与项目一对一绑定。'
       : 'Configure Agent identity, select Feature capabilities, prepare runtime environment, then test. The graph is one-to-one bound to the project.') + '</div>',
     '</section>',
     '<aside class="assembly-side-rail"><section class="assembly-quick-dock"><div class="assembly-quick-dock-main"><div class="assembly-quick-dock-copy"><div class="assembly-quick-dock-title">' + escapeHtml(editorMode === 'editing-saved'
-      ? (currentLanguage === 'zh' ? `编辑中：${assemblyName || '未命名配置'}` : `Editing: ${assemblyName || 'Untitled Setup'}`)
-      : (currentLanguage === 'zh' ? `新建中：${assemblyName || '未命名 Agent'}` : `New: ${assemblyName || 'Untitled Agent'}`)) + '</div><div class="assembly-quick-dock-meta">' + escapeHtml([
+      ? (getCurrentLanguage() === 'zh' ? `编辑中：${assemblyName || '未命名配置'}` : `Editing: ${assemblyName || 'Untitled Setup'}`)
+      : (getCurrentLanguage() === 'zh' ? `新建中：${assemblyName || '未命名 Agent'}` : `New: ${assemblyName || 'Untitled Agent'}`)) + '</div><div class="assembly-quick-dock-meta">' + escapeHtml([
         editorMode === 'editing-saved'
-          ? (currentLanguage === 'zh' ? '自动保存中' : 'Auto-saved')
-          : (currentLanguage === 'zh' ? '新建配置' : 'New Setup'),
+          ? (getCurrentLanguage() === 'zh' ? '自动保存中' : 'Auto-saved')
+          : (getCurrentLanguage() === 'zh' ? '新建配置' : 'New Setup'),
         `${currentLanguage === 'zh' ? '步骤' : 'Step'} ${stage === 'goal' ? '1' : stage === 'capabilities' ? '2' : stage === 'environment' ? '3' : '4'}`,
         envStatusLabel,
-      ].filter(Boolean).join(' · ')) + '</div></div><div class="assembly-quick-dock-actions"><button class="assembly-quick-dock-action" type="button" data-action="assembly.launch">' + escapeHtml(currentLanguage === 'zh' ? '启动' : 'Launch') + '</button><button class="assembly-quick-dock-action" type="button" data-action="assembly.toggleControlPanel">' + escapeHtml(assemblyControlPanelOpen ? (currentLanguage === 'zh' ? '收起' : 'Close') : (currentLanguage === 'zh' ? '更多' : 'More')) + '</button></div></div></section>',
-    assemblyControlPanelOpen ? '<section class="assembly-floating-panel"><div class="assembly-floating-head"><div><div class="assembly-floating-title">' + escapeHtml(editorMode === 'editing-saved'
-      ? (currentLanguage === 'zh' ? `正在编辑 ${assemblyName || '未命名配置'}` : `Editing ${assemblyName || 'Untitled Setup'}`)
-      : (currentLanguage === 'zh' ? `新建 ${assemblyName || '未命名 Agent'}` : `New ${assemblyName || 'Untitled Agent'}`)) + '</div><div class="assembly-floating-subtitle">' + escapeHtml(currentLanguage === 'zh'
+      ].filter(Boolean).join(' · ')) + '</div></div><div class="assembly-quick-dock-actions"><button class="assembly-quick-dock-action" type="button" data-action="assembly.launch">' + escapeHtml(getCurrentLanguage() === 'zh' ? '启动' : 'Launch') + '</button><button class="assembly-quick-dock-action" type="button" data-action="assembly.toggleControlPanel">' + escapeHtml(assemblyUi.assemblyControlPanelOpen ? (getCurrentLanguage() === 'zh' ? '收起' : 'Close') : (getCurrentLanguage() === 'zh' ? '更多' : 'More')) + '</button></div></div></section>',
+    assemblyUi.assemblyControlPanelOpen ? '<section class="assembly-floating-panel"><div class="assembly-floating-head"><div><div class="assembly-floating-title">' + escapeHtml(editorMode === 'editing-saved'
+      ? (getCurrentLanguage() === 'zh' ? `正在编辑 ${assemblyName || '未命名配置'}` : `Editing ${assemblyName || 'Untitled Setup'}`)
+      : (getCurrentLanguage() === 'zh' ? `新建 ${assemblyName || '未命名 Agent'}` : `New ${assemblyName || 'Untitled Agent'}`)) + '</div><div class="assembly-floating-subtitle">' + escapeHtml(getCurrentLanguage() === 'zh'
       ? '切换当前编辑对象，常用动作也放在这里。'
-      : 'Switch the current editing target here, with the most common actions close by.') + '</div></div><button class="workspace-action secondary" type="button" data-action="assembly.toggleControlPanel">' + escapeHtml(currentLanguage === 'zh' ? '关闭' : 'Close') + '</button></div><section class="assembly-editor-panel"><div class="assembly-editor-panel-title">' + escapeHtml(currentLanguage === 'zh' ? '步骤导航' : 'Step Navigation') + '</div><div class="assembly-target-list">' + stageListHtml + '</div></section><section class="assembly-editor-panel"><div class="assembly-editor-panel-title">' + escapeHtml(currentLanguage === 'zh' ? '编辑目标' : 'Editing Target') + '</div><div class="assembly-target-list">' + targetListHtml + '</div></section><div class="assembly-floating-actions"><button class="workspace-action" type="button" data-action="assembly.launch">' + escapeHtml(currentLanguage === 'zh' ? '启动实例' : 'Launch Instance') + '</button></div></section>' : '',
+      : 'Switch the current editing target here, with the most common actions close by.') + '</div></div><button class="workspace-action secondary" type="button" data-action="assembly.toggleControlPanel">' + escapeHtml(getCurrentLanguage() === 'zh' ? '关闭' : 'Close') + '</button></div><section class="assembly-editor-panel"><div class="assembly-editor-panel-title">' + escapeHtml(getCurrentLanguage() === 'zh' ? '步骤导航' : 'Step Navigation') + '</div><div class="assembly-target-list">' + stageListHtml + '</div></section><section class="assembly-editor-panel"><div class="assembly-editor-panel-title">' + escapeHtml(getCurrentLanguage() === 'zh' ? '编辑目标' : 'Editing Target') + '</div><div class="assembly-target-list">' + targetListHtml + '</div></section><div class="assembly-floating-actions"><button class="workspace-action" type="button" data-action="assembly.launch">' + escapeHtml(getCurrentLanguage() === 'zh' ? '启动实例' : 'Launch Instance') + '</button></div></section>' : '',
     '</aside>',
     '<section class="assembly-stage' + (stage === 'goal' ? ' active' : '') + '">',
     renderAssemblyStageHeader(formId, stage, 'goal', 1, goalStageSummary),
     stage === 'goal' ? [
       '<div class="assembly-stage-body">',
       '<div class="assembly-form-grid">',
-      '<label class="assembly-inline-field"><span class="assembly-inline-label">' + escapeHtml(currentLanguage === 'zh' ? '目标 Agent 名称' : 'Target Agent Name') + '</span><input class="assembly-inline-input" data-assembly-field="assembly_name" type="text" value="' + escapeHtml(String(draft.assembly_name || '')) + '" placeholder="' + escapeHtml(currentLanguage === 'zh' ? '例如 support-chatbot' : 'For example support-chatbot') + '" data-action="assembly.draftField" data-event="input focusout" data-form-id="' + escapeHtml(formId) + '" data-field="assembly_name"></label>',
-      '<label class="assembly-inline-field full"><span class="assembly-inline-label">' + escapeHtml(currentLanguage === 'zh' ? '主要目标' : 'Goal') + '</span><textarea class="assembly-inline-textarea" data-assembly-field="goal" data-action="assembly.draftField" data-event="input focusout" data-form-id="' + escapeHtml(formId) + '" data-field="goal">' + escapeHtml(String(draft.goal || '')) + '</textarea></label>',
+      '<label class="assembly-inline-field"><span class="assembly-inline-label">' + escapeHtml(getCurrentLanguage() === 'zh' ? '目标 Agent 名称' : 'Target Agent Name') + '</span><input class="assembly-inline-input" data-assembly-field="assembly_name" type="text" value="' + escapeHtml(String(draft.assembly_name || '')) + '" placeholder="' + escapeHtml(getCurrentLanguage() === 'zh' ? '例如 support-chatbot' : 'For example support-chatbot') + '" data-action="assembly.draftField" data-event="input focusout" data-form-id="' + escapeHtml(formId) + '" data-field="assembly_name"></label>',
+      '<label class="assembly-inline-field full"><span class="assembly-inline-label">' + escapeHtml(getCurrentLanguage() === 'zh' ? '主要目标' : 'Goal') + '</span><textarea class="assembly-inline-textarea" data-assembly-field="goal" data-action="assembly.draftField" data-event="input focusout" data-form-id="' + escapeHtml(formId) + '" data-field="goal">' + escapeHtml(String(draft.goal || '')) + '</textarea></label>',
       '</div>',
       '<details class="assembly-prompt-panel"' + (String(draft.advanced_prompt_open || '') === '1' ? ' open' : '') + ' data-action="assembly.promptPanelToggle" data-event="toggle" data-form-id="' + escapeHtml(formId) + '">',
-      '<summary class="assembly-card-title">' + escapeHtml(currentLanguage === 'zh' ? '高级：自定义系统提示词' : 'Advanced: Custom System Prompt') + '</summary>',
-      '<div class="assembly-workbench-note">' + escapeHtml(currentLanguage === 'zh' ? '默认会根据目标、预设和已启用 Feature 自动生成系统提示词。只有你想强行微调行为时才需要覆盖。' : 'By default the system prompt is generated from the goal, preset, and enabled features. Override it only when you need to force behavior.') + '</div>',
-      '<label class="assembly-inline-field"><span class="assembly-inline-label">' + escapeHtml(currentLanguage === 'zh' ? '自动生成版本' : 'Generated Prompt') + '</span><div class="assembly-generated-prompt">' + escapeHtml(generatedPrompt) + '</div></label>',
-      '<label class="assembly-inline-field"><span class="assembly-inline-label">' + escapeHtml(currentLanguage === 'zh' ? '自定义覆盖内容（可留空）' : 'Custom Override (Optional)') + '</span><textarea class="assembly-inline-textarea" data-assembly-field="custom_system_prompt" data-action="assembly.draftField" data-event="input focusout" data-form-id="' + escapeHtml(formId) + '" data-field="custom_system_prompt">' + escapeHtml(String(draft.custom_system_prompt || '')) + '</textarea></label>',
+      '<summary class="assembly-card-title">' + escapeHtml(getCurrentLanguage() === 'zh' ? '高级：自定义系统提示词' : 'Advanced: Custom System Prompt') + '</summary>',
+      '<div class="assembly-workbench-note">' + escapeHtml(getCurrentLanguage() === 'zh' ? '默认会根据目标、预设和已启用 Feature 自动生成系统提示词。只有你想强行微调行为时才需要覆盖。' : 'By default the system prompt is generated from the goal, preset, and enabled features. Override it only when you need to force behavior.') + '</div>',
+      '<label class="assembly-inline-field"><span class="assembly-inline-label">' + escapeHtml(getCurrentLanguage() === 'zh' ? '自动生成版本' : 'Generated Prompt') + '</span><div class="assembly-generated-prompt">' + escapeHtml(generatedPrompt) + '</div></label>',
+      '<label class="assembly-inline-field"><span class="assembly-inline-label">' + escapeHtml(getCurrentLanguage() === 'zh' ? '自定义覆盖内容（可留空）' : 'Custom Override (Optional)') + '</span><textarea class="assembly-inline-textarea" data-assembly-field="custom_system_prompt" data-action="assembly.draftField" data-event="input focusout" data-form-id="' + escapeHtml(formId) + '" data-field="custom_system_prompt">' + escapeHtml(String(draft.custom_system_prompt || '')) + '</textarea></label>',
       '</details>',
-      '<div class="assembly-stage-actions"><button class="workspace-action" type="button" data-action="assembly.setStage" data-form-id="' + escapeHtml(formId) + '" data-stage="capabilities">' + escapeHtml(currentLanguage === 'zh' ? '下一步：选择能力' : 'Next: Choose Capabilities') + '</button></div>',
+      '<div class="assembly-stage-actions"><button class="workspace-action" type="button" data-action="assembly.setStage" data-form-id="' + escapeHtml(formId) + '" data-stage="capabilities">' + escapeHtml(getCurrentLanguage() === 'zh' ? '下一步：选择能力' : 'Next: Choose Capabilities') + '</button></div>',
       '</div>',
     ].join('') : '',
     '</section>',
@@ -1041,15 +1203,15 @@ function renderAssemblyWorkbenchStageFlow(agent, block) {
     stage === 'capabilities' ? [
       '<div class="assembly-stage-body">',
       '<div class="assembly-source-tabs">',
-      '<button class="assembly-source-tab' + (sourceFilter === 'all' ? ' active' : '') + '" type="button" data-action="assembly.setSourceFilter" data-form-id="' + escapeHtml(formId) + '" data-source="all">' + escapeHtml(currentLanguage === 'zh' ? '全部' : 'All') + '</button>',
-      '<button class="assembly-source-tab' + (sourceFilter === 'preset' ? ' active' : '') + '" type="button" data-action="assembly.setSourceFilter" data-form-id="' + escapeHtml(formId) + '" data-source="preset">' + escapeHtml(currentLanguage === 'zh' ? '预设' : 'Preset') + '</button>',
-      '<button class="assembly-source-tab' + (sourceFilter === 'bundle' ? ' active' : '') + '" type="button" data-action="assembly.setSourceFilter" data-form-id="' + escapeHtml(formId) + '" data-source="bundle">' + escapeHtml(currentLanguage === 'zh' ? '套件' : 'Bundle') + '</button>',
-      '<button class="assembly-source-tab' + (sourceFilter === 'official' ? ' active' : '') + '" type="button" data-action="assembly.setSourceFilter" data-form-id="' + escapeHtml(formId) + '" data-source="official">' + escapeHtml(currentLanguage === 'zh' ? '官方' : 'Official') + '</button>',
-      '<button class="assembly-source-tab' + (sourceFilter === 'custom' ? ' active' : '') + '" type="button" data-action="assembly.setSourceFilter" data-form-id="' + escapeHtml(formId) + '" data-source="custom">' + escapeHtml(currentLanguage === 'zh' ? '自定义' : 'Custom') + '</button>',
+      '<button class="assembly-source-tab' + (sourceFilter === 'all' ? ' active' : '') + '" type="button" data-action="assembly.setSourceFilter" data-form-id="' + escapeHtml(formId) + '" data-source="all">' + escapeHtml(getCurrentLanguage() === 'zh' ? '全部' : 'All') + '</button>',
+      '<button class="assembly-source-tab' + (sourceFilter === 'preset' ? ' active' : '') + '" type="button" data-action="assembly.setSourceFilter" data-form-id="' + escapeHtml(formId) + '" data-source="preset">' + escapeHtml(getCurrentLanguage() === 'zh' ? '预设' : 'Preset') + '</button>',
+      '<button class="assembly-source-tab' + (sourceFilter === 'bundle' ? ' active' : '') + '" type="button" data-action="assembly.setSourceFilter" data-form-id="' + escapeHtml(formId) + '" data-source="bundle">' + escapeHtml(getCurrentLanguage() === 'zh' ? '套件' : 'Bundle') + '</button>',
+      '<button class="assembly-source-tab' + (sourceFilter === 'official' ? ' active' : '') + '" type="button" data-action="assembly.setSourceFilter" data-form-id="' + escapeHtml(formId) + '" data-source="official">' + escapeHtml(getCurrentLanguage() === 'zh' ? '官方' : 'Official') + '</button>',
+      '<button class="assembly-source-tab' + (sourceFilter === 'custom' ? ' active' : '') + '" type="button" data-action="assembly.setSourceFilter" data-form-id="' + escapeHtml(formId) + '" data-source="custom">' + escapeHtml(getCurrentLanguage() === 'zh' ? '自定义' : 'Custom') + '</button>',
       '</div>',
       sourceFilter === 'preset' ? [
         '<div class="assembly-workbench-grid">' + presetCards + '</div>',
-        '<div class="assembly-summary-block"><div class="assembly-summary-label">' + escapeHtml(currentLanguage === 'zh' ? '预设包含的 Feature（点击可取消）' : 'Preset Features (click to deselect)') + '</div><div class="assembly-summary-row">' + selectedFeatureChips + '</div></div>',
+        '<div class="assembly-summary-block"><div class="assembly-summary-label">' + escapeHtml(getCurrentLanguage() === 'zh' ? '预设包含的 Feature（点击可取消）' : 'Preset Features (click to deselect)') + '</div><div class="assembly-summary-row">' + selectedFeatureChips + '</div></div>',
         '<div class="assembly-feature-grid">' + featureCards + '</div>',
       ].join('') : '',
       sourceFilter === 'bundle' ? [
@@ -1058,13 +1220,13 @@ function renderAssemblyWorkbenchStageFlow(agent, block) {
       ].join('') : '',
       sourceFilter !== 'preset' && sourceFilter !== 'bundle' ? [
         '<div class="assembly-capability-topbar">',
-        '<input class="assembly-search-input" style="flex:1 1 280px;min-height:40px;" type="text" value="' + escapeHtml(String(draft.feature_query || '')) + '" placeholder="' + escapeHtml(currentLanguage === 'zh' ? '按名称、说明或标签搜索' : 'Search by name, description or tags') + '" data-action="assembly.draftField" data-event="input keydown focusout" data-form-id="' + escapeHtml(formId) + '" data-field="feature_query">',
-        '<button class="workspace-action secondary" type="button" data-action="assembly.launch">' + escapeHtml(currentLanguage === 'zh' ? '快速启动' : 'Quick Launch') + '</button>',
+        '<input class="assembly-search-input" style="flex:1 1 280px;min-height:40px;" type="text" value="' + escapeHtml(String(draft.feature_query || '')) + '" placeholder="' + escapeHtml(getCurrentLanguage() === 'zh' ? '按名称、说明或标签搜索' : 'Search by name, description or tags') + '" data-action="assembly.draftField" data-event="input keydown focusout" data-form-id="' + escapeHtml(formId) + '" data-field="feature_query">',
+        '<button class="workspace-action secondary" type="button" data-action="assembly.launch">' + escapeHtml(getCurrentLanguage() === 'zh' ? '快速启动' : 'Quick Launch') + '</button>',
         '</div>',
-        '<div class="assembly-summary-block"><div class="assembly-summary-label">' + escapeHtml(currentLanguage === 'zh' ? '当前已启用 Feature' : 'Enabled Features') + '</div><div class="assembly-summary-row">' + selectedFeatureChips + '</div></div>',
+        '<div class="assembly-summary-block"><div class="assembly-summary-label">' + escapeHtml(getCurrentLanguage() === 'zh' ? '当前已启用 Feature' : 'Enabled Features') + '</div><div class="assembly-summary-row">' + selectedFeatureChips + '</div></div>',
         '<div class="assembly-feature-grid">' + featureCards + '</div>',
       ].join('') : '',
-      '<div class="assembly-stage-actions"><button class="workspace-action secondary" type="button" data-action="assembly.setStage" data-form-id="' + escapeHtml(formId) + '" data-stage="goal">' + escapeHtml(currentLanguage === 'zh' ? '返回：修改目标' : 'Back: Edit Goal') + '</button><button class="workspace-action" type="button" data-action="assembly.setStage" data-form-id="' + escapeHtml(formId) + '" data-stage="environment">' + escapeHtml(currentLanguage === 'zh' ? '下一步：环境准备' : 'Next: Environment Setup') + '</button></div>',
+      '<div class="assembly-stage-actions"><button class="workspace-action secondary" type="button" data-action="assembly.setStage" data-form-id="' + escapeHtml(formId) + '" data-stage="goal">' + escapeHtml(getCurrentLanguage() === 'zh' ? '返回：修改目标' : 'Back: Edit Goal') + '</button><button class="workspace-action" type="button" data-action="assembly.setStage" data-form-id="' + escapeHtml(formId) + '" data-stage="environment">' + escapeHtml(getCurrentLanguage() === 'zh' ? '下一步：环境准备' : 'Next: Environment Setup') + '</button></div>',
       '</div>',
     ].join('') : '',
     '</section>',
@@ -1073,24 +1235,24 @@ function renderAssemblyWorkbenchStageFlow(agent, block) {
     stage === 'environment' ? [
       '<div class="assembly-stage-body">',
       '<div class="assembly-summary-card">',
-      '<div class="assembly-workbench-kicker">' + escapeHtml(currentLanguage === 'zh' ? 'Agent 独立工作环境' : 'Agent Workspace') + '</div>',
-      '<div class="assembly-workbench-note">' + escapeHtml(currentLanguage === 'zh'
+      '<div class="assembly-workbench-kicker">' + escapeHtml(getCurrentLanguage() === 'zh' ? 'Agent 独立工作环境' : 'Agent Workspace') + '</div>',
+      '<div class="assembly-workbench-note">' + escapeHtml(getCurrentLanguage() === 'zh'
         ? '每个 Agent 项目拥有独立的工作目录，用于存放记忆、审计日志、配置文件等运行时数据。'
         : 'Each chatbot has its own workspace directory for memory, audit logs, config files, and other runtime data.') + '</div>',
-      '<div class="assembly-summary-block"><div class="assembly-summary-label">' + escapeHtml(currentLanguage === 'zh' ? '当前状态' : 'Current Status') + '</div><div class="assembly-summary-copy"><span class="workspace-tag" style="border-color:' + escapeHtml(envStatusTone) + ';color:' + escapeHtml(envStatusTone) + ';">' + escapeHtml(envStatusLabel) + '</span></div></div>',
-      '<div class="assembly-summary-block"><div class="assembly-summary-label">' + escapeHtml(currentLanguage === 'zh' ? '环境目录' : 'Environment Directory') + '</div><div class="assembly-summary-copy"><code>' + escapeHtml(envDir || (currentLanguage === 'zh' ? '未设置' : 'Not set')) + '</code></div></div>',
-      '<div class="assembly-summary-block"><div class="assembly-summary-label">' + escapeHtml(currentLanguage === 'zh' ? '将创建的目录结构' : 'Directory Structure') + '</div><div class="assembly-summary-copy"><pre style="margin:0;white-space:pre-wrap;font-size:13px;line-height:1.5;">' + escapeHtml(envDir ? envDirPreview : (currentLanguage === 'zh' ? '请先在第一步填写 Agent 名称' : 'Please set an agent name in step 1')) + '</pre></div></div>',
+      '<div class="assembly-summary-block"><div class="assembly-summary-label">' + escapeHtml(getCurrentLanguage() === 'zh' ? '当前状态' : 'Current Status') + '</div><div class="assembly-summary-copy"><span class="workspace-tag" style="border-color:' + escapeHtml(envStatusTone) + ';color:' + escapeHtml(envStatusTone) + ';">' + escapeHtml(envStatusLabel) + '</span></div></div>',
+      '<div class="assembly-summary-block"><div class="assembly-summary-label">' + escapeHtml(getCurrentLanguage() === 'zh' ? '环境目录' : 'Environment Directory') + '</div><div class="assembly-summary-copy"><code>' + escapeHtml(envDir || (getCurrentLanguage() === 'zh' ? '未设置' : 'Not set')) + '</code></div></div>',
+      '<div class="assembly-summary-block"><div class="assembly-summary-label">' + escapeHtml(getCurrentLanguage() === 'zh' ? '将创建的目录结构' : 'Directory Structure') + '</div><div class="assembly-summary-copy"><pre style="margin:0;white-space:pre-wrap;font-size:13px;line-height:1.5;">' + escapeHtml(envDir ? envDirPreview : (getCurrentLanguage() === 'zh' ? '请先在第一步填写 Agent 名称' : 'Please set an agent name in step 1')) + '</pre></div></div>',
       envStatusMessage ? '<div class="assembly-summary-block"><div class="assembly-summary-copy" style="color:' + escapeHtml(envStatusTone) + ';">' + escapeHtml(envStatusMessage) + '</div></div>' : '',
-      '<div class="assembly-summary-block"><div class="assembly-summary-label">' + escapeHtml(currentLanguage === 'zh' ? '启动时会发生什么' : 'What Happens On Launch') + '</div><div class="assembly-summary-copy">' + escapeHtml(currentLanguage === 'zh'
+      '<div class="assembly-summary-block"><div class="assembly-summary-label">' + escapeHtml(getCurrentLanguage() === 'zh' ? '启动时会发生什么' : 'What Happens On Launch') + '</div><div class="assembly-summary-copy">' + escapeHtml(getCurrentLanguage() === 'zh'
         ? '1. 先检查并准备用户目录环境。 2. 然后在该目录执行 npm install，安装 agentdev 和你选中的 Features。 3. 最后启动 chatbot runtime。'
         : '1. Prepare the user environment directory. 2. Run npm install there for agentdev and the selected features. 3. Launch the chatbot runtime.') + '</div></div>',
       '<div class="assembly-summary-actions">',
-      '<button class="workspace-action" type="button" data-action="assembly.createEnvironment">' + escapeHtml(envState.isReady ? (currentLanguage === 'zh' ? '重新配置环境' : 'Reconfigure Environment') : (currentLanguage === 'zh' ? '创建环境' : 'Create Environment')) + '</button>',
+      '<button class="workspace-action" type="button" data-action="assembly.createEnvironment">' + escapeHtml(envState.isReady ? (getCurrentLanguage() === 'zh' ? '重新配置环境' : 'Reconfigure Environment') : (getCurrentLanguage() === 'zh' ? '创建环境' : 'Create Environment')) + '</button>',
       '</div>',
       '</div>',
       '<div class="assembly-stage-actions">',
-      '<button class="workspace-action secondary" type="button" data-action="assembly.setStage" data-form-id="' + escapeHtml(formId) + '" data-stage="capabilities">' + escapeHtml(currentLanguage === 'zh' ? '返回：修改能力' : 'Back: Edit Capabilities') + '</button>',
-      '<button class="workspace-action" type="button" data-action="assembly.setStage" data-form-id="' + escapeHtml(formId) + '" data-stage="review">' + escapeHtml(currentLanguage === 'zh' ? '下一步：确认与启动' : 'Next: Review And Launch') + '</button>',
+      '<button class="workspace-action secondary" type="button" data-action="assembly.setStage" data-form-id="' + escapeHtml(formId) + '" data-stage="capabilities">' + escapeHtml(getCurrentLanguage() === 'zh' ? '返回：修改能力' : 'Back: Edit Capabilities') + '</button>',
+      '<button class="workspace-action" type="button" data-action="assembly.setStage" data-form-id="' + escapeHtml(formId) + '" data-stage="review">' + escapeHtml(getCurrentLanguage() === 'zh' ? '下一步：确认与启动' : 'Next: Review And Launch') + '</button>',
       '</div>',
       '</div>',
     ].join('') : '',
@@ -1100,20 +1262,20 @@ function renderAssemblyWorkbenchStageFlow(agent, block) {
     stage === 'review' ? [
       '<div class="assembly-stage-body">',
       '<div class="assembly-summary-card">',
-      '<div class="assembly-workbench-kicker">' + escapeHtml(currentLanguage === 'zh' ? '你即将启动的 Agent' : 'The Agent You Are About To Launch') + '</div>',
+      '<div class="assembly-workbench-kicker">' + escapeHtml(getCurrentLanguage() === 'zh' ? '你即将启动的 Agent' : 'The Agent You Are About To Launch') + '</div>',
       '<div class="assembly-summary-title">' + escapeHtml(assemblyName) + '</div>',
-      '<div class="assembly-summary-copy">' + escapeHtml(goalSummary || (currentLanguage === 'zh' ? '还没有填写主要目标，建议至少补一句这个 Agent 要解决什么问题。' : 'No primary goal yet. Add at least one sentence describing what this agent should solve.')) + '</div>',
-      '<div class="assembly-summary-block"><div class="assembly-summary-label">' + escapeHtml(currentLanguage === 'zh' ? '预设' : 'Preset') + '</div><div class="assembly-summary-copy">' + escapeHtml(getAssemblyPresetLabel(preset)) + ' · ' + escapeHtml(getAssemblyPresetDescription(preset)) + '</div></div>',
-      '<div class="assembly-summary-block"><div class="assembly-summary-label">' + escapeHtml(currentLanguage === 'zh' ? '套件' : 'Bundles') + '</div><div class="assembly-summary-row">' + selectedToolkitChips + '</div></div>',
-      '<div class="assembly-summary-block"><div class="assembly-summary-label">' + escapeHtml(currentLanguage === 'zh' ? '已启用 Feature' : 'Enabled Features') + '</div><div class="assembly-summary-row">' + selectedFeatureChips + '</div></div>',
-      '<div class="assembly-summary-block"><div class="assembly-summary-label">' + escapeHtml(currentLanguage === 'zh' ? '环境状态' : 'Environment Status') + '</div><div class="assembly-summary-copy"><span class="workspace-tag" style="border-color:' + escapeHtml(envStatusTone) + ';color:' + escapeHtml(envStatusTone) + ';">' + escapeHtml(envStatusLabel) + '</span>' + (envDir ? ' <code>' + escapeHtml(envDir) + '</code>' : '') + '</div></div>',
+      '<div class="assembly-summary-copy">' + escapeHtml(goalSummary || (getCurrentLanguage() === 'zh' ? '还没有填写主要目标，建议至少补一句这个 Agent 要解决什么问题。' : 'No primary goal yet. Add at least one sentence describing what this agent should solve.')) + '</div>',
+      '<div class="assembly-summary-block"><div class="assembly-summary-label">' + escapeHtml(getCurrentLanguage() === 'zh' ? '预设' : 'Preset') + '</div><div class="assembly-summary-copy">' + escapeHtml(getAssemblyPresetLabel(preset)) + ' · ' + escapeHtml(getAssemblyPresetDescription(preset)) + '</div></div>',
+      '<div class="assembly-summary-block"><div class="assembly-summary-label">' + escapeHtml(getCurrentLanguage() === 'zh' ? '套件' : 'Bundles') + '</div><div class="assembly-summary-row">' + selectedToolkitChips + '</div></div>',
+      '<div class="assembly-summary-block"><div class="assembly-summary-label">' + escapeHtml(getCurrentLanguage() === 'zh' ? '已启用 Feature' : 'Enabled Features') + '</div><div class="assembly-summary-row">' + selectedFeatureChips + '</div></div>',
+      '<div class="assembly-summary-block"><div class="assembly-summary-label">' + escapeHtml(getCurrentLanguage() === 'zh' ? '环境状态' : 'Environment Status') + '</div><div class="assembly-summary-copy"><span class="workspace-tag" style="border-color:' + escapeHtml(envStatusTone) + ';color:' + escapeHtml(envStatusTone) + ';">' + escapeHtml(envStatusLabel) + '</span>' + (envDir ? ' <code>' + escapeHtml(envDir) + '</code>' : '') + '</div></div>',
       envStatusMessage ? '<div class="assembly-summary-block"><div class="assembly-summary-copy" style="color:' + escapeHtml(envStatusTone) + ';">' + escapeHtml(envStatusMessage) + '</div></div>' : '',
-      '<div class="assembly-summary-block"><div class="assembly-summary-label">' + escapeHtml(currentLanguage === 'zh' ? '最终系统提示词' : 'Effective System Prompt') + '</div><div class="assembly-generated-prompt">' + escapeHtml(effectivePrompt) + '</div></div>',
+      '<div class="assembly-summary-block"><div class="assembly-summary-label">' + escapeHtml(getCurrentLanguage() === 'zh' ? '最终系统提示词' : 'Effective System Prompt') + '</div><div class="assembly-generated-prompt">' + escapeHtml(effectivePrompt) + '</div></div>',
       '<div class="assembly-summary-actions">',
-      '<button class="workspace-action" type="button" data-action="assembly.launch">' + escapeHtml(currentLanguage === 'zh' ? '启动测试 Agent' : 'Launch Test Agent') + '</button>',
-      '<button class="workspace-action secondary" type="button" data-action="assembly.setStage" data-form-id="' + escapeHtml(formId) + '" data-stage="environment">' + escapeHtml(currentLanguage === 'zh' ? '返回：环境准备' : 'Back: Environment') + '</button>',
-      '<button class="workspace-action secondary" type="button" data-action="wsAction.showTab" data-tab="projects">' + escapeHtml(currentLanguage === 'zh' ? '查看项目总览' : 'View Project') + '</button>',
-      '<button class="workspace-action secondary" type="button" data-action="wsAction.showTab" data-tab="project">' + escapeHtml(currentLanguage === 'zh' ? '升级到项目开发' : 'Promote To Project') + '</button>',
+      '<button class="workspace-action" type="button" data-action="assembly.launch">' + escapeHtml(getCurrentLanguage() === 'zh' ? '启动测试 Agent' : 'Launch Test Agent') + '</button>',
+      '<button class="workspace-action secondary" type="button" data-action="assembly.setStage" data-form-id="' + escapeHtml(formId) + '" data-stage="environment">' + escapeHtml(getCurrentLanguage() === 'zh' ? '返回：环境准备' : 'Back: Environment') + '</button>',
+      '<button class="workspace-action secondary" type="button" data-action="wsAction.showTab" data-tab="projects">' + escapeHtml(getCurrentLanguage() === 'zh' ? '查看项目总览' : 'View Project') + '</button>',
+      '<button class="workspace-action secondary" type="button" data-action="wsAction.showTab" data-tab="project">' + escapeHtml(getCurrentLanguage() === 'zh' ? '升级到项目开发' : 'Promote To Project') + '</button>',
       '</div>',
       '</div>',
       '</div>',
@@ -1134,62 +1296,62 @@ function renderWorkGroupChatBlock(agent, block) {
 }
 
 function _ensureWorkGroupEventDelegation() {
-  if (_workGroupEventsWired) return;
-  _workGroupEventsWired = true;
-  container.addEventListener('click', (e) => {
+  if (appUiState._workGroupEventsWired) return;
+  appUiState._workGroupEventsWired = true;
+  domRefs.container.addEventListener('click', (e) => {
     if (window.WorkGroupUI && e.target.closest('.wg-app')) {
       window.WorkGroupUI.onContainerClick(e);
     }
   });
-  container.addEventListener('input', (e) => {
+  domRefs.container.addEventListener('input', (e) => {
     if (window.WorkGroupUI && e.target.closest('.wg-app')) {
       window.WorkGroupUI.onContainerInput(e);
     }
   });
-  container.addEventListener('change', (e) => {
+  domRefs.container.addEventListener('change', (e) => {
     if (window.WorkGroupUI && e.target.closest('.wg-app')) {
       window.WorkGroupUI.onContainerChange(e);
     }
   });
-  container.addEventListener('keydown', (e) => {
+  domRefs.container.addEventListener('keydown', (e) => {
     if (window.WorkGroupUI && e.target.closest('.wg-app')) {
       window.WorkGroupUI.onContainerKeyDown(e);
     }
   });
-  container.addEventListener('contextmenu', (e) => {
+  domRefs.container.addEventListener('contextmenu', (e) => {
     if (window.WorkGroupUI && window.WorkGroupUI.onContainerContextMenu && e.target.closest('.wg-app')) {
       window.WorkGroupUI.onContainerContextMenu(e);
     }
   });
   // 拖拽事件：从 Files 面板拖文件到输入区
-  container.addEventListener('dragover', (e) => {
+  domRefs.container.addEventListener('dragover', (e) => {
     if (window.WorkGroupUI && e.target.closest('.wg-app')) {
       window.WorkGroupUI.onContainerDragOver(e);
     }
   });
-  container.addEventListener('dragleave', (e) => {
+  domRefs.container.addEventListener('dragleave', (e) => {
     if (window.WorkGroupUI && e.target.closest('.wg-app')) {
       window.WorkGroupUI.onContainerDragLeave(e);
     }
   });
-  container.addEventListener('drop', (e) => {
+  domRefs.container.addEventListener('drop', (e) => {
     if (window.WorkGroupUI && e.target.closest('.wg-app')) {
       window.WorkGroupUI.onContainerDrop(e);
     }
   });
-  container.addEventListener('mouseover', (e) => {
+  domRefs.container.addEventListener('mouseover', (e) => {
     if (window.WorkGroupUI && window.WorkGroupUI.onContainerMouseOver && e.target.closest('.wg-app')) {
       window.WorkGroupUI.onContainerMouseOver(e);
     }
   });
-  container.addEventListener('mouseout', (e) => {
+  domRefs.container.addEventListener('mouseout', (e) => {
     if (window.WorkGroupUI && window.WorkGroupUI.onContainerMouseOut && e.target.closest('.wg-app')) {
       window.WorkGroupUI.onContainerMouseOut(e);
     }
   });
 }
 
-function renderWorkspaceBlock(agent, block) {
+export function renderWorkspaceBlock(agent, block) {
   if (!shouldRenderBlock(block)) return '';
   return window.ClawHost.blocks.render(agent, block);
 }
@@ -1212,21 +1374,21 @@ window.ClawHost.blocks.registerPrimitive('feature-repository', (agent, block) =>
 window.ClawHost.blocks.registerPrimitive('workspace-artifacts', (agent, block) => renderWorkspaceArtifactsBlock(agent, block));
 window.ClawHost.blocks.registerPrimitive('project-docset', (agent, block) => renderProjectDocsetBlock(agent, block));
 window.ClawHost.blocks.registerPrimitive('config-editor', (agent, block) => (
-  isIMWorkspaceConfigEditor(block) ? renderIMWorkspaceConfigEditor(block)
-    : isDispatchConfigEditor(block) ? renderDispatchConfigEditor(block) : ''
+  window.isIMWorkspaceConfigEditor(block) ? window.renderIMWorkspaceConfigEditor(block)
+    : window.isDispatchConfigEditor(block) ? window.renderDispatchConfigEditor(block) : ''
 ));
 window.ClawHost.blocks.registerPrimitive('flow-editor', (agent, block) => renderFlowEditorBlock(agent, block));
 window.ClawHost.blocks.registerPrimitive('work-group-chat', (agent, block) => renderWorkGroupChatBlock(agent, block));
 
-function renderWorkspaceSurface(agent = getCurrentAgentRecord()) {
+export function renderWorkspaceSurface(agent = window.getCurrentAgentRecord()) {
   // Home agent — render the new Dashboard instead of legacy blocks
-  if (agent?.id === 'home' && typeof renderHomeDashboard === 'function') {
-    return renderHomeDashboard();
+  if (agent?.id === 'home' && typeof window.renderHomeDashboard === 'function') {
+    return window.renderHomeDashboard();
   }
 
-  const ui = getCurrentUnitUi(agent);
+  const ui = window.getCurrentUnitUi(agent);
   if (!agent || !ui) {
-    return getEmptyStateHtml();
+    return window.getEmptyStateHtml();
   }
 
   // APP 前端界面按需装载：清单里有该 agent 且尚未装载时，先起装载并在完成
@@ -1240,7 +1402,7 @@ function renderWorkspaceSurface(agent = getCurrentAgentRecord()) {
   const content = blocks.map((block) => renderWorkspaceBlock(agent, block)).filter(Boolean).join('');
   const hasAssemblyWorkbench = blocks.some((block) => block?.type === 'assembly-workbench');
   const animateClass = shouldAnimateWorkspaceSurface && !hasAssemblyWorkbench ? ' animate-in' : '';
-  shouldAnimateWorkspaceSurface = false;
+  setShouldAnimateWorkspaceSurface(false);
 
   return '<div class="workspace-surface' + animateClass + '">' + content + '</div>';
 }
@@ -1270,17 +1432,17 @@ function isEditingWorkspaceForm() {
  *  （历史问题：dock 在 surface 内底部对齐，点开便签内容长高后输入框被推下移）。
  *  按配置签名比对（agent + 端点 + 语言），语义不变不动 DOM——轮询重渲染期间
  *  正在输入的 textarea 不被重建（草稿本身经 render 内嵌缓存还原，无需签名）。 */
-function syncAppChatInputSlot(agent) {
+export function syncAppChatInputSlot(agent) {
   const slot = document.getElementById('app-chat-input-slot');
   if (!slot) return;
   let key = '';
   let block = null;
   if (agent && shouldRenderWorkspaceSurface(agent)) {
-    const ui = getCurrentUnitUi(agent);
+    const ui = window.getCurrentUnitUi(agent);
     const blocks = Array.isArray(ui?.home?.blocks) ? ui.home.blocks : [];
     block = blocks.find((b) => b?.type === 'app-chat-input' && shouldRenderBlock(b)) || null;
     if (block) {
-      key = [agent.id, block.resolveEndpoint, block.ensureEndpoint, currentLanguage].join('|');
+      key = [agent.id, block.resolveEndpoint, block.ensureEndpoint, getCurrentLanguage()].join('|');
     }
   }
   if (slot.dataset.mountKey !== key) {
@@ -1290,12 +1452,12 @@ function syncAppChatInputSlot(agent) {
   slot.classList.toggle('hidden', !block);
 }
 
-function renderCurrentMainView(viewState = readCurrentSessionViewState()) {
+export function renderCurrentMainView(viewState = readCurrentSessionViewState()) {
   // 只读浏览指示器与主视图同频刷新：视图切走（读档目标失效）自然消失。
   if (typeof window.updateReadOnlySessionIndicator === 'function') {
     window.updateReadOnlySessionIndicator();
   }
-  const agent = getCurrentAgentRecord();
+  const agent = window.getCurrentAgentRecord();
   // ── rail 按钮按注册表同步（面板注册/摘除/语言切换后自愈）──
   if (typeof syncRailButtons === 'function') syncRailButtons();
   // 主视图渲染是工作空间身份变化的单点时机（进会话/切空间/回首页都经过这里）：
@@ -1316,7 +1478,7 @@ function renderCurrentMainView(viewState = readCurrentSessionViewState()) {
     const available = availablePanelIds.has(panelId);
     btn.style.display = available ? '' : 'none';
     if (!available && activeFeaturePanel === panelId) {
-      activeFeaturePanel = null;
+      setActiveFeaturePanel(null);
       activePanelBecameUnavailable = true;
     }
   });
@@ -1356,23 +1518,23 @@ function renderCurrentMainView(viewState = readCurrentSessionViewState()) {
     const newHtml = renderWorkspaceSurface(agent);
     // Also force re-render if the container is not currently showing workspace content
     // (e.g. returning from chat mode where workspace HTML was cached but DOM shows messages).
-    const containerIsWorkspace = !!container.querySelector('.workspace-surface');
+    const containerIsWorkspace = !!domRefs.container.querySelector('.workspace-surface');
     if (lastRenderedWorkspaceHtml !== newHtml || !containerIsWorkspace) {
       if (isEditingWorkspaceForm()) {
         updateProjectDocsetChrome(agent);
         updateFollowLatestButton();
         return;
       }
-      container.querySelectorAll('details.feature-project-disclosure[open]').forEach((el) => {
+      domRefs.container.querySelectorAll('details.feature-project-disclosure[open]').forEach((el) => {
         const card = el.closest('.feature-project-card');
         if (card?.dataset?.prebuiltProjectId) {
           expandedProjectIds.add(card.dataset.prebuiltProjectId);
         }
       });
-      container.querySelectorAll('.ph-session-tabs[data-tab-group]').forEach((tg) => {
+      domRefs.container.querySelectorAll('.ph-session-tabs[data-tab-group]').forEach((tg) => {
         const activeBtn = tg.querySelector('.ph-session-tab.active');
         if (activeBtn?.dataset?.phTab) {
-          savedPhTabState[tg.dataset.tabGroup] = activeBtn.dataset.phTab;
+          phSessionUi.savedPhTabState[tg.dataset.tabGroup] = activeBtn.dataset.phTab;
         }
       });
       const workspaceScrollKey = getWorkspaceSurfaceScrollKey(agent);
@@ -1382,21 +1544,21 @@ function renderCurrentMainView(viewState = readCurrentSessionViewState()) {
         && lastRenderedWorkspaceScrollKey === workspaceScrollKey
         && !isNewWorkspaceSurface;
       if (containerIsWorkspace && lastRenderedWorkspaceScrollKey && !isSameWorkspaceScrollSurface) {
-        workspaceSurfaceScrollCache.set(lastRenderedWorkspaceScrollKey, container.scrollTop || 0);
+        appUiState.workspaceSurfaceScrollCache.set(lastRenderedWorkspaceScrollKey, domRefs.container.scrollTop || 0);
       }
       const savedWsScrollTop = isSameWorkspaceScrollSurface
-        ? container.scrollTop
-        : (workspaceScrollKey ? (workspaceSurfaceScrollCache.get(workspaceScrollKey) || 0) : 0);
-      const prevScrollBehavior = container.style.scrollBehavior;
+        ? domRefs.container.scrollTop
+        : (workspaceScrollKey ? (appUiState.workspaceSurfaceScrollCache.get(workspaceScrollKey) || 0) : 0);
+      const prevScrollBehavior = domRefs.container.style.scrollBehavior;
       runWithSuppressedChatViewportObservers(() => {
-        container.style.scrollBehavior = 'auto';
-        container.style.visibility = 'hidden';
-        container.innerHTML = newHtml;
+        domRefs.container.style.scrollBehavior = 'auto';
+        domRefs.container.style.visibility = 'hidden';
+        domRefs.container.innerHTML = newHtml;
       }, 220);
-      lastRenderedWorkspaceHtml = newHtml;
-      lastRenderedWorkspaceScrollKey = workspaceScrollKey;
+      setLastRenderedWorkspaceHtml(newHtml);
+      setLastRenderedWorkspaceScrollKey(workspaceScrollKey);
       expandedProjectIds.forEach((pid) => {
-        const card = container.querySelector(`.feature-project-card[data-prebuilt-project-id="${CSS.escape(pid)}"]`);
+        const card = domRefs.container.querySelector(`.feature-project-card[data-prebuilt-project-id="${CSS.escape(pid)}"]`);
         if (card) {
           const details = card.querySelector('details.feature-project-disclosure');
           if (details) details.open = true;
@@ -1404,17 +1566,17 @@ function renderCurrentMainView(viewState = readCurrentSessionViewState()) {
       });
       // 记忆回放与用户点击共享同一呈现函数（active class + tab 副作用，
       // 含 topics 懒加载）；点击链路额外写记忆，回放不写。
-      Object.entries(savedPhTabState).forEach(([group, tab]) => {
-        const tg = container.querySelector(`.ph-session-tabs[data-tab-group="${CSS.escape(group)}"]`);
+      Object.entries(phSessionUi.savedPhTabState).forEach(([group, tab]) => {
+        const tg = domRefs.container.querySelector(`.ph-session-tabs[data-tab-group="${CSS.escape(group)}"]`);
         if (tg && typeof window.applyPhSessionTabDom === 'function') window.applyPhSessionTabDom(tg, tab);
       });
       requestAnimationFrame(() => {
-        container.scrollTop = savedWsScrollTop;
-        container.style.visibility = '';
-        container.style.scrollBehavior = prevScrollBehavior;
+        domRefs.container.scrollTop = savedWsScrollTop;
+        domRefs.container.style.visibility = '';
+        domRefs.container.style.scrollBehavior = prevScrollBehavior;
         requestAnimationFrame(() => {
           if (lastRenderedWorkspaceScrollKey === workspaceScrollKey && shouldRenderWorkspaceSurface(agent)) {
-            container.scrollTop = savedWsScrollTop;
+            domRefs.container.scrollTop = savedWsScrollTop;
           }
         });
       });
@@ -1458,7 +1620,7 @@ function renderCurrentMainView(viewState = readCurrentSessionViewState()) {
 // --- chat-viewport functions extracted to modules/chat-viewport.js ---
 //     updateAssemblySideRailPosition
 
-function resetRuntimeBackedSurfaceState() {
+export function resetRuntimeBackedSurfaceState() {
   // patch 写入即声明（工单 037）：inputRequests 清空自动触发输入面渲染。
   applySessionViewPatch({
     messages: [],
@@ -1467,40 +1629,40 @@ function resetRuntimeBackedSurfaceState() {
     overview: getEmptyOverviewSnapshot(),
     todoPlan: getEmptyTodoPlan(),
   });
-  setCurrentLogs([]);
+  window.setCurrentLogs([]);
   // 传 null（而非 {}）：updateNotificationStatus 只对 falsy 入参清空
   // _lastCallFinishTime，空对象会让上一个会话的"X 秒前"胶囊残留。
-  updateNotificationStatus(null);
-  lastRenderedWorkspaceHtml = '';
-  _lastRenderedChatSig = '';
+  window.updateNotificationStatus(null);
+  setLastRenderedWorkspaceHtml('');
+  setLastRenderedChatSig('');
   clearChatLoadingSession();
-  currentWorkspaceArtifactDetail = null;
-  currentWorkspaceDocsetDetail = null;
-  currentProjectDocsetOpen = false;
-  currentProjectRequirementEdit = null;
-  currentProjectDocsetPage = 'requirement';
-  resetUserCollapseStateForContext();
-  updateProjectDocsetChrome(getCurrentAgentRecord());
+  setCurrentWorkspaceArtifactDetail(null);
+  setCurrentWorkspaceDocsetDetail(null);
+  setCurrentProjectDocsetOpen(false);
+  setCurrentProjectRequirementEdit(null);
+  setCurrentProjectDocsetPage('requirement');
+  window.resetUserCollapseStateForContext();
+  updateProjectDocsetChrome(window.getCurrentAgentRecord());
 }
 
-function renderWorkspaceTabs(agent = getCurrentAgentRecord()) {
-  if (!workspaceTabsBar) return;
-  if (isTablessHostSurface(agent)) {
-    workspaceTabsBar.classList.add('hidden');
-    workspaceTabsBar.innerHTML = '';
+function renderWorkspaceTabs(agent = window.getCurrentAgentRecord()) {
+  if (!domRefs.workspaceTabsBar) return;
+  if (window.isTablessHostSurface(agent)) {
+    domRefs.workspaceTabsBar.classList.add('hidden');
+    domRefs.workspaceTabsBar.innerHTML = '';
     return;
   }
   const tabs = getUnitTabs(agent);
   if (tabs.length <= 1) {
-    workspaceTabsBar.classList.add('hidden');
-    workspaceTabsBar.innerHTML = '';
+    domRefs.workspaceTabsBar.classList.add('hidden');
+    domRefs.workspaceTabsBar.innerHTML = '';
     return;
   }
 
   const activeMode = ensureUnitMode(agent) || 'home';
   const canOpenChat = canEnterWorkspaceChat(agent);
-  workspaceTabsBar.classList.remove('hidden');
-  workspaceTabsBar.innerHTML = tabs.map((tab) => (
+  domRefs.workspaceTabsBar.classList.remove('hidden');
+  domRefs.workspaceTabsBar.innerHTML = tabs.map((tab) => (
     '<button class="workspace-tab' + (tab.id === activeMode ? ' active' : '') + '" type="button" data-workspace-action="' + escapeHtml(JSON.stringify(
       tab.action || (tab.id === 'chat'
         ? { type: 'show_chat' }
@@ -1546,10 +1708,9 @@ function renderWorkspaceTabs(agent = getCurrentAgentRecord()) {
 // renderFeaturePanel）与可见性过滤（renderCurrentMainView）都从它读，
 // 不维护平行清单。中央注册块与 resources-viewer 经此包装器注册。
 
-function registerFeaturePanel(panelId, panel) {
+export function registerFeaturePanel(panelId, panel) {
   return window.ClawPanels.register(panelId, panel);
 }
-window.registerFeaturePanel = registerFeaturePanel;
 
 registerFeaturePanel('workspace', {
   when: { surfaces: ['chat'] },
@@ -1650,27 +1811,27 @@ function _ensureSidebarBackdrop() {
   _sidebarBackdrop = document.createElement('div');
   _sidebarBackdrop.className = 'sidebar-backdrop';
   _sidebarBackdrop.addEventListener('click', () => {
-    sidebar.classList.add('collapsed');
+    domRefs.sidebar.classList.add('collapsed');
     _updateSidebarBackdrop();
   });
   document.body.insertBefore(_sidebarBackdrop, document.querySelector('.main-content'));
   return _sidebarBackdrop;
 }
-function _isNarrowScreen() { return window.innerWidth <= 860; }
+export function _isNarrowScreen() { return window.innerWidth <= 860; }
 function _updateSidebarBackdrop() {
   if (!_sidebarBackdrop) return;
-  const show = _isNarrowScreen() && !sidebar.classList.contains('collapsed');
+  const show = _isNarrowScreen() && !domRefs.sidebar.classList.contains('collapsed');
   _sidebarBackdrop.classList.toggle('visible', show);
 }
-sidebarToggle.addEventListener('click', () => {
-  sidebar.classList.toggle('collapsed');
+domRefs.sidebarToggle.addEventListener('click', () => {
+  domRefs.sidebar.classList.toggle('collapsed');
   if (_isNarrowScreen()) {
     _ensureSidebarBackdrop();
     _updateSidebarBackdrop();
   }
   // 展开左栏可能挤压中央区：与 resize 链路同一级联，代价由右栏承担
   // （keepSidebarOpen 避免刚展开的左栏被级联第 1 步立即收回）
-  if (!sidebar.classList.contains('collapsed')) {
+  if (!domRefs.sidebar.classList.contains('collapsed')) {
     ensureCentralMinWidth({ keepSidebarOpen: true });
   }
 });
@@ -1679,8 +1840,8 @@ let _centralAdaptRaf = 0;
 // 残留的展开态会盖住中央区——遮挡与中央区最小宽度同级，是第一优先级。
 // 宽→窄跨入瞬间自动收起；窄屏内用户主动点汉堡展开不受 resize 干扰。
 let _lastNarrowScreen = _isNarrowScreen();
-if (_lastNarrowScreen && !sidebar.classList.contains('collapsed')) {
-  sidebar.classList.add('collapsed');
+if (_lastNarrowScreen && !domRefs.sidebar.classList.contains('collapsed')) {
+  domRefs.sidebar.classList.add('collapsed');
 }
 window.addEventListener('resize', () => {
   const narrow = _isNarrowScreen();
@@ -1688,8 +1849,8 @@ window.addEventListener('resize', () => {
     // Wide screen: hide backdrop, ensure sidebar visible
     if (_sidebarBackdrop) _sidebarBackdrop.classList.remove('visible');
   } else {
-    if (!_lastNarrowScreen && !sidebar.classList.contains('collapsed')) {
-      sidebar.classList.add('collapsed');
+    if (!_lastNarrowScreen && !domRefs.sidebar.classList.contains('collapsed')) {
+      domRefs.sidebar.classList.add('collapsed');
     }
     _updateSidebarBackdrop();
   }
@@ -1714,20 +1875,20 @@ window.addEventListener('resize', () => {
       手动拖动一致），并同步 featurePanelWidth 全局变量
    3) 仍不足 → 收起右栏（复用 activeFeaturePanel=null + renderFeaturePanel）
    面板/侧栏宽度均无 transition，动作为同步突变；触发处负责滚动锚定。 */
-const CENTRAL_MIN_WIDTH = 480;
+export const CENTRAL_MIN_WIDTH = 480;
 const SIDEBAR_MIN_WIDTH = 200;
-const SIDEBAR_MAX_WIDTH = 480;
+export const SIDEBAR_MAX_WIDTH = 480;
 
-function _getSidebarOccupiedWidth() {
-  if (sidebar.classList.contains('collapsed')) return 0;
+export function _getSidebarOccupiedWidth() {
+  if (domRefs.sidebar.classList.contains('collapsed')) return 0;
   if (_isNarrowScreen()) return 0;
   const w = parseInt(document.documentElement.style.getPropertyValue('--sidebar-width'), 10) || 280;
   return w + 4; // + sidebar-resizer
 }
 
-function _getPanelOccupiedWidth() {
-  if (!featurePanel.classList.contains('open')) return 0;
-  return featurePanelWidth;
+export function _getPanelOccupiedWidth() {
+  if (!domRefs.featurePanel.classList.contains('open')) return 0;
+  return getFeaturePanelWidth();
 }
 
 function _centralAvailableWidth() {
@@ -1738,12 +1899,12 @@ function _centralAvailableWidth() {
  *  都不允许把中央区挤到下限以下——与 resize 级联 _cascadeCentralWidth 同一
  *  约束，布局合法态只有一种定义（窗口突变与手动拖动闭环）。
  *  60 = sidebar-resizer(4) + rail(56)。 */
-function _sidebarDragCeiling() {
+export function _sidebarDragCeiling() {
   if (_isNarrowScreen()) return SIDEBAR_MAX_WIDTH; // 抽屉模式左栏不占布局宽度
   return window.innerWidth - _getPanelOccupiedWidth() - 60 - CENTRAL_MIN_WIDTH;
 }
 
-function _panelDragCeiling() {
+export function _panelDragCeiling() {
   return window.innerWidth - _getSidebarOccupiedWidth() - 56 - CENTRAL_MIN_WIDTH;
 }
 
@@ -1751,7 +1912,7 @@ function _panelDragCeiling() {
  *  keepSidebarOpen：左栏刚被用户主动展开时置真——此时收起左栏等于展开
  *  无效，级联跳过第 1 步，空间代价由右栏承担（收窄到下限、再收起）。
  *  @returns {boolean} 是否实际发生了级联动作（收侧栏/收窄面板/收面板） */
-function _cascadeCentralWidth({ keepSidebarOpen = false } = {}) {
+export function _cascadeCentralWidth({ keepSidebarOpen = false } = {}) {
   let changed = false;
   let central = _centralAvailableWidth();
   if (central >= CENTRAL_MIN_WIDTH) return changed;
@@ -1759,8 +1920,8 @@ function _cascadeCentralWidth({ keepSidebarOpen = false } = {}) {
   // 1) 收起左栏
   if (central < CENTRAL_MIN_WIDTH
       && !keepSidebarOpen
-      && !sidebar.classList.contains('collapsed') && !_isNarrowScreen()) {
-    sidebar.classList.add('collapsed');
+      && !domRefs.sidebar.classList.contains('collapsed') && !_isNarrowScreen()) {
+    domRefs.sidebar.classList.add('collapsed');
     _updateSidebarBackdrop();
     changed = true;
     central = _centralAvailableWidth();
@@ -1769,18 +1930,18 @@ function _cascadeCentralWidth({ keepSidebarOpen = false } = {}) {
   // 2) 右栏自动收窄（下限与手动拖动一致）
   if (central < CENTRAL_MIN_WIDTH && _getPanelOccupiedWidth() > 0) {
     const minWidth = window.innerWidth <= 1100 ? 300 : 400;
-    const nextWidth = Math.max(minWidth, featurePanelWidth - (CENTRAL_MIN_WIDTH - central));
-    if (nextWidth !== featurePanelWidth) {
-      featurePanelWidth = nextWidth;
-      featurePanel.style.setProperty('--feature-panel-width', nextWidth + 'px');
+    const nextWidth = Math.max(minWidth, getFeaturePanelWidth() - (CENTRAL_MIN_WIDTH - central));
+    if (nextWidth !== getFeaturePanelWidth()) {
+      setFeaturePanelWidth(nextWidth);
+      domRefs.featurePanel.style.setProperty('--feature-panel-width', nextWidth + 'px');
       changed = true;
     }
     central = _centralAvailableWidth();
   }
 
   // 3) 收起右栏（极窄窗口 + 右栏已到下限时可达）
-  if (central < CENTRAL_MIN_WIDTH && featurePanel.classList.contains('open')) {
-    activeFeaturePanel = null;
+  if (central < CENTRAL_MIN_WIDTH && domRefs.featurePanel.classList.contains('open')) {
+    setActiveFeaturePanel(null);
     renderFeaturePanel();
     changed = true;
   }
@@ -1841,20 +2002,20 @@ function ensureCentralMinWidth(opts) {
     }
   } catch (_) { /* ignore */ }
 
-  sidebarResizer.addEventListener('mousedown', (e) => {
+  domRefs.sidebarResizer.addEventListener('mousedown', (e) => {
     e.preventDefault();
-    sidebarResizer.classList.add('dragging');
+    domRefs.sidebarResizer.classList.add('dragging');
     document.body.style.userSelect = 'none';
     document.body.style.cursor = 'col-resize';
 
     // 收回区提示文案随当前语言刷新（提示仅在拖拽期间可见）
-    if (sidebarCollapseHint) {
-      sidebarCollapseHint.querySelector('.sidebar-collapse-hint-title').textContent = t('panel_collapse_hint_title');
+    if (domRefs.sidebarCollapseHint) {
+      domRefs.sidebarCollapseHint.querySelector('.sidebar-collapse-hint-title').textContent = t('panel_collapse_hint_title');
     }
 
     // 记录拖拽开始时的正常宽度：松手收起后恢复，避免重新展开时宽度异常
     let lastStableWidth = Math.max(SIDEBAR_MIN_WIDTH, Math.min(SIDEBAR_MAX_WIDTH,
-      parseInt(getComputedStyle(sidebar).width) || 280));
+      parseInt(getComputedStyle(domRefs.sidebar).width) || 280));
     let shouldCollapse = false;
     let inCollapseZone = false;
 
@@ -1871,12 +2032,12 @@ function ensureCentralMinWidth(opts) {
 
       if (inCollapseZone) {
         shouldCollapse = true;
-        sidebar.classList.add('drag-collapsing');
+        domRefs.sidebar.classList.add('drag-collapsing');
         document.documentElement.style.setProperty('--sidebar-width',
           Math.max(ev.clientX, SIDEBAR_COLLAPSE_FLOOR) + 'px');
       } else {
         shouldCollapse = false;
-        sidebar.classList.remove('drag-collapsing');
+        domRefs.sidebar.classList.remove('drag-collapsing');
         // 上限同时受 SIDEBAR_MAX_WIDTH 与中央区最小宽度约束：左栏加宽
         // 不可把中央区挤到 480px 以下（与 resize 级联同一约束）
         const w = Math.max(SIDEBAR_MIN_WIDTH,
@@ -1887,12 +2048,12 @@ function ensureCentralMinWidth(opts) {
     };
 
     const handleMouseUp = () => {
-      sidebarResizer.classList.remove('dragging');
-      sidebar.classList.remove('drag-collapsing');
+      domRefs.sidebarResizer.classList.remove('dragging');
+      domRefs.sidebar.classList.remove('drag-collapsing');
       document.body.style.userSelect = '';
       document.body.style.cursor = '';
       if (shouldCollapse) {
-        sidebar.classList.add('collapsed');
+        domRefs.sidebar.classList.add('collapsed');
         _updateSidebarBackdrop();
       }
       // 无论是否收起，宽度都回到最后一个正常值并持久化（收起时恢复，未收起时保持当前值）
@@ -1912,8 +2073,8 @@ function ensureCentralMinWidth(opts) {
 // [Phase 2f-2] renderFeaturePanel / toggleFeaturePanel → modules/debug-panels.js
 
 let _logSearchRenderTimer = 0;
-window.updateLogFilter = (key, value) => {
-  logFilters[key] = value;
+export function updateLogFilter(key, value) {
+  debugPanel.logFilters[key] = value;
   if (key === 'search') {
     // 搜索输入防抖：避免每个键程触发整列表重渲染
     clearTimeout(_logSearchRenderTimer);
@@ -1924,7 +2085,7 @@ window.updateLogFilter = (key, value) => {
     return;
   }
   renderFeaturePanel();
-};
+}
 
 // [工作项 D] 装配预检面板定义在 modules/debug-preflight.js（P2 已转 ESM）：
 // renderPreflightPanel 经 KernelState 桥服务上面的面板注册闭包；loadPreflight
@@ -1942,7 +2103,7 @@ window.updateLogFilter = (key, value) => {
 // Settings flyout menu — click gear to toggle, click item to act + close
 const settingsFlyout = document.getElementById('settings-flyout-menu');
 
-settingsToggle.addEventListener('click', (e) => {
+domRefs.settingsToggle.addEventListener('click', (e) => {
   e.stopPropagation();
   settingsFlyout.classList.toggle('open');
 });
@@ -2018,18 +2179,18 @@ document.getElementById('settings-flyout-mcp-gateway')?.addEventListener('click'
 
 document.getElementById('settings-flyout-exit').addEventListener('click', () => {
   settingsFlyout.classList.remove('open');
-  if (!confirm(currentLanguage === 'zh' ? '确定要退出程序吗？' : 'Are you sure you want to quit?')) return;
+  if (!confirm(getCurrentLanguage() === 'zh' ? '确定要退出程序吗？' : 'Are you sure you want to quit?')) return;
   fetch('/protoclaw/shutdown', { method: 'POST' }).catch(e => console.warn(e));
 });
 
-featurePanelResizer.addEventListener('mousedown', (event) => {
-  if (!featurePanel.classList.contains('open')) return;
+domRefs.featurePanelResizer.addEventListener('mousedown', (event) => {
+  if (!domRefs.featurePanel.classList.contains('open')) return;
 
   event.preventDefault();
 
   // 收回区提示文案随当前语言刷新（提示仅在拖拽期间可见）
-  if (featurePanelCollapseHint) {
-    featurePanelCollapseHint.querySelector('.feature-panel-collapse-hint-title').textContent = t('panel_collapse_hint_title');
+  if (domRefs.featurePanelCollapseHint) {
+    domRefs.featurePanelCollapseHint.querySelector('.feature-panel-collapse-hint-title').textContent = t('panel_collapse_hint_title');
   }
 
   // ── 拖动期间滚动位置策略 ──
@@ -2047,7 +2208,7 @@ featurePanelResizer.addEventListener('mousedown', (event) => {
   // scroll 事件都意味着用户主动滚动（wheel/触摸板），松手时放弃锚定校正。
   let _userScrolledDuringDrag = false;
   const _markUserScroll = () => { _userScrolledDuringDrag = true; };
-  container.addEventListener('scroll', _markUserScroll, { passive: true });
+  domRefs.container.addEventListener('scroll', _markUserScroll, { passive: true });
   let _suppressApplied = false;
   if (_anchor && typeof suppressChatViewportObservers === 'function') {
     suppressChatViewportObservers(120000);
@@ -2080,17 +2241,17 @@ featurePanelResizer.addEventListener('mousedown', (event) => {
 
     if (inCollapseZone) {
       shouldCollapse = true;
-      featurePanel.classList.add('drag-collapsing');
+      domRefs.featurePanel.classList.add('drag-collapsing');
       // 硬下限：保证收回区提示文案单行显示，不被挤压换行
-      featurePanel.style.setProperty('--feature-panel-width', Math.max(nextWidth, 180) + 'px');
+      domRefs.featurePanel.style.setProperty('--feature-panel-width', Math.max(nextWidth, 180) + 'px');
     } else {
       shouldCollapse = false;
-      featurePanel.classList.remove('drag-collapsing');
+      domRefs.featurePanel.classList.remove('drag-collapsing');
       // 上限同时受 750 与中央区最小宽度约束：右栏加宽不可把中央区挤到
       // 480px 以下（与 resize 级联同一约束，见 CENTRAL_MIN_WIDTH）
       const ceiling = window.innerWidth - _getSidebarOccupiedWidth() - 56 - CENTRAL_MIN_WIDTH;
-      featurePanelWidth = Math.max(minWidth, Math.min(750, nextWidth, ceiling));
-      featurePanel.style.setProperty('--feature-panel-width', featurePanelWidth + 'px');
+      setFeaturePanelWidth(Math.max(minWidth, Math.min(750, nextWidth, ceiling)));
+      domRefs.featurePanel.style.setProperty('--feature-panel-width', getFeaturePanelWidth() + 'px');
     }
 
     // 不做每帧滚动补偿（见 mousedown 注释）：保持 scrollTop 不变，视口
@@ -2106,11 +2267,11 @@ featurePanelResizer.addEventListener('mousedown', (event) => {
   const handleMouseUp = () => {
     window.removeEventListener('mousemove', handleMouseMove);
     window.removeEventListener('mouseup', handleMouseUp);
-    container.removeEventListener('scroll', _markUserScroll);
+    domRefs.container.removeEventListener('scroll', _markUserScroll);
     if (_dragRaf) { cancelAnimationFrame(_dragRaf); _dragRaf = 0; }
-    featurePanel.classList.remove('drag-collapsing');
+    domRefs.featurePanel.classList.remove('drag-collapsing');
     if (shouldCollapse) {
-      activeFeaturePanel = null;
+      setActiveFeaturePanel(null);
       renderFeaturePanel();
     }
 
@@ -2140,10 +2301,10 @@ featurePanelResizer.addEventListener('mousedown', (event) => {
 /* ── 面板宽度变化时切换 .narrow class，驱动 feature-grid 列数 ── */
 const _fpNarrowObserver = new ResizeObserver(entries => {
   for (const entry of entries) {
-    featurePanelBody.classList.toggle('narrow', entry.contentRect.width < 380);
+    domRefs.featurePanelBody.classList.toggle('narrow', entry.contentRect.width < 380);
   }
 });
-_fpNarrowObserver.observe(featurePanelBody);
+_fpNarrowObserver.observe(domRefs.featurePanelBody);
 
 /* ══════════════════════════════════════
    Generic ctx-menu system
@@ -2180,40 +2341,37 @@ function renderCtxItems(items) {
   }).join('');
 }
 
-function showCtxMenu(x, y, items, target) {
+export function showCtxMenu(x, y, items, target) {
   _ctxTarget = target;
   window._ctxTarget = target;
-  ctxMenu.innerHTML = renderCtxItems(items);
-  ctxMenu.classList.add('open');
-  ctxMenu.style.left = '0px';
-  ctxMenu.style.top = '0px';
-  const rect = ctxMenu.getBoundingClientRect();
+  domRefs.ctxMenu.innerHTML = renderCtxItems(items);
+  domRefs.ctxMenu.classList.add('open');
+  domRefs.ctxMenu.style.left = '0px';
+  domRefs.ctxMenu.style.top = '0px';
+  const rect = domRefs.ctxMenu.getBoundingClientRect();
   const margin = 8;
   const maxLeft = window.innerWidth - rect.width - margin;
   const maxTop = window.innerHeight - rect.height - margin;
-  ctxMenu.style.left = Math.max(margin, Math.min(x, maxLeft)) + 'px';
-  ctxMenu.style.top = Math.max(margin, Math.min(y, maxTop)) + 'px';
+  domRefs.ctxMenu.style.left = Math.max(margin, Math.min(x, maxLeft)) + 'px';
+  domRefs.ctxMenu.style.top = Math.max(margin, Math.min(y, maxTop)) + 'px';
 
   // Flip submenus to the left when there's not enough space on the right
   const submenuWidth = 160;
-  const placedRect = ctxMenu.getBoundingClientRect();
+  const placedRect = domRefs.ctxMenu.getBoundingClientRect();
   if (placedRect.right + submenuWidth > window.innerWidth - margin) {
-    ctxMenu.classList.add('flip-submenu');
+    domRefs.ctxMenu.classList.add('flip-submenu');
   } else {
-    ctxMenu.classList.remove('flip-submenu');
+    domRefs.ctxMenu.classList.remove('flip-submenu');
   }
 }
 
-function closeCtxMenu() {
-  ctxMenu.classList.remove('open');
-  ctxMenu.classList.remove('flip-submenu');
-  ctxMenu.innerHTML = '';
+export function closeCtxMenu() {
+  domRefs.ctxMenu.classList.remove('open');
+  domRefs.ctxMenu.classList.remove('flip-submenu');
+  domRefs.ctxMenu.innerHTML = '';
   _ctxTarget = null;
   window._ctxTarget = null;
 }
-
-window.showCtxMenu = showCtxMenu;
-window.closeCtxMenu = closeCtxMenu;
 
 
 // ── 内联事件收编（Phase C）：app-ui 模板的动作注册 ──────────────────────────
@@ -2264,7 +2422,7 @@ window.ClawFW.actions.registerMany({
   'assembly.switchEditingTarget': (el) => window.switchAssemblyEditingTarget(el.dataset.targetId),
   'assembly.stopRuntime': (el) => {
     window.stopAssemblySessionRuntime(el.dataset.agentId);
-    setTimeout(window.fwRerender, 200);
+    setTimeout(fwRerender, 200);
   },
   'assembly.setBundleFilter': (el) => window.setBundleFilter(el.dataset.formId, el.dataset.filter),
   'assembly.jumpStage': (el) => window.jumpAssemblyStage(el.dataset.stage),
@@ -2272,9 +2430,74 @@ window.ClawFW.actions.registerMany({
   'assembly.launch': () => window.launchAssemblyInstance(),
   'assembly.ensureEnv': (el) => {
     window.createAssemblyEnvironment();
-    setTimeout(window.fwRerender, Number(el.dataset.rerender) || 300);
+    setTimeout(fwRerender, Number(el.dataset.rerender) || 300);
   },
   'wsAction.showTab': (el) => window.runWorkspaceAction(JSON.stringify({ type: 'show_workspace_tab', tab: el.dataset.tab })),
   'assembly.setStage': (el) => window.updateWorkspaceFormDraft(el.dataset.formId, 'assembly_stage', el.dataset.stage),
   'assembly.openPackageDetails': (el) => window.openRepositoryPackageDetails(el.dataset.packageId),
+});
+
+
+// ── 桥接期兼容面（domain `app-ui`）─────────────────────────────────────
+// 本文件迁 ESM 后，classic 消费方（app-main / app-core / claw-host / 悬置域
+// wg-* · im-* · dispatch-* · home-dashboard · resources-viewer）与被仍 classic 的
+// 文件晚绑定的 ESM 消费方（63 个文件的 renderCurrentMainView 等）都经这些桥键
+// 取用；workspace-surface-host（导航宿主装配）在首调时经
+// createWorkspaceSurfaceHost 键取用（静态环，见该文件头注）。
+//
+// 逐键消费面（grep public/ 核过）：
+//   renderCurrentMainView              ← app-main / app-core / claw-host / 63 文件（classic + window）
+//   resetRuntimeBackedSurfaceState     ← app-core / app-main（classic）+ agent-data-loader / workspace-actions
+//   shouldRenderWorkspaceSurface       ← app-main（classic）+ chat-* / input-helpers / workspace-docset
+//   isChatSurfaceActive                ← app-main（classic）+ chat-renderer / chat-viewport / 输入面
+//   setPreferredUnitMode               ← app-main / claw-host（classic）+ 会话切换 / 装配动作
+//   saveCurrentWorkspaceSurfaceScroll  ← app-main（classic）+ workspace-actions / session-readonly-view
+//   getRuntimeAwareAgentRecord / Name  ← input-model-switcher 裸调、chat-context-bar / debug-overview（window）
+//   upsertConnectedAgent               ← session-dialogs / session-mutation / trim-page / workspace-actions
+//   refreshVisibleWorkspacePanelData   ← workspace-blocks + memo 插件
+//   ensureUnitMode                     ← workspace-docset
+//   renderWorkspaceSurface             ← ph-project-actions
+//   syncAppChatInputSlot               ← app-chat-input / workspace-blocks
+//   renderAssemblyWorkbenchStageFlow   ← workspace-blocks
+//   renderFWList / renderFWDetail / renderFWFeatures ← fw-config-panel / model-preset-cache
+//   renderWorkspaceBlock               ← 测试唯一消费（不上桥，命名导出）
+//   registerFeaturePanel               ← debug-* 面板 + p2 面板批次入口 + resources-viewer（classic）
+//   updateLogFilter                    ← app-core（classic）+ debug-logs
+//   showCtxMenu / closeCtxMenu         ← ctx-menu-handlers / ph-session-list / sidebar-render / chat-scroll
+//   _cascadeCentralWidth               ← debug-panel-host
+//   createWorkspaceSurfaceHost         ← workspace-surface-host（首调惰性；静态环见该文件头注）
+//
+// 注销条件：上列消费方全部迁完并改具名 import 后，删除本段与逐键 defineKey、
+// 下调 .kernel-bridge-baseline.json（同上列清单一一对应）。
+const bridgeApi = {
+  createWorkspaceSurfaceHost,
+  renderCurrentMainView,
+  resetRuntimeBackedSurfaceState,
+  shouldRenderWorkspaceSurface,
+  isChatSurfaceActive,
+  setPreferredUnitMode,
+  saveCurrentWorkspaceSurfaceScroll,
+  getRuntimeAwareAgentRecord,
+  getRuntimeAwareAgentName,
+  upsertConnectedAgent,
+  refreshVisibleWorkspacePanelData,
+  ensureUnitMode,
+  renderWorkspaceSurface,
+  syncAppChatInputSlot,
+  renderAssemblyWorkbenchStageFlow,
+  renderFWList,
+  renderFWDetail,
+  renderFWFeatures,
+  registerFeaturePanel,
+  updateLogFilter,
+  showCtxMenu,
+  closeCtxMenu,
+  _cascadeCentralWidth,
+};
+for (const [key, value] of Object.entries(bridgeApi)) {
+  window.KernelState.defineKey('app-ui', key, value);
+}
+window.KernelState.claim('app-ui', {
+  get: (key) => bridgeApi[key],
+  set: (key, value) => { bridgeApi[key] = value; },
 });

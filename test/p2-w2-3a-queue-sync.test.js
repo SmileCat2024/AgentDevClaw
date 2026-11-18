@@ -181,6 +181,14 @@ async function waitFor(predicate, label) {
 }
 
 async function loadGraph(c) {
+  // 五个函数级直调边界的桩在 classic 相写下，但 app-ui（P4 T2 末件）迁 ESM 后
+  // 会随内核图在模块相装载并 import input-render —— 后者在求值期用
+  // KernelState.defineKey 重新定义 window.notifyInputSurfaceChanged（访问器），
+  // 覆盖 classic 相的普通属性赋值。因此在模块相之后按同一夹具面重放一次
+  // （与 p2-thread-case 的 __caseOverrides 重放同义，语义不变：这些边界就是
+  // 用例的观测点）。
+  const overrides = c.sandbox.__caseOverrides;
+  if (overrides) for (const [name, value] of Object.entries(overrides)) c.sandbox[name] = value;
   // 刷新引擎（P4 T3 起是真实 ESM）：交互域 thread-store-domain 在**装载期**取它的
   // 窄宿主 createThreadStoreHost，必须先于 queue-projection 的 import 链进入同一张图。
   await c.load('public/src/modules/thread-store.js');

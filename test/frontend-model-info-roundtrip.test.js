@@ -24,7 +24,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
-import { prepareClassicSandbox } from './p2-classic-hosts.js';
+import { APP_UI_DOMAIN, prepareClassicSandbox, prepareEsmModules } from './p2-classic-hosts.js';
 
 const SESSION_UI = 'public/src/modules/session-ui.js';
 const OVERVIEW_DATA = 'public/src/modules/overview-data.js';
@@ -78,6 +78,8 @@ function withRuntimeAwareRecord(hostRecord, runtimeRecord, probe) {
       // 真实先行脚本序（index.html 的 classic 标签链，含 app-ui / app-main）；
       // 记录来源是本案夹具 → 真实链之后覆盖这两个窄观察面。
       prepareClassicSandbox(sandbox);
+      // app-ui（P4 T2 末件）已迁 ESM：getRuntimeAwareAgentRecord 由它在模块相注册桥键。
+      prepareEsmModules(sandbox, APP_UI_DOMAIN);
       sandbox.getCurrentAgentRecord = () => hostRecord;
       sandbox.getCurrentRuntimeRecord = () => runtimeRecord;
     },

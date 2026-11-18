@@ -89,3 +89,12 @@ import './rollback-dialog.js'; // 部分压缩状态键注册壳（owner/claim �
 import './chat-scroll.js'; // 滚轮归一化 / 跟随判定；零桥键（纯函数与容器监听）
 import './input-helpers.js'; // 桥 updateChatProcessToggle ← app-ui
 import './input-render.js'; // 桥 notifyInputSurfaceChanged ← session-view-state / app-ui / persistent-input
+
+// ── T2 渲染层末件：app-ui（工作空间主视图渲染域）──
+// 排在 P4 各域之后：本域在求值期注册宿主 block primitive、面板注册、actions 与
+// 布局监听，并在末尾登记 domain `app-ui` 的桥面；它的具名 import 覆盖
+// chat-viewport / chat-renderer / workspace-blocks / assembly-* / debug-* 等已迁
+// 域，排在它们之后求值可保持「先注册域状态、后注册消费方桥」的既有次序。
+// 装载期消费方 workspace-surface-host 在同一相内随后求值（具名 import）。
+import '../app-ui.js'; // 桥 domain app-ui（23 键）；createWorkspaceSurfaceHost ← workspace-surface-host
+import './workspace-surface-host.js'; // 导航宿主装配（求值期取 app-ui 的 createWorkspaceSurfaceHost）

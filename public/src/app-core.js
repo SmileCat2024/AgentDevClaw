@@ -1093,6 +1093,17 @@ function resolveWorkspaceFallbackAgentId(agent = getCurrentAgentRecord()) {
 function createP2BootstrapDomHost() {
   return Object.freeze({
     container,
+    // app-ui 批次（P4 T2 末件）增补：workspace surface 渲染 / 侧栏抽屉 / 中央区
+    // 级联适配 / 设置 flyout 直接读写这些元素（原 classic 裸标识符，迁 ESM 后
+    // 经 domRefs 取同一引用）。全部是加载期 const 引用，元素从不替换。
+    sidebar,
+    sidebarToggle,
+    sidebarResizer,
+    sidebarCollapseHint,
+    featurePanelResizer,
+    featurePanelCollapseHint,
+    workspaceTabsBar,
+    settingsToggle,
     agentList,
     externalAgentList,
     externalGroup,
@@ -1347,6 +1358,30 @@ function createP2BootstrapContextMenuHost() {
     set contextMenuProjectId(value) { contextMenuProjectId = value; },
     get contextMenuFeatureRepoPackageId() { return contextMenuFeatureRepoPackageId; },
     set contextMenuFeatureRepoPackageId(value) { contextMenuFeatureRepoPackageId = value; },
+  });
+}
+
+/**
+ * app-ui 迁移残留的 classic 状态（P4 T2 末件的最小 host seam；B 表风格）。
+ *
+ * 三个键的物理 owner 仍是本文件顶层声明，本工厂只转发、不减不增：
+ *   - workspaceSurfaceModePreferences（const 对象，按引用交出）：每个工作空间单元
+ *     上次停留的 surface 模式；app-ui 读 + 就地改写键值（从不整体替换）。
+ *   - workspaceSurfaceScrollCache（const Map，按引用交出）：surface 列表滚动位置
+ *     缓存；app-ui 沿用既有 .set / .get 语义。
+ *   - _workGroupEventsWired（let，get/set 成对）：工作群事件委托的搭线闸，写一次、
+ *     读一次，唯一消费方是 app-ui 的 _ensureWorkGroupEventDelegation。
+ * 三者零跨文件消费面（grep public/ 仅 app-ui），因此不在 app-ui 侧另建存储、也不
+ * 搬移 owner：app-ui 迁 ESM 后按本工厂取用同一份状态。
+ * 收敛条件：工作空间 surface 域状态整体迁入 ESM owner（render-entry-state）时，
+ * 这三个键随搬迁注销本工厂。
+ */
+function createP2BootstrapAppUiStateHost() {
+  return Object.freeze({
+    workspaceSurfaceModePreferences,
+    workspaceSurfaceScrollCache,
+    get _workGroupEventsWired() { return _workGroupEventsWired; },
+    set _workGroupEventsWired(value) { _workGroupEventsWired = value; },
   });
 }
 

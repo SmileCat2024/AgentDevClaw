@@ -216,10 +216,33 @@ async function withLocate(probe) {
         renderCurrentMainView = function () {};
         renderFeaturePanel = function () {};
         refreshVisibleWorkspacePanelData = function () {};
+        // app-ui 迁 ESM 后，宿主工厂的写点走 ESM 状态 owner 的 setter、读点走
+        // 具名导入的活绑定与 p2-bootstrap 适配面：按这些入口的语义给最小桩
+        // （写回上面的沙箱状态、读值即沙箱现值，与切片原先直接读写全局同一份状态）。
+        setCurrentWorkspaceTab = function (value) { currentWorkspaceTab = value; };
+        setFocusedAgentId = function (value) { focusedAgentId = value; };
+        setReadOnlyMode = function (value) { readOnlyMode = value; };
+        setCurrentRuntimeAgentId = function (value) { currentRuntimeAgentId = value; };
+        setActiveFeaturePanel = function (value) { activeFeaturePanel = value; };
+        setShouldAnimateWorkspaceSurface = function (value) { shouldAnimateWorkspaceSurface = value; };
+        setCurrentWorkspaceArtifactDetail = function (value) { currentWorkspaceArtifactDetail = value; };
+        setCurrentWorkspaceDocsetDetail = function (value) { currentWorkspaceDocsetDetail = value; };
+        setCurrentProjectDocsetOpen = function (value) { currentProjectDocsetOpen = value; };
+        setCurrentProjectRequirementEdit = function (value) { currentProjectRequirementEdit = value; };
+        setCurrentProjectDocsetPage = function (value) { currentProjectDocsetPage = value; };
+        appUiState = {
+          workspaceSurfaceModePreferences: window.workspaceSurfaceModePreferences,
+          workspaceSurfaceScrollCache: new Map(),
+          _workGroupEventsWired: false,
+        };
+        callActivity = { _recentlyFinishedRuntimes: new Set() };
+        window.AgentLoaderHost = { loadedAgentDetailIds: window.loadedAgentDetailIds };
       `);
-      // 真实宿主工厂（app-ui 源码片段）：workspace-surface-host 在 ESM 求值期
-      // 经 window.createWorkspaceSurfaceHost() 取用，因此必须先执行。
-      sandbox.run(sourceBetween(APP_UI_SRC, 'function createWorkspaceSurfaceHost() {', 'function upsertConnectedAgent('));
+      // 真实宿主工厂（app-ui 源码片段）：workspace-surface-host 在首调时经
+      // window.createWorkspaceSurfaceHost() 取用，因此必须先执行。片段里的
+      // `export ` 前缀在沙箱里去掉（vm 无模块语义）。
+      sandbox.run(sourceBetween(APP_UI_SRC, 'function createWorkspaceSurfaceHost() {', 'function upsertConnectedAgent(')
+        .replace(/^export /gm, ''));
       sandbox.run(`
         // ESM 图求值期读取的其余 loader host 工厂（最小契约替身）。
         createAgentSnapshotLoaderHost = () => ({ state: {} });

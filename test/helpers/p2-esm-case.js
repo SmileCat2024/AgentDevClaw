@@ -69,6 +69,10 @@ const PLATFORM_GLOBALS = [
   'alert',
   'requestAnimationFrame',
   'cancelAnimationFrame',
+  // 模块相就触达的浏览器面（app-ui 顶层 ResizeObserver；渲染链 CSS.escape /
+  // CSS.supports）。沙箱里由 frontend-vm 的 windowStub 提供同款 no-op 桩。
+  'ResizeObserver',
+  'CSS',
   'setTimeout',
   'clearTimeout',
   'setInterval',
