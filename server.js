@@ -60,6 +60,7 @@ import {
 } from './server/shared/constants.js';
 import { sanitizeSessionFragment, cleanSessionText, isWorkspaceSessionAgent, log, getAssemblyWorkspaceDir, normalizeClientAgentId, parseListField } from './server/shared/string-helpers.js';
 import { createMemorySampler, resolveSampleIntervalMs } from './server/shared/memory-diagnostics.js';
+import { createFirstPaintIndexRenderer } from './server/shared/modulepreload.js';
 import { compareSemver, uniqueStrings } from './server/shared/feature-utils.js';
 import { readJson, readJsonSafe, ensureDir } from './server/shared/fs-helpers.js';
 import { openDirectoryInSystem } from './server/shared/system-opener.js';
@@ -1704,6 +1705,27 @@ const vendorMounts = {
 for (const [urlPath, packagePath] of Object.entries(vendorMounts)) {
   app.use(urlPath, express.static(path.join(__dirname, 'node_modules', packagePath), staticCacheHeaders));
 }
+// 首屏 modulepreload 注入（首屏加载专项）：按实时 import 图预取整张首屏模块图，
+// 消掉“逐层发现”的瀑布。只在根路径与 /index.html 生效；禁用（CLAW_MODULEPRELOAD=0）
+// 或生成失败时静默回落 express.static 直出——preload 只是提示，落空不影响页面行为。
+const firstPaintIndex = createFirstPaintIndexRenderer({
+  publicDir: path.join(__dirname, 'public'),
+  enabled: process.env.CLAW_MODULEPRELOAD !== '0',
+});
+app.get(['/', '/index.html'], (req, res, next) => {
+  let html = null;
+  try {
+    html = firstPaintIndex.render();
+  } catch (error) {
+    log('modulepreload 注入失败，回落静态直出：', error?.message || error);
+  }
+  if (!html) {
+    next();
+    return;
+  }
+  res.setHeader('Cache-Control', 'no-cache');
+  res.type('html').send(html);
+});
 app.use(express.static(path.join(__dirname, 'public'), staticCacheHeaders));
 
 app.use((error, req, res, _next) => {
