@@ -12,7 +12,7 @@ import {
   renderTurnDetail,
   renderReferenceReminder,
   renderLedgerReminder,
-  renderThreadRelationsSection,
+  renderThreadRelationsNote,
   renderThreadOverview,
   extractTimeRange,
   isThreadId,
@@ -777,8 +777,12 @@ describe('thread navigation (dual-mode session_read_overview)', () => {
     }) as any;
     try {
       const result = await (tools.get('session_read_overview')!.execute as any)({ sessionId: 'wt-live' });
-      assert.equal(urls.length, 1);
-      assert.match(urls[0], /\/protoclaw\/threads\/wt-live$/);
+      // 线程详情恰好一次；另有一次并发的关联查询（读取面附带，2026-11-18 后移）
+      const detailCalls = urls.filter(u => /\/protoclaw\/threads\/wt-live$/.test(u));
+      assert.equal(detailCalls.length, 1);
+      assert.equal(urls.filter(u => u.includes('thread_relations')).length, 1);
+      // 无 agentId 也不触碰会话反查路径
+      assert.ok(!urls.some(u => u.includes('session_record')));
       assert.match(result.text, /\[线程导航\] wt-live/);
       assert.equal(result.threadId, 'wt-live');
     } finally {
@@ -1101,43 +1105,52 @@ describe('renderReferenceReminder thread identity', () => {
   });
 });
 
-describe('renderThreadRelationsSection', () => {
-  const base = { resolvedThreadId: 'wt-x', resolvedThreadTitle: '线程标题', component: { size: 3 } };
+describe('renderThreadRelationsNote', () => {
+  const base = { threadId: 'wt-x', componentSize: 3 };
 
-  it('returns null without neighbors（投影为空 / 降级时无关联节）', () => {
-    assert.equal(renderThreadRelationsSection([]), null);
-    assert.equal(renderThreadRelationsSection([{ ...base, neighbors: [] }] as any), null);
+  it('returns null without neighbors（孤立线程 / 降级时无提示节）', () => {
+    assert.equal(renderThreadRelationsNote({ ...base, neighbors: [] }), null);
   });
 
   it('renders neighbors with direction labels, counts and component size', () => {
-    const text = renderThreadRelationsSection([{
+    const text = renderThreadRelationsNote({
       ...base,
       neighbors: [
         { threadId: 'wt-y', title: '邻居一', agentId: 'ph', direction: 'references' as const, count: 2, lastSeenAt: '2026-11-14T10:00:00.000Z' },
         { threadId: 'wt-z', title: '邻居二', agentId: 'ph', direction: 'referenced-by' as const, count: 1 },
         { threadId: 'wt-w', agentId: 'ph', direction: 'both' as const, count: 5 },
       ],
-    }] as any);
-    assert.match(text!, /^\[会话引用·关联线程\]/);
-    assert.match(text!, /被引线程 wt-x「线程标题」 的上下游（该线程所在关联群共 3 条线程，含传递关联）：/);
-    assert.match(text!, /wt-y「邻居一」 — 被引线程引用过（2 次/);
-    assert.match(text!, /wt-z「邻居二」 — 引用过被引线程（1 次）/);
+    });
+    assert.match(text!, /\[线程引用关联\] wt-x 的上下游（所在关联群共 3 条线程，含传递关联）：/);
+    assert.match(text!, /wt-y「邻居一」 — 该线程引用过（2 次/);
+    assert.match(text!, /wt-z「邻居二」 — 引用过该线程（1 次）/);
     assert.match(text!, /wt-w — 双向引用（5 次）/);
     assert.match(text!, /session_read_overview/);
+    assert.doesNotMatch(text!, /投影未完全就绪/);
+  });
+
+  it('marks partial projections（投影未完全就绪时明示列表可能不全）', () => {
+    const text = renderThreadRelationsNote({
+      threadId: 'wt-x',
+      componentSize: 2,
+      partial: true,
+      neighbors: [{ threadId: 'wt-y', agentId: 'ph', direction: 'references' as const, count: 1 }],
+    });
+    assert.match(text!, /投影未完全就绪、列表可能不全/);
   });
 
   it('caps neighbor lines at the budget with an explicit remainder note', () => {
     const neighbors = Array.from({ length: 10 }, (_, i) => ({
       threadId: `wt-n${i}`, agentId: 'ph', direction: 'references' as const, count: 1,
     }));
-    const text = renderThreadRelationsSection([{ ...base, neighbors }] as any);
+    const text = renderThreadRelationsNote({ threadId: 'wt-x', componentSize: 11, neighbors });
     const neighborLines = text!.split('\n').filter(line => line.startsWith('· wt-n'));
     assert.equal(neighborLines.length, 8);
     assert.match(text!, /其余 2 条关联略/);
   });
 });
 
-describe('injectSessionReferences thread relations（HTTP 面 mock）', () => {
+describe('injectSessionReferences thread identity（HTTP 面 mock）', () => {
   const realFetch = globalThis.fetch;
   const relationsPayload = {
     threadId: 'wt-x',
@@ -1162,7 +1175,7 @@ describe('injectSessionReferences thread relations（HTTP 面 mock）', () => {
     };
   }
 
-  it('upgrades thread-owned references and appends one relations section', async () => {
+  it('upgrades thread-owned references without injecting relations（关联信息后移到读取面，防 overread）', async () => {
     globalThis.fetch = (async (url: any) => {
       if (String(url).includes('thread_relations')) {
         return { ok: true, status: 200, json: async () => relationsPayload } as any;
@@ -1173,16 +1186,17 @@ describe('injectSessionReferences thread relations（HTTP 面 mock）', () => {
       const feature = new SessionReferenceFeature({ serverOrigin: 'http://server.test' });
       const { ctx, injected } = makeCtx([{ agentId: 'ph', sessionId: 's-1', title: '被引代', sessionType: 'main' }]);
       await feature.injectSessionReferences(ctx);
-      assert.equal(injected.length, 2);
+      // 契约：只注入一条引用 reminder；兄弟线程的寻址不得出现在其中
+      assert.equal(injected.length, 1);
       assert.match(injected[0].content, /- wt-x「线程标题」 — agentId: ph（身份: main，线程对话 · 被引一代: s-1「被引代」，共 3 代）/);
-      assert.match(injected[1].content, /^\[会话引用·关联线程\]/);
-      assert.match(injected[1].content, /wt-y「邻居」 — 被引线程引用过（2 次/);
+      assert.doesNotMatch(injected[0].content, /\[线程引用关联\]/);
+      assert.doesNotMatch(injected[0].content, /wt-y/);
     } finally {
       globalThis.fetch = realFetch;
     }
   });
 
-  it('dedupes the relations section when two references resolve to the same thread', async () => {
+  it('injects a single reference reminder when two references resolve to the same thread', async () => {
     globalThis.fetch = (async (url: any) => {
       if (String(url).includes('thread_relations')) {
         return { ok: true, status: 200, json: async () => relationsPayload } as any;
@@ -1196,18 +1210,17 @@ describe('injectSessionReferences thread relations（HTTP 面 mock）', () => {
         { agentId: 'ph', sessionId: 's-2', title: 'b', sessionType: 'main' },
       ]);
       await feature.injectSessionReferences(ctx);
-      // 引用 reminder + 单条关联节（同线程去重）
-      assert.equal(injected.length, 2);
-      assert.equal(injected.filter(item => item.content.startsWith('[会话引用·关联线程]')).length, 1);
-      // 两条引用行都升级到同一线程身份，锚点各自保留
+      // 单条引用 reminder：两条引用行都升级到同一线程身份，锚点各自保留
+      assert.equal(injected.length, 1);
       assert.match(injected[0].content, /被引一代: s-1「a」/);
       assert.match(injected[0].content, /被引一代: s-2「b」/);
+      assert.doesNotMatch(injected[0].content, /wt-y/);
     } finally {
       globalThis.fetch = realFetch;
     }
   });
 
-  it('falls back to session identity and omits the relations section when the endpoint fails', async () => {
+  it('falls back to session identity when the endpoint fails', async () => {
     globalThis.fetch = (async (url: any) => {
       if (String(url).includes('thread_relations')) throw new Error('relations down');
       return { ok: true, status: 200, json: async () => ({ messages: [] }) } as any;
@@ -1219,6 +1232,123 @@ describe('injectSessionReferences thread relations（HTTP 面 mock）', () => {
       assert.equal(injected.length, 1);
       assert.match(injected[0].content, /- s-1「t」 — agentId: ph（身份: main）/);
       assert.doesNotMatch(injected[0].content, /wt-x/);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+});
+
+describe('read tools attach thread relations（HTTP 面 mock）', () => {
+  const realFetch = globalThis.fetch;
+  const relationsPayload = {
+    threadId: 'wt-x',
+    resolvedThreadId: 'wt-x',
+    resolvedThreadTitle: '线程标题',
+    generations: 3,
+    found: true,
+    partial: false,
+    neighbors: [{ threadId: 'wt-y', title: '邻居', agentId: 'ph', direction: 'references', count: 2, lastSeenAt: '2026-11-14T10:00:00.000Z' }],
+    component: { size: 2, memberThreadIds: ['wt-x', 'wt-y'] },
+  };
+
+  function toolMap() {
+    const feature = new SessionReferenceFeature({ serverOrigin: 'http://server.test' });
+    return new Map(feature.getTools().map((tool) => [tool.name, tool]));
+  }
+
+  it('session_read_overview (threadId 输入) attaches relations field and note', async () => {
+    globalThis.fetch = (async (url: any) => {
+      const u = String(url);
+      if (u.includes('thread_relations')) return { ok: true, status: 200, json: async () => relationsPayload } as any;
+      if (u.includes('/protoclaw/threads/')) {
+        return {
+          ok: true, status: 200,
+          json: async () => ({
+            thread: { threadId: 'wt-x', agentId: 'ph', headSessionTitle: '标题' },
+            sessionChainMeta: [{ sessionId: 's-1', title: '第一代', messageCount: 2 }],
+          }),
+        } as any;
+      }
+      return { ok: true, status: 200, json: async () => ({}) } as any;
+    }) as any;
+    try {
+      const tools = toolMap();
+      const result = await (tools.get('session_read_overview')!.execute as any)({ sessionId: 'wt-x' });
+      assert.equal(result.threadId, 'wt-x');
+      assert.match(result.text, /\[线程导航\] wt-x「标题」/);
+      assert.match(result.text, /\[线程引用关联\] wt-x 的上下游（所在关联群共 2 条线程，含传递关联）：/);
+      assert.match(result.text, /wt-y「邻居」 — 该线程引用过（2 次/);
+      assert.equal(result.relations.threadId, 'wt-x');
+      assert.equal(result.relations.componentSize, 2);
+      assert.equal(result.relations.neighbors.length, 1);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
+  it('session_read_overview (sessionId 输入) attaches relations when the session belongs to a thread', async () => {
+    globalThis.fetch = (async (url: any) => {
+      const u = String(url);
+      if (u.includes('thread_relations')) return { ok: true, status: 200, json: async () => relationsPayload } as any;
+      if (u.includes('session_record')) {
+        return {
+          ok: true, status: 200,
+          json: async () => ({ title: '会话标题', messages: [{ role: 'user', content: 'hi', turn: 1 }], timestamps: [] }),
+        } as any;
+      }
+      return { ok: true, status: 200, json: async () => ({}) } as any;
+    }) as any;
+    try {
+      const tools = toolMap();
+      const result = await (tools.get('session_read_overview')!.execute as any)({ sessionId: 's-1', agentId: 'ph' });
+      assert.equal(result.error, undefined);
+      assert.match(result.text, /\[线程引用关联\] wt-x 的上下游/);
+      assert.equal(result.relations.neighbors[0].threadId, 'wt-y');
+      assert.equal(result.relations.neighbors[0].direction, 'references');
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
+  it('session_read_thread attaches relations field and note', async () => {
+    globalThis.fetch = (async (url: any) => {
+      const u = String(url);
+      if (u.includes('thread_relations')) return { ok: true, status: 200, json: async () => relationsPayload } as any;
+      if (u.includes('thread_transcript')) {
+        return { ok: true, status: 200, json: async () => ({ title: '线程标题', events: [], generations: [] }) } as any;
+      }
+      return { ok: true, status: 200, json: async () => ({}) } as any;
+    }) as any;
+    try {
+      const tools = toolMap();
+      const result = await (tools.get('session_read_thread')!.execute as any)({ threadId: 'wt-x' });
+      assert.match(result.text, /\[线程连续对话\] wt-x「线程标题」/);
+      assert.match(result.text, /\[线程引用关联\] wt-x 的上下游/);
+      assert.match(result.text, /wt-y「邻居」 — 该线程引用过（2 次/);
+      assert.equal(result.relations.threadId, 'wt-x');
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
+  it('omits relations silently when the endpoint fails（读取不受关联降级影响）', async () => {
+    globalThis.fetch = (async (url: any) => {
+      const u = String(url);
+      if (u.includes('thread_relations')) throw new Error('relations down');
+      if (u.includes('/protoclaw/threads/')) {
+        return {
+          ok: true, status: 200,
+          json: async () => ({ thread: { threadId: 'wt-x', agentId: 'ph', headSessionTitle: '标题' }, sessionChainMeta: [] }),
+        } as any;
+      }
+      return { ok: true, status: 200, json: async () => ({}) } as any;
+    }) as any;
+    try {
+      const tools = toolMap();
+      const result = await (tools.get('session_read_overview')!.execute as any)({ sessionId: 'wt-x' });
+      assert.equal(result.threadId, 'wt-x');
+      assert.equal(result.relations, undefined);
+      assert.doesNotMatch(result.text, /线程引用关联/);
     } finally {
       globalThis.fetch = realFetch;
     }

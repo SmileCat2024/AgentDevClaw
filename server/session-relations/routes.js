@@ -1,5 +1,6 @@
 /**
- * 线程关联查询路由（session-reference 关联注入的数据面）。
+ * 线程关联查询路由（session-reference 的数据面：引用注入的线程身份
+ * 反查 + 读取工具返回附带的引用关联）。
  *
  * GET /protoclaw/topic_groups
  *   ?agentId=programming-helper&projectId=…|openDirectory=…
