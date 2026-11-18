@@ -118,7 +118,7 @@ runtime-status、remote-connections、bg-panel、rail-customize、voice-input、
 | `12b04b0a` | 第六批（T2 收尾）：sidebar-render + runtime-status 迁 ESM，app-main 顶层 call-state IIFE 搬出为 `modules/agent-call-states-engine.js`，B2/B3 两处求值期抓取改具名 import，app-core 补两处最小 seam（B5/B6） | src 标签 44 → 42；桥债 368/106 → 382/108；台账 50 / 261 / 606 → 50 / 248 / 554 |
 | `2608fe1d` | 第七批：session-view-state 迁 ESM（T2 渲染层最后一件）。8 命名导出 + 6 桥键；identity 族 6 条 defineKey 注销；`session-view-commit-host` 的 window 抓取改具名 import（与 B2/B3 同型）；57 test 文件 + 3 helper 改造，`test/helpers/session-view-commit.js` 删除 | src 标签 42 → 41；桥债 382/108 → 382/109；台账 50 / 248 / 554 → 50 / 247 / 544 |
 | `2bf6ef91` | 第八批：app-ui 迁 ESM（T2 渲染层收尾）。35 处 export + 23 桥键；app-core 两处最小 seam；`workspace-surface-host` 改首调惰性装配（破静态环）；**回归修复**：resources-viewer 改为直接调注册表本体，并在生产浏览器回归里加 work-group 面板断言 | src 标签 41 → 40；桥债 382/109 → 383/110；台账 50 / 247 / 544 → 50 / 238 / 490 |
-| `1108b73f` | 第九批：app-core 拆解——dom-refs / identity / transport / format-utils 四族抽出 ESM（app-core 1439 → 838 行）。桥债反向 383/110 → 398/114（抽出后 classic 消费方仍需桥，注销条件逐键写在模块尾注） | src 标签 40 → 41（app-core 尚存 + 新模块经 p4-entry，标签数不变口径见门禁）；台账 50 / 238 / 490 → 51 / 189 / 464 |
+| `1108b73f` | 第九批：app-core 拆解——dom-refs / identity / transport / format-utils 四族抽出 ESM（app-core 1439 → 838 行）。桥债反向 383/110 → 398/114（抽出后 classic 消费方仍需桥，注销条件逐键写在模块尾注） | src 标签 40（不变，新模块由 p4-entry 装载）；台账 50 / 238 / 490 → 51 / 189 / 464 |
 
 转换中确立的几条约定（后续批次沿用）：
 
