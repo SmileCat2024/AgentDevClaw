@@ -89,11 +89,9 @@ const MODULE_ENTRIES = [
 // 里占标签）。R4 同样适用：它们的首次执行时机由 import 边决定，改装载链就是
 // 改时序，所以必须显式登记；登记项必须真被某个登记入口 import，且文件是 ESM
 // 语法。P2 消费方批次收口在 p2-entry.js（原 69 条 classic 标签删于此）。
-const MODULE_ENTRY_IMPORTS = [
-  './src/modules/p2-entry.js',
-  // P4 批次入口（时序切换后迁移的活跃域），由 kernel-entry 静态 import
-  './src/modules/p4-entry.js',
-];
+// P4 T5 收尾：p2-entry / p4-entry 已合并进 kernel-entry，本清单清空。
+// 若将来再拆出整批入口文件，在这里登记（门禁会核对「被某个入口 import」且「确实是 ESM」）。
+const MODULE_ENTRY_IMPORTS = [];
 
 function scriptSources(html) {
   return [...html.matchAll(/<script\b[^>]*\bsrc=["']([^"']+)["'][^>]*>/g)].map((m) => m[1]);

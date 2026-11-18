@@ -512,9 +512,11 @@ describe('前端加载链（index.html 真实入口 + P2 ESM 图，P2 子集）'
       MODULE_GRAPH.has(sseRepoPath),
       `sse-client 必须在 module 入口图内可达（可达文件 ${MODULE_GRAPH.size} 个）`,
     );
+    // P4 T5 收尾：p2-entry / p4-entry 已合并进 kernel-entry，装载收口改钉「模块图内
+    // 可达」——那些模块仍必须由单一入口链带入，不得退回散装标签。
     assert.ok(
-      MODULE_GRAPH.get(kernelRepoPath)?.includes('public/src/modules/p2-entry.js'),
-      'kernel-entry 必须 import p2-entry：P2 已迁消费方的装载收口在入口链上，不是散装标签',
+      MODULE_GRAPH.get(kernelRepoPath)?.includes('public/src/modules/workspace-actions.js'),
+      'P2 段（原 p2-entry）必须仍在 kernel-entry 的装载链上：已迁消费方的收口是入口，不是散装标签',
     );
     assert.equal(
       MODULE_ENTRIES.some((entry) => entry.src === SSE_TAG_SRC),
@@ -535,10 +537,8 @@ describe('前端加载链（index.html 真实入口 + P2 ESM 图，P2 子集）'
       );
     }
     assert.ok(
-      MODULE_GRAPH.get('public/src/modules/p2-entry.js')?.includes(
-        'public/src/modules/input-model-switcher.js',
-      ),
-      'input-model-switcher 必须由 p2-entry 显式 import：它没有批次入口文件，'
+      MODULE_GRAPH.get(kernelRepoPath)?.includes('public/src/modules/input-model-switcher.js'),
+      'input-model-switcher 必须由 kernel-entry（原 p2-entry 段）显式 import：它没有批次入口文件，'
         + '不能靠偶然的 import 边进入生产装载链',
     );
     // ── P4 T2 收尾批次：侧栏渲染 / 运行时状态 / call 状态引擎 ──
@@ -557,9 +557,8 @@ describe('前端加载链（index.html 真实入口 + P2 ESM 图，P2 子集）'
       );
     }
     assert.ok(
-      (MODULE_GRAPH.get('public/src/modules/p4-entry.js') || [])
-        .includes('public/src/modules/sidebar-render.js'),
-      'sidebar-render 必须由 p4-entry 显式 import（首屏渲染的桥键在模块相注册）',
+      (MODULE_GRAPH.get(kernelRepoPath) || []).includes('public/src/modules/sidebar-render.js'),
+      'sidebar-render 必须由 kernel-entry（原 p4-entry 段）显式 import（首屏渲染的桥键在模块相注册）',
     );
 
     for (const src of INPUT_SHELL_ESM) {
@@ -581,9 +580,9 @@ describe('前端加载链（index.html 真实入口 + P2 ESM 图，P2 子集）'
       `${WORKSPACE_ACTIONS_ESM} 已迁 ESM：classic 标签会在解析期 SyntaxError（整条脚本不执行）`,
     );
     assert.ok(
-      (MODULE_GRAPH.get('public/src/modules/p2-entry.js') || [])
+      (MODULE_GRAPH.get(kernelRepoPath) || [])
         .includes('public/src/modules/workspace-actions.js'),
-      'workspace-actions 必须由 p2-entry 显式 import：它没有批次入口文件',
+      'workspace-actions 必须由 kernel-entry（原 p2-entry 段）显式 import：它没有批次入口文件',
     );
     // 刷新引擎已迁 ESM（P4 T3）：classic 标签必须删除（解析期 SyntaxError），
     // 且必须经 p4-entry 进入 module 入口图——它是 thread-store-domain 装载期取用
@@ -610,11 +609,11 @@ describe('前端加载链（index.html 真实入口 + P2 ESM 图，P2 子集）'
         `${src} 必须在 module 入口图内可达（调试批次入口 → p2-entry）`,
       );
     }
-    const entryGraph = MODULE_GRAPH.get('public/src/modules/p2-entry.js') || [];
+    const entryGraph = MODULE_GRAPH.get(kernelRepoPath) || [];
     for (const bootstrap of DEBUG_BOOTSTRAPS) {
       assert.ok(
         entryGraph.includes(bootstrap.replace(/^\.\//, 'public/')),
-        `${bootstrap} 必须由 p2-entry 显式 import：调试批次没有散装 module 标签`,
+        `${bootstrap} 必须由 kernel-entry（原 p2-entry 段）显式 import：调试批次没有散装 module 标签`,
       );
     }
     // P4 T2 起 debug-logs / debug-features-hooks / debug-panel-host 也进了 ESM 图：

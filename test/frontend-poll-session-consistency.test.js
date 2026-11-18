@@ -130,7 +130,7 @@ test('session view ownership module is an ESM entry, evaluated before first pain
     /import \{ createSessionViewCommitHost \} from '\.\/session-view-state\.js';/,
     '提交策略宿主改具名 import（不再经 window 晚抓 classic 实现）',
   );
-  assert.match(read('public/src/modules/p4-entry.js'), /import '\.\/session-view-state\.js';/);
+  assert.match(read('public/src/modules/kernel-entry.js'), /import '\.\/session-view-state\.js';/);
 });
 
 test('runtime status cannot commit after the same runtime is re-entered', async () => {
