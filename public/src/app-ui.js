@@ -2110,6 +2110,8 @@ domRefs.settingsToggle.addEventListener('click', (e) => {
 
 document.getElementById('settings-flyout-config').addEventListener('click', () => {
   settingsFlyout.classList.remove('open');
+  // 桥接期：定义于 auth-client（访问保护设置面）。不具名 import——该模块求值期
+  // 要求 action 分发器与桥存储就位，静态边会把装载期副作用铺进主视图域整张图。
   if (typeof window.closeAuthSettings === 'function') window.closeAuthSettings();
   window.ClawFW.settingsTab = 'overview';
   if (window.ClawFW.settingsOpen) {

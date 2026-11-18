@@ -4,9 +4,11 @@
  * import 已迁为 ESM 的 agent-data-loader（host 工厂 seam）与 sse-client。
  *
  * 契约：
- *   - classic 相：kernel-state / app-core / sidebar-render / auth-client 等
- *     auth-client 都必须仍是 classic 标签且先于 app-main（首屏同步链与桥存储的
- *     唯一实现，不能等 deferred module）；
+ *   - classic 相：kernel-state / app-core 仍是 classic 标签且先于一切 module
+ *     （首屏同步链与桥存储的唯一实现，不能等 deferred module）；
+ *   - 认证客户端：auth-client 已迁 ESM（P4 收尾），classic 标签必须删除；它的
+ *     module 入口必须排在 app-main 入口**之前**——编排域的 boot 主链等它发布的
+ *     认证闸 `__clawAuthReady`（原 classic 解析相时序的等价表达，plan R4）；
  *   - ESM 入口链：sse-client 不得是 classic 标签（classic 相解析 import 会
  *     SyntaxError），必须在 index.html 的 module 入口图内可达，并经
  *     kernel-entry → p2-entry 收口（P2 生产装载接线）；
@@ -427,12 +429,11 @@ const selfBootCaseOptions = () => {
 
 describe('前端加载链（index.html 真实入口 + P2 ESM 图，P2 子集）', () => {
   it('入口与时序契约：classic 首屏链仍按 index.html 标签序在 classic 相加载，sse-client 经 module 入口图（kernel-entry → p2-entry）装载，SSE 与 boot 都由认证闸放行', async () => {
-    // ── classic 相：桥存储 / app-core / 认证客户端仍是 classic 标签（先于一切
-    //    module 求值，这是 classic 相与模块相的时序事实，不是标签序约定）
+    // ── classic 相：桥存储 / app-core 仍是 classic 标签（先于一切 module 求值，
+    //    这是 classic 相与模块相的时序事实，不是标签序约定）
     const classicRequirements = [
       './src/modules/kernel-state.js', // 桥存储：状态访问器必须先于一切域模块
       './src/app-core.js', // DOM 引用与 createP2Bootstrap*Host 工厂
-      './src/modules/auth-client.js', // __clawAuthReady 的创建方
     ];
     for (const src of classicRequirements) {
       assert.notEqual(classicIndex(src), -1, `${src} 必须是 classic 标签（classic 相先于模块相求值）`);
@@ -440,6 +441,26 @@ describe('前端加载链（index.html 真实入口 + P2 ESM 图，P2 子集）'
     assert.ok(
       classicIndex('./src/modules/kernel-state.js') < classicIndex('./src/app-core.js'),
       '桥存储必须先于 app-core 注册首个桥键',
+    );
+    // ── 认证客户端（P4 收尾）：已迁 ESM。classic 标签必须删除（解析期
+    //    SyntaxError），且必须作为**独立 module 入口排在 app-main 之前**——
+    //    auth-client 不再被 app-main 静态 import：它的求值期要求 action 分发器与
+    //    桥存储就位，静态边会把这个装载期副作用随编排域铺进每一张触达
+    //    app-main 的图（夹具里就是 80 个文件的 auth/status 建模成本）。
+    assert.equal(
+      CLASSIC_SRCS.includes('./src/modules/auth-client.js'),
+      false,
+      'auth-client 已迁 ESM：classic 标签会在解析期 SyntaxError',
+    );
+    const authClientEntryIdx = MODULE_ENTRIES.findIndex(
+      (entry) => entry.src === './src/modules/auth-client.js',
+    );
+    assert.notEqual(authClientEntryIdx, -1,
+      'auth-client 必须是 index.html 的 module 入口（发布认证闸 __clawAuthReady）');
+    assert.ok(
+      authClientEntryIdx < MODULE_ENTRIES.findIndex((entry) => entry.src === './src/app-main.js'),
+      `auth-client 入口必须早于 app-main（实际 ${authClientEntryIdx}）：`
+        + 'app-main 的 boot 主链在求值期读它发布的认证闸',
     );
     // ── 编排域（P4 T3 收尾）：app-main 已迁 ESM，classic 标签必须删除；它的
     //    module 入口必须**早于 kernel-entry**——kernel-entry 图里 12 个宿主模块在

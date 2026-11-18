@@ -33,9 +33,10 @@
  *
  * ## 启动编排（实测结论：未 await 的 IIFE，不用 top-level await）
  *
- * `window.__clawAuthReady` 由 auth-client（classic，解析相创建）在 DOMContentLoaded
- * 之后的 `initialize()` 里兑现，因此本模块求值时它**必然仍未兑现**：注册 reaction
- * 的时点从解析相挪到模块相不改变任何顺序（浏览器回归实测 authAt < connectedAt）。
+ * 认证闸 `window.__clawAuthReady` 由 auth-client（P4 收尾迁 ESM，module 入口在
+ * index.html 中排在本入口之前）在 DOMContentLoaded 之后的 `initialize()` 里兑现，
+ * 因此本模块求值时它**必然仍未兑现**：注册 reaction 的时点从解析相挪到模块相不改变
+ * 任何顺序（浏览器回归实测 authAt < connectedAt）。
  *
  * 保持未被 await 的调用体（而不是写成 top-level await）的理由是「不必要的行为面
  * 变化」：实测（2026-11-18 变异：把 IIFE 改成 TLA 后跑真实 Chromium 回归）TLA
@@ -1184,10 +1185,11 @@ window.KernelState.claim('app-main', {
 
 // ── 启动编排（auth 放行之后）────────────────────────────────────────────
 // 保持未 await 的调用体（不是 top-level await）：`__clawAuthReady` 由 auth-client
-// 在 DOMContentLoaded 后兑现，本模块求值时它必然仍未兑现，因此认证放行 →
-// startApplication 的顺序由 promise 链本身保证；`startApplication` 的桥键由
-// kernel-entry 图的 application-startup-host 在本文件之后注册，兑现发生在
-// DOMContentLoaded 之后，调用时点必然已就位。写成 TLA 也不会死锁（2026-11-18
+// 在 DOMContentLoaded 后兑现，本模块求值时它必然仍未兑现（auth-client 的 module
+// 入口排在 index.html 更前面，见文件头注），因此认证放行 → startApplication 的
+// 顺序由 promise 链本身保证；`startApplication`
+// 的桥键由 kernel-entry 图的 application-startup-host 在本文件之后注册，兑现发生
+// 在 DOMContentLoaded 之后，调用时点必然已就位。写成 TLA 也不会死锁（2026-11-18
 // 变异实测），但会推迟页面 load 事件——既有语义是 fire-and-forget，没有理由换。
 (async () => {
   await window.__clawAuthReady;

@@ -65,8 +65,10 @@ import './voice-input.js'; // 语音录制 / 转写；状态键 owner 在 p2-w2-
 // ── T3 长尾：线程刷新引擎与插件清单 ──
 import './thread-store.js'; // 线程刷新引擎（2s 启动 / 20s 周期 / visibilitychange）；桥 domain thread-store-engine
 import './plugin-manifest.js'; // APP 插件清单解析；桥 resolveAgentPlugin ← app-ui
-// auth-client 判定 R1/R2/R4 触线，保持 classic：它创建 __clawAuthReady 并被 app-main
-// 顶层 IIFE 等待，创建时点不能后移到模块相（详见 P4 计划实施记录）。
+// auth-client 已迁 ESM（P4 收尾）：它是 index.html 的**独立 module 入口**，排在
+// app-main 之前（认证闸 __clawAuthReady 必须在编排域求值前发布），因此本入口不
+// 重复 import；桥键 domain `auth-client` 服务 sse-client 的自举判定与 app-ui 的
+// 访问保护设置入口。
 
 // ── T3 长尾：远程连接（remote-connections）──
 import './remote-connections.js'; // 远程命名空间 / 侧栏远程投影 / 远程写链路；10 桥键

@@ -92,7 +92,10 @@
   <!-- plugin-manifest 已迁 ESM（P4 T3）：classic 标签删除，由 p4-entry 装载；
        桥键 resolveAgentPlugin ← app-ui 的插件解析闭包。 -->
   <script src="./src/modules/action-dispatcher.js"></script>
-  <script src="./src/modules/auth-client.js"></script>
+  <!-- auth-client 已迁 ESM（P4 收尾）：独立 module 入口，必须早于 app-main 的
+       入口求值（认证闸 __clawAuthReady 在编排域读取前发布）。勿并入 p4-entry：
+       那会把认证初始化推到整张模块图之后，与 boot 首屏链的等待面错位。 -->
+  <script type="module" src="./src/modules/auth-client.js"></script>
   <link rel="stylesheet" href="./styles/base.css">
   <link rel="stylesheet" href="./styles/layout.css">
   <link rel="stylesheet" href="./styles/sidebar-layout.css">
