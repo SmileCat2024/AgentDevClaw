@@ -15,6 +15,8 @@
  * 入口注册：mount 时写 window.ClawFW.appSettingsPanels.memo（unmount 摘除）
  * ——首页 hero 的「设置」按钮声明通用 action type 'open_app_settings' +
  * settings: 'memo'，公共分发器查注册表调用，不按 APP ID 分支（可拔插约束）。
+ * 侧栏工作空间右键菜单的「设置」项经同一入口（跨工作空间调用时分发器
+ * 等插件装载落定后再查表，见 workspace-actions 的就绪等待）。
  *
  * 宿主能力经 mount(presenter) 注入（presenter 由插件 index.js 收敛）：
  *   escapeHtml / getLanguage / workspace.agentById / modelPresets.get,set /
@@ -144,7 +146,7 @@ const MemoSettingsUI = (() => {
     const zh = isZh();
     if (!reminderState) return '';
     const { userValue, authorDefault } = reminderState;
-    const effective = typeof userValue === 'boolean' ? userValue : authorDefault;
+    const effective = userValue ?? authorDefault;
     const toggleRow = [
       '<div class="ph-mc-list">',
       '<div class="ph-mc-row">',
@@ -153,7 +155,7 @@ const MemoSettingsUI = (() => {
       '</div>',
       '<div style="display:flex;justify-content:flex-end;align-items:center;padding-top:7px;">',
       '<label class="proxy-switch">',
-      '<input type="checkbox" ' + (effective ? 'checked' : '') + ' data-action="memoSettings.toggleReminder" />',
+      '<input type="checkbox" ' + (effective !== 'off' ? 'checked' : '') + ' data-action="memoSettings.toggleReminder" />',
       '<span class="proxy-switch-slider"></span>',
       '</label>',
       '</div>',
@@ -218,7 +220,15 @@ const MemoSettingsUI = (() => {
     pluginHost.enhanceSelectAll(host);
   }
 
-  /** 拉取提醒通知权限判定链输入：用户覆盖（resourcePolicy）+ 作者默认（metadata permissionDefaults）。 */
+  /** 拉取提醒通知权限判定链输入：用户覆盖（resourcePolicy）+ 作者默认（metadata permissionDefaults）。
+   * 值域是三态呈现模式（off / auto / persistent，ADR-0030 修订）；memo 设置
+   * 保持开关形态——开 = 非 off（写 auto），关 = off。历史布尔值就地归一。 */
+  function normalizeReminderMode(value) {
+    if (value === true) return 'auto';
+    if (value === false) return 'off';
+    return (value === 'off' || value === 'auto' || value === 'persistent') ? value : null;
+  }
+
   async function loadReminderState() {
     reminderState = null;
     try {
@@ -227,16 +237,15 @@ const MemoSettingsUI = (() => {
       const memo = pluginHost.workspace.agentById(AGENT_ID);
       const defaults = memo && memo.source === 'prebuilt' && memo.permissionDefaults
         && typeof memo.permissionDefaults === 'object' ? memo.permissionDefaults : {};
-      const authorDefault = typeof defaults['notifications.reminder'] === 'boolean'
-        ? defaults['notifications.reminder'] : false;
-      const userValue = data?.resourcePolicy?.[AGENT_ID]?.['notifications.reminder'];
+      const authorDefault = normalizeReminderMode(defaults['notifications.reminder']) || 'off';
+      const userValue = normalizeReminderMode(data?.resourcePolicy?.[AGENT_ID]?.['notifications.reminder']);
       reminderState = {
-        userValue: typeof userValue === 'boolean' ? userValue : undefined,
+        userValue: userValue ?? undefined,
         authorDefault,
       };
     } catch {
       // 读取失败按作者默认渲染（开关仍可用，保存走同端点）
-      reminderState = { userValue: undefined, authorDefault: true };
+      reminderState = { userValue: undefined, authorDefault: 'auto' };
     }
   }
 
@@ -275,6 +284,8 @@ const MemoSettingsUI = (() => {
   async function toggleReminder(el) {
     const checked = el?.checked === true;
     const zh = isZh();
+    // 开关形态 ↔ 三态模式：开 = auto（轻提示），关 = off
+    const nextMode = checked ? 'auto' : 'off';
     try {
       const resp = await fetch('/protoclaw/workspace_settings/resource_policy', {
         method: 'PUT',
@@ -282,14 +293,14 @@ const MemoSettingsUI = (() => {
         body: JSON.stringify({
           agentId: AGENT_ID,
           permissionId: 'notifications.reminder',
-          value: checked,
+          value: nextMode,
         }),
       });
       if (!resp.ok) {
         const data = await resp.json().catch(() => ({}));
         throw new Error(data?.error || ('HTTP ' + resp.status));
       }
-      if (reminderState) reminderState.userValue = checked;
+      if (reminderState) reminderState.userValue = nextMode;
       setStatus(zh ? '已保存' : 'Saved', false);
     } catch (error) {
       console.error('[memo-settings] reminder toggle failed:', error);

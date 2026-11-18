@@ -18,9 +18,12 @@
  * 输入框引用联动：user-turn 的 metadata['session-reference']（条目：
  * {agentId, sessionId, title?, sessionType?}）在 CallStart 注入一条
  * reminder，提示 AI 按三级读取协议消费被引用会话。引用随消息一次性流动。
- * 被引会话属于线程时，行身份升级为线程（wt-… 主身份 + 被引一代锚点），
- * 并追加一条关联 reminder（一跳邻居 + 关联群规模，显式引用重建的派生
- * 投影，详见 server/session-relations/）。
+ * 被引会话属于线程时，行身份升级为线程（wt-… 主身份 + 被引一代锚点）。
+ * 引用 reminder 只携带被引对象自身的寻址信息——线程的引用关联（一跳
+ * 邻居 + 关联群规模）不在此注入，后移到读取面：session_read_overview /
+ * session_read_thread 的返回体附带 relations 字段与文末 [线程引用关联]
+ * 提示，模型已决定读取该线程时才看到线索。历史版本曾在引用时追加关联
+ * reminder，实测诱导模型读取未被引用的兄弟线程（overread），已退役。
  *
  * 引用账本（轮转接续）：用户引用与 AI 主动读取过的会话记入 feature 内存
  * 账本（上限条目、最新来源覆盖、lastSeenAt 滚动），经 declareContinuity
@@ -712,52 +715,62 @@ export interface ThreadRelationsResult {
   partial?: boolean;
 }
 
-// 关联注入的邻居行总上限：多个被引线程共享该预算（克制注入体积）。
-const RELATION_NEIGHBOR_LINE_LIMIT = 8;
+/** 读取返回附带的线程引用关联（session_read_overview / session_read_thread 的 relations 字段形态）。 */
+export interface ThreadRelationsPayload {
+  threadId: string;
+  neighbors: ThreadRelationNeighbor[];
+  componentSize: number;
+  /** 投影未完全就绪时为 true（邻居列表可能不全）。 */
+  partial?: boolean;
+}
+
+/** 读取返回关联提示的邻居行上限（单线程场景，克制提示体积）。 */
+const READ_RELATION_NEIGHBOR_LINE_LIMIT = 8;
 
 const RELATION_DIRECTION_LABELS: Record<ThreadRelationNeighbor['direction'], string> = {
-  references: '被引线程引用过',
-  'referenced-by': '引用过被引线程',
+  references: '该线程引用过',
+  'referenced-by': '引用过该线程',
   both: '双向引用',
 };
 
+/** 端点返回体 → 读取返回的瘦 payload（读取场景主数据已在 text 中，只留关联事实）。 */
+function toRelationsPayload(relations: ThreadRelationsResult): ThreadRelationsPayload {
+  return {
+    threadId: relations.resolvedThreadId,
+    neighbors: Array.isArray(relations.neighbors) ? relations.neighbors : [],
+    componentSize: relations.component?.size || 1,
+    partial: relations.partial === true,
+  };
+}
+
 /**
- * 渲染关联注入 reminder（独立于引用 reminder 的补充消息）。
+ * 渲染读取返回内的线程引用关联提示（附在 session_read_overview /
+ * session_read_thread 返回 text 的尾部）。无邻居返回 null（无提示节）。
  *
- * 防误抽约束：消息前缀「[会话引用·关联线程]」不以「[会话引用]」开头、
- * 行前缀用「·」不用「- 」——投影抽取的 content 门与行解析都不可能把
- * 关联行误抽为引用边（server/session-relations/projection.js 同契约）。
- * 只收有邻居的线程；失败/超时的查询在调用侧已被过滤。返回 null 表示
- * 无可注入内容。
+ * 防误抽说明：该文本进入工具结果而非 system reminder，投影抽取的
+ * content 门（source === 'session-reference' 且以「[会话引用]」开头，
+ * 见 server/session-relations/projection.js）不可能命中工具结果；
+ * 行前缀沿用「·」是惯例延续，非硬约束。
  */
-export function renderThreadRelationsSection(results: ThreadRelationsResult[]): string | null {
-  const withNeighbors = results.filter(result => result.resolvedThreadId && Array.isArray(result.neighbors) && result.neighbors.length > 0);
-  if (withNeighbors.length === 0) return null;
+export function renderThreadRelationsNote(relations: ThreadRelationsPayload): string | null {
+  if (!relations.neighbors || relations.neighbors.length === 0) return null;
   const lines: string[] = [];
-  let budget = RELATION_NEIGHBOR_LINE_LIMIT;
-  for (const result of withNeighbors) {
+  let budget = READ_RELATION_NEIGHBOR_LINE_LIMIT;
+  for (const neighbor of relations.neighbors) {
     if (budget <= 0) break;
-    const threadTitle = result.resolvedThreadTitle ? `「${truncateText(result.resolvedThreadTitle, 80)}」` : '';
-    lines.push(`· 被引线程 ${result.resolvedThreadId}${threadTitle} 的上下游（该线程所在关联群共 ${result.component?.size || 1} 条线程，含传递关联）：`);
-    for (const neighbor of result.neighbors) {
-      if (budget <= 0) break;
-      const title = neighbor.title ? `「${truncateText(neighbor.title, 60)}」` : '';
-      const time = neighbor.lastSeenAt ? `，最近 ${formatTimestamp(Date.parse(neighbor.lastSeenAt))}` : '';
-      const label = RELATION_DIRECTION_LABELS[neighbor.direction] || String(neighbor.direction);
-      lines.push(`· ${neighbor.threadId}${title} — ${label}（${neighbor.count || 1} 次${time}）`);
-      budget--;
-    }
-    if (budget <= 0) {
-      const remaining = withNeighbors
-        .reduce((sum, item) => sum + item.neighbors.length, 0) - (RELATION_NEIGHBOR_LINE_LIMIT - budget);
-      if (remaining > 0) lines.push(`·（其余 ${remaining} 条关联略，可用 thread_list / 会话目录检索）`);
-      break;
-    }
+    const title = neighbor.title ? `「${truncateText(neighbor.title, 60)}」` : '';
+    const time = neighbor.lastSeenAt ? `，最近 ${formatTimestamp(Date.parse(neighbor.lastSeenAt))}` : '';
+    const label = RELATION_DIRECTION_LABELS[neighbor.direction] || String(neighbor.direction);
+    lines.push(`· ${neighbor.threadId}${title} — ${label}（${neighbor.count || 1} 次${time}）`);
+    budget--;
   }
+  const omitted = relations.neighbors.length - lines.length;
+  if (omitted > 0) lines.push(`·（其余 ${omitted} 条关联略，可用 thread_list / 会话目录检索）`);
+  const partialNote = relations.partial ? '，投影未完全就绪、列表可能不全' : '';
   return [
-    '[会话引用·关联线程] 被引线程的上下游关联（由历史显式引用重建，仅供定位，不能代表会话真实内容与方向）：',
+    `· [线程引用关联] ${relations.threadId} 的上下游（所在关联群共 ${relations.componentSize || 1} 条线程，含传递关联${partialNote}）：`,
     ...lines,
-    '需要细节时以行内线程号（wt-…）作 session_read_overview 输入读代际导航；与当前任务无关的关联可忽略。',
+    '· 需要时以行内线程号（wt-…）作 session_read_overview 输入读代际导航；与当前任务无关的关联可忽略。',
   ].join('\n');
 }
 
@@ -972,12 +985,14 @@ class SessionReferenceFeatureInner implements AgentFeature {
   }
 
   /**
-   * 校验存在性 → 反查线程身份与关联（best-effort）→ 注入引用 reminder →
-   * 注入关联 reminder（有邻居时）→ 记账（missing 不入账本）。
+   * 校验存在性 → 反查线程身份（best-effort）→ 注入引用 reminder → 记账
+   * （missing 不入账本）。
    *
-   * 线程身份与关联来自同一请求（/protoclaw/thread_relations 的会话反查
-   * 路径）：失败/超时静默降级——引用行回退会话身份（与旧版一致）、关联
-   * 节直接省略，主注入路径不被补充信息阻塞。
+   * 线程身份来自 /protoclaw/thread_relations 的会话反查路径：失败/超时
+   * 静默降级——引用行回退会话身份（与旧版一致），主注入路径不被补充
+   * 信息阻塞。同一响应里的引用关联（邻居/关联群）不在此消费——关联
+   * 信息已后移到读取面（session_read_overview / session_read_thread
+   * 返回附带），引用注入只携带被引对象自身的信息，防 overread。
    */
   private async verifyAndInjectReferences(
     entries: Array<Record<string, unknown>>,
@@ -1000,7 +1015,7 @@ class SessionReferenceFeatureInner implements AgentFeature {
     await Promise.all(verified
       .filter(ref => ref.availability === 'ok')
       .map(async ref => {
-        const relations = await this.fetchThreadRelationsSafe(ref.agentId, ref.sessionId);
+        const relations = await this.fetchThreadRelationsSafe({ agentId: ref.agentId, sessionId: ref.sessionId });
         if (relations?.resolvedThreadId) relationsByKey.set(`${ref.agentId}/${ref.sessionId}`, relations);
       }));
     const enriched: VerifiedSessionReference[] = verified.map(ref => {
@@ -1014,10 +1029,6 @@ class SessionReferenceFeatureInner implements AgentFeature {
       };
     });
     context.addSystemMessage(renderReferenceReminder(enriched), turn, this.name, 'reminder');
-    // 关联节：同一线程被多会话引用时去重；投影 partial / 无邻居时无内容。
-    const relationsBlocks = [...new Map([...relationsByKey.values()].map(rel => [rel.resolvedThreadId, rel])).values()];
-    const relationsSection = renderThreadRelationsSection(relationsBlocks);
-    if (relationsSection) context.addSystemMessage(relationsSection, turn, this.name, 'reminder');
     for (const ref of verified) {
       if (ref.availability === 'missing') continue;
       this.recordLedger(ref, 'user-reference');
@@ -1025,11 +1036,15 @@ class SessionReferenceFeatureInner implements AgentFeature {
   }
 
   /**
-   * 线程关联查询（含被引会话的线程归属反查）。8s 超时：冷启动投影首建
-   * 分钟级（服务侧有启动预热），超时返回 null 走降级路径。
+   * 线程关联查询：threadId 直连（wt- 全局唯一）或 agentId+sessionId 反查
+   * 所属线程。8s 超时：冷启动投影首建分钟级（服务侧有启动预热），超时
+   * 返回 null 走降级路径。消费方两个：引用注入（反查线程身份）与读取
+   * 工具（返回附带 relations，按 threadId 直连）。
    */
-  private async fetchThreadRelationsSafe(agentId: string, sessionId: string): Promise<ThreadRelationsResult | null> {
-    const params = new URLSearchParams({ agentId, sessionId });
+  private async fetchThreadRelationsSafe(
+    query: { threadId: string } | { agentId: string; sessionId: string },
+  ): Promise<ThreadRelationsResult | null> {
+    const params = new URLSearchParams(query as Record<string, string>);
     try {
       const resp = await fetch(`${this.serverOrigin}/protoclaw/thread_relations?${params}`, {
         headers: internalAuthHeaders(),
@@ -1041,6 +1056,16 @@ class SessionReferenceFeatureInner implements AgentFeature {
     } catch {
       return null;
     }
+  }
+
+  /**
+   * 端点结果 → 读取返回附带的 payload：无线程归属（非线程会话 / 查询
+   * 失败降级）或无邻居（孤立线程）时返回 null，读取返回不附带 relations。
+   */
+  private resolveRelationsPayload(relations: ThreadRelationsResult | null): ThreadRelationsPayload | null {
+    if (!relations?.resolvedThreadId) return null;
+    const payload = toRelationsPayload(relations);
+    return payload.neighbors.length > 0 ? payload : null;
   }
 
   /**
@@ -1231,7 +1256,7 @@ class SessionReferenceFeatureInner implements AgentFeature {
         name: 'session_read_thread',
         parallelizable: true,
         render: { call: 'thread-transcript', result: 'thread-transcript' },
-        description: '读取线程聚合后的连续对话时间线（账目驱动）：每代附代卡（标题/时间/消息数/接续方式）；Trim 重放的前代对话按 handoff 账目折叠为单行，接续注记与摘要显式呈现；用户与助手正文保留、系统注入与工具活动折叠为一行。每条消息带来源 sessionId/turn/messageIndex，原文用 session_read_turn 回读。',
+        description: '读取线程聚合后的连续对话时间线（账目驱动）：每代附代卡（标题/时间/消息数/接续方式）；Trim 重放的前代对话按 handoff 账目折叠为单行，接续注记与摘要显式呈现；用户与助手正文保留、系统注入与工具活动折叠为一行。每条消息带来源 sessionId/turn/messageIndex，原文用 session_read_turn 回读。线程存在引用关联时，返回附 relations 字段与文末 [线程引用关联] 提示（同 session_read_overview）。',
         parameters: {
           type: 'object',
           properties: { threadId: { type: 'string', description: '线程 ID（wt- 前缀）' } },
@@ -1241,6 +1266,8 @@ class SessionReferenceFeatureInner implements AgentFeature {
           const threadId = cleanText(args?.threadId);
           if (!isThreadId(threadId)) return { error: 'threadId 必须是 wt- 前缀的线程 ID' };
           try {
+            // 关联查询与时间线并发：读取该线程时附带引用关联（防 overread 的读取面）。
+            const relationsPromise = this.fetchThreadRelationsSafe({ threadId });
             const params = new URLSearchParams({ threadId });
             const resp = await fetch(`${this.serverOrigin}/protoclaw/thread_transcript?${params}`, { headers: internalAuthHeaders() });
             const data = await resp.json().catch(() => null);
@@ -1347,7 +1374,17 @@ class SessionReferenceFeatureInner implements AgentFeature {
               lines.push(`[为控制篇幅，前段另有 ${omitted} 条事件未展开；可按代卡与各行地址用 session_read_turn 回读]`);
             }
             lines.push(...items.slice(cut).map((item) => item.text));
-            return { text: lines.join('\n'), threadId, eventCount: data.events?.length || 0, omittedEvents: omitted, generations: data.generations || [] };
+            const payload = this.resolveRelationsPayload(await relationsPromise);
+            const note = payload ? renderThreadRelationsNote(payload) : null;
+            if (note) lines.push(note);
+            return {
+              text: lines.join('\n'),
+              threadId,
+              eventCount: data.events?.length || 0,
+              omittedEvents: omitted,
+              generations: data.generations || [],
+              ...(note ? { relations: payload } : {}),
+            };
           } catch (err: any) {
             return { error: `线程对话读取失败: ${err?.message || err}` };
           }
@@ -1426,7 +1463,8 @@ class SessionReferenceFeatureInner implements AgentFeature {
           '轮次过多时未入正文的轮次以单行速览收录（概览覆盖全部轮次）。' +
           '线程导航：线程元信息 + 代际链（每代的 sessionId、标题、时间与规模、接续方式），用于定位要深入的会话——选定代后仍以该代 sessionId + agentId 调用本工具读会话概览。' +
           '阅读策略：仅对与当前任务相关的轮次/代际深入，不要逐轮通读——概览是索引不是全文；' +
-          '用户意图不明确时，先复述概览脉络与用户确认关注点再下钻。',
+          '用户意图不明确时，先复述概览脉络与用户确认关注点再下钻。' +
+          '所属线程存在引用关联时，返回附 relations 字段与文末 [线程引用关联] 提示（一跳邻居与关联群规模，显式引用重建），供按需追踪关联对话，与当前任务无关可忽略。',
         parameters: {
           type: 'object',
           properties: {
@@ -1449,6 +1487,8 @@ class SessionReferenceFeatureInner implements AgentFeature {
           }
           try {
             if (isThreadId(sessionId)) {
+              // 关联查询与线程详情并发：读取该线程时才提示邻居线索（防 overread）。
+              const relationsPromise = this.fetchThreadRelationsSafe({ threadId: sessionId });
               const detail = await fetchThreadDetail(this.serverOrigin, sessionId);
               if (detail === null) {
                 return {
@@ -1461,11 +1501,19 @@ class SessionReferenceFeatureInner implements AgentFeature {
               }
               const chainMeta = Array.isArray(detail?.sessionChainMeta) ? detail.sessionChainMeta : undefined;
               const text = renderThreadOverview(thread, chainMeta);
-              return { text, threadId: cleanText(thread.threadId) };
+              const payload = this.resolveRelationsPayload(await relationsPromise);
+              const note = payload ? renderThreadRelationsNote(payload) : null;
+              return {
+                text: note ? `${text}\n${note}` : text,
+                threadId: cleanText(thread.threadId),
+                ...(note ? { relations: payload } : {}),
+              };
             }
             if (!agentId) {
               return { error: 'agentId is required（会话按 (agentId, sessionId) 二元组寻址，不能省略；线程 ID 输入时无需 agentId）' };
             }
+            // 关联查询与会话记录并发：会话属于线程时读取返回附带引用关联。
+            const relationsPromise = this.fetchThreadRelationsSafe({ agentId, sessionId });
             const record = await fetchSessionRecord(this.serverOrigin, agentId, sessionId);
             const messages = Array.isArray(record?.messages) ? record.messages : [];
             if (messages.length === 0) {
@@ -1493,7 +1541,14 @@ class SessionReferenceFeatureInner implements AgentFeature {
               firstAt: timeRange?.firstAt ?? null,
               lastAt: timeRange?.lastAt ?? null,
             });
-            return { text, truncated, messageCount: messages.length };
+            const payload = this.resolveRelationsPayload(await relationsPromise);
+            const note = payload ? renderThreadRelationsNote(payload) : null;
+            return {
+              text: note ? `${text}\n${note}` : text,
+              truncated,
+              messageCount: messages.length,
+              ...(note ? { relations: payload } : {}),
+            };
           } catch (err: any) {
             return { error: `会话概览读取失败: ${err?.message || err}` };
           }

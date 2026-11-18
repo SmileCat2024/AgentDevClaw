@@ -300,7 +300,7 @@ describe('programming-helper workspace process mode UI', () => {
       settings.renderPhSettingsOverlay({ id: 'programming-helper' }, [], { initialTab: 'model' });
       // 真实用户路径：点左栏 Coder 页签（data-action="phSettings.switchTab"）
       invokeSettingsAction(c, 'phSettings.switchTab', { dataset: { tab: 'coder' } });
-      // 同步断言（fetch 未 resolve 前）：Coder智能体页默认落「策略」分页
+      // 同步断言（fetch 未 resolve 前）：Coder设置页默认落「策略」分页
       assert.match(host.innerHTML, /ph-session-tab active[^>]*data-sub="policy"/);
       assert.match(host.innerHTML, /ph-coder-policy-host/);
       assert.match(host.innerHTML, /data-sub="mounts"/);
@@ -351,8 +351,8 @@ describe('programming-helper workspace process mode UI', () => {
       document: createSettingsDoc(() => host),
     }, async ({ settings }) => {
       settings.renderPhSettingsOverlay({ id: 'programming-helper' }, [], { initialTab: 'coder' });
-      // 左栏旧「Coder 策略」独立页签消失，内容并入 Coder智能体页策略分页
-      assert.match(host.innerHTML, /Coder智能体/);
+      // 左栏旧「Coder 策略」独立页签消失，内容并入 Coder设置页策略分页
+      assert.match(host.innerHTML, /Coder设置/);
       assert.doesNotMatch(host.innerHTML, /data-tab="coder-policy"/);
       assert.match(host.innerHTML, /ph-coder-policy-host/);
       assert.match(host.innerHTML, /ph-session-tab active[^>]*data-sub="policy"/);

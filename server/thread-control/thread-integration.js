@@ -493,10 +493,12 @@ export function createThreadIntegration({
      * 指令追加后的即时投递：head runtime 已就绪时当场送达，
      * 否则保持 pending 等待下一次 head 推进 / 显式 deliver。
      * 经 delivery-consumer 消费（投递失败进入线程级退避）。
+     * force：滞留自愈（requeue reconcile）与 runtime-ready 补投一样，
+     * 是新事实驱动的投递，不受此前投递失败的退避约束。
      */
-    async tryDeliver(threadId) {
+    async tryDeliver(threadId, { force = false } = {}) {
       try {
-        return await deliveryConsumer.consume(threadId);
+        return await deliveryConsumer.consume(threadId, { force });
       } catch (error) {
         if (error instanceof ThreadNotFoundError) {
           return { attempted: 0, delivered: 0, reason: 'thread_not_found', results: [] };

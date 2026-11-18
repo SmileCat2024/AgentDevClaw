@@ -6,6 +6,8 @@
 
 深化验证入口见 [回执与接续协议深化检查](DEEP-MODELS.md)：独立 Viewer 回执与接续投递窗口模型、13 个场景（含活性和模型变异）、真实 500 条历史边界回放。运行 `node specs/tla/check-deep-models.mjs`；原始基准模型与以下命令保持独立。
 
+宿主投递面模型见 [HostDeliveryPlane.tla](HostDeliveryPlane.tla)：Thread Inbox 指令从 pending 到 delivered 的最后一跳——双真相源（宿主注册表条目 vs viewer 采纳身份）、投递触发票、换头与 runtime 退出干扰预算。8 场景（修复前后死锁对照、活性假设边界、变异辨别力），运行 `node specs/tla/check-host-delivery.mjs`。发现与裁决事项见 [2026-11-18 宿主投递面调查](../../docs/investigations/2026-11-18-host-delivery-deadlock-and-liveness.md)。
+
 本试验检查“领取命令 → 写入内存 Context → 保存 Session 快照 → ack”与保存失败、取消、runtime 重启的交错。它是诊断工具，不是新的产品契约，也不代表整个命令系统已获证明。生产实现未因本试验改变。
 
 ## 基准与前置条件

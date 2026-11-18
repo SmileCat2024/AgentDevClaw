@@ -12,8 +12,13 @@
  *
  * 判定链（三层，ADR-0027/0030）：用户覆盖（workspace-settings
  * resourcePolicy，按 agentId 键控）> 作者默认（metadata permissionDefaults）
- * > 兜底 false。不通过静默跳过（deliverAppNotification 返回 false 供调用
- * 方观测，不报错）。
+ * > 兜底 off。值域是三态呈现模式（off / auto / persistent，ADR-0030 修订：
+ * 布尔退役，历史 true/false 读路径归一为 auto/off）。完成通知按焦点子场景
+ * 细分三键（focused / elsewhere / background）独立判定（信息层级目标，
+ * 子键声明见 FINISH_FOCUS_PERMISSION_IDS），其余类型三键同值；三键全 off
+ * 静默跳过（deliverAppNotification 返回 false 供调用方观测，不报错），
+ * 否则随帧下发（帧 modes 字段）——server 不感知页面焦点，前端呈现器按
+ * 当下焦点态选键呈现（off 不弹 / auto 轻提示 / persistent 常驻）。
  *
  * 去重拆层：server 做事件级（同一事实只发一帧，键对齐 desktop-notify 既有
  * 完成判定的事实键：finish = agentId + finish 事件时间戳，input = agentId +
@@ -25,6 +30,11 @@
 import { resolveRequestAuth } from '../auth.js';
 import { readWorkspaceResourcePolicies } from './workspace-settings.js';
 import { publishAppNotification } from './sse-events.js';
+import {
+  normalizeNotificationModeValue,
+  FINISH_FOCUS_MODE_KEYS,
+  FINISH_FOCUS_PERMISSION_IDS,
+} from '../shared/permission-registry.js';
 import { CONTEXT_ROTATION_INTERRUPT_CAUSE } from '../../local-features/dist/context-guard/src/index.js';
 
 /** 通知 type → 权限项 ID。枚举外的自定义 type 不允许（工单裁决）。 */
@@ -40,11 +50,17 @@ export const APP_NOTIFICATION_TYPES = Object.freeze({
 const _deliveredFactKeys = new Set();
 const DEDUP_MAX_KEYS = 500;
 
-/** 三层判定链（纯函数，可测）：用户覆盖 > 作者默认 > 兜底 false。 */
-export function resolveNotificationPermissionValue({ userValue, authorDefault }) {
-  if (typeof userValue === 'boolean') return userValue;
-  if (typeof authorDefault === 'boolean') return authorDefault;
-  return false;
+/**
+ * 三层判定链（纯函数，可测）：用户覆盖 > 作者默认 > 兜底 off。历史布尔值
+ * （true/false）就地归一为模式（true→auto、false→off）——布尔值域退役前的
+ * 存量覆盖与旧调用方仍可能携带；非模式非布尔返回 null（未配置）。
+ */
+export function resolveNotificationPermissionValue({ userValue, authorDefault } = {}) {
+  const user = normalizeNotificationModeValue(userValue);
+  if (user) return user;
+  const author = normalizeNotificationModeValue(authorDefault);
+  if (author) return author;
+  return 'off';
 }
 
 /** 读 metadata 作者默认值。requireAgent 缺失或 agent 未知时按空表处理。 */
@@ -60,10 +76,13 @@ async function readAuthorDefaults(agentId, requireAgent) {
 }
 
 /**
- * 判定 agentId 对某通知 type 是否允许投递（判定链全链）。
- * settingsPath 是测试缝（隔离用户数据目录），生产调用不传。
+ * 判定 agentId 对某通知 type 的呈现模式组（判定链全链，焦点细分）。
+ * 返回 { focused, elsewhere, background } 三键（信息层级目标：完成通知
+ * 按焦点子场景独立配置；无细分的类型三键同值）。server 不感知页面焦点，
+ * 三键全部随帧下发，前端按当下焦点态选键呈现。settingsPath 是测试缝
+ * （隔离用户数据目录），生产调用不传。
  */
-export async function isNotificationAllowed({
+export async function resolveNotificationModes({
   agentId,
   type,
   requireAgent = null,
@@ -71,15 +90,44 @@ export async function isNotificationAllowed({
 } = {}) {
   const permissionId = APP_NOTIFICATION_TYPES[type];
   const normalizedAgentId = String(agentId || '').trim();
-  if (!permissionId || !normalizedAgentId) return false;
+  if (!permissionId || !normalizedAgentId) {
+    return { focused: 'off', elsewhere: 'off', background: 'off' };
+  }
   const [policies, authorDefaults] = await Promise.all([
     readWorkspaceResourcePolicies({ settingsPath }),
     readAuthorDefaults(normalizedAgentId, requireAgent),
   ]);
-  return resolveNotificationPermissionValue({
-    userValue: policies[normalizedAgentId]?.[permissionId],
-    authorDefault: authorDefaults[permissionId],
+  const userPolicy = policies[normalizedAgentId] || {};
+  const resolveOne = (pid) => resolveNotificationPermissionValue({
+    userValue: userPolicy[pid],
+    authorDefault: authorDefaults[pid],
   });
+
+  if (permissionId !== 'notifications.finish') {
+    const mode = resolveOne(permissionId);
+    return { focused: mode, elsewhere: mode, background: mode };
+  }
+
+  // 完成通知：作者默认声明了焦点子键（focus-keyed agent，如编程小助手）
+  // 即按子键独立判定；用户无任何子键覆盖但存在旧单键覆盖时，单键值复制
+  // 三键（存量迁移语义：用户确认过的行为压过作者默认，不因层级升级漂移）。
+  // 作者未声明子键（coder 形态）按单键判定——用户数据中误写的子键覆盖
+  // 不在声明集内，忽略。
+  const isFocusKeyed = FINISH_FOCUS_PERMISSION_IDS.some((pid) => authorDefaults[pid] !== undefined);
+  if (permissionId === 'notifications.finish' && isFocusKeyed) {
+    const hasUserFocusOverride = FINISH_FOCUS_PERMISSION_IDS.some((pid) => userPolicy[pid] !== undefined);
+    if (!hasUserFocusOverride) {
+      const legacyUser = normalizeNotificationModeValue(userPolicy[permissionId]);
+      if (legacyUser) {
+        return { focused: legacyUser, elsewhere: legacyUser, background: legacyUser };
+      }
+    }
+    return Object.fromEntries(
+      FINISH_FOCUS_MODE_KEYS.map((key, index) => [key, resolveOne(FINISH_FOCUS_PERMISSION_IDS[index])]),
+    );
+  }
+  const mode = resolveOne(permissionId);
+  return { focused: mode, elsewhere: mode, background: mode };
 }
 
 /**
@@ -118,12 +166,17 @@ export async function deliverAppNotification({
     if (_deliveredFactKeys.size >= DEDUP_MAX_KEYS) _deliveredFactKeys.clear();
     _deliveredFactKeys.add(key);
   }
-  const allowed = await isNotificationAllowed({ agentId: normalizedAgentId, type, requireAgent, settingsPath });
-  if (!allowed) return false;
+  const modes = await resolveNotificationModes({ agentId: normalizedAgentId, type, requireAgent, settingsPath });
+  // 三键全 off = 该场景整体关闭（server 感知的极限粒度）：不发布帧。
+  // 部分子场景 off 照常发布——焦点态在设备端，由前端呈现器选键后静默。
+  if (FINISH_FOCUS_MODE_KEYS.every((key) => modes[key] === 'off')) return false;
   publishAppNotification({
     kind: 'app-notification',
     agentId: normalizedAgentId,
     type,
+    // 呈现模式组随帧下发（判定链按焦点子场景解析）：server 不感知页面
+    // 焦点，三键全量下发，前端按当下焦点态选键决定不弹 / 轻提示 / 常驻。
+    modes,
     ...(normalizedRuntimeAgentId ? { runtimeAgentId: normalizedRuntimeAgentId } : {}),
     ...(title ? { title: String(title) } : {}),
     ...(body ? { body: String(body) } : {}),

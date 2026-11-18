@@ -182,11 +182,22 @@ test('declared app entry carries the workspace ctx identity, menu gate and ⋯ b
   assert.doesNotMatch(html, /onpointermove=/, 'hover fade is pure CSS, no JS proximity driver');
 });
 
-test('undeclared app entry has no menu entry points', (ctx) => {
+test('app outside every fact family has no menu entry points', (ctx) => {
+  ctx.allAgents = [{ id: 'work-group', name: 'Work Group', source: 'prebuilt' }];
+  const html = ctx.run(`renderAgentItems([{ id: 'work-group', name: 'Work Group', source: 'prebuilt' }], { prebuilt: true })`);
+  assert.match(html, /data-agent-context-menu="false"/, 'no capability fact → no entry, browser default menu');
+  assert.doesNotMatch(html, /agent-runtime-more/);
+});
+
+test('settings shortcuts fact family alone opens the entry gate (programming-helper)', (ctx) => {
+  // 真实声明形态：编程小助手未声明 sidebarSessions（metadata.json），
+  // 设置直达族独立命中门控（右键与 ⋯ 同一条件 = 菜单非空）
   ctx.allAgents = [{ id: 'programming-helper', name: '智能编码空间', source: 'prebuilt' }];
   const html = ctx.run(`renderAgentItems([{ id: 'programming-helper', name: '智能编码空间', source: 'prebuilt' }], { prebuilt: true })`);
-  assert.match(html, /data-agent-context-menu="false"/, 'no capability declaration → no entry, browser default menu');
-  assert.doesNotMatch(html, /agent-runtime-more/);
+  assert.match(html, /data-agent-context-menu="true"/, 'gate opens when the settings shortcuts family is present');
+  assert.match(html, /data-ctx-role="workspace"/);
+  assert.match(html, /data-ctx-ns="programming-helper"/);
+  assert.match(html, /class="agent-runtime-more"/, '⋯ button renders for the non-empty workspace menu');
 });
 
 test('gate retirement is prebuilt-only: non-prebuilt runtime items keep the static-menu path', (ctx) => {
@@ -211,9 +222,12 @@ test('⋯ entry routes the workspace role through the shared session ctx-menu op
   assert.equal(shown.length, 1, 'menu opens exactly once');
   assert.equal(shown[0].target.role, 'workspace');
   assert.equal(shown[0].target.ns, 'memo');
-  assert.equal(shown[0].items.length, 1);
-  assert.equal(shown[0].items[0].action, 'claw:toggle-sidebar-sessions');
-  assert.equal(shown[0].items[0].label, '显示对话条目', 'label follows the effective policy');
+  // memo 命中两族：设置直达（appSettings 落点）在前，呈现策略切换在后
+  assert.equal(shown[0].items.length, 3);
+  assert.equal(shown[0].items[0].action, 'claw:open-settings:app:memo');
+  assert.equal(shown[0].items[1].type, 'separator');
+  assert.equal(shown[0].items[2].action, 'claw:toggle-sidebar-sessions');
+  assert.equal(shown[0].items[2].label, '显示对话条目', 'label follows the effective policy');
 });
 
 // ── 会话子树呈现过滤（ADR-0050 P2）：生效值 hidden 时整棵会话子树不渲染 ──

@@ -1,8 +1,10 @@
 /**
  * Tests for ADR-0030 notification foundation:
- * - server/shared/permission-registry.js 布尔通知项与 permissionDefaults 校验
- * - server/routes/app-notification.js 判定链、统一投递出口、事件级去重、
- *   runtime 状态感知（完成/输入请求）、POST /protoclaw/app_notifications 端点
+ * - server/shared/permission-registry.js 三态模式通知项（off/auto/persistent，
+ *   ADR-0030 修订：布尔退役）与 permissionDefaults 校验
+ * - server/routes/app-notification.js 判定链（含历史布尔归一）、统一投递
+ *   出口（帧携带 mode）、事件级去重、runtime 状态感知（完成/输入请求）、
+ *   POST /protoclaw/app_notifications 端点、存量布尔用户覆盖的读迁移
  * - sse-events.js 的 app-notification 帧发布（模块级入口 → 实例环形缓冲）
  * - 三份 prebuilt metadata.json 的声明契约（工单"决策已定死"逐字校验）
  *
@@ -24,12 +26,17 @@ import express from 'express';
 const DATA_DIR = mkdtempSync(path.join(tmpdir(), 'claw-app-notification-test-'));
 process.env.AGENTDEV_DATA_DIR = DATA_DIR;
 
-const { PERMISSION_ITEMS, normalizePermissionDefaults, isValidPermissionValue } =
-  await import('../server/shared/permission-registry.js');
+const {
+  PERMISSION_ITEMS,
+  NOTIFICATION_MODE_VALUES,
+  normalizePermissionDefaults,
+  isValidPermissionValue,
+} = await import('../server/shared/permission-registry.js');
 const { createSseEventsModule } = await import('../server/routes/sse-events.js');
 const {
   APP_NOTIFICATION_TYPES,
   resolveNotificationPermissionValue,
+  resolveNotificationModes,
   deliverAppNotification,
   observeCallStatusSnapshot,
   observeThreadTurnFact,
@@ -40,7 +47,8 @@ const {
   isFinishNews,
   setupAppNotificationRoutes,
 } = await import('../server/routes/app-notification.js');
-const { writeWorkspacePermissionValue } = await import('../server/routes/workspace-settings.js');
+const { writeWorkspacePermissionValue, readWorkspaceResourcePolicies } =
+  await import('../server/routes/workspace-settings.js');
 const { publishAppNotification } = await import('../server/routes/sse-events.js');
 
 // ── SSE 装配（照 sse-events.test.js 的最小形态）─────────────────────
@@ -128,13 +136,18 @@ async function waitAppNotificationFrame(predicate, timeoutMs = 1000) {
 
 // ── 1. 权限项族（permission-registry）───────────────────────────────
 
-describe('permission registry: notification boolean items', () => {
-  it('registers the three notification items as boolean', () => {
+describe('permission registry: notification mode items', () => {
+  it('registers the three notification items as tri-state mode enums', () => {
     for (const id of ['notifications.finish', 'notifications.reminder', 'notifications.input']) {
-      assert.equal(PERMISSION_ITEMS[id]?.valueType, 'boolean', id);
+      assert.equal(PERMISSION_ITEMS[id]?.valueType, 'enum', id);
+      assert.deepEqual(PERMISSION_ITEMS[id]?.values, NOTIFICATION_MODE_VALUES, id);
       assert.equal(typeof PERMISSION_ITEMS[id]?.validate, 'function', id);
-      assert.equal(isValidPermissionValue(id, true), true, id);
-      assert.equal(isValidPermissionValue(id, false), true, id);
+      for (const mode of NOTIFICATION_MODE_VALUES) {
+        assert.equal(isValidPermissionValue(id, mode), true, `${id} ${mode}`);
+      }
+      // 布尔值域已退役（ADR-0030 修订）：写路径拒收，只在读路径归一
+      assert.equal(isValidPermissionValue(id, true), false, id);
+      assert.equal(isValidPermissionValue(id, false), false, id);
       assert.equal(isValidPermissionValue(id, 'true'), false, id);
       assert.equal(isValidPermissionValue(id, 1), false, id);
       assert.equal(isValidPermissionValue(id, null), false, id);
@@ -150,14 +163,14 @@ describe('permission registry: notification boolean items', () => {
   it('normalizes permissionDefaults: undefined -> {}, valid projection', () => {
     assert.deepEqual(normalizePermissionDefaults(undefined, ['notifications.finish']), {});
     assert.deepEqual(
-      normalizePermissionDefaults({ 'notifications.finish': true }, ['notifications.finish']),
-      { 'notifications.finish': true },
+      normalizePermissionDefaults({ 'notifications.finish': 'auto' }, ['notifications.finish']),
+      { 'notifications.finish': 'auto' },
     );
   });
 
   it('rejects permissionDefaults with undeclared keys', () => {
     assert.throws(
-      () => normalizePermissionDefaults({ 'notifications.input': true }, ['notifications.finish']),
+      () => normalizePermissionDefaults({ 'notifications.input': 'auto' }, ['notifications.finish']),
       /未声明/,
     );
     assert.throws(
@@ -171,6 +184,10 @@ describe('permission registry: notification boolean items', () => {
       () => normalizePermissionDefaults({ 'notifications.finish': 'yes' }, ['notifications.finish']),
       /值非法/,
     );
+    assert.throws(
+      () => normalizePermissionDefaults({ 'notifications.finish': true }, ['notifications.finish']),
+      /值非法/,
+    );
     assert.throws(() => normalizePermissionDefaults('nope', ['notifications.finish']), /必须是对象/);
     assert.throws(() => normalizePermissionDefaults([], ['notifications.finish']), /必须是对象/);
   });
@@ -178,16 +195,72 @@ describe('permission registry: notification boolean items', () => {
 
 // ── 2. 三层判定链 ────────────────────────────────────────────────────
 
-describe('resolveNotificationPermissionValue: override > default > false', () => {
+describe('resolveNotificationPermissionValue: override > default > off', () => {
   it('user override wins over author default (both directions)', () => {
-    assert.equal(resolveNotificationPermissionValue({ userValue: false, authorDefault: true }), false);
-    assert.equal(resolveNotificationPermissionValue({ userValue: true, authorDefault: false }), true);
+    assert.equal(resolveNotificationPermissionValue({ userValue: 'off', authorDefault: 'auto' }), 'off');
+    assert.equal(resolveNotificationPermissionValue({ userValue: 'persistent', authorDefault: 'off' }), 'persistent');
   });
-  it('author default applies when unset; fallback is false', () => {
-    assert.equal(resolveNotificationPermissionValue({ userValue: undefined, authorDefault: true }), true);
-    assert.equal(resolveNotificationPermissionValue({ userValue: undefined, authorDefault: false }), false);
-    assert.equal(resolveNotificationPermissionValue({ userValue: undefined, authorDefault: undefined }), false);
-    assert.equal(resolveNotificationPermissionValue({}), false);
+  it('author default applies when unset; fallback is off', () => {
+    assert.equal(resolveNotificationPermissionValue({ userValue: undefined, authorDefault: 'auto' }), 'auto');
+    assert.equal(resolveNotificationPermissionValue({ userValue: undefined, authorDefault: 'persistent' }), 'persistent');
+    assert.equal(resolveNotificationPermissionValue({ userValue: undefined, authorDefault: undefined }), 'off');
+    assert.equal(resolveNotificationPermissionValue({}), 'off');
+  });
+  it('normalizes legacy booleans in place (true→auto, false→off)', () => {
+    // 布尔值域退役前的存量覆盖与旧调用方：判定链就地归一，语义不变
+    assert.equal(resolveNotificationPermissionValue({ userValue: true, authorDefault: 'off' }), 'auto');
+    assert.equal(resolveNotificationPermissionValue({ userValue: false, authorDefault: 'auto' }), 'off');
+    assert.equal(resolveNotificationPermissionValue({ userValue: undefined, authorDefault: true }), 'auto');
+    assert.equal(resolveNotificationPermissionValue({ userValue: undefined, authorDefault: false }), 'off');
+  });
+});
+
+// ── 2b. 焦点细分判定链（resolveNotificationModes）───────────────────
+
+describe('resolveNotificationModes: finish focus keys', () => {
+  const settingsPath = () => path.join(mkdtempSync(path.join(tmpdir(), 'claw-appnotif-modes-')), 'workspace-settings.json');
+  const FOCUS_DEFAULTS = {
+    'notifications.finish.focused': 'off',
+    'notifications.finish.elsewhere': 'auto',
+    'notifications.finish.background': 'persistent',
+    'notifications.input': 'persistent',
+  };
+  const focusAgent = async (agentId) => ({ id: agentId, permissionDefaults: { ...FOCUS_DEFAULTS } });
+
+  it('resolves each focus key independently when sub-keys are declared', async () => {
+    const modes = await resolveNotificationModes({
+      agentId: 'ph', type: 'finish', requireAgent: focusAgent, settingsPath: settingsPath(),
+    });
+    assert.deepEqual(modes, { focused: 'off', elsewhere: 'auto', background: 'persistent' });
+  });
+
+  it('per-focus-key user override beats author default', async () => {
+    const sp = settingsPath();
+    await writeWorkspacePermissionValue('ph', 'notifications.finish.focused', 'persistent', { settingsPath: sp });
+    await writeWorkspacePermissionValue('ph', 'notifications.finish.background', 'off', { settingsPath: sp });
+    const modes = await resolveNotificationModes({ agentId: 'ph', type: 'finish', requireAgent: focusAgent, settingsPath: sp });
+    assert.deepEqual(modes, { focused: 'persistent', elsewhere: 'auto', background: 'off' });
+  });
+
+  it('falls back to the legacy single-key override when no sub-key is overridden', async () => {
+    // 存量迁移语义：旧单键用户覆盖（含布尔归一结果）在子键未逐项覆盖时
+    // 复制三键——用户确认过的行为不因层级升级漂移
+    const sp = settingsPath();
+    await writeWorkspacePermissionValue('ph', 'notifications.finish', 'auto', { settingsPath: sp });
+    const modes = await resolveNotificationModes({ agentId: 'ph', type: 'finish', requireAgent: focusAgent, settingsPath: sp });
+    assert.deepEqual(modes, { focused: 'auto', elsewhere: 'auto', background: 'auto' });
+  });
+
+  it('non-finish types and single-key finish agents resolve one mode into all three keys', async () => {
+    const singleAgent = async (agentId) => ({ id: agentId, permissionDefaults: { 'notifications.finish': 'off' } });
+    assert.deepEqual(
+      await resolveNotificationModes({ agentId: 'coder', type: 'finish', requireAgent: singleAgent, settingsPath: settingsPath() }),
+      { focused: 'off', elsewhere: 'off', background: 'off' },
+    );
+    assert.deepEqual(
+      await resolveNotificationModes({ agentId: 'ph', type: 'input', requireAgent: focusAgent, settingsPath: settingsPath() }),
+      { focused: 'persistent', elsewhere: 'persistent', background: 'persistent' },
+    );
   });
 });
 
@@ -200,31 +273,38 @@ describe('prebuilt metadata permission contracts', () => {
     return JSON.parse(await readFile(path.join(root, agentId, 'metadata.json'), 'utf8'));
   }
 
-  it('programming-helper: finish=true, input=true, both declared', async () => {
+  it('programming-helper: finish focus keys (off/auto/persistent) + input=persistent, all declared', async () => {
     const meta = await readMetadata('programming-helper');
-    assert.deepEqual(meta.permissions, ['notifications.finish', 'notifications.input']);
+    assert.deepEqual(meta.permissions, [
+      'notifications.finish.focused',
+      'notifications.finish.elsewhere',
+      'notifications.finish.background',
+      'notifications.input',
+    ]);
     assert.deepEqual(normalizePermissionDefaults(meta.permissionDefaults, meta.permissions), {
-      'notifications.finish': true,
-      'notifications.input': true,
+      'notifications.finish.focused': 'off',
+      'notifications.finish.elsewhere': 'auto',
+      'notifications.finish.background': 'persistent',
+      'notifications.input': 'persistent',
     });
   });
 
-  it('coder: finish=false declared, maxLiveThreads kept for the quota gate, rotation strategy defaults adaptive', async () => {
+  it('coder: finish=off declared, maxLiveThreads kept for the quota gate, rotation strategy defaults adaptive', async () => {
     const meta = await readMetadata('coder');
     assert.ok(meta.permissions.includes('maxLiveThreads'), 'quota gate depends on this declaration');
     assert.deepEqual(normalizePermissionDefaults(meta.permissionDefaults, meta.permissions), {
-      'notifications.finish': false,
+      'notifications.finish': 'off',
       contextRotationStrategy: 'adaptive',
       runtimeExecutionMode: 'standard',
     });
   });
 
-  it('memo: reminder=true, input=true, both declared', async () => {
+  it('memo: reminder=auto, input=auto, both declared', async () => {
     const meta = await readMetadata('memo');
     assert.deepEqual(meta.permissions, ['notifications.reminder', 'notifications.input']);
     assert.deepEqual(normalizePermissionDefaults(meta.permissionDefaults, meta.permissions), {
-      'notifications.reminder': true,
-      'notifications.input': true,
+      'notifications.reminder': 'auto',
+      'notifications.input': 'auto',
     });
   });
 });
@@ -235,7 +315,7 @@ describe('deliverAppNotification', () => {
   const settingsPath = () => path.join(mkdtempSync(path.join(tmpdir(), 'claw-appnotif-ws-')), 'workspace-settings.json');
   const requireAgent = async (agentId) => ({
     id: agentId,
-    permissionDefaults: { 'notifications.finish': true, 'notifications.input': true, 'notifications.reminder': true },
+    permissionDefaults: { 'notifications.finish': 'auto', 'notifications.input': 'auto', 'notifications.reminder': 'auto' },
   });
 
   it('blocks delivery when neither override nor default allows it', async () => {
@@ -247,7 +327,7 @@ describe('deliverAppNotification', () => {
     assert.equal(delivered, false);
   });
 
-  it('delivers via author default and emits an app-notification frame', async () => {
+  it('delivers via author default and emits an app-notification frame carrying the resolved modes', async () => {
     const agentId = 'default-allowed';
     const ok = await deliverAppNotification({
       agentId, type: 'finish', finishTs: 1710000000000,
@@ -260,20 +340,87 @@ describe('deliverAppNotification', () => {
     assert.equal(frame.data.type, 'finish');
     assert.equal(frame.data.finishTs, 1710000000000);
     assert.equal(frame.data.kind, 'app-notification');
+    // 帧携带解析后的三键呈现模式组（ADR-0030 修订二）：单键 agent 三键
+    // 同值；前端按焦点态选键呈现
+    assert.deepEqual(frame.data.modes, { focused: 'auto', elsewhere: 'auto', background: 'auto' });
   });
 
-  it('user override false beats author default true; true beats false', async () => {
+  it('delivers focus-keyed agents with per-key modes; all-off keys block delivery', async () => {
+    // PH 形态（子键声明）：focused=off 仍投递——焦点态在设备端，部分子
+    // 场景关闭由前端呈现器选键后静默，server 只在全 off 时不发帧
+    const focusAgent = async (agentId) => ({
+      id: agentId,
+      permissionDefaults: {
+        'notifications.finish.focused': 'off',
+        'notifications.finish.elsewhere': 'auto',
+        'notifications.finish.background': 'persistent',
+      },
+    });
+    const ok = await deliverAppNotification({
+      agentId: 'ph-like', type: 'finish', finishTs: 1710000000001,
+      dedupeKey: 'ph-like:1710000000001',
+      requireAgent: focusAgent, settingsPath: settingsPath(),
+    });
+    assert.equal(ok, true);
+    const frame = await waitAppNotificationFrame((f) => f.data.agentId === 'ph-like');
+    assert.ok(frame, 'focus-keyed agent should deliver a frame');
+    assert.deepEqual(frame.data.modes, { focused: 'off', elsewhere: 'auto', background: 'persistent' });
+
+    // 用户把三个子场景都设为关闭 = 场景整体关闭，不投递
     const sp = settingsPath();
-    await writeWorkspacePermissionValue('override-agent', 'notifications.finish', false, { settingsPath: sp });
+    for (const pid of ['notifications.finish.focused', 'notifications.finish.elsewhere', 'notifications.finish.background']) {
+      await writeWorkspacePermissionValue('ph-like2', pid, 'off', { settingsPath: sp });
+    }
+    assert.equal(await deliverAppNotification({
+      agentId: 'ph-like2', type: 'finish', finishTs: 2,
+      dedupeKey: 'ph-like2:2', requireAgent: focusAgent, settingsPath: sp,
+    }), false);
+  });
+
+  it('user override off/persistent beats author default auto', async () => {
+    const sp = settingsPath();
+    await writeWorkspacePermissionValue('override-agent', 'notifications.finish', 'off', { settingsPath: sp });
     assert.equal(await deliverAppNotification({
       agentId: 'override-agent', type: 'finish', finishTs: 1,
       dedupeKey: 'override-agent:1', requireAgent, settingsPath: sp,
     }), false);
-    await writeWorkspacePermissionValue('override-agent2', 'notifications.finish', true, { settingsPath: sp });
+    await writeWorkspacePermissionValue('override-agent2', 'notifications.finish', 'persistent', { settingsPath: sp });
     assert.equal(await deliverAppNotification({
       agentId: 'override-agent2', type: 'finish', finishTs: 2,
       dedupeKey: 'override-agent2:2', requireAgent, settingsPath: sp,
     }), true);
+    const frame = await waitAppNotificationFrame((f) => f.data.agentId === 'override-agent2');
+    assert.ok(frame, 'persistent override should deliver a frame');
+    assert.deepEqual(frame.data.modes, { focused: 'persistent', elsewhere: 'persistent', background: 'persistent' });
+  });
+
+  it('normalizes legacy boolean overrides on read: true→auto, false→off', async () => {
+    // 布尔值域退役前的存量 workspace-settings 用户覆盖不经迁移改写：读路径
+    // 就地归一，判定链与帧 modes 仍成立（true 表现如 auto，false 表现如 off）
+    const sp = settingsPath();
+    await mkdir(path.dirname(sp), { recursive: true });
+    const legacy = {
+      version: 1,
+      resourcePolicy: {
+        'legacy-on-agent': { 'notifications.finish': true },
+        'legacy-off-agent': { 'notifications.finish': false },
+      },
+    };
+    await writeFile(sp, JSON.stringify(legacy), 'utf8');
+    const policies = await readWorkspaceResourcePolicies({ settingsPath: sp });
+    assert.equal(policies['legacy-on-agent']?.['notifications.finish'], 'auto');
+    assert.equal(policies['legacy-off-agent']?.['notifications.finish'], 'off');
+    assert.equal(await deliverAppNotification({
+      agentId: 'legacy-off-agent', type: 'finish', finishTs: 3,
+      dedupeKey: 'legacy-off-agent:3', requireAgent, settingsPath: sp,
+    }), false);
+    assert.equal(await deliverAppNotification({
+      agentId: 'legacy-on-agent', type: 'finish', finishTs: 4,
+      dedupeKey: 'legacy-on-agent:4', requireAgent, settingsPath: sp,
+    }), true);
+    const frame = await waitAppNotificationFrame((f) => f.data.agentId === 'legacy-on-agent');
+    assert.ok(frame);
+    assert.deepEqual(frame.data.modes, { focused: 'auto', elsewhere: 'auto', background: 'auto' });
   });
 
   it('dedupes at event level: same fact key delivers once', async () => {
@@ -298,7 +445,7 @@ describe('observeCallStatusSnapshot', () => {
   const settingsPath = () => path.join(mkdtempSync(path.join(tmpdir(), 'claw-appnotif-ob-')), 'workspace-settings.json');
   const requireAgent = async (agentId) => ({
     id: agentId,
-    permissionDefaults: { 'notifications.finish': true, 'notifications.input': true },
+    permissionDefaults: { 'notifications.finish': 'auto', 'notifications.input': 'auto' },
   });
 
   const finishSnapshot = (ts) => ({
@@ -542,7 +689,7 @@ describe('observeThreadTurnFact', () => {
   const settingsPath = () => path.join(mkdtempSync(path.join(tmpdir(), 'claw-appnotif-tt-')), 'workspace-settings.json');
   const requireAgent = async (agentId) => ({
     id: agentId,
-    permissionDefaults: { 'notifications.finish': true },
+    permissionDefaults: { 'notifications.finish': 'auto' },
   });
 
   it('delivers finish with thread identity and delivery excerpt for completed turns', async () => {
@@ -677,7 +824,7 @@ describe('POST /protoclaw/app_notifications', () => {
   const requireAgent = async (agentId) => {
     if (agentId === 'ghost-agent') throw Object.assign(new Error('Unknown agent'), { statusCode: 404 });
     if (agentId === 'no-perm-agent') return { id: agentId, permissionDefaults: {} };
-    return { id: agentId, permissionDefaults: { 'notifications.reminder': true, 'notifications.input': true } };
+    return { id: agentId, permissionDefaults: { 'notifications.reminder': 'auto', 'notifications.input': 'auto' } };
   };
   setupAppNotificationRoutes(app, express, { requireAgent });
   const server = http.createServer(app);

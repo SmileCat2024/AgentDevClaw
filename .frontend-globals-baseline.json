@@ -85,7 +85,6 @@
   "public/src/modules/desktop-notify.js": {
     "state": [
       "__clawConsumeNotificationActivation",
-      "_lastForegroundTs",
       "_notifiedFinishMap",
       "_notifiedGenericMap",
       "_notifiedInputRequestMap"
@@ -102,9 +101,8 @@
       "_presentGenericAppNotification",
       "_presentInputRequestNotification",
       "_requestNotifyPermission",
-      "_shouldPersistNotification",
+      "_resolveFramePresentation",
       "_showPersistentNotification",
-      "_syncForegroundState",
       "_truncateForNotification",
       "_webNotification"
     ]

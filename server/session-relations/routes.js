@@ -1,5 +1,6 @@
 /**
- * 线程关联查询路由（session-reference 关联注入的数据面）。
+ * 线程关联查询路由（session-reference 的数据面：引用注入的线程身份
+ * 反查 + 读取工具返回附带的引用关联）。
  *
  * GET /protoclaw/topic_groups
  *   ?agentId=programming-helper&projectId=…|openDirectory=…
@@ -7,8 +8,11 @@
  *   倒序，已合并簇标注（title 自定义值优先、summary）。
  *
  * PUT /protoclaw/topic_groups/:topicId
- *   body { title?, summary? }（至少其一；空串 = 清除该字段，两者皆空 = 删除标注）
- *   更新一个已存在主题簇的标题 / 简介。簇成员由会话引用客观决定，本端点
+ *   body { title?, summary?, docs?, commits? }（至少其一）
+ *   - title / summary：字符串；空串 = 清除该字段。
+ *   - docs / commits：字符串数组（参考文档 / 相关提交条目，自由文本）；
+ *     空数组 = 清除该字段。四个内容字段全空 = 删除标注条目。
+ *   更新一个已存在主题簇的标注。簇成员由会话引用客观决定，本端点
  *   只写标注（topic-notes），不能创建、删除或重组簇。
  *
  * GET /protoclaw/thread_relations
@@ -26,6 +30,16 @@ import { loadTopicNotes, resolveTopicNote, saveTopicNote } from './topic-notes.j
 import { USER_DATA_ROOT } from '../shared/constants.js';
 
 const text = value => (typeof value === 'string' ? value.trim() : '');
+
+const MAX_NOTE_LIST_ITEMS = 50;
+
+/** 数组字段校验 + 清洗：必须是字符串数组（条数 ≤ MAX_NOTE_LIST_ITEMS），
+ * 返回 trim 后的非空条目；不合法返回 null（调用方回 400）。 */
+function listField(value) {
+  if (!Array.isArray(value) || value.length > MAX_NOTE_LIST_ITEMS) return null;
+  if (!value.every(item => typeof item === 'string')) return null;
+  return value.map(item => item.trim()).filter(Boolean);
+}
 
 export function setupSessionRelationsRoutes(app, { dataRoot = USER_DATA_ROOT } = {}) {
   app.get('/protoclaw/topic_groups', async (req, res, next) => {
@@ -48,9 +62,15 @@ export function setupSessionRelationsRoutes(app, { dataRoot = USER_DATA_ROOT } =
       const body = req.body || {};
       const hasTitle = Object.prototype.hasOwnProperty.call(body, 'title');
       const hasSummary = Object.prototype.hasOwnProperty.call(body, 'summary');
-      if (!hasTitle && !hasSummary) return res.status(400).json({ error: 'provide at least one of title or summary' });
+      const hasDocs = Object.prototype.hasOwnProperty.call(body, 'docs');
+      const hasCommits = Object.prototype.hasOwnProperty.call(body, 'commits');
+      if (!hasTitle && !hasSummary && !hasDocs && !hasCommits) return res.status(400).json({ error: 'provide at least one of title, summary, docs or commits' });
       if (hasTitle && typeof body.title !== 'string') return res.status(400).json({ error: 'title must be a string' });
       if (hasSummary && typeof body.summary !== 'string') return res.status(400).json({ error: 'summary must be a string' });
+      const docsList = hasDocs ? listField(body.docs) : undefined;
+      if (hasDocs && !docsList) return res.status(400).json({ error: 'docs must be an array of strings (max 50 items)' });
+      const commitsList = hasCommits ? listField(body.commits) : undefined;
+      if (hasCommits && !commitsList) return res.status(400).json({ error: 'commits must be an array of strings (max 50 items)' });
       // 簇必须真实存在于当前 agent 范围（全域，不按项目过滤）——工具面与
       // 看板都以该列表为准，不允许对悬空 id 写标注。
       const { groups } = await getTopicGroups({ agentId, dataRoot });
@@ -61,11 +81,13 @@ export function setupSessionRelationsRoutes(app, { dataRoot = USER_DATA_ROOT } =
       const existing = resolveTopicNote(notes, { clusterId: topicId, memberThreadIds: group.threadIds });
       const title = hasTitle ? text(body.title) : (existing?.title || '');
       const summary = hasSummary ? text(body.summary) : (existing?.summary || '');
-      await saveTopicNote({ dataRoot, agentId, clusterId: topicId, title, summary, threadIds: group.threadIds });
+      const docs = hasDocs ? docsList : (existing?.docs || []);
+      const commits = hasCommits ? commitsList : (existing?.commits || []);
+      await saveTopicNote({ dataRoot, agentId, clusterId: topicId, title, summary, docs, commits, threadIds: group.threadIds });
       const fallbackTitle = group.fallbackTitle || '';
       res.json({
         ok: true,
-        topic: { id: topicId, title: title || fallbackTitle, summary, customTitle: Boolean(title) },
+        topic: { id: topicId, title: title || fallbackTitle, summary, docs, commits, customTitle: Boolean(title) },
       });
     } catch (error) {
       next(error);

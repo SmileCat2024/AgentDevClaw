@@ -36,15 +36,15 @@ describe('discoverAgents: permission declaration projection', () => {
     const root = await writeAgent('ok', 'ok-agent', {
       id: 'ok-agent',
       permissions: ['notifications.finish', 'notifications.input'],
-      permissionDefaults: { 'notifications.finish': true, 'notifications.input': true },
+      permissionDefaults: { 'notifications.finish': 'auto', 'notifications.input': 'persistent' },
     });
     const agents = await mod.discoverAgents(root);
     const agent = agents.find((a) => a.id === 'ok-agent');
     assert.ok(agent);
     assert.deepEqual(agent.permissions, ['notifications.finish', 'notifications.input']);
     assert.deepEqual(agent.permissionDefaults, {
-      'notifications.finish': true,
-      'notifications.input': true,
+      'notifications.finish': 'auto',
+      'notifications.input': 'persistent',
     });
   });
 
@@ -61,18 +61,21 @@ describe('discoverAgents: permission declaration projection', () => {
     const root = await writeAgent('undeclared', 'undeclared-agent', {
       id: 'undeclared-agent',
       permissions: ['notifications.finish'],
-      permissionDefaults: { 'notifications.input': true },
+      permissionDefaults: { 'notifications.input': 'auto' },
     });
     await assert.rejects(() => mod.discoverAgents(root), /未声明的权限项/);
   });
 
   it('rejects permissionDefaults values that fail the item validate', async () => {
-    const root = await writeAgent('invalid-value', 'invalid-value-agent', {
-      id: 'invalid-value-agent',
-      permissions: ['notifications.finish'],
-      permissionDefaults: { 'notifications.finish': 'yes' },
-    });
-    await assert.rejects(() => mod.discoverAgents(root), /值非法/);
+    // 通知项值域是三态模式（ADR-0030 修订）：'yes' 与退役布尔均非法
+    for (const bad of ['yes', true, false]) {
+      const root = await writeAgent(`invalid-value-${String(bad)}`, 'invalid-value-agent', {
+        id: 'invalid-value-agent',
+        permissions: ['notifications.finish'],
+        permissionDefaults: { 'notifications.finish': bad },
+      });
+      await assert.rejects(() => mod.discoverAgents(root), /值非法/);
+    }
   });
 
   it('still rejects unknown permission ids in declarations', async () => {

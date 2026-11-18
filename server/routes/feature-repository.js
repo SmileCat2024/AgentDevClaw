@@ -590,10 +590,73 @@ async function deleteFeaturePackage(packageId) {
 
 const pendingFeatureImports = new Map();
 
-export function setupFeatureRepositoryRoutes(app, express) {
-  const uploadsDir = path.join(USER_DATA_ROOT, 'uploads');
-  mkdirSync(uploadsDir, { recursive: true });
-  const upload = multer({ dest: uploadsDir });
+/* ── 分片上传（chunked upload）──────────────────────────────────────
+ * 公网部署常经反向代理暴露（如 nginx 默认 client_max_body_size 仅
+ * 1MB），单请求传大 tgz 会在到达应用前被网关以 413 拒绝。行业标准解
+ * 法是分片上传（S3 Multipart / tus 同思路）：客户端把包切成小于常见
+ * 网关默认限制的块逐块传输，服务端拼装后走与 parse_upload 完全相同
+ * 的解析 → confirm / cancel 流程（uploadId 语义不变，前端后半段无感）。
+ * 单片请求保持小体积同时规避了慢速公网下 Node 默认 5 分钟
+ * requestTimeout 对整请求接收期的约束。 */
+const CHUNK_UPLOAD_MAX_TOTAL_BYTES = 512 * 1024 * 1024; // 单个插件包上限
+const CHUNK_UPLOAD_MAX_CHUNKS = 4096;
+const CHUNK_UPLOAD_CHUNK_LIMIT_BYTES = 2 * 1024 * 1024; // 分片级 multer 兜底上限
+const UPLOAD_SESSION_TTL_MS = 30 * 60_000; // 会话超龄即清理（含 parse 待确认态）
+const UPLOAD_SESSION_SWEEP_INTERVAL_MS = 5 * 60_000;
+
+// uploadId → { dir, originalName, totalChunks, totalSize, createdAt, updatedAt }
+const chunkUploadSessions = new Map();
+
+/** 清理超龄的上传会话与临时文件（分片中 / 待确认 / 重启孤儿）。测试可直接注入 now / ttlMs / uploadsRoot。 */
+export async function cleanupStaleUploadSessions({ now = Date.now(), ttlMs = UPLOAD_SESSION_TTL_MS, uploadsRoot = null } = {}) {
+  for (const [id, session] of chunkUploadSessions) {
+    if (now - session.updatedAt <= ttlMs) continue;
+    chunkUploadSessions.delete(id);
+    await fs.rm(session.dir, { recursive: true, force: true }).catch(e => console.warn('[feature-repository] stale chunk session cleanup failed:', e?.message || e));
+  }
+  for (const [id, pending] of pendingFeatureImports) {
+    if (now - pending.createdAt <= ttlMs) continue;
+    pendingFeatureImports.delete(id);
+    await fs.rm(pending.tempPath, { force: true }).catch(e => console.warn('[feature-repository] stale pending import cleanup failed:', e?.message || e));
+  }
+  if (!uploadsRoot) return;
+  // 重启孤儿：uploads 下不属于任何活跃会话且超龄的文件 / 目录（进程崩溃残留）
+  const live = new Set([...chunkUploadSessions.values()].map(session => session.dir));
+  for (const pending of pendingFeatureImports.values()) live.add(pending.tempPath);
+  let entries;
+  try {
+    entries = await fs.readdir(uploadsRoot, { withFileTypes: true });
+  } catch {
+    return; // 目录不存在：无孤儿可清
+  }
+  for (const entry of entries) {
+    const full = path.join(uploadsRoot, entry.name);
+    if (live.has(full)) continue;
+    const stat = await fs.stat(full).catch(() => null);
+    if (stat && now - stat.mtimeMs > ttlMs) {
+      await fs.rm(full, { recursive: true, force: true }).catch(e => console.warn('[feature-repository] orphan upload cleanup failed:', e?.message || e));
+    }
+  }
+}
+
+let uploadSweeperTimer = null;
+function ensureUploadSweeper(uploadsRoot) {
+  if (uploadSweeperTimer) return;
+  uploadSweeperTimer = setInterval(() => {
+    void cleanupStaleUploadSessions({ uploadsRoot })
+      .catch(e => console.warn('[feature-repository] upload sweep failed:', e?.message || e));
+  }, UPLOAD_SESSION_SWEEP_INTERVAL_MS);
+  uploadSweeperTimer.unref?.();
+}
+
+export function setupFeatureRepositoryRoutes(app, express, options = {}) {
+  const uploadsRoot = options.uploadsRoot || path.join(USER_DATA_ROOT, 'uploads');
+  mkdirSync(uploadsRoot, { recursive: true });
+  // 整包直传（parse_upload / upload）：本地直连场景无网关限制，上限取单包上限
+  const upload = multer({ dest: uploadsRoot, limits: { fileSize: CHUNK_UPLOAD_MAX_TOTAL_BYTES } });
+  // 分片直传（chunk_append）：每片必须保持小体积，上限独立收紧
+  const chunkUpload = multer({ dest: uploadsRoot, limits: { fileSize: CHUNK_UPLOAD_CHUNK_LIMIT_BYTES } });
+  ensureUploadSweeper(uploadsRoot);
 
   app.post('/protoclaw/feature_repository/delete', express.json(), async (req, res, next) => {
     try {
@@ -719,6 +782,150 @@ export function setupFeatureRepositoryRoutes(app, express) {
         pendingFeatureImports.delete(uploadId);
         await fs.unlink(pending.tempPath).catch(e => console.warn(e));
       }
+      res.json({ success: true });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post('/protoclaw/feature_repository/chunk_init', express.json(), async (req, res, next) => {
+    try {
+      const fileName = path.basename(String(req.body?.fileName || ''));
+      const totalChunks = Number(req.body?.totalChunks);
+      const totalSize = Number(req.body?.totalSize);
+      if (!fileName.toLowerCase().endsWith('.tgz')) {
+        res.status(400).json({ error: 'fileName must end with .tgz' });
+        return;
+      }
+      if (!Number.isInteger(totalChunks) || totalChunks < 1 || totalChunks > CHUNK_UPLOAD_MAX_CHUNKS) {
+        res.status(400).json({ error: `totalChunks must be an integer in [1, ${CHUNK_UPLOAD_MAX_CHUNKS}]` });
+        return;
+      }
+      if (!Number.isInteger(totalSize) || totalSize < 1 || totalSize > CHUNK_UPLOAD_MAX_TOTAL_BYTES) {
+        res.status(400).json({ error: `totalSize must be an integer in [1, ${CHUNK_UPLOAD_MAX_TOTAL_BYTES}]` });
+        return;
+      }
+      const uploadId = randomUUID();
+      const dir = path.join(uploadsRoot, `chunk-${uploadId}`);
+      await fs.mkdir(dir, { recursive: true });
+      chunkUploadSessions.set(uploadId, {
+        dir,
+        originalName: fileName,
+        totalChunks,
+        totalSize,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      });
+      res.json({ uploadId });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  // 分片可乱序、可重复（幂等覆盖同 index），uploadId 与 index 走 query，
+  // multipart 体只承载数据块本身
+  app.post('/protoclaw/feature_repository/chunk_append', chunkUpload.single('file'), async (req, res, next) => {
+    try {
+      const uploadId = String(req.query?.uploadId || '');
+      const index = Number(req.query?.index);
+      const session = chunkUploadSessions.get(uploadId);
+      if (!session) {
+        if (req.file?.path) await fs.unlink(req.file.path).catch(e => console.warn(e));
+        res.status(404).json({ error: 'Unknown or expired upload' });
+        return;
+      }
+      if (!Number.isInteger(index) || index < 0 || index >= session.totalChunks) {
+        if (req.file?.path) await fs.unlink(req.file.path).catch(e => console.warn(e));
+        res.status(400).json({ error: `index must be an integer in [0, ${session.totalChunks - 1}]` });
+        return;
+      }
+      if (!req.file) {
+        res.status(400).json({ error: 'No file uploaded' });
+        return;
+      }
+      const partPath = path.join(session.dir, `${index}.part`);
+      await fs.rm(partPath, { force: true });
+      await fs.rename(req.file.path, partPath);
+      session.updatedAt = Date.now();
+      const received = (await fs.readdir(session.dir)).filter(name => name.endsWith('.part')).length;
+      res.json({ received, totalChunks: session.totalChunks });
+    } catch (error) {
+      if (req.file?.path) await fs.unlink(req.file.path).catch(e => console.warn(e));
+      next(error);
+    }
+  });
+
+  app.post('/protoclaw/feature_repository/chunk_complete', express.json(), async (req, res, next) => {
+    try {
+      const uploadId = String(req.body?.uploadId || '').trim();
+      const session = chunkUploadSessions.get(uploadId);
+      if (!session) {
+        res.status(404).json({ error: 'Unknown or expired upload' });
+        return;
+      }
+      const missing = [];
+      for (let i = 0; i < session.totalChunks; i++) {
+        if (!existsSync(path.join(session.dir, `${i}.part`))) missing.push(i);
+      }
+      if (missing.length > 0) {
+        res.status(400).json({
+          error: `Missing chunks: ${missing.slice(0, 10).join(', ')}${missing.length > 10 ? ' …' : ''}`,
+          missing,
+        });
+        return;
+      }
+      const assembledPath = path.join(uploadsRoot, `${uploadId}.tgz`);
+      const failCleanup = async () => {
+        chunkUploadSessions.delete(uploadId);
+        await fs.rm(session.dir, { recursive: true, force: true }).catch(() => {});
+        await fs.rm(assembledPath, { force: true }).catch(() => {});
+      };
+      try {
+        for (let i = 0; i < session.totalChunks; i++) {
+          const part = await fs.readFile(path.join(session.dir, `${i}.part`));
+          await fs.appendFile(assembledPath, part);
+        }
+        const assembledSize = (await fs.stat(assembledPath)).size;
+        if (assembledSize !== session.totalSize) {
+          await failCleanup();
+          res.status(400).json({ error: `Assembled size mismatch: expected ${session.totalSize}, got ${assembledSize}` });
+          return;
+        }
+        const summary = await summarizeFeatureArchive(assembledPath, session.originalName, 'custom');
+        pendingFeatureImports.set(uploadId, {
+          tempPath: assembledPath,
+          originalName: session.originalName,
+          summary,
+          createdAt: Date.now(),
+        });
+        chunkUploadSessions.delete(uploadId);
+        await fs.rm(session.dir, { recursive: true, force: true }).catch(() => {});
+        res.json({ uploadId, summary });
+      } catch (error) {
+        // 坏包（summarize 抛错）等失败必须清理服务端会话资源，不能走 500 裸抛留下泄漏
+        await failCleanup();
+        res.status(400).json({ error: `chunk assembly failed: ${error instanceof Error ? error.message : String(error)}` });
+      }
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  // 统一中止：分片进行中与 parse 完成待确认两个阶段都兜（前端失败路径调用）
+  app.post('/protoclaw/feature_repository/chunk_abort', express.json(), async (req, res, next) => {
+    try {
+      const uploadId = String(req.body?.uploadId || '').trim();
+      const session = chunkUploadSessions.get(uploadId);
+      if (session) {
+        chunkUploadSessions.delete(uploadId);
+        await fs.rm(session.dir, { recursive: true, force: true }).catch(() => {});
+      }
+      const pending = pendingFeatureImports.get(uploadId);
+      if (pending) {
+        pendingFeatureImports.delete(uploadId);
+        await fs.unlink(pending.tempPath).catch(e => console.warn(e));
+      }
+      await fs.rm(path.join(uploadsRoot, `${uploadId}.tgz`), { force: true }).catch(() => {});
       res.json({ success: true });
     } catch (error) {
       next(error);

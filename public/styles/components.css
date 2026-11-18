@@ -2385,6 +2385,14 @@ body[data-theme="light"] .workspace-docset-row {
 .ph-topic-card-meta { flex-shrink: 0; }
 .ph-topic-summary { margin: 7px 0 0; font-size: 13px; line-height: 1.6; color: var(--text-secondary, rgba(220, 226, 240, .78)); display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
 .ph-topic-summary-empty { color: var(--text-muted, #8b92a3); font-style: italic; -webkit-line-clamp: 1; }
+/* 锚点条带（agent 经工具维护的参考文档 / 相关提交，只读展示）：
+   小字标签 + 单行省略条目，与卡片次级文本同档，不与主题争夺视觉。 */
+.ph-topic-field { margin-top: 8px; }
+.ph-topic-field-label { display: block; font-size: 11px; color: var(--text-muted, #8b92a3); }
+.ph-topic-field-items { display: grid; gap: 3px; margin-top: 3px; min-width: 0; }
+.ph-topic-anchor-item { font-size: 12px; line-height: 1.5; color: var(--text-secondary, rgba(220, 226, 240, .78)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+a.ph-topic-anchor-item { color: var(--accent-text, var(--accent, #5b8def)); text-decoration: none; }
+a.ph-topic-anchor-item:hover { text-decoration: underline; }
 .ph-topic-details { margin-top: 4px; }
 .ph-topic-details-toggle { display: inline-block; color: var(--text-muted, #8b92a3); font-size: 12px; cursor: pointer; user-select: none; padding: 4px 0; list-style: none; transition: color .15s ease; }
 .ph-topic-details-toggle::-webkit-details-marker { display: none; }
@@ -14849,3 +14857,15 @@ body[data-theme="light"] .session-ref-chip {
 .ph-delete-dir-option input[type="checkbox"] {
   margin-top: 3px;
 }
+
+/* ── PH 设置·通知页签：沿用模型配置的行与分隔方式，控制列统一右对齐；
+   标题和子项共用文字起点，以字重/字号区分层级，避免阶梯式缩进。 ── */
+.ph-notify-root { display: flex; flex-direction: column; gap: 16px; padding: 16px 24px 8px; }
+.ph-notify-scene-row { border-bottom: none; }
+.ph-notify-subrows .ph-mc-row { padding: 10px 24px; border-bottom: none; }
+.ph-notify-subrows .ph-mc-row:last-child { padding-bottom: 14px; border-bottom: 1px solid var(--border-color); }
+.ph-notify-subrows .ph-mc-role { padding-left: 0; }
+.ph-notify-subrows .ph-mc-role-name { font-size: 13px; font-weight: 500; }
+.ph-notify-subrows .ph-mc-role-desc { font-size: 11px; }
+.ph-notify-subrows .ph-mc-single,
+.ph-notify-scene-toggle { width: 220px; }

@@ -30,6 +30,7 @@
 
 import { getCurrentLanguage } from './i18n-environment-state.js';
 import { escapeHtml } from './markdown-utils.js';
+import { uploadTgzChunked } from './tgz-chunked-upload.js';
 import { formatWorkspaceDate } from './time-format-host.js';
 import { setCurrentWorkspaceTab, setShouldAnimateWorkspaceSurface } from './render-entry-state.js';
 import {
@@ -678,19 +679,53 @@ async function fwOpenFeatureImport(formId) {
   input.onchange = async () => {
     const file = input.files?.[0];
     if (!file) return;
+    // 大包自动分片（公网网关对单请求体积有限制，直传会被 413 拒绝）；
+    // 上传遮罩挂 body 独立宿主（仿 assembly-drift-dialog-host），不动 fw 主渲染
+    fwShowFeatureUpload(file);
     try {
-      const formData = new FormData();
-      formData.append('file', file);
-      const response = await fetch('/protoclaw/feature_repository/parse_upload', { method: 'POST', body: formData });
-      if (!response.ok) throw new Error(await response.text().catch(() => 'parse upload failed'));
-      const parsed = await response.json();
+      const parsed = await uploadTgzChunked(file, {
+        onProgress: (fraction) => {
+          const el = document.getElementById('claw-fw-upload-progress');
+          if (el) el.textContent = Math.round(fraction * 100) + '%';
+        },
+      });
       featureImport = { ...parsed, formId };
       fwRerender();
     } catch (error) {
-      window.alert((getCurrentLanguage() === 'zh' ? '解析 tgz 失败：' : 'Failed to parse tgz: ') + (error?.message || error));
+      window.alert((getCurrentLanguage() === 'zh' ? '上传 tgz 失败：' : 'Failed to upload tgz: ') + (error?.message || error));
+    } finally {
+      fwHideFeatureUpload();
     }
   };
   input.click();
+}
+
+/** Feature 导入上传中遮罩（独立 body 宿主，进度直写避免整体重渲染） */
+function fwShowFeatureUpload(file) {
+  let host = document.getElementById('fw-feature-upload-dialog-host');
+  if (!host) {
+    host = document.createElement('div');
+    host.id = 'fw-feature-upload-dialog-host';
+    document.body.appendChild(host);
+  }
+  host.innerHTML = [
+    '<div class="feature-detail-overlay">',
+    '<div class="feature-detail-window" style="max-width:420px;">',
+    '<div class="feature-detail-head"><div>',
+    '<div class="feature-detail-title">' + escapeHtml(getCurrentLanguage() === 'zh' ? '上传 Feature 包' : 'Uploading Feature Package') + '</div>',
+    '<div class="feature-detail-subtitle">' + escapeHtml(getCurrentLanguage() === 'zh' ? '大包自动分片传输，请勿关闭弹窗。' : 'Large packages are transferred in chunks; keep this dialog open.') + '</div>',
+    '</div></div>',
+    '<div style="padding:18px 22px;font-size:13px;">',
+    '<div style="margin-bottom:8px;word-break:break-all;">' + escapeHtml(file.name) + '</div>',
+    '<div id="claw-fw-upload-progress">0%</div>',
+    '</div>',
+    '</div>',
+    '</div>',
+  ].join('');
+}
+
+function fwHideFeatureUpload() {
+  document.getElementById('fw-feature-upload-dialog-host')?.remove();
 }
 
 async function fwCancelFeatureImport() {
