@@ -119,6 +119,7 @@ runtime-status、remote-connections、bg-panel、rail-customize、voice-input、
 | `2608fe1d` | 第七批：session-view-state 迁 ESM（T2 渲染层最后一件）。8 命名导出 + 6 桥键；identity 族 6 条 defineKey 注销；`session-view-commit-host` 的 window 抓取改具名 import（与 B2/B3 同型）；57 test 文件 + 3 helper 改造，`test/helpers/session-view-commit.js` 删除 | src 标签 42 → 41；桥债 382/108 → 382/109；台账 50 / 248 / 554 → 50 / 247 / 544 |
 | `2bf6ef91` | 第八批：app-ui 迁 ESM（T2 渲染层收尾）。35 处 export + 23 桥键；app-core 两处最小 seam；`workspace-surface-host` 改首调惰性装配（破静态环）；**回归修复**：resources-viewer 改为直接调注册表本体，并在生产浏览器回归里加 work-group 面板断言 | src 标签 41 → 40；桥债 382/109 → 383/110；台账 50 / 247 / 544 → 50 / 238 / 490 |
 | `1108b73f` | 第九批：app-core 拆解——dom-refs / identity / transport / format-utils 四族抽出 ESM（app-core 1439 → 838 行）。桥债反向 383/110 → 398/114（抽出后 classic 消费方仍需桥，注销条件逐键写在模块尾注） | src 标签 40（不变，新模块由 p4-entry 装载）；台账 50 / 238 / 490 → 51 / 189 / 464 |
+| `746d9155` | 第十批：app-main 迁 ESM（活跃域最后一件大文件）。新增独立 module 入口并排在 kernel-entry 之前（12 个宿主工厂的求值期取用）；启动编排保持未 await 的 async IIFE（TLA 变异实测不死锁但会推迟 load）；visibilitychange 移到模块相并补 typeof 守卫；newIdempotencyKey 保持模块私有（wg 侧已建 non-configurable 全局） | src 标签 40（classic → module 平移）；桥债 398/114 → 399/115；台账 51 / 189 / 464 → 51 / 187 / 430 |
 
 转换中确立的几条约定（后续批次沿用）：
 
@@ -133,7 +134,7 @@ runtime-status、remote-connections、bg-panel、rail-customize、voice-input、
 
 - **T1 已完成**（第五批 markdown-bootstrap、第九批 app-core 四族）。app-core 剩余 838 行的 owner 迁移与 app-main 同批（见第九批记录）。
 - **T2 已完成**（第六、七、八批：sidebar-render / runtime-status / session-view-state / app-ui）。
-- **T3**：remote-connections / runtime-status（第六批解除 R1）已迁。`auth-client` **R1/R2/R4 触线保留 classic**：它创建 `__clawAuthReady` 并被 app-main 顶层 IIFE 等待，创建时点不能后移到模块相。`desktop-open` / `desktop-notify` 按 R4 保留；head 四件中 `action-dispatcher` 在配方禁区，需单独立项。app-main 残余（`visibilitychange` 注册与 `startApplication` 编排）是下一步。
+- **T3**：remote-connections / runtime-status（第六批解除 R1）/ app-main（第十批）已迁。`auth-client` **R1/R2/R4 触线保留 classic**：它创建 `__clawAuthReady` 并被 app-main 顶层 IIFE 等待，创建时点不能后移到模块相。`desktop-open` / `desktop-notify` 按 R4 保留；head 四件中 `action-dispatcher` 在配方禁区，需单独立项。app-main 残余（`visibilitychange` 注册与 `startApplication` 编排）是下一步。
 - **T5 收尾**：`kernel-entry` 与 `p2-entry` / `p4-entry` 合并为单一入口；台账 / script-tags / 桥债基线收敛；`AGENT.md` 与 `frontend-rendering-patterns.md` 中"classic 相 / 首屏同步链"表述同步。
 
 ### 第六批：T2 收尾批次（sidebar-render + runtime-status + call 状态引擎）
@@ -192,6 +193,19 @@ app-core 从 1439 行降到 838 行，四族抽出：`dom-refs`（140 行，37 �
 app-core 保留的 838 行不是剩余垃圾：47 个 `defineKey` 的真相被 app-main 与多个 ESM 域双向读写，owner 迁移必须与 app-main 同批；9 个 `createP2Bootstrap*Host` 工厂是 classic 词法状态到 ESM 域的窄宿主面，状态一迁走即消亡。
 
 验收（实跑）：`test:core` 6651 项 / 6644 通过 / 3 失败（已知平台项）/ 4 跳过；浏览器回归主链 + 7 面板 + work-group 面板 PASS、零 pageerror；`check-import-cycles` 零新增环；两个门禁 12 项通过。
+
+### 第十批：app-main（T3 收尾）
+
+app-main 907 → 1196 行。它的特殊之处是「宿主工厂提供方」：12 个 `createXHost` 被 kernel-entry 图里的宿主模块在**求值期**取用，原语义靠「classic 解析相先于一切模块」保证。迁入模块相后改由装载序保证——新增一条独立 module 入口并排在 kernel-entry 之前，文件头注写明挪动它的后果与需要同步的两处清单。
+
+四条实测结论值得留档（都是实跑，不是推断）：
+
+1. **启动编排不用 top-level await**。工单原本假设 TLA 会死锁，变异实测证伪（改 TLA 后真实 Chromium 回归全 PASS，`auth → connected` 顺序不变），差别只是推迟页面 `load` 事件。既有语义是 classic 相的 fire-and-forget，保持 IIFE 既等价又不引入新的装载面耦合。这是「先实测再下结论」的直接收益：按假设改写会引入不必要的行为变化。
+2. **`visibilitychange` 的偏移窗口实测无损**。窗口内 `allAgents` 为空、`currentRuntimeAgentId` 恒 null、两条对账桥键尚未注册，处理体两个分支都不发请求。用例改成真实造出该窗口（只装编排域 → 派发 → 引擎进图 → 再派发），而不是假定无害。
+3. **`newIdempotencyKey` 不能上桥**：classic 相 `wg-threads-panel`（悬置域）已把它建成 non-configurable 数据属性，对同名键 `defineKey` 会在模块求值期抛 `Cannot redefine property` 并中断整个编排域。保持模块私有副本，窗口面仍由 wg 侧同实现提供，`p2-w2-7` 的 H1 用例断言原样保留。
+4. **裸标识符的判定口径**：83 个具名 import（22 个模块）+ 110 个键经 window 晚绑定。判据是「该域的求值是否依赖本文件提供的宿主工厂」——依赖者不能具名 import，否则会在工厂注册前求值。转换后用 `eslint-scope` 复核模块作用域零未解析裸标识符，比人眼 grep 可靠。
+
+验收（实跑）：`test:core` 6651 项 / 6644 通过 / 3 失败（已知平台项）/ 4 跳过；`p2-production-boot` 主链 + 7 面板 PASS、零 pageerror；`bg-panel-browser-check` PASS；`check-import-cycles` 零新增环；两个门禁 12 项通过。
 
 ### 剩余核心批次的阻断清单（2026-11-17 实测）
 
