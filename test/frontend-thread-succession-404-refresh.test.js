@@ -29,15 +29,16 @@ function createSandbox({ threadForSession, refreshImpl } = {}) {
     String,
     Promise,
     window: {},
-    _partialCompactInFlight: false,
-    _partialCompactRuntimeId: null,
+    partialCompactInFlight: false,
+    partialCompactRuntimeId: null,
     clearPartialCompactState() {},
     normalizeAgentIdentity: (x) => x,
-    prebuiltSessionSwitchInFlight: false,
-    suppressSidebarRerender: false,
+    // 编排域迁 ESM 后这些 classic 词法态改为模块级适配面（同一份绑定的转发），
+    // 切片求值时按新形态给替身：侧栏交互态 / 会话切换标志 / 轮询节奏 / call 容器。
+    sessionSwitch: { prebuiltSessionSwitchInFlight: false },
+    sidebarUi: { suppressSidebarRerender: false },
+    pollHost: { POLL_FAST_INTERVAL_MS: 1000, POLL_INTERVAL_MS: 5000 },
     schedulePoll(delay) { calls.schedulePoll.push(delay); },
-    POLL_FAST_INTERVAL_MS: 1000,
-    POLL_INTERVAL_MS: 5000,
     getRuntimeWorkspaceSessionId: () => 'sess-old-head',
     getCurrentHostAgentRecord: () => ({ id: 'programming-helper' }),
     getRuntimeRecord: () => null,
@@ -50,12 +51,22 @@ function createSandbox({ threadForSession, refreshImpl } = {}) {
     selectWorkspaceSurface() { calls.selectSurface += 1; },
     renderCurrentMainView() { calls.renderMainView += 1; },
     loadAgents: async () => {},
-    _agentCallActive: new Set(),
+    callActivity: { _agentCallActive: new Set() },
     clearInterruptSuppression() {},
     focusedAgentId: 'some-agent',
     currentWorkspaceTab: null,
     currentRuntimeAgentId: 'rt-old',
+    // 状态写入经 setter（owner 是 orchestration / agent-store 状态域）。
+    setCurrentRuntimeAgentId(value) { sandbox.currentRuntimeAgentId = value; },
+    setFocusedAgentId(value) { sandbox.focusedAgentId = value; },
+    setCurrentWorkspaceTab(value) { sandbox.currentWorkspaceTab = value; },
   };
+  // 编排域迁 ESM 后宿主工厂经 `window.<桥键>` 晚绑定取对端能力（原 bare 标识符
+  // 直接命中沙箱全局）。沙箱全局对象即 window，两者同一份。
+  sandbox.window = sandbox;
+  // 编排域迁 ESM 后宿主工厂经 `window.<桥键>` 晚绑定取对端能力（原 bare 标识符
+  // 直接命中沙箱全局）。沙箱全局对象即 window，两者同一份。
+  sandbox.window = sandbox;
   sandbox.window.getThreadForSession = threadForSession || (() => null);
   sandbox.window.refreshThreads = async (force = false) => {
     calls.refresh.push(force);

@@ -33,7 +33,7 @@ import fs from 'node:fs';
 import { marked } from 'marked';
 import { createPollMaintenance } from '../public/src/modules/poll-maintenance.js';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
-import { prepareSidebarDomain } from './p2-classic-hosts.js';
+import { APP_MAIN_DOMAIN, prepareEsmModules, prepareSidebarDomain } from './p2-classic-hosts.js';
 
 const flush = async (n = 6) => { for (let i = 0; i < n; i++) await new Promise(setImmediate); };
 
@@ -50,7 +50,7 @@ const CLASSIC_STACK = [
   'public/src/app-core.js',
   // session-view-state / app-ui 自 P4 T2 起是 ESM：由 prepareEsmModules(...) /
   // prepareClassicSandbox 在模块相装载，classic 链里不再有它们（app-ui 见 APP_UI_DOMAIN）。
-  'public/src/app-main.js',
+  // app-main 自 P4 T3 收尾起同样是 ESM（见 APP_MAIN_DOMAIN，排在 ESM 清单最前）。
 ];
 
 /** app-ui / app-main 布局监听与首屏入口依赖的浏览器全局（沙箱无此能力）。 */
@@ -196,6 +196,8 @@ async function withSetup({ entities = [], target = null, openDirectory = '', phP
         applyTheme = () => {};
       `);
       for (const file of CLASSIC_STACK) sandbox.loadSource(file);
+      // 编排域（app-main）迁 ESM 后最先求值：宿主模块在求值期取它的 createXHost。
+      prepareEsmModules(sandbox, APP_MAIN_DOMAIN);
       prepareSidebarDomain(sandbox);
       // 轮询协调器宿主（classic app-main 工厂）：ESM 图经 agent-data-loader →
       // input-actions 触达 poll-coordinator-host，后者在模块求值期取该工厂。
@@ -1119,6 +1121,9 @@ describe('045 — 轮询归属随 typed target（不被 workspace_state 漂移�
           applyTheme = () => {};
         `);
         for (const file of CLASSIC_STACK) sandbox.loadSource(file);
+        // 编排域（app-main）迁 ESM（P4 T3 收尾）：createPollMaintenanceHost 由它在
+        // 模块相提供，排在 ESM 清单最前求值。
+        prepareEsmModules(sandbox, APP_MAIN_DOMAIN);
         // 装载后再装宿主面（app-core 的 classic 实现装载期占用同名属性）
         sandbox.allAgents = [agent];
         sandbox.fetch = (url) => {

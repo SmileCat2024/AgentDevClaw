@@ -158,6 +158,7 @@ const APP_MAIN_PRELUDE = `
  */
 const SINK_OVERRIDES = `
   window.ClawFW = window.ClawFW || {};
+  // 编排域迁 ESM 后本行会被 app-main 模块求值期的挂载顶掉，用例体里重挂（见下）。
   window.ClawFW.forceFullPollOnce = () => window.__sinkForceFullPoll();
   window._syncForegroundState = () => window.__sinkForegroundSync();
 `;
@@ -307,6 +308,9 @@ async function withSseCase(opts, fn) {
     // 经同一访问器的 setter 换实现（写回 owner 的桥面，语义与 classic 顶层赋值一致）。
     c.window.updateNotificationStatus = (p, runtimeId, token) => c.window.__sinkUpdateNotificationStatus(p, runtimeId, token);
     c.window.renderAgentList = () => c.window.__sinkRenderAgentList();
+    // 编排域迁 ESM（P4 T3 收尾）后 `ClawFW.forceFullPollOnce` 由 app-main 在模块求值
+    // 期挂载（它在 classic 相之后），classic 相的覆盖会被顶掉；同样在模块相之后重挂。
+    c.window.ClawFW.forceFullPollOnce = () => c.window.__sinkForceFullPoll();
     // 刷新引擎（P4 T3 起是真实 ESM）：交互域在装载期取它的窄宿主，必须先入图。
     await c.load(THREAD_STORE);
     // 回退 / 压缩域状态键注册壳（已迁 ESM，P4 T2）：真实 import，桥键由模块自身注册。

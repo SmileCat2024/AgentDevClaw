@@ -622,6 +622,30 @@ function createP2BootstrapCallActivityHost() {
 }
 
 /**
+ * 轮询节奏与模板重载记账（P4 T3 编排域迁移的最小 host seam）。
+ *
+ * 四个键的物理 owner 仍是本文件顶层声明，本工厂只转发、不另存：
+ *   - POLL_INTERVAL_MS / POLL_FAST_INTERVAL_MS（const 数值）：正常 / 忙碌态轮询间隔；
+ *   - _lastChoiceAlertCheckAt（let，get/set 成对）：全局 choice 提醒的节流时间戳；
+ *   - lastFeatureTemplateReloadAt（let，get/set 成对）：模板映射重载的节流时间戳。
+ *
+ * 消费方：app-main.js（编排域迁 ESM 后，四个轮询宿主工厂与主循环都从这里取）。
+ * `_lastChoiceAlertCheckAt` 原先只经 app-main 的 createPollCycleHost 转发给 ESM
+ * 轮询，app-main 迁入模块相后那条转发面随之改变——本工厂成为它唯一的 classic
+ * 读写入口，同一份绑定，不构成第二份状态。
+ */
+function createP2BootstrapPollHost() {
+  return Object.freeze({
+    POLL_INTERVAL_MS,
+    POLL_FAST_INTERVAL_MS,
+    get lastChoiceAlertCheckAt() { return _lastChoiceAlertCheckAt; },
+    set lastChoiceAlertCheckAt(value) { _lastChoiceAlertCheckAt = value; },
+    get lastFeatureTemplateReloadAt() { return lastFeatureTemplateReloadAt; },
+    set lastFeatureTemplateReloadAt(value) { lastFeatureTemplateReloadAt = value; },
+  });
+}
+
+/**
  * 编程小助手会话列表 UI 状态：排序偏好、检索词、检索防抖句柄、页签回放。
  * 消费方：ph-session-list / ph-project-actions / session-list-render /
  * ph-search-locate / ph-session-move / session-ui / app-ui。

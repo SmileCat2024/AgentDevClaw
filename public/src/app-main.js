@@ -1,3 +1,200 @@
+/**
+ * app-main.js — 编排域（P4 T3 收尾：classic → ESM，活跃域 classic 清零的最后一
+ * 件大文件）。
+ *
+ * 本文件此前是 classic 脚本（index.html 的 `./src/app-main.js` 标签），顶层语句
+ * 在**解析相**执行。迁 ESM 后它的顶层语句改在**模块相**执行，index.html 里以
+ * 一条 `<script type="module">` 入口装载，位置**必须早于 kernel-entry.js**——原因
+ * 见下一条。
+ *
+ * ## 装载相位（本文件最关键的一条约束）
+ *
+ * 本文件是「宿主工厂提供方」：`createRuntimeSwitchHost` / `createCompactResumeHost`
+ * / `createPollCoordinatorHost` / `createMessageProbeHost` / `createMetadataCommitHost`
+ * / `createPollMaintenanceHost` / `createRuntimePollHost` / `createPollCycleHost` /
+ * `createRuntimeNotFoundHost` / `createWorkspaceEntryHost` /
+ * `createWorkspaceSessionNavigationHost` / `createApplicationStartupHost` 这 12 个
+ * 工厂由 kernel-entry 图里的宿主模块在**求值期**经 `window.createXHost()` 取用
+ * （原语义：classic 解析相先于一切模块执行，所以"一定已就位"）。
+ *
+ * 迁入模块相后这条时序不再由语言保证，因此本文件作为**独立 module 入口**排在
+ * kernel-entry 之前求值（与 i18n-environment / agent-store 等状态入口同一做法，
+ * 理由同构：它们的键同样在 kernel-entry 各宿主的求值期被取用）。改动装载序就是
+ * 改动时序（plan R4），新增/挪动入口须同步 test/frontend-script-tags-gate.test.js
+ * 的 MODULE_ENTRIES 与 test/p2-production-boot-browser-check.mjs 的门控清单。
+ *
+ * 另一个直接后果：**本文件不能静态 import 任何会（传递地）求值到这 12 个宿主
+ * 模块的域**——那会在本文件求值完成之前就触发 `window.createXHost`，取到
+ * undefined。实测受限于此的是 app-ui / chat-renderer / workspace-surface-host /
+ * auto-title / input-composer / persistent-input / sidebar-operations /
+ * project-data / input-actions / sse-client / agent-loader-host 等（它们经
+ * agent-data-loader / 输入面 / 派发链接回 poll-coordinator-host、runtime-switch-host
+ * 等宿主模块）。这些域一律经 `window.<桥键>` 晚绑定，行尾注释标注定义域。
+ *
+ * ## 启动编排（实测结论：未 await 的 IIFE，不用 top-level await）
+ *
+ * `window.__clawAuthReady` 由 auth-client（classic，解析相创建）在 DOMContentLoaded
+ * 之后的 `initialize()` 里兑现，因此本模块求值时它**必然仍未兑现**：注册 reaction
+ * 的时点从解析相挪到模块相不改变任何顺序（浏览器回归实测 authAt < connectedAt）。
+ *
+ * 保持未被 await 的调用体（而不是写成 top-level await）的理由是「不必要的行为面
+ * 变化」：实测（2026-11-18 变异：把 IIFE 改成 TLA 后跑真实 Chromium 回归）TLA
+ * 在本页**不会**死锁——DOMContentLoaded 照常触发、auth/status 照常发出、两轮回归
+ * 全 PASS；差别只在于 TLA 会推迟页面的 load 事件（并让任何未来 import 本模块的
+ * 图等它）。既有语义是 classic 相的 fire-and-forget，保持它既等价又不引入新的
+ * 装载面耦合。
+ *
+ * ## 可见性对账（高风险点实测：注册相位从解析相挪到模块相）
+ *
+ * `visibilitychange` 监听器现在在模块相注册。偏移窗口 = 「本文件求值完成」到
+ * 「kernel-entry 图求值完成之间可能插入的宏任务」，窗口内可达的状态只有：agents
+ * 空列表、`currentRuntimeAgentId` 恒 null（orchestration-state 初值，启动事务尚未
+ * 开始）——此时处理体两条链路都不产生请求（下详），因此漏掉该窗口里的一次
+ * visibilitychange 不改变任何可观察状态；首次前台对账由随后启动的轮询与下一次
+ * 真实 visibilitychange 承担。同型先例：thread-store.js（P4 T3）的刷新引擎同样
+ * 在模块相注册该事件。
+ *
+ * ## 状态归属（不搬移、不双存储）
+ *
+ * - 选中 / 只读 / 列表 / 列表刷新时刻 → agent-store-state（具名 import + setter）
+ * - 运行时身份、切换事务、导航代次、恢复滚动位 → orchestration-state
+ * - 渲染槽位（工作空间 tab / 详情 / docset / 去重签名）→ render-entry-state
+ * - 会话视图快照 → session-view-storage；提交边界 → session-view-state /
+ *   session-view-commit-host
+ * - 身份解析 → identity；DOM 引用 → dom-refs（经 p2-bootstrap-dom 的既有路径）
+ * - 仍 classic 的 app-core 词法状态：call 活动容器 / 侧栏交互态 / 会话切换引导
+ *   标志 / 聊天表面偏好 经 modules/p2-bootstrap-* 适配面取用（app-core 的
+ *   createP2Bootstrap*Host 转发同一绑定）；轮询节奏与模板重载记账经本批新增的
+ *   `createP2BootstrapPollHost()`（最小 seam，同一绑定，不另存状态）。
+ * - 本文件自身的编排态（`_forceFullPollNextCycle`、`_lastWsSessionRefreshAt`）保持
+ *   原位：前者零外部消费方、随本文件私有；后者原本就是 window 上的跨路径时间戳
+ *   （轮询维护宿主写、测试夹具读），保持同一槽位不变量。
+ *
+ * ## 对外符号（桥接期）
+ *
+ * 文件末尾按逐键消费面清单发布 domain `app-main` 的桥键：classic 消费方
+ * （app-core / claw-host / desktop-* / 悬置域 wg-* / im-*）与经 window 晚绑定的
+ * ESM 域语义不变。终局（T5 编排域收敛、app-core 剩余 defineKey 的 owner 迁移）
+ * 逐键改具名 import 后删除对应 defineKey 并下调桥债基线。
+ */
+
+import { t } from './i18n.js';
+import { escapeHtml } from './modules/markdown-utils.js';
+import { getCurrentLanguage, showAgentStartError } from './modules/i18n-environment-state.js';
+import { invoke } from './modules/transport.js';
+import { domRefs } from './modules/p2-bootstrap-dom.js';
+import { callActivity } from './modules/p2-bootstrap-call-activity.js';
+import { chatSurface } from './modules/p2-bootstrap-chat-surface.js';
+import { sessionSwitch } from './modules/p2-bootstrap-session-switch.js';
+import { sidebarUi } from './modules/p2-bootstrap-sidebar.js';
+import {
+  allAgents,
+  focusedAgentId,
+  readOnlyMode,
+  lastAgentListRefreshAt,
+  setFocusedAgentId,
+  setReadOnlyMode,
+  setLastAgentListRefreshAt,
+} from './modules/agent-store-state.js';
+import {
+  currentRuntimeAgentId,
+  pendingSwitchTarget,
+  pendingSwitchSerial,
+  _switchEpoch,
+  _navigationGuardEpoch,
+  _restoredScrollTop,
+  setCurrentRuntimeAgentId,
+  setPendingSwitchTarget,
+  setPendingSwitchSerial,
+  setSwitchEpoch,
+  setRestoredScrollTop,
+} from './modules/orchestration-state.js';
+import {
+  activeFeaturePanel,
+  currentWorkspaceTab,
+  lastRenderedWorkspaceHtml,
+  _lastRenderedChatSig,
+  currentWorkspaceArtifactDetail,
+  currentWorkspaceDocsetDetail,
+  currentProjectDocsetOpen,
+  currentProjectRequirementEdit,
+  currentProjectDocsetPage,
+  setCurrentWorkspaceTab,
+  setLastRenderedWorkspaceHtml,
+  setLastRenderedChatSig,
+  setCurrentWorkspaceArtifactDetail,
+  setCurrentWorkspaceDocsetDetail,
+  setCurrentProjectDocsetOpen,
+  setCurrentProjectRequirementEdit,
+  setCurrentProjectDocsetPage,
+} from './modules/render-entry-state.js';
+import {
+  currentMessages,
+  currentInputRequests,
+  currentHookInspectorSignature,
+  currentOverviewSignature,
+  currentTodoPlanSignature,
+} from './modules/session-view-storage.js';
+import {
+  normalizeAgentIdentity,
+  getParentAgentId,
+  getLogicalAgentId,
+  getRuntimeId,
+  getAgentRuntimeId,
+  setViewerSessionBinding,
+  _deriveRuntimeSessionIdFromAgents,
+  getRuntimeWorkspaceSessionId,
+  getRuntimeContextKey,
+} from './modules/identity.js';
+import {
+  applySessionViewPatch,
+  captureSessionViewToken,
+  readCurrentSessionViewState,
+} from './modules/session-view-state.js';
+import {
+  commitSessionViewState,
+  commitSessionViewPatch,
+  isSessionViewTokenCurrent,
+  isSessionViewInputRequestsCurrent,
+} from './modules/session-view-commit-host.js';
+import { saveCurrentRuntimeToCache, restoreRuntimeFromCache } from './modules/runtime-view-cache-host.js';
+import {
+  partialCompactInFlight,
+  partialCompactRuntimeId,
+  clearPartialCompactState,
+} from './modules/p2-w2-3b-rollback-domain.js';
+import {
+  getEmptyOverviewSnapshot,
+  normalizeOverviewSnapshot,
+  getOverviewSignature,
+  normalizeHookInspector,
+  getHookInspectorSignature,
+  extractMessagesProbe,
+} from './modules/overview-data.js';
+import {
+  getEmptyTodoPlan,
+  normalizeTodoPlan,
+  getTodoPlanSignature,
+} from './modules/todo-plan.js';
+import { attachMessagesTimestamps } from './modules/message-timeline.js';
+import { closeAgentContextMenu, openCompactMenu } from './modules/context-menu.js';
+
+/**
+ * 仍 classic 的 app-core 词法状态（顶层 let/const 没有 window 可达形态）。
+ * 本批新增的最小 seam：轮询间隔两个 const + 两处时间戳绑定（get/set 成对转发
+ * 到原声明，同一份状态，不另存副本）。消费方就是本文件的四个轮询宿主工厂与
+ * 主循环；`_lastChoiceAlertCheckAt` 原先只经本文件的 createPollCycleHost 转发，
+ * 本文件进模块相后这里成为它唯一的 classic 读写入口。
+ */
+const pollHost = window.createP2BootstrapPollHost();
+
+// ── 本文件私有的编排态 ──────────────────────────────────────────────────
+// SSE 全量对账标记（§6.5 兜底闭环）：看门狗静默 30s、resync 帧、UDS 重连都经
+// forceFullPollOnce 置位，下一轮 poll 消费一次。零外部消费方，随本文件私有。
+let _forceFullPollNextCycle = false;
+
+// ── 身份解析（顶栏 / 侧栏高亮 / 切换宿主的公共查询）──────────────────────
+
 function getCurrentSessionHostAgentId() {
   return normalizeAgentIdentity(getCurrentHostAgentRecord()?.id || focusedAgentId);
 }
@@ -79,7 +276,7 @@ function getCurrentVisualAgentTitle() {
   // （refreshRemoteCatalog → renderAgentList → updateCurrentAgentChrome）
   // 自然带动，不新增轮询。
   const focusedId = normalizeAgentIdentity(focusedAgentId) || normalizeAgentIdentity(currentRuntimeAgentId);
-  if (typeof isRemoteNamespaceAgentId === 'function' && isRemoteNamespaceAgentId(focusedId)) {
+  if (typeof window.isRemoteNamespaceAgentId === 'function' && window.isRemoteNamespaceAgentId(focusedId)) {
     const runtimeRef = normalizeAgentIdentity(currentRuntimeAgentId);
     const runtimeTitle = runtimeRef
       ? (window.RemoteConnections?.getEntrySessionTitle?.(runtimeRef) || '')
@@ -90,13 +287,13 @@ function getCurrentVisualAgentTitle() {
 }
 
 function updateCurrentAgentChrome() {
-  if (!currentAgentTitle) return;
+  if (!domRefs.currentAgentTitle) return;
   const hasSelection = normalizeAgentIdentity(focusedAgentId) || normalizeAgentIdentity(currentRuntimeAgentId);
   if (!hasSelection) {
-    currentAgentTitle.textContent = t('page_title');
+    domRefs.currentAgentTitle.textContent = t('page_title');
     return;
   }
-  currentAgentTitle.textContent = getCurrentVisualAgentTitle();
+  domRefs.currentAgentTitle.textContent = getCurrentVisualAgentTitle();
 }
 
 function isAgentActive(agent) {
@@ -260,7 +457,7 @@ function toEpochMs(value) {
 function getInputSurfaceMode(requests = readCurrentSessionViewState().inputRequests) {
   // 输入面模式由 chat/runtime/choice 等显示状态决定；普通文本 lease
   // 不参与 composer 形态判定。
-  return resolveInputSurfaceMode(readInputSurfaceModeState(requests, isChatSurfaceActive()));
+  return window.resolveInputSurfaceMode(window.readInputSurfaceModeState(requests, window.isChatSurfaceActive()));
 }
 
 // ── Sidebar rendering & agent list → modules/sidebar-render.js ──
@@ -268,30 +465,30 @@ function getInputSurfaceMode(requests = readCurrentSessionViewState().inputReque
 
 function createWorkspaceEntryHost() {
   return {
-    bumpNavigationGuard: () => bumpNavigationGuard(),
+    bumpNavigationGuard: () => window.bumpNavigationGuard(),
     closeContextMenu: () => closeAgentContextMenu(),
     findWorkspace: (id) => allAgents.find((agent) => agent.id === id && agent.source === 'prebuilt'),
-    isWorkspaceHost: (agent) => isWorkspaceHostUnit(agent),
-    isWorkspaceSurface: (agent) => isWorkspaceSurfaceUnit(agent),
-    preferHome: (agent) => setPreferredUnitMode('home', agent),
-    focus: (id) => { focusedAgentId = id; },
-    renderAgents: () => renderAgentList(),
-    hasDetail: (id) => loadedAgentDetailIds.has(id),
-    markDetailLoaded: (id) => loadedAgentDetailIds.add(id),
+    isWorkspaceHost: (agent) => window.isWorkspaceHostUnit(agent),
+    isWorkspaceSurface: (agent) => window.isWorkspaceSurfaceUnit(agent),
+    preferHome: (agent) => window.setPreferredUnitMode('home', agent),
+    focus: (id) => { setFocusedAgentId(id); },
+    renderAgents: () => window.renderAgentList(),
+    hasDetail: (id) => window.AgentLoaderHost.loadedAgentDetailIds.has(id),
+    markDetailLoaded: (id) => window.AgentLoaderHost.loadedAgentDetailIds.add(id),
     showLoading: () => {
-      container.innerHTML = '<div class="workspace-surface" style="display:grid;place-items:center;color:var(--text-secondary);font-size:14px;">' + escapeHtml(currentLanguage === 'zh' ? '加载中...' : 'Loading...') + '</div>';
+      domRefs.container.innerHTML = '<div class="workspace-surface" style="display:grid;place-items:center;color:var(--text-secondary);font-size:14px;">' + escapeHtml(getCurrentLanguage() === 'zh' ? '加载中...' : 'Loading...') + '</div>';
     },
-    loadDetail: (id) => loadAgentDetail(id),
+    loadDetail: (id) => window.loadAgentDetail(id),
     persistEntry: (id) => { try { localStorage.setItem('claw:lastFocusedEntryId', id); } catch { /* ignore */ } },
-    selectWorkspace: (id, options) => selectWorkspaceSurface(id, options),
+    selectWorkspace: (id, options) => window.selectWorkspaceSurface(id, options),
     switchAgent: (id) => window.switchAgent(id),
-    isPending: (id) => pendingPrebuiltAgentIds.has(id),
-    markPending: (id) => pendingPrebuiltAgentIds.add(id),
-    clearPending: (id) => pendingPrebuiltAgentIds.delete(id),
+    isPending: (id) => sidebarUi.pendingPrebuiltAgentIds.has(id),
+    markPending: (id) => sidebarUi.pendingPrebuiltAgentIds.add(id),
+    clearPending: (id) => sidebarUi.pendingPrebuiltAgentIds.delete(id),
     navigationEpoch: () => _navigationGuardEpoch,
     startAgent: (id) => invoke('start_agent', { agentId: id }),
-    waitRuntime: (id) => waitForPrebuiltRuntimeSession(id),
-    requestSwitch: (id, source) => requestSwitch(id, source),
+    waitRuntime: (id) => window.waitForPrebuiltRuntimeSession(id),
+    requestSwitch: (id, source) => window.requestSwitch(id, source),
     error: (...args) => console.error(...args),
     showStartError: (error) => showAgentStartError(error),
   };
@@ -304,7 +501,7 @@ function applyOptimisticWorkspaceSession(agentId, session) {
     ? hostAgent.workspace_sessions.sessions
     : [];
   const nextSessions = [session, ...existingSessions.filter((item) => item?.id !== session.id)];
-  return updateAgentRecord(agentId, {
+  return window.updateAgentRecord(agentId, {
     workspace_sessions: {
       ...(hostAgent?.workspace_sessions || {}),
       activeSessionId: session.id,
@@ -321,6 +518,13 @@ function applyOptimisticWorkspaceSession(agentId, session) {
 }
 
 // ── 幂等键（ADR-0011）：写类提交统一携带（本地忽略、远程强制）───────────
+// **不上桥**（与 input-actions / ctx-menu-handlers 同制）：classic 相
+// `wg-threads-panel.js` 的同名顶层声明已经把 `window.newIdempotencyKey` 建成
+// non-configurable 数据属性（悬置域，先于模块相执行），对它 defineKey 会在
+// 模块求值期抛 `Cannot redefine property` —— 那会中断整个编排域。因此本模块
+// 保持私有副本自用；既有 window 消费方（claw-host 的插件 env 裸引用守卫、
+// context-guard-toggle 的 `window.newIdempotencyKey()`）继续取到 wg 侧逐字
+// 相同的实现，语义不变。全仓同名单例收敛留给 T5（悬置域封存）。
 function newIdempotencyKey() {
   const cryptoObj = (typeof crypto !== 'undefined') ? crypto : null;
   if (cryptoObj && typeof cryptoObj.randomUUID === 'function') {
@@ -331,13 +535,17 @@ function newIdempotencyKey() {
 
 function createCompactResumeHost() {
   return {
-    isRemote: (id) => typeof isRemoteNamespaceAgentId === 'function' && isRemoteNamespaceAgentId(id),
+    isRemote: (id) => typeof window.isRemoteNamespaceAgentId === 'function' && window.isRemoteNamespaceAgentId(id),
     remote: () => window.RemoteConnections,
-    createOperationId: (reason) => createSidebarOperationId(reason),
-    now: () => sidebarDiagnosticNow(),
-    observe: (id) => beginSidebarOperationMainThreadObservation(id),
-    checkpoint: (...args) => recordSidebarOperationCheckpoint(...args),
-    fetch: (...args) => fetch(...args),
+    createOperationId: (reason) => window.createSidebarOperationId(reason),
+    now: () => window.sidebarDiagnosticNow(),
+    observe: (id) => window.beginSidebarOperationMainThreadObservation(id),
+    checkpoint: (...args) => window.recordSidebarOperationCheckpoint(...args),
+    // 显式 window.fetch：宿主工厂交给 ESM 消费方的取数入口就是页面上那条
+    // （auth-client 的 401 拦截补丁挂在这里），与 classic 裸标识符经全局对象
+    // 解析到同一函数；写成裸 `fetch` 会绑定模块 realm 的全局，测试夹具替换
+    // window.fetch 时两条通道分叉。
+    fetch: (...args) => window.fetch(...args),
     idempotencyKey: () => newIdempotencyKey(),
     refreshThreads: () => { if (typeof window.refreshThreads === 'function') window.refreshThreads(true).catch(() => {}); },
   };
@@ -366,48 +574,53 @@ function createCompactResumeHost() {
  */
 function createWorkspaceSessionNavigationHost() {
   return {
-    bumpNavigationGuard: () => bumpNavigationGuard(),
+    bumpNavigationGuard: () => window.bumpNavigationGuard(),
     navigationEpoch: () => _navigationGuardEpoch,
     focusedAgentId: () => focusedAgentId,
     runtimeId: () => currentRuntimeAgentId,
     readOnlyMode: () => readOnlyMode,
     findWorkspace: (id) => allAgents.find((agent) => agent.id === id && agent.source === 'prebuilt'),
-    saveWorkspaceScroll: () => { if (typeof saveCurrentWorkspaceSurfaceScroll === 'function') saveCurrentWorkspaceSurfaceScroll(); },
+    saveWorkspaceScroll: () => { if (typeof window.saveCurrentWorkspaceSurfaceScroll === 'function') window.saveCurrentWorkspaceSurfaceScroll(); },
     saveCache: (id, key) => saveCurrentRuntimeToCache(id, key),
     contextKey: (id) => getRuntimeContextKey(id),
     selectLoading: (agentId) => {
-      focusedAgentId = agentId;
-      currentRuntimeAgentId = null;
+      setFocusedAgentId(agentId);
+      setCurrentRuntimeAgentId(null);
       applySessionViewPatch({ identity: { agentId, sessionId: '' } });
-      readOnlyMode = false;
-      currentWorkspaceArtifactDetail = null;
-      currentWorkspaceDocsetDetail = null;
-      currentProjectDocsetOpen = false;
-      currentProjectRequirementEdit = null;
-      currentWorkspaceTab = 'chat';
-      _lastRenderedChatSig = '';
-      resetRuntimeBackedSurfaceState();
-      renderAgentList();
-      container.innerHTML = '<div class="workspace-surface" style="display:grid;place-items:center;color:var(--text-secondary);font-size:14px;">' + escapeHtml(currentLanguage === 'zh' ? '加载中...' : 'Loading...') + '</div>';
+      setReadOnlyMode(false);
+      setCurrentWorkspaceArtifactDetail(null);
+      setCurrentWorkspaceDocsetDetail(null);
+      setCurrentProjectDocsetOpen(false);
+      setCurrentProjectRequirementEdit(null);
+      setCurrentWorkspaceTab('chat');
+      setLastRenderedChatSig('');
+      window.resetRuntimeBackedSurfaceState();
+      window.renderAgentList();
+      domRefs.container.innerHTML = '<div class="workspace-surface" style="display:grid;place-items:center;color:var(--text-secondary);font-size:14px;">' + escapeHtml(getCurrentLanguage() === 'zh' ? '加载中...' : 'Loading...') + '</div>';
     },
     loadDetail: (id) => window.loadAgentDetail(id),
     runAction: (action) => window.runWorkspaceAction(action),
-    preferHome: (agent) => setPreferredUnitMode('home', agent),
-    render: () => renderCurrentMainView(),
+    preferHome: (agent) => window.setPreferredUnitMode('home', agent),
+    render: () => window.renderCurrentMainView(),
   };
 }
 
 // ── Docset & material actions → modules/workspace-docset.js ──
 
 
-window.runWorkspaceActionFromEvent = async (event, rawAction) => {
+// 桌面/模板级事件入口：迁移前是 `window.X =` 赋值。inline-events 迁移（data-
+// workspace-action 捕获相委托）之后两者都**零仓内消费方**（public/ 与
+// features/ 的生成模板逐字 grep 为空），因此按配方收敛为模块私有、不再上桥：
+// 保留实现原样，随编排域收敛批次（T5）一并删除。新增消费方请直接用
+// `data-workspace-action` 委托，不要恢复 window 面。
+async function runWorkspaceActionFromEvent(event, rawAction) {
   const btn = event?.target instanceof Element ? event.target.closest('button[data-workspace-action]') : null;
   if (event) {
     event.preventDefault();
     event.stopPropagation();
   }
   await window.runWorkspaceAction(rawAction, btn || undefined);
-};
+}
 
 document.addEventListener('click', (event) => {
   const actionButton = event.target instanceof Element
@@ -433,7 +646,7 @@ document.addEventListener('click', (event) => {
 
 // ── ctx-menu items / dispatcher → modules/ctx-menu-items.js (Phase B-2, 2026-07-04) ──
 
-window.showCompactMenu = (event, buttonElement) => {
+function showCompactMenu(event, buttonElement) {
   if (event) {
     event.preventDefault();
     event.stopPropagation();
@@ -451,7 +664,7 @@ window.showCompactMenu = (event, buttonElement) => {
 
   const rect = buttonElement.getBoundingClientRect();
   openCompactMenu(action, rect.left, rect.bottom + 4);
-};
+}
 
 
 function markSessionLoading(agentId, sessionId) {
@@ -480,96 +693,100 @@ function createRuntimeSwitchHost() {
   return {
     state: {
       get pendingSwitchTarget() { return pendingSwitchTarget; },
-      set pendingSwitchTarget(value) { pendingSwitchTarget = value; },
+      set pendingSwitchTarget(value) { setPendingSwitchTarget(value); },
       get pendingSwitchSerial() { return pendingSwitchSerial; },
-      set pendingSwitchSerial(value) { pendingSwitchSerial = value; },
+      set pendingSwitchSerial(value) { setPendingSwitchSerial(value); },
       get navigationEpoch() { return _navigationGuardEpoch; },
       get switchEpoch() { return _switchEpoch; },
-      set switchEpoch(value) { _switchEpoch = value; },
+      set switchEpoch(value) { setSwitchEpoch(value); },
       get focusedAgentId() { return focusedAgentId; },
-      set focusedAgentId(value) { focusedAgentId = value; },
+      set focusedAgentId(value) { setFocusedAgentId(value); },
       get runtimeId() { return currentRuntimeAgentId; },
-      set runtimeId(value) { currentRuntimeAgentId = value; },
+      set runtimeId(value) { setCurrentRuntimeAgentId(value); },
       get readOnlyMode() { return readOnlyMode; },
-      set readOnlyMode(value) { readOnlyMode = value; },
+      set readOnlyMode(value) { setReadOnlyMode(value); },
       get lastRenderedWorkspaceHtml() { return lastRenderedWorkspaceHtml; },
-      set lastRenderedWorkspaceHtml(value) { lastRenderedWorkspaceHtml = value; },
-      get followLatest() { return followLatestEnabled; },
+      set lastRenderedWorkspaceHtml(value) { setLastRenderedWorkspaceHtml(value); },
+      get followLatest() { return chatSurface.followLatestEnabled; },
       get restoredScrollTop() { return _restoredScrollTop; },
-      set restoredScrollTop(value) { _restoredScrollTop = value; },
+      set restoredScrollTop(value) { setRestoredScrollTop(value); },
     },
     switchAgent: (id) => window.switchAgent(id),
     setTimeout: (callback, delay) => setTimeout(callback, delay),
-    hasPendingNavigation: (agent) => typeof hasPendingSessionNavigation === 'function' && hasPendingSessionNavigation(agent),
-    bumpNavigationGuard: () => bumpNavigationGuard(),
+    hasPendingNavigation: (agent) => typeof window.hasPendingSessionNavigation === 'function' && window.hasPendingSessionNavigation(agent),
+    bumpNavigationGuard: () => window.bumpNavigationGuard(),
     closeContextMenu: () => closeAgentContextMenu(),
-    findAgent: (id) => findAgentByIdentity(id),
-    isWorkspaceHost: (agent) => isWorkspaceHostUnit(agent),
+    findAgent: (id) => window.findAgentByIdentity(id),
+    isWorkspaceHost: (agent) => window.isWorkspaceHostUnit(agent),
     runtimeId: (agent) => getRuntimeId(agent),
     agentRuntimeId: (agent) => getAgentRuntimeId(agent),
-    isRemote: (id) => isRemoteNamespaceAgentId(id),
+    isRemote: (id) => window.isRemoteNamespaceAgentId(id),
     remote: () => window.RemoteConnections,
     closeReadOnlySession: () => {
       if (typeof window.getReadOnlySessionTarget === 'function' && window.getReadOnlySessionTarget()
         && typeof window.closeReadOnlySession === 'function') window.closeReadOnlySession();
     },
-    isWorkspaceSurface: (agent) => isWorkspaceSurfaceUnit(agent),
-    selectWorkspace: (id, options) => selectWorkspaceSurface(id, options),
-    storeDraft: () => _storeVisibleSessionInputDraft(),
-    saveWorkspaceScroll: () => { if (typeof saveCurrentWorkspaceSurfaceScroll === 'function') saveCurrentWorkspaceSurfaceScroll(); },
+    isWorkspaceSurface: (agent) => window.isWorkspaceSurfaceUnit(agent),
+    selectWorkspace: (id, options) => window.selectWorkspaceSurface(id, options),
+    storeDraft: () => window._storeVisibleSessionInputDraft(),
+    saveWorkspaceScroll: () => { if (typeof window.saveCurrentWorkspaceSurfaceScroll === 'function') window.saveCurrentWorkspaceSurfaceScroll(); },
     saveCache: (id) => saveCurrentRuntimeToCache(id),
     logicalId: (agent) => getLogicalAgentId(agent),
     normalize: (id) => normalizeAgentIdentity(id),
-    clearFinished: (id) => _recentlyFinishedRuntimes.delete(id),
+    clearFinished: (id) => callActivity._recentlyFinishedRuntimes.delete(id),
     deriveSession: (id) => _deriveRuntimeSessionIdFromAgents(id),
     bindSession: (id, session) => setViewerSessionBinding(id, session),
     updateThreadIndicators: () => {
-      if (typeof _syncActiveThreadSubscription === 'function') _syncActiveThreadSubscription();
+      if (typeof window._syncActiveThreadSubscription === 'function') window._syncActiveThreadSubscription();
       if (typeof window.updateThreadHeaderIndicator === 'function') window.updateThreadHeaderIndicator();
       if (typeof window.updateQueueIndicator === 'function') window.updateQueueIndicator();
     },
     browseOnly: () => window.ClawThreads?.browseOnly === true,
     resetSurface: () => {
-      currentWorkspaceArtifactDetail = null;
-      currentWorkspaceDocsetDetail = null;
-      currentProjectDocsetOpen = false;
-      currentProjectRequirementEdit = null;
-      currentProjectDocsetPage = 'requirement';
-      currentWorkspaceTab = 'chat';
-      _lastRenderedChatSig = '';
+      setCurrentWorkspaceArtifactDetail(null);
+      setCurrentWorkspaceDocsetDetail(null);
+      setCurrentProjectDocsetOpen(false);
+      setCurrentProjectRequirementEdit(null);
+      setCurrentProjectDocsetPage('requirement');
+      setCurrentWorkspaceTab('chat');
+      setLastRenderedChatSig('');
     },
     resetScroll: () => {
-      setPendingChatScrollRestore(null);
-      if (typeof setPendingChatViewportAnchor === 'function') setPendingChatViewportAnchor(null);
-      showChatProcess = false;
+      window.setPendingChatScrollRestore(null);
+      if (typeof window.setPendingChatViewportAnchor === 'function') window.setPendingChatViewportAnchor(null);
+      chatSurface.showChatProcess = false;
     },
-    resetStatus: () => resetRuntimeStatusForSwitch(),
-    activateCollapse: (key) => activateUserCollapseStateForContext(key),
+    resetStatus: () => window.resetRuntimeStatusForSwitch(),
+    activateCollapse: (key) => window.activateUserCollapseStateForContext(key),
     contextKey: (id) => getRuntimeContextKey(id),
     restoreCache: (id) => restoreRuntimeFromCache(id),
-    setPendingScroll: (top) => setPendingChatScrollRestore(top),
-    render: () => renderCurrentMainView(),
-    renderPanel: () => renderFeaturePanel(),
+    setPendingScroll: (top) => window.setPendingChatScrollRestore(top),
+    render: () => window.renderCurrentMainView(),
+    renderPanel: () => window.renderFeaturePanel(),
     patch: (patch) => applySessionViewPatch(patch),
     emptyOverview: () => getEmptyOverviewSnapshot(),
     emptyTodo: () => getEmptyTodoPlan(),
-    setFollowLatest: (value) => setFollowLatest(value),
-    beginFollowWindows: () => { beginFollowLatestCooldown(); beginFollowLatestEntryWindow(); },
-    renderAgents: () => renderAgentList(),
-    fetch: (...args) => fetch(...args),
-    isCalling: (data) => resolveNotificationCallingState(data),
+    setFollowLatest: (value) => window.setFollowLatest(value),
+    beginFollowWindows: () => { window.beginFollowLatestCooldown(); window.beginFollowLatestEntryWindow(); },
+    renderAgents: () => window.renderAgentList(),
+    // 显式 window.fetch：宿主工厂交给 ESM 消费方的取数入口就是页面上那条
+    // （auth-client 的 401 拦截补丁挂在这里），与 classic 裸标识符经全局对象
+    // 解析到同一函数；写成裸 `fetch` 会绑定模块 realm 的全局，测试夹具替换
+    // window.fetch 时两条通道分叉。
+    fetch: (...args) => window.fetch(...args),
+    isCalling: (data) => window.resolveNotificationCallingState(data),
     applyCalling: (id, calling) => {
-      if (calling) { _markAgentCallStartedForNotify(id); _agentCallActive.set(id, true); }
-      else _agentCallActive.delete(id);
+      if (calling) { window._markAgentCallStartedForNotify(id); callActivity._agentCallActive.set(id, true); }
+      else callActivity._agentCallActive.delete(id);
     },
-    syncActionButton: () => _syncPersistentActionButton(),
+    syncActionButton: () => window._syncPersistentActionButton(),
     persistFocus: (id) => {
       try { localStorage.setItem('claw:lastFocusedRuntimeId', id); localStorage.removeItem('claw:lastFocusedEntryId'); }
       catch { /* localStorage may be unavailable. */ }
     },
-    loadData: (id) => loadAgentData(id),
-    loadAgents: () => loadAgents(),
-    clearLoading: () => clearChatLoadingSession(),
+    loadData: (id) => window.loadAgentData(id),
+    loadAgents: () => window.loadAgents(),
+    clearLoading: () => window.clearChatLoadingSession(),
     warn: (...args) => console.warn(...args),
     error: (...args) => console.error(...args),
     alert: (message) => window.alert(message),
@@ -589,8 +806,8 @@ function createRuntimeSwitchHost() {
 // another recursive timer chain.
 function createPollCoordinatorHost() {
   return {
-    run: () => runPollCycle(),
-    fastInterval: () => POLL_FAST_INTERVAL_MS,
+    run: () => window.runPollCycle(),
+    fastInterval: () => pollHost.POLL_FAST_INTERVAL_MS,
     setTimeout: (callback, delay) => setTimeout(callback, delay),
     clearTimeout: (id) => clearTimeout(id),
   };
@@ -606,17 +823,16 @@ function createPollCoordinatorHost() {
 // 用即可，不会产生第二条递归定时链。
 window.ClawFW = window.ClawFW || {};
 window.ClawFW.requestImmediatePoll = function () {
-  poll();
+  window.poll();
 };
 
 // ── SSE 全量对账钩子（§6.5 兜底闭环）────────────────────────────────
 // 看门狗静默 30s、resync 帧（服务端重启 eid 归零 / 缓冲超界）、UDS 重连
 // （connection{reconnected:true}）都经此触发一轮完整轮询：poll 的 SSE 分支
 // 不拉 notification 等状态端点，对账能力只在全量形态存在。
-let _forceFullPollNextCycle = false;
 window.ClawFW.forceFullPollOnce = function () {
   _forceFullPollNextCycle = true;
-  poll();
+  window.poll();
 };
 
 // ── dev 计量（ADR-0012，默认关闭）──────────────────────────────────────────
@@ -630,9 +846,9 @@ window.ClawFW.forceFullPollOnce = function () {
 
 // Exposed for feature panel toggle: after IPC tool-state change, trigger a
 // delayed poll so inspector refreshes from the agent subprocess.
-window._scheduleInspectorRefresh = function (delayMs) {
-  schedulePoll(delayMs || 300);
-};
+function _scheduleInspectorRefresh(delayMs) {
+  window.schedulePoll(delayMs || 300);
+}
 
 // ── poll 与 SSE 事件共用的消费函数（§5.2：事件到达路径与 fetch 路径走同一实现）──
 
@@ -640,31 +856,31 @@ function createRuntimeNotFoundHost() {
   return {
     isCurrent: (token) => isSessionViewTokenCurrent(token),
     clearCompact: (id) => {
-      if (_partialCompactInFlight && normalizeAgentIdentity(id) === normalizeAgentIdentity(_partialCompactRuntimeId)) clearPartialCompactState();
+      if (partialCompactInFlight && normalizeAgentIdentity(id) === normalizeAgentIdentity(partialCompactRuntimeId)) clearPartialCompactState();
     },
-    switching: () => prebuiltSessionSwitchInFlight || suppressSidebarRerender,
-    schedule: (delay) => schedulePoll(delay),
-    fastInterval: () => POLL_FAST_INTERVAL_MS,
-    interval: () => POLL_INTERVAL_MS,
+    switching: () => sessionSwitch.prebuiltSessionSwitchInFlight || sidebarUi.suppressSidebarRerender,
+    schedule: (delay) => window.schedulePoll(delay),
+    fastInterval: () => pollHost.POLL_FAST_INTERVAL_MS,
+    interval: () => pollHost.POLL_INTERVAL_MS,
     sessionId: (id) => typeof getRuntimeWorkspaceSessionId === 'function' ? getRuntimeWorkspaceSessionId(id) : '',
-    hostRecord: () => typeof getCurrentHostAgentRecord === 'function' ? getCurrentHostAgentRecord() : null,
+    hostRecord: () => getCurrentHostAgentRecord(),
     thread: (id, session) => typeof window.getThreadForSession === 'function' ? window.getThreadForSession(id, session) : null,
     canRefreshThreads: () => typeof window.refreshThreads === 'function',
     refreshThreads: (force) => window.refreshThreads(force),
     activeConversation: () => window.ClawThreads?.activeConversation || null,
-    runtimeRecord: (id) => getRuntimeRecord(id),
-    fallback: (record) => resolveWorkspaceFallbackAgentId(record),
+    runtimeRecord: (id) => window.getRuntimeRecord(id),
+    fallback: (record) => window.resolveWorkspaceFallbackAgentId(record),
     patch: (token, patch, effect) => commitSessionViewPatch(token, patch, effect),
     emptyTodo: () => getEmptyTodoPlan(),
     clearView: (id, failed, fallback) => {
-      _agentCallActive.delete(id);
-      clearInterruptSuppression(id);
+      callActivity._agentCallActive.delete(id);
+      window.clearInterruptSuppression(id);
       if (failed) { failed.callActive = false; failed.connected = false; }
-      currentRuntimeAgentId = null;
-      if (fallback) selectWorkspaceSurface(fallback, { skipFeaturePanel: true });
-      else { focusedAgentId = null; currentWorkspaceTab = null; renderCurrentMainView(); }
+      setCurrentRuntimeAgentId(null);
+      if (fallback) window.selectWorkspaceSurface(fallback, { skipFeaturePanel: true });
+      else { setFocusedAgentId(null); setCurrentWorkspaceTab(null); window.renderCurrentMainView(); }
     },
-    loadAgents: () => loadAgents(),
+    loadAgents: () => window.loadAgents(),
   };
 }
 
@@ -674,7 +890,7 @@ function createMessageProbeHost(createRenderer, createMetrics, bytes) {
     messages: () => currentMessages,
     isCurrent: (token) => isSessionViewTokenCurrent(token),
     commit: (token, patch, effect) => commitSessionViewPatch(token, patch, effect),
-    fetch: (url) => fetch(url),
+    fetch: (url) => window.fetch(url),
     attachTimestamps: (messages, timestamps) => attachMessagesTimestamps(messages, timestamps),
     bytes,
     metrics: createMetrics({
@@ -688,30 +904,30 @@ function createMessageProbeHost(createRenderer, createMetrics, bytes) {
 // Narrow UI adapter; selection and update policy live in the ESM renderer.
 function createCommittedViewRendererHost() {
   return {
-    clearLoading: () => clearChatLoadingSession(),
+    clearLoading: () => window.clearChatLoadingSession(),
     // ADR-0041: this legacy title trigger is intentionally a no-op.
-    markTitle: (previous, next) => markAutoTitleCandidate(previous, next),
-    firstChanged: (next, previous) => findFirstChangedMessageIndex(next, previous),
-    workspaceSurface: () => shouldRenderWorkspaceSurface(),
-    render: (current) => renderCurrentMainView(current),
-    append: (messages, offset) => appendNewMessages(messages, offset),
-    updateLast: (message) => updateLastMessage(message),
+    markTitle: (previous, next) => window.markAutoTitleCandidate(previous, next),
+    firstChanged: (next, previous) => window.findFirstChangedMessageIndex(next, previous),
+    workspaceSurface: () => window.shouldRenderWorkspaceSurface(),
+    render: (current) => window.renderCurrentMainView(current),
+    append: (messages, offset) => window.appendNewMessages(messages, offset),
+    updateLast: (message) => window.updateLastMessage(message),
     reconcile: (messages) => {
       if (typeof window.ClawFW?.reconcileOptimisticUserEchoes === 'function') window.ClawFW.reconcileOptimisticUserEchoes(messages);
     },
     panel: () => activeFeaturePanel,
-    renderPanel: () => renderFeaturePanel(),
-    updateContext: (current) => { if (typeof updateChatContextBar === 'function') updateChatContextBar(current); },
-    updateModel: () => { if (typeof updateInputModelSwitcher === 'function') updateInputModelSwitcher(); },
-    updateThinking: () => { if (typeof updateThinkingEffortSwitcher === 'function') updateThinkingEffortSwitcher(); },
-    updatePlanBadge: () => updatePlanBadge(),
+    renderPanel: () => window.renderFeaturePanel(),
+    updateContext: (current) => { if (typeof window.updateChatContextBar === 'function') window.updateChatContextBar(current); },
+    updateModel: () => { if (typeof window.updateInputModelSwitcher === 'function') window.updateInputModelSwitcher(); },
+    updateThinking: () => { if (typeof window.updateThinkingEffortSwitcher === 'function') window.updateThinkingEffortSwitcher(); },
+    updatePlanBadge: () => window.updatePlanBadge(),
     clearCompletedCompact: (token, requests) => {
-      if (_partialCompactInFlight && normalizeAgentIdentity(token.runtimeId) === normalizeAgentIdentity(_partialCompactRuntimeId)
+      if (partialCompactInFlight && normalizeAgentIdentity(token.runtimeId) === normalizeAgentIdentity(partialCompactRuntimeId)
         && requests && requests.length > 0) clearPartialCompactState();
     },
-    updateRollback: () => updateRollbackActionVisibility(),
-    chatSurface: () => isChatSurfaceActive(),
-    syncInput: (id) => _syncPersistentInputUi(id),
+    updateRollback: () => window.updateRollbackActionVisibility(),
+    chatSurface: () => window.isChatSurfaceActive(),
+    syncInput: (id) => window._syncPersistentInputUi(id),
   };
 }
 
@@ -727,10 +943,10 @@ function createMetadataCommitHost(createRenderer) {
     currentOverviewSignature: () => currentOverviewSignature,
     currentTodoSignature: () => currentTodoPlanSignature,
     inputRequests: () => currentInputRequests,
-    interruptTarget: () => getInterruptTargetId(),
-    setInterruptTarget: (value) => setInterruptTargetId(value),
+    interruptTarget: () => window.getInterruptTargetId(),
+    setInterruptTarget: (value) => window.setInterruptTargetId(value),
     now: () => Date.now(),
-    lastInterruptAction: () => _lastInterruptUserActionAt,
+    lastInterruptAction: () => callActivity._lastInterruptUserActionAt,
     render: createRenderer(createCommittedViewRendererHost()).renderMetadata,
   };
 }
@@ -740,45 +956,45 @@ function createPollMaintenanceHost() {
     agents: () => allAgents,
     focused: () => focusedAgentId,
     now: () => Date.now(),
-    isPh: (record) => typeof isPhStyleWorkspaceAgent === 'function' && isPhStyleWorkspaceAgent(record),
-    browsingTarget: (record) => typeof getPhBrowsingTarget === 'function' ? getPhBrowsingTarget(record) : null,
-    workspaceState: (record) => typeof getAgentWorkspaceState === 'function' ? getAgentWorkspaceState(record) : null,
-    fetch: (url) => fetch(url),
-    isWorkspace: (record) => isWorkspaceHostUnit(record),
-    detailLoaded: (id) => loadedAgentDetailIds.has(id),
+    isPh: (record) => typeof window.isPhStyleWorkspaceAgent === 'function' && window.isPhStyleWorkspaceAgent(record),
+    browsingTarget: (record) => typeof window.getPhBrowsingTarget === 'function' ? window.getPhBrowsingTarget(record) : null,
+    workspaceState: (record) => typeof window.getAgentWorkspaceState === 'function' ? window.getAgentWorkspaceState(record) : null,
+    fetch: (url) => window.fetch(url),
+    isWorkspace: (record) => window.isWorkspaceHostUnit(record),
+    detailLoaded: (id) => window.AgentLoaderHost.loadedAgentDetailIds.has(id),
     lastWorkspaceRefresh: () => window._lastWsSessionRefreshAt || 0,
     setWorkspaceRefresh: (value) => { window._lastWsSessionRefreshAt = value; },
     lastAgentRefresh: () => lastAgentListRefreshAt,
-    setAgentRefresh: (value) => { lastAgentListRefreshAt = value; },
-    sseActive: () => typeof isSseActive === 'function' && isSseActive(),
-    loadAgents: () => loadAgents(),
-    refreshCalls: (agents) => refreshAgentCallStates(agents),
+    setAgentRefresh: (value) => { setLastAgentListRefreshAt(value); },
+    sseActive: () => typeof window.isSseActive === 'function' && window.isSseActive(),
+    loadAgents: () => window.loadAgents(),
+    refreshCalls: (agents) => window.refreshAgentCallStates(agents),
     isCurrent: (token) => isSessionViewTokenCurrent(token),
     patch: (token, patch, effect) => commitSessionViewPatch(token, patch, effect),
     commit: (token, effect) => commitSessionViewState(token, effect),
     apply: (patch) => applySessionViewPatch(patch),
-    notify: (value) => updateNotificationStatus(value),
-    merge: (previous, fresh, id) => typeof mergeWorkspaceSessionSnapshots === 'function'
-      ? mergeWorkspaceSessionSnapshots(previous, fresh, id) : fresh,
+    notify: (value) => window.updateNotificationStatus(value),
+    merge: (previous, fresh, id) => typeof window.mergeWorkspaceSessionSnapshots === 'function'
+      ? window.mergeWorkspaceSessionSnapshots(previous, fresh, id) : fresh,
     renderWorkspace: (record, allowSoftRefresh) => {
-      if (typeof shouldRenderWorkspaceSurface === 'function' && shouldRenderWorkspaceSurface(record)) {
+      if (typeof window.shouldRenderWorkspaceSurface === 'function' && window.shouldRenderWorkspaceSurface(record)) {
         if (allowSoftRefresh && record.id === 'work-group' && window.WorkGroupUI?.softRefresh) window.WorkGroupUI.softRefresh();
-        else renderCurrentMainView();
-      } else if (typeof updateChatContextBar === 'function') updateChatContextBar();
+        else window.renderCurrentMainView();
+      } else if (typeof window.updateChatContextBar === 'function') window.updateChatContextBar();
     },
     updateComposer: () => {
-      if (typeof updateChatContextBar === 'function') updateChatContextBar();
-      if (typeof updateInputModelSwitcher === 'function') updateInputModelSwitcher();
-      if (typeof updateThinkingEffortSwitcher === 'function') updateThinkingEffortSwitcher();
+      if (typeof window.updateChatContextBar === 'function') window.updateChatContextBar();
+      if (typeof window.updateInputModelSwitcher === 'function') window.updateInputModelSwitcher();
+      if (typeof window.updateThinkingEffortSwitcher === 'function') window.updateThinkingEffortSwitcher();
     },
     panel: () => activeFeaturePanel,
-    loadLogs: () => loadLogs(),
+    loadLogs: () => window.loadLogs(),
     normalizeHooks: (value) => normalizeHookInspector(value),
     hookSignature: (value) => getHookInspectorSignature(value),
     currentHookSignature: () => currentHookInspectorSignature,
-    renderPanel: () => renderFeaturePanel(),
+    renderPanel: () => window.renderFeaturePanel(),
     saveCache: (id) => saveCurrentRuntimeToCache(id),
-    trackRecap: () => _trackRecapSessionPresence(),
+    trackRecap: () => window._trackRecapSessionPresence(),
   };
 }
 
@@ -786,49 +1002,49 @@ function createRuntimePollHost() {
   return {
     capture: () => captureSessionViewToken(),
     consumeForceFull: () => { const force = _forceFullPollNextCycle; _forceFullPollNextCycle = false; return force; },
-    sseActive: () => typeof isSseActive === 'function' && isSseActive(),
-    guard: (id, token) => refreshContextGuardStatus(id, token),
-    status: (id, token) => refreshCurrentRuntimeStatus(id, token),
-    refreshCalls: (agents, options) => refreshAgentCallStates(agents, options),
+    sseActive: () => typeof window.isSseActive === 'function' && window.isSseActive(),
+    guard: (id, token) => window.refreshContextGuardStatus(id, token),
+    status: (id, token) => window.refreshCurrentRuntimeStatus(id, token),
+    refreshCalls: (agents, options) => window.refreshAgentCallStates(agents, options),
     agents: () => allAgents,
     commit: (token, effect) => commitSessionViewState(token, effect),
     isCurrent: (token) => isSessionViewTokenCurrent(token),
-    syncInput: (id) => { _syncPersistentActionButton(); _syncPersistentInputUi(id); },
-    title: (id) => { if (!isRuntimeCalling(id)) tryAutoTitleGeneration(currentMessages); },
-    tail: (token) => _runPollTailLowFrequency(token),
-    schedule: (delay) => schedulePoll(delay),
-    fastInterval: () => POLL_FAST_INTERVAL_MS,
-    interval: () => POLL_INTERVAL_MS,
-    fetch: (url) => fetch(url),
-    notFound: (token) => handleCoreResponsesNotFound(token),
-    messages: (token, probe) => runMessagesProbeCycle(token, probe),
-    probe: (overview) => typeof extractMessagesProbe === 'function' ? extractMessagesProbe(overview) : null,
-    metadata: (token, parts) => commitMetadataUpdate(token, parts),
+    syncInput: (id) => { window._syncPersistentActionButton(); window._syncPersistentInputUi(id); },
+    title: (id) => { if (!window.isRuntimeCalling(id)) window.tryAutoTitleGeneration(currentMessages); },
+    tail: (token) => window._runPollTailLowFrequency(token),
+    schedule: (delay) => window.schedulePoll(delay),
+    fastInterval: () => pollHost.POLL_FAST_INTERVAL_MS,
+    interval: () => pollHost.POLL_INTERVAL_MS,
+    fetch: (url) => window.fetch(url),
+    notFound: (token) => window.handleCoreResponsesNotFound(token),
+    messages: (token, probe) => window.runMessagesProbeCycle(token, probe),
+    probe: (overview) => extractMessagesProbe(overview),
+    metadata: (token, parts) => window.commitMetadataUpdate(token, parts),
   };
 }
 
 function createPollCycleHost() {
   return {
-    switching: () => prebuiltSessionSwitchInFlight,
-    schedule: (delay) => schedulePoll(delay),
-    fastInterval: () => POLL_FAST_INTERVAL_MS,
-    interval: () => POLL_INTERVAL_MS,
-    sseActive: () => typeof isSseActive === 'function' && isSseActive(),
+    switching: () => sessionSwitch.prebuiltSessionSwitchInFlight,
+    schedule: (delay) => window.schedulePoll(delay),
+    fastInterval: () => pollHost.POLL_FAST_INTERVAL_MS,
+    interval: () => pollHost.POLL_INTERVAL_MS,
+    sseActive: () => typeof window.isSseActive === 'function' && window.isSseActive(),
     now: () => Date.now(),
-    lastChoiceCheck: () => _lastChoiceAlertCheckAt,
-    setChoiceCheck: (value) => { _lastChoiceAlertCheckAt = value; },
-    checkChoices: () => checkGlobalChoiceAlerts(),
+    lastChoiceCheck: () => pollHost.lastChoiceAlertCheckAt,
+    setChoiceCheck: (value) => { pollHost.lastChoiceAlertCheckAt = value; },
+    checkChoices: () => window.checkGlobalChoiceAlerts(),
     refreshRemote: () => {
-      if (typeof maybeRefreshRemoteCatalog === 'function') maybeRefreshRemoteCatalog();
-      if (typeof maybeRefreshRemoteHistory === 'function') maybeRefreshRemoteHistory();
+      if (typeof window.maybeRefreshRemoteCatalog === 'function') window.maybeRefreshRemoteCatalog();
+      if (typeof window.maybeRefreshRemoteHistory === 'function') window.maybeRefreshRemoteHistory();
     },
-    templates: () => FEATURE_TEMPLATE_MAP,
-    lastTemplateReload: () => lastFeatureTemplateReloadAt,
-    setTemplateReload: (value) => { lastFeatureTemplateReloadAt = value; },
+    templates: () => window.FEATURE_TEMPLATE_MAP,
+    lastTemplateReload: () => pollHost.lastFeatureTemplateReloadAt,
+    setTemplateReload: (value) => { pollHost.lastFeatureTemplateReloadAt = value; },
     reloadTemplates: () => window.reloadFeatureTemplateMap(),
     runtimeId: () => currentRuntimeAgentId,
-    noFocus: () => refreshUnfocusedPoll(),
-    runtime: () => runRuntimePoll(),
+    noFocus: () => window.refreshUnfocusedPoll(),
+    runtime: () => window.runRuntimePoll(),
     warn: (...args) => console.warn(...args),
   };
 }
@@ -860,8 +1076,12 @@ function _getSessionInputCacheKey() {
 // P4 T2 收尾批次：原顶层 IIFE `bootstrapAgentCallStates` 已逐字搬出为 ESM 模块
 // （B1：它在 classic 解析相调用 sidebar-render 的宿主工厂并读 runtime-status 的
 // `_agentSuspended`，两者本批进模块相）。引擎实例、`agent-call-states` 桥键与
-// `window.ClawFW.CallStates` 协议面不变；下方 visibilitychange 监听器继续以裸
-// 标识符读桥键（本文件仍是 classic，调用点在运行期）。
+// `window.ClawFW.CallStates` 协议面不变。
+//
+// 本文件仍在**模块相之前**可用（它是 kernel-entry 之前求值的独立入口），可见性
+// 监听器里的两条链路因此保持 typeof / null 守卫：引擎桥键由 kernel-entry 图在
+// 本文件之后求值时才注册，`refreshCurrentRuntimeStatus` 同批（runtime-status-loader）
+// 才注册。
 
 // 首屏同步渲染（applyTheme → applyLanguage → 侧栏 / 面板 / 主视图）已迁到 ESM
 // 时序：public/src/modules/boot.js（P4 时序切换，index.html 最后一条 module 标签）。
@@ -874,34 +1094,102 @@ document.addEventListener('visibilitychange', () => {
   if (document.hidden) return;
   // Re-sync all agent calling states immediately（回前台是全量对账路径：
   // SSE 激活时本地条目也参与本轮对账，§5.3 includeSseLocals）。
-  // 引擎实例已迁模块相（P4 T2 收尾批次）：解析相（模块图未求值）的
-  // visibilitychange 不触达该链路，与下方 currentRuntimeAgentId 的 null 不变量
-  // 同款；模块就绪后的轮询事件自会补齐这一跳。
-  if (typeof refreshAgentCallStates === 'function') {
-    refreshAgentCallStates(allAgents, { force: true, includeSseLocals: true });
+  // 引擎实例在 kernel-entry 图里求值（本文件之后）：图求值完成前触达时
+  // typeof 守卫跳过——与下方 currentRuntimeAgentId 的 null 不变量同款；
+  // 模块就绪后的轮询事件自会补齐这一跳。
+  if (typeof window.refreshAgentCallStates === 'function') {
+    window.refreshAgentCallStates(allAgents, { force: true, includeSseLocals: true });
   }
   // Re-sync current runtime's notification status (button, status bar)
-  // 不变量：currentRuntimeAgentId 在 ESM 模块图求值前恒为 null（本监听器注册于
-  // 模块相之前），因此仅存在于 ESM 的 refreshCurrentRuntimeStatus 不会被裸调。
-  // 新增 classic 写入面必须重评该不变量（frontend-foreground-sync-owner 钉住）。
-  if (currentRuntimeAgentId) {
-    refreshCurrentRuntimeStatus(currentRuntimeAgentId);
+  // 不变量：启动事务（startApplication）在本监听器可触达之前尚未开始，
+  // currentRuntimeAgentId 恒为初值 null，因此仅存在于 kernel-entry 图的
+  // refreshCurrentRuntimeStatus 不会被裸调；runtimes 出现后它一定已注册。
+  // 新增写入面必须重评该不变量（frontend-foreground-sync-owner 钉住）。
+  if (currentRuntimeAgentId && typeof window.refreshCurrentRuntimeStatus === 'function') {
+    window.refreshCurrentRuntimeStatus(currentRuntimeAgentId);
   }
 });
 
 function createApplicationStartupHost() {
   return {
     loadTemplates: () => window.loadFeatureTemplateMap(),
-    loadAgents: () => loadAgents(),
+    loadAgents: () => window.loadAgents(),
     consumeDesktopOpen: async () => { if (window.ClawDesktopOpen) await window.ClawDesktopOpen.consumeBootOpenRequest(); },
     reloadTemplates: () => window.reloadFeatureTemplateMap(),
-    loadMcp: (force) => loadMcpInfo(force),
-    poll: () => poll(),
+    loadMcp: (force) => window.loadMcpInfo(force),
+    poll: () => window.poll(),
     log: (...args) => console.log(...args),
   };
 }
 
+// ─── 桥接期兼容面（domain `app-main`）─────────────────────────────────────
+// 逐键消费面（grep public/ 核过，classic 裸标识符与 ESM 的 window.* 晚绑定同列）：
+//   getCurrentAgentRecord            ← app-core / flow-editor（classic 裸调）+
+//                                      identity / claw-host / session-ui / …（window）
+//   getCurrentHostAgentRecord        ← chat-context-bar / session-view-state /
+//                                      thread-store / input-model-switcher
+//   getCurrentRuntimeRecord          ← app-ui / agent-data-loader / slash-* / git 面板
+//   updateCurrentAgentChrome         ← i18n-environment-state / sidebar-render
+//   isAgentActive / isRuntimeItemActive ← sidebar-render（条目高亮谓词）
+//   groupConnectedAgents             ← sidebar-render / sidebar-layout
+//   toEpochMs                        ← runtime-status（通知时间排序）
+//   getInputSurfaceMode              ← input-composer / input-render / input-queue
+//   markSessionLoading / markActionLoading / clearSessionLoading ← session-dialogs /
+//                                      trim-page / workspace-actions / im-actions
+//   applyOptimisticWorkspaceSession  ← workspace-actions
+//   _getSessionInputCacheKey         ← input-composer / input-render / persistent-input /
+//                                      recap-hint / voice-input / rollback-runtime
+//   _scheduleInspectorRefresh        ← context-guard-toggle / debug-features-hooks /
+//                                      slash-menu / session-controls
+//   12 个 createXHost                ← kernel-entry 图的宿主模块（求值期取用，本批
+//                                      的装载相位约束就落在这 12 个键上）
+// 注销条件：上列消费方全部改具名 import（或随 T5 编排域收敛删除）后，逐键删除
+// defineKey 并下调 .kernel-bridge-baseline.json；domain 随之注销。
+export const bridgeApi = {
+  getCurrentHostAgentRecord,
+  getCurrentRuntimeRecord,
+  getCurrentAgentRecord,
+  updateCurrentAgentChrome,
+  isAgentActive,
+  groupConnectedAgents,
+  isRuntimeItemActive,
+  toEpochMs,
+  getInputSurfaceMode,
+  markSessionLoading,
+  markActionLoading,
+  clearSessionLoading,
+  applyOptimisticWorkspaceSession,
+  _getSessionInputCacheKey,
+  _scheduleInspectorRefresh,
+  createWorkspaceEntryHost,
+  createWorkspaceSessionNavigationHost,
+  createCompactResumeHost,
+  createRuntimeSwitchHost,
+  createPollCoordinatorHost,
+  createRuntimeNotFoundHost,
+  createMessageProbeHost,
+  createMetadataCommitHost,
+  createPollMaintenanceHost,
+  createRuntimePollHost,
+  createPollCycleHost,
+  createApplicationStartupHost,
+};
+for (const [key, value] of Object.entries(bridgeApi)) {
+  window.KernelState.defineKey('app-main', key, value);
+}
+window.KernelState.claim('app-main', {
+  get: (key) => bridgeApi[key],
+  set: (key, value) => { bridgeApi[key] = value; },
+});
+
+// ── 启动编排（auth 放行之后）────────────────────────────────────────────
+// 保持未 await 的调用体（不是 top-level await）：`__clawAuthReady` 由 auth-client
+// 在 DOMContentLoaded 后兑现，本模块求值时它必然仍未兑现，因此认证放行 →
+// startApplication 的顺序由 promise 链本身保证；`startApplication` 的桥键由
+// kernel-entry 图的 application-startup-host 在本文件之后注册，兑现发生在
+// DOMContentLoaded 之后，调用时点必然已就位。写成 TLA 也不会死锁（2026-11-18
+// 变异实测），但会推迟页面 load 事件——既有语义是 fire-and-forget，没有理由换。
 (async () => {
   await window.__clawAuthReady;
-  await startApplication();
+  await window.startApplication();
 })();

@@ -71,6 +71,10 @@ const MODULE_ENTRIES = [
   './src/modules/agent-store-state.js',
   './src/modules/render-entry-state.js',
   './src/modules/orchestration-state.js',
+  // P4 T3 收尾：编排域（app-main）迁 ESM。位置在 kernel-entry **之前**——后者图
+  // 内的 12 个宿主模块在求值期取本入口提供的 createXHost 工厂（原 classic 解析相
+  // 时序的等价表达）。挪动位置即改动时序，必须与本清单一并复核。
+  './src/app-main.js',
   './src/modules/kernel-entry.js',
   './src/modules/markdown-utils.js',
   // P4 时序切换：首屏渲染链（applyTheme → applyLanguage → 主视图）的 ESM 入口。

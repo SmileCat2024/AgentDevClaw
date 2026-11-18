@@ -23,7 +23,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
-import { prepareEsmModules, prepareSidebarDomain, SESSION_VIEW_DOMAIN } from './p2-classic-hosts.js';
+import { APP_MAIN_DOMAIN, prepareEsmModules, prepareSidebarDomain, SESSION_VIEW_DOMAIN } from './p2-classic-hosts.js';
 
 const OVERVIEW_DATA = 'public/src/modules/overview-data.js';
 
@@ -104,22 +104,23 @@ async function withHeaderSandbox(fn) {
       prepareSidebarDomain(ctx);
       // app-main 的 classic 同步引擎在装载期组合 sidebar-render 的
       // createAgentCallStatesHost：按生产先行脚本序装真链，不造宿主桩。
-      prepareEsmModules(ctx, SESSION_VIEW_DOMAIN);
+      // 编排域（app-main）迁 ESM（P4 T3 收尾）：本体进模块相且最先求值（宿主工厂
+      // 供 runtime-switch / poll 等宿主模块在求值期取用）。
+      prepareEsmModules(ctx, [...APP_MAIN_DOMAIN, ...SESSION_VIEW_DOMAIN]);
       // todo-plan / chat-context-bar 已迁 ESM（P4 L1）：classic 相只补 markdown-utils
       // 的 classic 实现（escapeHtml / renderer），两个模块在 async 相 c.load。
       // i18n 已迁 ESM（P4）：t 桥键由 createFrontendSandbox 装好（install-i18n.js）
       // app-main.js 底部的启动序列在沙箱里不执行；主题/语言应用与渲染函数以 stub 替身
       ctx.run(`
         window.__clawAuthReady = new Promise(() => {});
-        applyTheme = () => {};
-        applyLanguage = () => {};
+        // app-ui / chat-viewport 不在本链：capability 以最小替身注入（调用点语义
+        // 由各自测试覆盖，本文件只验 header 渲染链）。
         shouldRenderWorkspaceSurface = () => false;
         isChatSurfaceActive = () => true;
         getRuntimeAwareAgentRecord = () => null;
         notifyChatViewportMutation = () => {};
         isRemoteNamespaceAgentId = (value) => typeof value === 'string' && value.startsWith('remote:');
       `);
-      ctx.loadSource('public/src/app-main.js');
     },
   }, async (c) => {
     // 首屏链两件（P4 L1 已迁 ESM）：模块相装载，classic 侧经桥键调用同名入口。

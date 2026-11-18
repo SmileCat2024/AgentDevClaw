@@ -100,6 +100,7 @@
       "createP2BootstrapContextMenuHost",
       "createP2BootstrapDebugPanelHost",
       "createP2BootstrapPhSessionHost",
+      "createP2BootstrapPollHost",
       "createP2BootstrapSessionSwitchHost",
       "createP2BootstrapSidebarHost",
       "createRuntimeViewCacheHost",
@@ -130,47 +131,10 @@
   },
   "public/src/app-main.js": {
     "state": [
-      "_forceFullPollNextCycle",
-      "_lastWsSessionRefreshAt",
-      "_scheduleInspectorRefresh"
+      "_lastWsSessionRefreshAt"
     ],
     "behavior": [
-      "ClawFW",
-      "_getSessionInputCacheKey",
-      "_titleForBoundSession",
-      "applyOptimisticWorkspaceSession",
-      "clearSessionLoading",
-      "createApplicationStartupHost",
-      "createCommittedViewRendererHost",
-      "createCompactResumeHost",
-      "createMessageProbeHost",
-      "createMetadataCommitHost",
-      "createPollCoordinatorHost",
-      "createPollCycleHost",
-      "createPollMaintenanceHost",
-      "createRuntimeNotFoundHost",
-      "createRuntimePollHost",
-      "createRuntimeSwitchHost",
-      "createWorkspaceEntryHost",
-      "createWorkspaceSessionNavigationHost",
-      "getCurrentAgentRecord",
-      "getCurrentHostAgentRecord",
-      "getCurrentRuntimeRecord",
-      "getCurrentSessionHostAgentId",
-      "getCurrentVisualAgentTitle",
-      "getInputSurfaceMode",
-      "groupConnectedAgents",
-      "isAgentActive",
-      "isPrebuiltAppVisible",
-      "isRuntimeItemActive",
-      "markActionLoading",
-      "markSessionLoading",
-      "newIdempotencyKey",
-      "orderPrebuiltByHost",
-      "runWorkspaceActionFromEvent",
-      "showCompactMenu",
-      "toEpochMs",
-      "updateCurrentAgentChrome"
+      "ClawFW"
     ]
   },
   "public/src/app-ui.js": {

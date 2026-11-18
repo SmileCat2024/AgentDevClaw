@@ -97,8 +97,11 @@ const MIME = {
  * 标签同时取就会占满连接池，解析完的 classic 脚本反而发不出请求（门控本身把
  * 场景卡死，测不到"慢网络"窗口）。扣两个入口即可覆盖首屏链与内核图。
  */
-/** 每轮可覆写的门控集合：主链轮扣首屏两个入口，rail 探针轮只扣内核图。 */
-let gatedModulePaths = new Set(['/src/modules/kernel-entry.js', '/src/modules/boot.js']);
+/** 每轮可覆写的门控集合：主链轮扣首屏三个入口，rail 探针轮只扣内核图。 */
+// 编排域（app-main，P4 T3 收尾迁 ESM）是独立 module 入口、排在 kernel-entry 之前：
+// 它同样是「延迟相必须先扣住」的首屏链一环（否则它会在延迟相先求值，把模块相
+// 的时序事实测没）。
+let gatedModulePaths = new Set(['/src/app-main.js', '/src/modules/kernel-entry.js', '/src/modules/boot.js']);
 
 /**
  * 工作区快照：字段对齐 server/routes/agent-connected.js 的 prebuilt 投影
@@ -519,8 +522,8 @@ async function runMainChain(browser, port) {
     );
     assert.deepEqual(
       [...gate.arrivals].sort(),
-      ['/src/modules/boot.js', '/src/modules/kernel-entry.js'],
-      '首屏入口（kernel-entry / boot）都应被门控扣住',
+      ['/src/app-main.js', '/src/modules/boot.js', '/src/modules/kernel-entry.js'],
+      '首屏入口（app-main / kernel-entry / boot）都应被门控扣住',
     );
     const preRelease = await page.evaluate(() => ({
       domContentLoaded: window.__p2BootTrace.domContentLoaded,

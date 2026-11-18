@@ -14,7 +14,7 @@ import fs from 'node:fs';
 import test from 'node:test';
 import { Renderer } from 'marked';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
-import { IDENTITY_DOMAIN, prepareClassicSandbox, prepareEsmModules, prepareSidebarDomain, SESSION_VIEW_DOMAIN } from './p2-classic-hosts.js';
+import { APP_MAIN_DOMAIN, IDENTITY_DOMAIN, prepareClassicSandbox, prepareEsmModules, prepareSidebarDomain, SESSION_VIEW_DOMAIN } from './p2-classic-hosts.js';
 
 const OVERVIEW_DATA = 'public/src/modules/overview-data.js';
 const POLL_COORDINATOR = 'public/src/modules/poll-coordinator.js';
@@ -348,13 +348,13 @@ async function withPollHarness({ blockStatus = true } = {}, fn) {
       // app-main 的 classic 同步引擎在装载期组合 sidebar-render 的
       // createAgentCallStatesHost（读 runtime-status 的 _agentSuspended）：按生产
       // 先行脚本序装真链，不给它造宿主桩。
+      // app-main 迁 ESM（P4 T3 收尾）：编排域本体走真实模块装载（排在清单最前），
+      // 它的宿主工厂由 poll-coordinator / message-probe 等宿主模块求值期取用。
+      prepareEsmModules(sandbox, APP_MAIN_DOMAIN);
       prepareSidebarDomain(sandbox);
       sandbox.run(`
         window.__clawAuthReady = new Promise(() => {});
-        applyTheme = () => {};
-        applyLanguage = () => {};
       `);
-      sandbox.loadSource('public/src/app-main.js');
     },
   }, async (c) => {
     await c.load(OVERVIEW_DATA);

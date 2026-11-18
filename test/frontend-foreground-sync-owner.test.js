@@ -20,7 +20,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
-import { prepareClassicSandbox } from './p2-classic-hosts.js';
+import { APP_MAIN_DOMAIN, CLASSIC_BOOTSTRAP, prepareClassicSandbox, prepareEsmModules } from './p2-classic-hosts.js';
 
 /**
  * 每个用例：真实 classic 先行链（app-main 注册 visibilitychange、app-core 交出
@@ -100,41 +100,68 @@ describe('foreground visibilitychange: sync owner contract (P4 T2 相位)', () =
     });
   });
 
-  it('a foreground event before module phase is skipped; after it the chain runs for real', async () => {
-    await withForegroundCase(async (env) => {
-      const { sandbox } = env;
-      // 解析相派发的真实事件（见下方 afterClassic）：守卫跳过，不发请求。
-      await new Promise((resolve) => setImmediate(resolve));
-      assert.deepEqual(env.fetched, [], '解析相的前台事件不触达 call 状态链（typeof 守卫）');
-
+  it('a foreground event before the engine bridge exists is skipped; after it the chain runs for real', async () => {
+    // 相位事实（P4 T3 收尾）：监听器现在随编排域（app-main）在**模块相**注册，
+    // 而引擎桥键由 kernel-entry 图（本用例里是显式装载的 sidebar 域）更晚注册。
+    // 本用例把这个窗口显式造出来：只装编排域 → 派发前台事件（守卫跳过）→
+    // 装引擎 → 再派发（同一条链跑完整并发真实请求）。
+    const listeners = [];
+    const fetched = [];
+    await withP2EsmCase({
+      globals: {
+        fetch: async (url) => {
+          fetched.push(String(url));
+          return { ok: true, status: 200, json: async () => ({ callActive: false }) };
+        },
+      },
+      classic: (sandbox) => {
+        sandbox.setInterval = () => 0;
+        const doc = sandbox.document;
+        const originalAdd = doc.addEventListener;
+        doc.addEventListener = function (type, handler) {
+          if (type === 'visibilitychange') listeners.push(handler);
+          return originalAdd.call(this, type, handler);
+        };
+        // 真实先行链（BOOT_NEUTRALIZER 同款：认证永不放行、周期排程关掉）
+        sandbox.run(`
+          window.__clawAuthReady = new Promise(() => {});
+          applyTheme = () => {};
+          applyLanguage = () => {};
+        `);
+        for (const file of CLASSIC_BOOTSTRAP) sandbox.loadSource(file);
+        // 只装编排域：引擎（sidebar 域）留到用例体里显式装载。
+        prepareEsmModules(sandbox, APP_MAIN_DOMAIN);
+      },
+    }, async (c) => {
+      const sandbox = c.window;
+      assert.equal(listeners.length, 1, '编排域求值后必须已注册前台监听器');
       sandbox.run(`
         allAgents = [{ id: 'rt-seed', connected: true, runtime_session_id: 'rt-seed', source: 'external' }];
         _agentCallActive.set('rt-seed', true);
       `);
-      // 模块相之后：同一条链跑完整并发真实请求。
-      for (const handler of env.listeners) handler();
+      assert.equal(typeof sandbox.refreshAgentCallStates, 'undefined',
+        '引擎桥键尚未注册（kernel-entry 图还没求值到 sidebar 域）');
+
+      // 窗口内的真实事件：守卫跳过，不发任何请求。
+      for (const handler of listeners) handler();
       await new Promise((resolve) => setImmediate(resolve));
-      assert.ok(env.fetched.includes('/api/agents/rt-seed/notification'),
-        `前台事件必须发出真实 notification 请求（实际 ${JSON.stringify(env.fetched)}）`);
+      assert.deepEqual(fetched, [], '引擎未就位时的前台事件不触达 call 状态链（typeof 守卫）');
+      assert.equal(sandbox.run('currentRuntimeAgentId'), null, '启动事务未开始，runtime 态恒 null');
+      assert.equal(sandbox.run('typeof refreshCurrentRuntimeStatus'), 'undefined');
+
+      // 引擎进图（与生产同一份模块）后：同一条链跑完整并发真实请求。
+      await c.load('public/src/modules/agent-call-states-engine.js');
+      assert.equal(typeof sandbox.refreshAgentCallStates, 'function', '引擎桥键就位');
+      for (const handler of listeners) handler();
+      await new Promise((resolve) => setImmediate(resolve));
+      assert.ok(fetched.includes('/api/agents/rt-seed/notification'),
+        `前台事件必须发出真实 notification 请求（实际 ${JSON.stringify(fetched)}）`);
       assert.equal(sandbox.run('allAgents.find((agent) => agent.id === "rt-seed").callActive'), false,
         '通知结果回收进 agent 记录');
       assert.deepEqual(sandbox.run('Array.from(_agentCallActive.keys())'), [],
         '共享容器被同一引擎清理');
-      // runtime 状态链路：处理器里的 `if (currentRuntimeAgentId)` 在模块相之前
-      // 恒为 null，因此 ESM-only 的 refreshCurrentRuntimeStatus 不被求值。
-      assert.equal(sandbox.run('currentRuntimeAgentId'), null);
-      assert.equal(sandbox.run('typeof refreshCurrentRuntimeStatus'), 'undefined');
-      assert.equal(env.fetched.some((url) => url.endsWith('/connection')), false,
+      assert.equal(fetched.some((url) => url.endsWith('/connection')), false,
         'call 状态对账不得触达 runtime 状态链路');
-    }, {
-      // 解析相：app-main 刚注册完监听器、模块图尚未求值 → 引擎桥键还不存在。
-      afterClassic: (sandbox, { listeners }) => {
-        sandbox.run(`
-          allAgents = [{ id: 'rt-seed', connected: true, runtime_session_id: 'rt-seed', source: 'external' }];
-          _agentCallActive.set('rt-seed', true);
-        `);
-        for (const handler of listeners) handler();
-      },
     });
   });
 

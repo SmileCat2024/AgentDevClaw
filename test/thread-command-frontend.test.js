@@ -6,6 +6,7 @@ import {
   threadCaseOptions,
   withThreadDomainCase,
 } from './p2-thread-case.js';
+import { consumePendingClassicPrep } from './p2-classic-hosts.js';
 
 /**
  * 线程寻址输入的前端契约（真实 ESM 交互域 + 真实 classic 提交链）：
@@ -201,6 +202,10 @@ describe('thread direct delivery restores consumed pills on failure (classic sub
           getActiveThreadInputTarget: () => ({ threadId: 'wt-9' }),
           renderAgentList: () => {},
         });
+        // 本用例在 async 体里装配 classic 相（不是 classic 回调），pending prep 不会
+        // 被 withP2EsmCase 自动消费：这里显式消费一次——编排域（app-main）必须最先
+        // 求值，否则后续 import 的宿主模块在求值期取不到 createXHost 工厂。
+        await consumePendingClassicPrep();
         // BOOT_NEUTRALIZER 关掉了首屏 rAF；本用例要跑真实 _nextPaint 的 paint 门槛。
         c.sandbox.run('requestAnimationFrame = (cb) => setTimeout(() => cb(Date.now()), 0);');
         // 真实提交链：与生产同一份 persistent-input.js（P4 输入面批次起是 ESM）。

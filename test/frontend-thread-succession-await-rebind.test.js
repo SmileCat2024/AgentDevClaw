@@ -39,13 +39,13 @@ function createSandbox({
     String,
     Promise,
     Array,
-    window: {},
     normalizeAgentIdentity: (x) => String(x || '').trim(),
-    prebuiltSessionSwitchInFlight: false,
-    suppressSidebarRerender: false,
+    // 编排域迁 ESM 后这些 classic 词法态改为模块级适配面（同一份绑定的转发），
+    // 切片求值时按新形态给替身：侧栏交互态 / 会话切换标志 / 轮询节奏 / call 容器。
+    sessionSwitch: { prebuiltSessionSwitchInFlight: false },
+    sidebarUi: { suppressSidebarRerender: false },
+    pollHost: { POLL_FAST_INTERVAL_MS: 1000, POLL_INTERVAL_MS: 5000 },
     schedulePoll(delay) { calls.schedulePoll.push(delay); },
-    POLL_FAST_INTERVAL_MS: 1000,
-    POLL_INTERVAL_MS: 5000,
     getRuntimeWorkspaceSessionId: () => 'session-old',
     getCurrentHostAgentRecord: () => ({ id: 'coder' }),
     getRuntimeRecord: () => null,
@@ -59,15 +59,23 @@ function createSandbox({
     renderCurrentMainView() { calls.renderMainView += 1; },
     loadAgents: async () => {},
     allAgents: [],
-    _agentCallActive: new Set(),
+    callActivity: { _agentCallActive: new Set() },
     clearInterruptSuppression() {},
     focusedAgentId: 'coder',
     currentWorkspaceTab: null,
     currentRuntimeAgentId: 'rt-old',
-    _partialCompactInFlight: false,
-    _partialCompactRuntimeId: null,
+    // 状态写入经 setter（owner 是 orchestration / agent-store 状态域，classic 相
+    // 的裸赋值语义由测试自己的可写槽位承接，断言仍读 sandbox.<name>）。
+    setCurrentRuntimeAgentId(value) { sandbox.currentRuntimeAgentId = value; },
+    setFocusedAgentId(value) { sandbox.focusedAgentId = value; },
+    setCurrentWorkspaceTab(value) { sandbox.currentWorkspaceTab = value; },
+    partialCompactInFlight: false,
+    partialCompactRuntimeId: null,
     clearPartialCompactState() {},
   };
+  // 编排域迁 ESM 后宿主工厂经 `window.<桥键>` 晚绑定取对端能力（原 bare 标识符
+  // 直接命中沙箱全局）。沙箱全局对象即 window，两者同一份。
+  sandbox.window = sandbox;
   sandbox.window.getThreadForSession = (_agentId, sid) => (thread && sid === 'session-old' ? thread : null);
   sandbox.window.refreshThreads = async (force = false) => { calls.refresh.push(force); };
   sandbox.window.ClawThreads = { activeConversation: activeConversation || null };

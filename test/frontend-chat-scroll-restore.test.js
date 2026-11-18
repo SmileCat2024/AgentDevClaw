@@ -474,7 +474,9 @@ test('wiring: switchAgent no longer writes the restore value into the outgoing D
     'switchAgent must hand the restore value to the renderer, not the live container',
   );
   assert.ok(
-    mainSource.includes('setPendingScroll: (top) => setPendingChatScrollRestore(top)'),
+    // 编排域迁 ESM（P4 T3 收尾）后该交接点是显式 window 晚绑定（chat-viewport 的
+    // 桥键）；语义不变：缓存位置经 pending 通道交给渲染器。
+    mainSource.includes('setPendingScroll: (top) => window.setPendingChatScrollRestore(top)'),
     'switchAgent must pass the cached position through the pending handoff',
   );
 });

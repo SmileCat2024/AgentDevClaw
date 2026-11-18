@@ -2,9 +2,11 @@
  * p2-classic-hosts.js — P2 用例的 classic 相装载链（测试支撑，不是产品代码）。
  *
  * 为什么需要：ESM 化后，一个域模块的静态依赖链可能触达 agent-loader-host /
- * sidebar-render / app-main，这些模块在**装载期**就调用 classic 相提供的宿主工厂：
+ * sidebar-render，这些模块在**装载期**就调用 classic 相提供的宿主工厂：
  *   - createAgentCallStatesHost        ← sidebar-render.js（读 runtime-status 的词法容器）
- *   - createRuntimeSwitchHost / createCompactResumeHost ← app-main.js
+ *   - agent-loader-host 起的数据装载链在求值期取 poll-coordinator / runtime-switch
+ *     等宿主工厂 ← app-main.js（P4 T3 收尾迁 ESM 后由 APP_MAIN_DOMAIN 在模块相
+ *     最先装载，等价于生产侧 index.html 的标签序）
  * （app-ui 在 P4 T2 末件迁 ESM 后不再属于这条 classic 链：它的宿主工厂
  * createWorkspaceSurfaceHost 由 workspace-surface-host 具名 import，见
  * APP_UI_DOMAIN。）
@@ -19,7 +21,7 @@
  * 相共享同一全局对象（不存在第二个 KernelState，也不存在把工厂引用搬到另一个
  * 全局对象的用法）。
  *
- * 首屏 boot 体（app-main 顶层）与模块相的 app-ui 求值挂在 `window.__clawAuthReady` 之后：
+ * 首屏 boot 体（app-main 的 async IIFE）与模块相的 app-ui 求值挂在 `window.__clawAuthReady` 之后：
  * 这里给它一个永不 resolve 的 promise，用例不驱动首屏 DOM 渲染。周期排程
  * （通知时钟 / 轮询 / rAF）一并关掉——用例不测它们，开着会让进程留下句柄。
  */
@@ -40,11 +42,23 @@ export const CLASSIC_BOOTSTRAP = [
   'public/src/app-core.js',
   // session-view-state 在 P4 T2 批次进模块相（原 classic 标签已从 index.html 删除）：
   // 它在 SESSION_VIEW_DOMAIN 里、排在 SIDEBAR_DOMAIN 之前装载——classic 消费方
-  // （app-ui / app-main / app-core）按桥键晚绑定取用，不需要 classic 相实现。
-  // app-ui 在 P4 T2 末件迁 ESM（原 classic 标签已删除）：本体在 APP_UI_DOMAIN，
-  // 排在各域之后装载；它的桥面（domain `app-ui`）随之注册到沙箱 window。
-  'public/src/app-main.js',
+  // （app-ui / app-core）按桥键晚绑定取用，不需要 classic 相实现。
+  // app-main 在 P4 T3 收尾迁 ESM（原 classic 标签已删除）：本体由 APP_MAIN_DOMAIN
+  // 在模块相装载，且**必须最先**（见该常量与 consumePendingClassicPrep）。
 ];
+
+/**
+ * 编排域（P4 T3 收尾：app-main 迁 ESM）。
+ *
+ * 为什么必须先装载：本域提供 12 个 createXHost 宿主工厂，kernel-entry 图的宿主
+ * 模块在**求值期**取用它们（生产侧由 index.html 的 module 标签序保证：app-main
+ * 入口早于 kernel-entry）。夹具里的等价物就是「本域排在 ESM 装载清单最前」——
+ * 见 `consumePendingClassicPrep`（登记了本域时总是先装载它）。
+ *
+ * 后续域（runAgentList / 输入面 / 数据装载等）会经静态 import 触达那些宿主模块，
+ * 因此顺序颠倒会让它们在窗口上取到 undefined 的宿主工厂并整图求值失败。
+ */
+export const APP_MAIN_DOMAIN = ['public/src/app-main.js'];
 
 /**
  * 首屏 DOM 引用域（P4 T1：从 app-core 抽出）。owner 是模块相，classic 相只有
@@ -106,7 +120,7 @@ export const APP_UI_DOMAIN = ['public/src/app-ui.js'];
  * P2 用例的墙钟推高一个量级。需要它的用例显式
  * `prepareEsmModules(sandbox, [...P4_DOMAINS, ...APP_UI_DOMAIN])`。
  */
-export const P4_DOMAINS = [...DOM_REFS_DOMAIN, ...IDENTITY_DOMAIN, ...TRANSPORT_DOMAIN, ...SESSION_VIEW_DOMAIN, ...SIDEBAR_DOMAIN];
+export const P4_DOMAINS = [...APP_MAIN_DOMAIN, ...DOM_REFS_DOMAIN, ...IDENTITY_DOMAIN, ...TRANSPORT_DOMAIN, ...SESSION_VIEW_DOMAIN, ...SIDEBAR_DOMAIN];
 
 /**
  * classic 链夹具「顺手」发起的 ESM 域装载（pending prep）。
@@ -121,6 +135,7 @@ export const P4_DOMAINS = [...DOM_REFS_DOMAIN, ...IDENTITY_DOMAIN, ...TRANSPORT_
  * 同沙箱重复登记是幂等的（prepareClassicSandbox 与 installForegroundSyncOwner
  * 常先后调用）。
  */
+const APP_MAIN_PATH = 'public/src/app-main.js';
 let pendingClassicPrep = null;   // { sandbox, modules }
 const domainBySandbox = new WeakMap(); // sandbox → 已启动的装载 promise
 
@@ -128,9 +143,22 @@ export function consumePendingClassicPrep() {
   const entry = pendingClassicPrep;
   pendingClassicPrep = null;
   if (!entry) return null;
+  // 夹具覆盖快照（见 replayAppMainOverrides）：在 classic 链与夹具赋值都已落定、
+  // 模块图尚未求值之前拍下沙箱自有数据属性。
+  const overrides = snapshotOwnDataProps(entry.sandbox);
   const promise = (async () => {
     const loaded = new Map();
-    for (const modulePath of entry.modules) loaded.set(modulePath, await entry.sandbox.loadEsm(modulePath));
+    // 编排域（app-main）总是最先求值：它的 createXHost 工厂是其余域静态 import
+    // 触达的宿主模块在求值期取用的对象（生产侧由 index.html 标签序表达）。
+    const ordered = [...entry.modules].sort((a, b) => Number(b === APP_MAIN_PATH) - Number(a === APP_MAIN_PATH));
+    for (const modulePath of ordered) {
+      loaded.set(modulePath, await entry.sandbox.loadEsm(modulePath));
+      // 编排域求值完、其余域尚未装载时回放夹具覆盖：迁移前 app-main 是 classic
+      // 顶层 function，夹具在 classic 链之后的 `sandbox.X = 替身` 会被随后装载的
+      // 消费方（poll-coordinator-host 等宿主模块）读到；迁 ESM 后这些名字成了
+      // 桥键，注册时以模块实现为初值，classic 相的同名普通属性会被覆盖。
+      if (modulePath === APP_MAIN_PATH) replayAppMainOverrides(entry.sandbox, loaded.get(modulePath), overrides);
+    }
     return applyEsmDomain(entry.sandbox, loaded);
   })().catch((error) => {
     domainBySandbox.delete(entry.sandbox);
@@ -138,6 +166,49 @@ export function consumePendingClassicPrep() {
   });
   domainBySandbox.set(entry.sandbox, promise);
   return promise;
+}
+
+/** 沙箱自有数据属性快照（夹具覆盖面；访问器与 harness 方法不在内）。 */
+function snapshotOwnDataProps(sandbox) {
+  const snapshot = new Map();
+  for (const name of Object.getOwnPropertyNames(sandbox)) {
+    const descriptor = Object.getOwnPropertyDescriptor(sandbox, name);
+    if (!descriptor || descriptor.get || descriptor.set) continue;
+    if (!('value' in descriptor)) continue;
+    if (typeof descriptor.value === 'function' && ['run', 'loadSource', 'loadEsm', 'expose'].includes(name)) continue;
+    if (name === 'window' || name === 'globalThis') continue;
+    snapshot.set(name, descriptor.value);
+  }
+  return snapshot;
+}
+
+/**
+ * 回放夹具对编排域（app-main）对外符号的覆盖。
+ *
+ * 为什么需要：迁移前 app-main 是 classic script，它的顶层 function 直接是 window
+ * 上的同名属性；夹具在 classic 链之后 `sandbox.X = 替身` 就是**覆盖生产实现**，
+ * 随后装载的消费者（poll-coordinator-host / runtime-switch-host 等宿主模块在求值
+ * 期取宿主工厂）看到的就是替身。迁 ESM（P4 T3 收尾）后这些名字是桥键：注册时以
+ * 模块实现为初值，classic 相写入的普通属性会在模块求值期被覆盖掉——覆盖失效。
+ *
+ * 因此本支撑面在「编排域求值完、其余域尚未装载」的那一刻把夹具写过的同名值经
+ * 桥 setter 写回，恢复迁移前的可观察语义（窗口面 = 夹具替身，消费方读到的同一份）。
+ * 只回放 app-main 的对外符号；其余名字保持原样（它们的 owner 没变）。
+ *
+ * 边界（如实记录）：模块**内部**对自身函数的调用走模块实现，不读桥键——迁移前
+ * 那种"覆盖连内部调用一起改"的效果不再成立。依赖该效果的用例须改为自带替身宿主
+ * （`APP_MAIN_DOMAIN` 之外的显式 stub），不要反过来放宽断言。
+ */
+function replayAppMainOverrides(sandbox, appMainModule, overrides) {
+  const bridged = appMainModule?.bridgeApi;
+  if (!bridged || !overrides) return;
+  for (const [name, value] of overrides) {
+    if (!(name in bridged)) continue;
+    const descriptor = Object.getOwnPropertyDescriptor(sandbox, name);
+    if (!descriptor || typeof descriptor.set !== 'function') continue;
+    if (descriptor.get && descriptor.get() === value) continue;
+    sandbox[name] = value;
+  }
 }
 
 /**
@@ -160,6 +231,7 @@ function applyEsmDomain(sandbox, loaded) {
   // `__esmDomain.<域>` 取真实模块实例——与 `c.load(...)` 同一实例，不建第二份状态。
   const appUi = loaded.get('public/src/app-ui.js');
   sandbox.__esmDomain = Object.freeze({
+    appMain: loaded.get('public/src/app-main.js'),
     domRefs: loaded.get('public/src/modules/dom-refs.js'),
     identity: loaded.get('public/src/modules/identity.js'),
     transport: loaded.get('public/src/modules/transport.js'),
@@ -345,6 +417,9 @@ export function installForegroundSyncOwner(sandbox) {
   if (typeof sandbox.applyTheme !== 'function') sandbox.applyTheme = () => {};
   if (typeof sandbox.applyLanguage !== 'function') sandbox.applyLanguage = () => {};
   sandbox.run('window.__clawAuthReady = window.__clawAuthReady || new Promise(() => {});');
-  sandbox.loadSource('public/src/app-main.js');
+  // app-main 迁 ESM（P4 T3 收尾）后本体在模块相：可见性监听器、call 状态宿主的
+  // 协作面（allAgents / _agentCallActive 等）都由它装载时建立。登记到 ESM 清单
+  // 最前（consumePendingClassicPrep 保证），侧栏域随之装载。
+  prepareEsmModules(sandbox, APP_MAIN_DOMAIN);
   return prepareSidebarDomain(sandbox);
 }

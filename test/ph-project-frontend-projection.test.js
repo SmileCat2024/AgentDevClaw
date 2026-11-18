@@ -31,7 +31,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
-import { prepareSidebarDomain } from './p2-classic-hosts.js';
+import { APP_MAIN_DOMAIN, prepareEsmModules, prepareSidebarDomain } from './p2-classic-hosts.js';
 
 const DATA_ROOT = mkdtempSync(join(tmpdir(), 'claw-ph-fe-projection-'));
 process.env.AGENTDEV_DATA_DIR = DATA_ROOT;
@@ -67,7 +67,7 @@ const CLASSIC_STACK = [
   'public/src/app-core.js',
   // session-view-state / app-ui 自 P4 T2 起是 ESM：由 prepareEsmModules(...) /
   // prepareClassicSandbox 在模块相装载，classic 链里不再有它们（app-ui 见 APP_UI_DOMAIN）。
-  'public/src/app-main.js',
+  // app-main 自 P4 T3 收尾起同样是 ESM（见 APP_MAIN_DOMAIN，排在 ESM 清单最前）。
 ];
 
 /** app-ui / app-main 布局监听与首屏入口依赖的浏览器全局（沙箱无此能力）。 */
@@ -215,6 +215,8 @@ async function withFrontend({ realSidebarRenderer = false, onSidebarClickListene
       const realGetElementById = sandbox.document.getElementById.bind(sandbox.document);
       sandbox.document.getElementById = (id) => (id === 'agent-list' ? agentListStub : realGetElementById(id));
       for (const file of CLASSIC_STACK) sandbox.loadSource(file);
+      // 编排域（app-main）迁 ESM 后最先求值：宿主模块在求值期取它的 createXHost。
+      prepareEsmModules(sandbox, APP_MAIN_DOMAIN);
       prepareSidebarDomain(sandbox);
       // 轮询协调器宿主（classic app-main 工厂）：ESM 图经 agent-data-loader →
       // input-actions 触达 poll-coordinator-host，后者在模块求值期取该工厂。

@@ -238,15 +238,17 @@ describe('P2-4 兼容桥：仍有 classic 消费方的入口', () => {
     assert.equal(window.getAgentRuntimeId, env.ctx.run('getAgentRuntimeId'));
   });
 
-  it('todo-plan 的桥键由自身 ESM 模块注册（P4 L1），本批环境未装载故无访问器', () => {
+  it('todo-plan 的桥键由自身 ESM 模块注册（P4 L1）：本批不为它造桥', () => {
     // 本批（W2-4）不替 todo-plan 造桥；P4 L1 之后它自己的 ESM 模块在模块相注册
-    // 六个经典消费方键。本批环境不装载 todo-plan，因此这里仍应看不到访问器——
-    // 出现就说明有别人替它造了桥（本批禁止）。
+    // 六个经典消费方键。编排域（app-main，P4 T3 收尾迁 ESM）会静态 import
+    // todo-plan，因此本批环境里访问器**在位**是预期事实——本用例钉的是
+    // 「唯一注册者是 todo-plan.js 自身」：其余源码不得出现同名 defineKey。
     const keys = ['getEmptyTodoPlan', 'normalizeTodoPlan', 'setCurrentTodoPlan',
       'updatePlanBadge', 'renderPlanPanel', 'getTodoPlanSignature'];
     for (const key of keys) {
-      assert.equal(Object.getOwnPropertyDescriptor(window, key)?.get, undefined,
-        `${key} 不应由本批造桥（唯一注册者是 todo-plan.js 自身）`);
+      const descriptor = Object.getOwnPropertyDescriptor(window, key);
+      assert.equal(typeof descriptor?.get, 'function', `${key} 应由 todo-plan.js 注册为桥键`);
+      assert.equal(typeof window[key], 'function', `${key} 应解析到实现`);
     }
     const source = readFileSync(new URL('../public/src/modules/todo-plan.js', import.meta.url), 'utf8');
     for (const key of keys) {

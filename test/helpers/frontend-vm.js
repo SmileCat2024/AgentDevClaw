@@ -14,7 +14,6 @@
 import fs from 'node:fs';
 import { marked as markedModule } from 'marked';
 import { installI18n } from './install-i18n.js';
-import { installRuntimeSwitch } from './runtime-switch.js';
 import { createRuntimeStatusLoader } from '../../public/src/modules/runtime-status-loader.js';
 import { createSessionDataLoader } from '../../public/src/modules/session-data-loader.js';
 import { createChatLoading } from '../../public/src/modules/chat-loading.js';
@@ -247,7 +246,10 @@ export function createFrontendSandbox(overrides = {}) {
       Object.assign(context, createRuntimeStatusLoader(vm.runInContext('createRuntimeStatusLoaderHost()', context)));
       Object.assign(context, createSessionDataLoader(vm.runInContext('createSessionDataLoaderHost()', context)));
     }
-    if (relativePath === 'public/src/app-main.js') installRuntimeSwitch(context);
+    // app-main 已迁 ESM（P4 T3 收尾）：本沙箱路线只剩 classic script，不再有
+    // loadSource('public/src/app-main.js') 的入口（classic 相解析 export 直接
+    // SyntaxError）。编排域经 withP2EsmCase 的 ESM 装载（p2-classic-hosts 的
+    // APP_MAIN_DOMAIN）进入同一沙箱 window。
     // app-ui 已迁 ESM（P4 T2 末件）：本沙箱路线只剩 classic script，不再有
     // loadSource('public/src/app-ui.js') 的入口（classic 相解析 export 直接
     // SyntaxError）。需要它的导航宿主时走 withP2EsmCase + APP_UI_DOMAIN

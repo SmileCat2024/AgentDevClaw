@@ -425,6 +425,16 @@
   <script type="module" src="./src/modules/agent-store-state.js"></script>
   <script type="module" src="./src/modules/render-entry-state.js"></script>
   <script type="module" src="./src/modules/orchestration-state.js"></script>
+  <!-- 编排域入口（P4 T3 收尾）：app-main 迁 ESM 后的 module 入口。**必须早于
+       kernel-entry**——kernel-entry 图里有 12 个宿主模块（runtime-switch /
+       compact-resume / poll-coordinator / message-probe / metadata-commit /
+       poll-maintenance / runtime-poll / poll-cycle / runtime-not-found /
+       workspace-entry / workspace-session-navigation / application-startup）在
+       求值期经 `window.createXHost()` 取本文件提供的工厂；原语义由"classic 解析相
+       先于一切模块"保证，迁入模块相后改由这条标签序保证。挪动它即改动时序
+       （plan R4），须同步 script-tags gate 的 MODULE_ENTRIES 与生产启动回归的
+       门控清单。 -->
+  <script type="module" src="./src/app-main.js"></script>
   <!-- ESM 内核入口：P2 已迁消费方批次的装载收口在这里（kernel-entry → p2-entry），
        这些文件原先各自的 classic 标签已删除；新增 module 入口须登记
        frontend-script-tags-gate 的 MODULE_ENTRIES。 -->
@@ -540,7 +550,8 @@
        8 个桥键（domain thread-store-engine）供 app-main / sidebar-render / 输入面 / 线程域使用。 -->
   <!-- 桌面右键唤起（冷启动 URL query / webview eval 统一消费），app-main.js boot 引用 -->
   <script src="./src/modules/desktop-open.js"></script>
-  <script src="./src/app-main.js"></script>
+  <!-- app-main 已迁 ESM（P4 T3 收尾）：classic 标签删除，module 入口见上方
+       （早于 kernel-entry 求值，供宿主工厂的求值期取用）。 -->
   <!-- 首屏渲染链的 ESM 入口（P4 时序切换）：必须是最后一条 module 标签，
        它触发 applyTheme → applyLanguage → 侧栏 / 面板 / 主视图的同步渲染。
        原 app-main.js 顶层的两行同步调用已删除，勿恢复。 -->

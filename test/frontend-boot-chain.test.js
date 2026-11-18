@@ -44,7 +44,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
-import { CLASSIC_BOOTSTRAP, prepareSidebarDomain } from './p2-classic-hosts.js';
+import { APP_MAIN_DOMAIN, CLASSIC_BOOTSTRAP, prepareEsmModules, prepareSidebarDomain } from './p2-classic-hosts.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..');
@@ -269,7 +269,10 @@ function loadClassicHostChain(sandbox, beforeAppMain) {
   `);
   for (const file of CLASSIC_HOST_CHAIN) sandbox.loadSource(file);
   if (typeof beforeAppMain === 'function') beforeAppMain(sandbox);
-  sandbox.loadSource(APP_MAIN_SOURCE);
+  // 编排域（app-main）迁 ESM（P4 T3 收尾）：它在模块相最先求值（宿主工厂供
+  // 其余域静态 import 触达的宿主模块在求值期取用）；认证闸 prelude 已在 classic
+  // 相落定，模块求值时读到同一份。
+  prepareEsmModules(sandbox, APP_MAIN_DOMAIN);
   // 侧栏渲染 / 运行时状态 / call 状态引擎（P4 T2 收尾批次进模块相）：classic 链
   // 之后按真实加载序装载，engine 的两个桥键（collectActiveCallRuntimeIds /
   // refreshAgentCallStates）由此注册——app-main 的顶层 IIFE 已搬出。
@@ -406,6 +409,9 @@ const selfBootCaseOptions = () => {
         // 环境里没有 `__clawAuthReady`（boot 主链仍被已捕获的 promise 挡住）。
         loadClassicHostChain(sandbox, (s) => s.run(APP_MAIN_PRELUDE));
         sandbox.run('delete window.__clawAuthReady;');
+        // 认证变量缺席时 app-main 的 boot 续体会立即执行：本用例只验 sse-client 的
+        // 自举分支，启动链换成计数器（真实启动链由生产浏览器回归覆盖）。
+        sandbox.run('startApplication = () => { window.__bootCalls = (window.__bootCalls || 0) + 1; };');
       },
       globals: {
         document,
@@ -421,22 +427,36 @@ const selfBootCaseOptions = () => {
 
 describe('前端加载链（index.html 真实入口 + P2 ESM 图，P2 子集）', () => {
   it('入口与时序契约：classic 首屏链仍按 index.html 标签序在 classic 相加载，sse-client 经 module 入口图（kernel-entry → p2-entry）装载，SSE 与 boot 都由认证闸放行', async () => {
-    // ── classic 相：首屏同步链与桥存储的唯一实现必须仍是 classic 标签，且先于 app-main
-    const mainIdx = classicIndex('./src/app-main.js');
-    assert.notEqual(mainIdx, -1, 'app-main 必须是 classic 标签（页面 boot 的唯一实现）');
+    // ── classic 相：桥存储 / app-core / 认证客户端仍是 classic 标签（先于一切
+    //    module 求值，这是 classic 相与模块相的时序事实，不是标签序约定）
     const classicRequirements = [
       './src/modules/kernel-state.js', // 桥存储：状态访问器必须先于一切域模块
       './src/app-core.js', // DOM 引用与 createP2Bootstrap*Host 工厂
       './src/modules/auth-client.js', // __clawAuthReady 的创建方
     ];
     for (const src of classicRequirements) {
-      const idx = classicIndex(src);
-      assert.notEqual(idx, -1, `${src} 必须是 classic 标签（首屏同步链不能在 deferred 相才就绪）`);
-      assert.ok(idx < mainIdx, `${src} 必须先于 app-main 加载：脚本序 ${idx} < ${mainIdx}`);
+      assert.notEqual(classicIndex(src), -1, `${src} 必须是 classic 标签（classic 相先于模块相求值）`);
     }
     assert.ok(
       classicIndex('./src/modules/kernel-state.js') < classicIndex('./src/app-core.js'),
       '桥存储必须先于 app-core 注册首个桥键',
+    );
+    // ── 编排域（P4 T3 收尾）：app-main 已迁 ESM，classic 标签必须删除；它的
+    //    module 入口必须**早于 kernel-entry**——kernel-entry 图里 12 个宿主模块在
+    //    求值期经 window.createXHost 取本入口提供的工厂（原 classic 解析相时序的
+    //    等价表达）。位置即语义，挪动等于改时序（plan R4）。
+    assert.equal(
+      CLASSIC_SRCS.includes('./src/app-main.js'),
+      false,
+      'app-main 已迁 ESM：classic 标签会在解析期 SyntaxError（整条脚本不执行）',
+    );
+    const appMainEntryIdx = MODULE_ENTRIES.findIndex((entry) => entry.src === './src/app-main.js');
+    const kernelEntryIdx = MODULE_ENTRIES.findIndex((entry) => entry.src === './src/modules/kernel-entry.js');
+    assert.notEqual(appMainEntryIdx, -1, 'app-main 必须是 index.html 的 module 入口');
+    assert.ok(
+      appMainEntryIdx < kernelEntryIdx,
+      `app-main 入口必须早于 kernel-entry（实际 ${appMainEntryIdx} / ${kernelEntryIdx}）：`
+        + 'kernel-entry 图的宿主模块在求值期取它的 createXHost 工厂',
     );
     // ── module 入口：静态非 async；sse-client 不在 classic 标签里，必须在入口图内可达
     for (const entry of MODULE_ENTRIES) {

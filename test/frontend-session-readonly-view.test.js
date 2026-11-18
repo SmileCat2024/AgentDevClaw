@@ -16,7 +16,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
-import { prepareEsmModules, prepareSidebarDomain, SESSION_VIEW_DOMAIN } from './p2-classic-hosts.js';
+import { APP_MAIN_DOMAIN, prepareEsmModules, prepareSidebarDomain, SESSION_VIEW_DOMAIN } from './p2-classic-hosts.js';
 
 const READONLY_VIEW = 'public/src/modules/session-readonly-view.js';
 const TOAST_NOTIFY = 'public/src/modules/toast-notify.js';
@@ -123,7 +123,11 @@ async function withReadonlyView({ payload = recordPayload(), threads = [], loadM
           getEmptyTodoPlan = () => ({ tasks: [] });
           notifyInputSurfaceChanged = () => {};
         `);
-        sandbox.loadSource('public/src/app-main.js');
+        // 编排域（app-main）迁 ESM（P4 T3 收尾）：本体进模块相且最先求值。
+        // runtime-switch-host 一并显式装载：它是 `window.switchAgent` 的真实 owner
+        // （迁移前由 frontend-vm 的 app-main 装载钩子经 installRuntimeSwitch 带进来，
+        // 该钩子随 app-main 迁 ESM 退役）。
+        prepareEsmModules(sandbox, [...APP_MAIN_DOMAIN, 'public/src/modules/runtime-switch-host.js']);
       }
 
     },
