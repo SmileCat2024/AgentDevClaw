@@ -415,8 +415,8 @@
          宿主底座新增需在测试更新基线并说明理由；
        ② 删模块必须同步删标签（死标签检测）；
        ③ 悬置/大工程域（wg-* / im-* / dispatch-* / flow-editor / home-dashboard /
-         resources-viewer）标签只许整体删除，随各自工程重做消亡，不许新增。 -->
-  <script src="./flow-editor.js"></script>
+         resources-viewer）改为按需装载（src/modules/lazy-domains.js），不再有静态标签；
+         要改回静态装载需同步更新 lazy-domains 的域清单与 gate 基线，不许各自为政。 -->
   <!-- i18n 已迁 ESM（P4 T1 原料层）：classic 标签删除，由 kernel-entry 的
        i18n-host 装载并注册 t 桥键。 -->
   <script src="./src/modules/kernel-state.js"></script>
@@ -456,19 +456,6 @@
        7 个桥键（renderAgentList / renderAgentGroup / renderAgentItems /
        getAgentIconHtml / getAgentListRenderSignature / waitForPrebuiltRuntimeSession /
        waitForTargetRuntimeSession）供 classic 与 window 晚绑定的消费方取用。 -->
-   <script type="module" src="./src/modules/toast-notify.js"></script>
-  <script src="./src/modules/dispatch-ui.js"></script>
-  <script src="./src/modules/dispatch-actions.js"></script>
-  <script src="./src/modules/im-ui.js"></script>
-  <script src="./src/modules/im-actions.js"></script>
-  <script src="./src/modules/wg-state.js"></script>
-  <script src="./src/modules/wg-voice-input.js"></script>
-  <script src="./src/modules/wg-annotations.js"></script>
-  <script src="./src/modules/wg-context-menu.js"></script>
-  <script src="./src/modules/wg-settings-panel.js"></script>
-  <script src="./src/modules/wg-threads-panel.js"></script>
-  <script src="./src/modules/wg-popover.js"></script>
-  <script src="./src/modules/wg-core.js"></script>
   <!-- remote-connections 已迁 ESM（P4 T3）：classic 标签删除，由 p4-entry 装载；
        10 个桥键供侧栏投影 / 远程写链路使用。 -->
   <!-- chat-context-bar 已迁 ESM（P4 L1）：classic 标签删除，由 p4-entry 装载；
@@ -477,6 +464,7 @@
        currentProjectDocsetOpen 状态仍由 app-core 的桥键持有。 -->
   <!-- markdown-bootstrap 已并入 markdown-utils（P4 T1）：escapeHtml 与 marked
        renderer 配置现在由该 ESM 模块自持，classic 标签删除。 -->
+  <script type="module" src="./src/modules/toast-notify.js"></script>
   <script type="module" src="./src/modules/markdown-utils.js"></script>
   <!-- theme-lang 已并入 i18n-environment-state（P4 T1）：classic 标签删除；
        applyTheme / applyLanguage 由 boot.js 直接 import 调用。 -->
@@ -511,8 +499,6 @@
   <!-- app-ui 已迁 ESM（P4 T2 末件，活跃域 classic 清零）：classic 标签删除，由
        p4-entry 装载（排在 p4 各域之后、p2-entry 之前）。宿主 block primitive 注册、
        scroll / resize / actions 监听与面板注册都在模块求值相完成，早于 boot.js 的
-       首屏渲染；对外符号仍是 domain `app-ui` 的桥键。 -->
-  <script src="./src/modules/resources-viewer.js"></script>
   <!-- rail-customize 已迁 ESM（P4 L2）：classic 标签删除，由 p4-entry 装载；
        桥键 applyRailConfig 供 app-ui 首屏尾部与 debug-panel-host 使用。 -->
   <script src="./src/modules/desktop-notify.js"></script>

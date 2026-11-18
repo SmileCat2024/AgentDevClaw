@@ -144,6 +144,7 @@ import { formatWorkspaceDate } from './modules/time-format-host.js';
 import { saveCurrentRuntimeToCache } from './modules/runtime-view-cache-host.js';
 import { getEmptyTodoPlan, renderPlanPanel } from './modules/todo-plan.js';
 import { getEmptyOverviewSnapshot } from './modules/overview-data.js';
+import { domainForAgent, ensure as ensureLazyDomain, isLoaded as isLazyDomainLoaded } from './modules/lazy-domains.js';
 import { renderMonitorPanel, renderStructurePanel } from './modules/debug-overview.js';
 import { renderFeaturesPanel, renderReverseHooksPanel } from './modules/debug-features-hooks.js';
 import { loadLogs, renderLogsPanel } from './modules/debug-logs.js';
@@ -836,6 +837,13 @@ function renderFWConfigPane(agent, block, formId, draft) {
 }
 
 function renderFWOrchestrate(agent, block) {
+  // 编排视图是 flow-editor.js（classic，按需装载）的唯一活跃消费面；未就绪先渲染
+  // fallback 标题，装载落定后重渲染补上图形区。
+  if (!isLazyDomainLoaded('flow')) {
+    ensureLazyDomain('flow').then((ok) => {
+      if (ok && window.getCurrentAgentRecord()?.id === agent?.id) renderCurrentMainView();
+    });
+  }
   const flowBlock = { id: 'flow-editor', type: 'flow-editor', title: { zh: '编排', en: 'Graph' } };
   return renderFlowEditorBlock(agent, flowBlock);
 }
@@ -1389,6 +1397,17 @@ export function renderWorkspaceSurface(agent = window.getCurrentAgentRecord()) {
   const ui = window.getCurrentUnitUi(agent);
   if (!agent || !ui) {
     return window.getEmptyStateHtml();
+  }
+
+  // 悬置域脚本按需装载（work-group / IM / 编排）：首屏不再装载它们，第一次要渲染
+  // 该界面时才注入。未就绪先给空占位（这些界面的 classic 脚本会在渲染中裸取全局，
+  // 例如 config-editor block 直接调 window.isIMWorkspaceConfigEditor），装载落定后重渲染。
+  const lazyDomain = domainForAgent(agent.id);
+  if (lazyDomain && !isLazyDomainLoaded(lazyDomain)) {
+    ensureLazyDomain(lazyDomain).then((ok) => {
+      if (ok && window.getCurrentAgentRecord()?.id === agent.id) renderCurrentMainView();
+    });
+    return '';
   }
 
   // APP 前端界面按需装载：清单里有该 agent 且尚未装载时，先起装载并在完成

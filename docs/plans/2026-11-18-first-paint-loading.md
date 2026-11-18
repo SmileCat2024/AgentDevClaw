@@ -9,12 +9,15 @@ S1–S4 改“模块之间怎么取用符号”，本文改“哪些模块进首
 
 首屏由四段串成，`boot.js` 是最后一条 module 标签并触发首屏渲染，因此“整张模块图求值完”才出骨架：
 
-| 段 | 规模 | 决定因素 |
+| 段 | 规模（本文件落地后） | 决定因素 |
 |---|---|---|
-| HTML 解析期阻塞脚本 | 24 个、gzip 233 KB | 无 `defer` 的 classic 在解析期同步执行 |
-| 解析后、模块前的 defer | katex 76 KB | katex 两个 defer 标签 |
+| HTML 解析期阻塞脚本 | 7 个、gzip 31 KB | 无 `defer` 的 classic 在解析期同步执行 |
+| 解析后、模块前的 defer | vendor 3 个（73 KB）+ katex 2 个（76 KB） | `defer` 与 module 同队列，按文档顺序执行 |
 | module 图求值 | 207 文件 / 3.49 MB / gzip 1095 KB，最长链 **27 层** | 静态 import 图；14 个 module 入口中 13 个 ≤7 层，深链全部来自 `kernel-entry` |
+| 悬置域脚本 | 14 个、gzip 133 KB，**不进首屏** | 进入 work-group / IM / 编排界面时才按需装载 |
 | 首屏数据 | 约 20 个 API | 认证放行后的启动编排 |
+
+首屏请求数：改动前 250；落地后 236（14 个悬置域脚本移出首屏）。
 
 `compression` 已启用；静态资源 `no-cache` + ETag（首次加载不省请求）；服务是 HTTP/1.1
 （`app.listen`，无 h2）。
@@ -33,8 +36,8 @@ S1–S4 改“模块之间怎么取用符号”，本文改“哪些模块进首
 - `right-panel-registry`（`ClawPanels`）在模块入口标签之后，被 `app-ui` 求值期取用；改成 `defer`
   后按文档序落到 `kernel-entry` 之后，`app-ui` 拿到 `undefined`，整张图中断（表现为
   `registerFeaturePanel` 读不到 `ClawPanels`、`startApplication` / `renderCurrentMainView` 未注册）。
-- 同型：`resources-viewer` 解析期调 `ClawHost.panels.register`；`wg-*` / `im-*` / `dispatch-*` 消费
-  `KernelState`。
+- 同型：`claw-host` 被面板注册路径在求值期取用；`kernel-state` 被 `wg-*` / `im-*` / `dispatch-*`
+  消费（后两组现已移入按需装载，见 §3）。
 
 要大面积 `defer`，前提是先把这些基础设施下沉到模块相（对应 S3/S4），不是加个属性的事。
 
@@ -51,6 +54,31 @@ S1–S4 改“模块之间怎么取用符号”，本文改“哪些模块进首
 端到端验证（隔离实例，`AGENTDEV_DATA_DIR=/tmp/... PORT=14231 AGENTDEV_VIEWER_PORT=2031`）：193 条
 preload 全部命中、页面零 `pageerror`、零 console error，`window.hljs.getLanguage('javascript')` 为真
 （证明真实 hljs 覆盖了 index.html 内联兜底，defer 化未退化）。
+
+### 3. 悬置域脚本改为按需装载
+
+`work-group`（8 个 `wg-*` + `resources-viewer`）、IM（`im-ui` / `im-actions` / `dispatch-ui` /
+`dispatch-actions`）、`flow-editor` 共 14 个 classic 脚本原先由 `index.html` 静态标签装载，首屏却
+不显示这些界面。改动：
+
+- **`public/src/modules/lazy-domains.js`**：按域声明脚本清单，首次需要时用 `script` 注入，
+  `async = false` 保证 script-inserted 脚本按插入顺序执行（`wg-core` 必须最后，这是域内依赖）。
+  `ensure()` 幂等、失败可重试；**域内脚本逐个注入，不按 `ready()` 短路**——`im-actions` /
+  `resources-viewer` 不改变 ready 谓词，按 ready 短路会让它们整批漏装（首版就是这个 bug，
+  `frontend-lazy-domains.test.js` 有用例钉住）。
+- **`renderWorkspaceSurface` 入口拦截**：当前 agent 属于某懒域且未就绪时返回空占位并起装载，
+  装载落定后重渲染。拦截放在这里而不是逐个调用点加守卫——`config-editor` block 直接调
+  `window.isIMWorkspaceConfigEditor`，逐点守卫会漏。
+- **`renderFWOrchestrate`** 触发 `flow` 域（`flow-editor` 的消费面是 Feature 配置的编排 tab，
+  不是工作空间首页）。
+- **首屏后预取只做 IM**：`work-group` 与 `flow-workspace` 在 `HIDDEN_PREBUILT_AGENT_IDS` 里
+  （隐藏、按 ID 可寻址），界面打不开时预取纯属浪费；两者保留按需路径。预取延迟 2 s 再走
+  `requestIdleCallback`，避免与首屏自己的数据请求抢连接。
+
+验证（隔离实例，`PORT=14232 / AGENTDEV_VIEWER_PORT=2032`）：首屏时三个域的全局都是
+`undefined`；点 IM 渠道后 4 个脚本按序装载、界面真实渲染（`.im-config-editor` 等出现）、
+零 `pageerror`。`work-group` / 编排 tab 因条目隐藏未能走真实点击，其渲染路径与 IM 同构且各有
+守卫（`renderWorkGroupChatBlock` / `renderFlowEditorBlock`），未单独实测。
 
 ## 实测结论：modulepreload 在 HTTP/1.1 下几乎拿不到远程收益
 
@@ -84,8 +112,11 @@ preload 全部命中、页面零 `pageerror`、零 console error，`window.hljs.
 
 ## 验收
 
-- `npm run test:core`：6660 项 / 6653 通过 / 3 失败（`desktop-workspace` Windows 已知目录、
-  `process-group`×2、`thread-conversation-search` 三条长期平台项）/ 4 跳过；新增 8 项 modulepreload 单测全过。
+- `npm run test:core`：6665 项 / 6658 通过 / 3 失败（`desktop-workspace` Windows 已知目录、
+  `process-group`×2、`thread-conversation-search` 三条长期平台项）/ 4 跳过；新增 13 项单测
+  （8 项 modulepreload + 5 项 lazy-domains）全过。
 - `node test/p2-production-boot-browser-check.mjs`：主链 PASS + 延迟相 7 面板 PASS，零 pageerror，
-  requests 361（与改动前一致）。
+  requests 357。work-group 面板断言改为「该域装载后齐备」——注册时点随按需装载变化，
+  断言守的仍是「`resources-viewer` 走注册表本体、不得依赖模块相」。
+- `node scripts/check-import-cycles.mjs`：零新增环。
 - 隔离实例端到端：见上文。

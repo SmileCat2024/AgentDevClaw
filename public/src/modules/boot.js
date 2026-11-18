@@ -29,6 +29,7 @@
 import {
   applyTheme, applyLanguage, getCurrentTheme, bindStaticToggleButtons,
 } from './i18n-environment-state.js';
+import { schedulePrefetch } from './lazy-domains.js';
 
 applyTheme(getCurrentTheme());
 applyLanguage();
@@ -36,3 +37,8 @@ applyLanguage();
 // 首屏落定后才挂主题 / 语言按钮的 click：此前点击无效果，避免走进半就绪的
 // 渲染链（见 bindStaticToggleButtons 的注释）。
 bindStaticToggleButtons();
+
+// 首屏渲染完成后再空闲预取悬置域脚本（work-group / IM / 编排）：它们已不在
+// index.html 的静态标签里，按需装载；预取让「进入这些界面」通常不再等脚本，
+// 而首屏本身不为它们付下载与解析成本。
+schedulePrefetch();

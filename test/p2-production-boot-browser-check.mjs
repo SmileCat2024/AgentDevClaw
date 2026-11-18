@@ -611,13 +611,18 @@ async function runMainChain(browser, port) {
         navigation: typeof window.NavigationCore?.waitForRuntimeReady,
         gitGraph: typeof window.GitGraph,
       },
-      // classic 解析期自注册的面板：resources-viewer 是 classic 脚本，注册时点
-      // 早于任何模块求值，因此只能走注册表本体（window.ClawPanels.register）。
-      // 若它退回经 app-ui 的 registerFeaturePanel（模块相才可用），这里会看到
-      // work-group 少掉「资料 / 文档」两项——正是 app-ui 迁 ESM 时踩过的坑。
-      workGroupPanels: window.ClawPanels.getAvailable({ agentId: 'work-group' })
-        .map((panel) => panel.id).sort(),
     }));
+
+    // work-group 面板：resources-viewer 已从静态标签改为按需装载（lazy-domains），
+    // 因此注册时点是「该域装载完成」，不再是解析期。装载后仍必须齐备——若它退回经
+    // app-ui 的 registerFeaturePanel（模块相才可用），这里会少掉「资料 / 文档」两项，
+    // 正是 app-ui 迁 ESM 时踩过的坑。
+    const workGroupPanels = await page.evaluate(async () => {
+      const lazy = await import('/src/modules/lazy-domains.js');
+      await lazy.ensure('work-group');
+      return window.ClawPanels.getAvailable({ agentId: 'work-group' })
+        .map((panel) => panel.id).sort();
+    });
     assert.equal(sessionView.protocols.sse, 'function', 'sse-client 模块必须已求值并建立 isSseActive');
     assert.equal(sessionView.protocols.welcome, 'function', 'workspace-agents 模块必须已求值并导出 getWelcomeName');
     assert.equal(sessionView.protocols.featureUi, 'function', 'feature-ui-registry 模块必须已求值并导出 refresh');
@@ -633,9 +638,9 @@ async function runMainChain(browser, port) {
     );
     assert.notEqual(sessionView.protocols.gitGraph, 'undefined', 'git-graph 模块必须已求值');
     assert.deepEqual(
-      sessionView.workGroupPanels,
+      workGroupPanels,
       ['resources', 'settings', 'threads', 'viewer'],
-      'work-group 面板必须由 classic 解析期自注册齐备（resources-viewer 不得依赖模块相）',
+      'work-group 域装载后面板必须齐备（resources-viewer 不得依赖模块相）',
     );
     assert.match(sessionView.messages, /hello from mock/, '接续后正文应来自真实 messages 端点');
     assert.match(sessionView.messages, /world from mock/, 'assistant 消息应同时上屏');
