@@ -88,9 +88,9 @@ test('real loadAgents reuses an in-flight request across owner claim and release
   });
   ctx.loadSource('public/src/modules/action-dispatcher.js');
   ctx.loadSource('public/src/app-core.js');
-  // classic 侧的宿主工厂（生产由 app-main / app-ui / session-view-state 提供）：
-  // 侧栏装载链在求值期取用，本文件不驱动轮询与工作区表面。
-  ctx.loadSource('public/src/modules/session-view-state.js');
+  // session-view-state 自 P4 T2 起是 ESM，且 session-view-commit-host 改具名 import
+  // （不再在求值期经 `window.createSessionViewCommitHost()` 取 classic 实现）——
+  // 装载链不再需要它的 classic 前置，本用例也不触达会话视图 API。
   // runtime-status 的 200ms 通知时钟在模块求值时启动（与 classic 加载期同义）：
   // 本用例不验它，关掉周期排程免得进程留句柄。
   ctx.setInterval = () => 0;

@@ -16,7 +16,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { createFrontendSandbox } from './helpers/frontend-vm.js';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
-import { prepareClassicSandbox } from './p2-classic-hosts.js';
+import { prepareClassicSandbox, prepareEsmModules, SESSION_VIEW_DOMAIN } from './p2-classic-hosts.js';
 
 const SLASH_MENU = 'public/src/modules/slash-menu.js';
 const QUEUE_PROJECTION = 'public/src/modules/p2-w2-3a-queue-projection.js';
@@ -556,7 +556,7 @@ function withInputEsmCase(options, fn) {
 function loadQueueClassicBootstrap(sandbox) {
   // 投影模块已 import 会话提交策略宿主：classic commit host 由 session-view-state
   // 提供（生产同源）。
-  sandbox.loadSource('public/src/modules/session-view-state.js');
+  prepareEsmModules(sandbox, SESSION_VIEW_DOMAIN);
 }
 
 function withQueueProjectionCase(extraGlobals, fn) {

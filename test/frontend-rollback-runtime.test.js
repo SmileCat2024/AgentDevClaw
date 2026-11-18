@@ -31,6 +31,7 @@ import { describe, it, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import { createFrontendSandbox } from './helpers/frontend-vm.js';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
+import { prepareEsmModules, SESSION_VIEW_DOMAIN } from './p2-classic-hosts.js';
 
 /**
  * tick() 只推进时钟并同步执行到期的定时器回调，不跑微任务队列；等待链是
@@ -238,7 +239,7 @@ function rollbackCase({ messages = [], inputRequests = [] } = {}) {
       sandbox.loadSource('public/src/modules/action-dispatcher.js');
       sandbox.run(BRIDGE_PRELUDE);
       // 会话视图同步实现（token 捕获 / patch 门）与主视图渲染读取它
-      sandbox.loadSource('public/src/modules/session-view-state.js');
+      prepareEsmModules(sandbox, SESSION_VIEW_DOMAIN);
       // 本域状态键注册壳已迁 ESM（P4 T2）：改由 async 相 c.load 装载。
     },
     globals: {

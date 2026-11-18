@@ -17,6 +17,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
+import { prepareEsmModules, SESSION_VIEW_DOMAIN } from './p2-classic-hosts.js';
 
 const WORKSPACE_ACTIONS = 'public/src/modules/workspace-actions.js';
 
@@ -39,7 +40,7 @@ async function withStudioCreateAction({ picker, agent = STUDIO_AGENT }, fn) {
       // sidebar-render 的 createXHost）装载会连带首屏与面板注册链，与本用例
       // 无关，按宿主缝给最小面——本用例在到达会话创建宿主时就返回，这些宿主
       // 的方法不会被调用。
-      sandbox.loadSource('public/src/modules/session-view-state.js');
+      prepareEsmModules(sandbox, SESSION_VIEW_DOMAIN);
 
       sandbox.window.createCompactResumeHost = () => ({});
       sandbox.window.createRuntimeSwitchHost = () => ({ state: {} });

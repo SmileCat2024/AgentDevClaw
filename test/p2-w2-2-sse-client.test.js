@@ -239,13 +239,11 @@ before(async () => {
       createSessionDataLoaderHost: () => ({}),
       createRuntimeStatusLoaderHost: () => ({}),
       createAgentSnapshotLoaderHost: () => ({ state: { suppressRender: true } }),
-      createSessionViewCommitHost: () => ({
-        identity: () => ({ agentId: 'agent-a', sessionId: 'session-a' }),
-        read: () => ({ runtimeId: orchestration.currentRuntimeAgentId, overview: { modelRevision: null } }),
-        apply: () => {},
-        normalizeModel: (value) => ({ modelRevision: null, ...(value || {}) }),
-        modelRuntimeId: () => null,
-      }),
+      // 会话视图 patch 的外部写入面（owner: overview-data / todo-plan；本文件不装这两个域，
+      // 它们的桥键由本桩按 setter 语义直接落进 session-view-storage owner）。
+      setCurrentHookInspector: (value) => sessionStorage.setCurrentHookInspector(value || {}),
+      setCurrentOverviewSnapshot: (value) => sessionStorage.setCurrentOverviewSnapshot(value || {}),
+      setCurrentTodoPlan: (value) => sessionStorage.setCurrentTodoPlan(value || {}),
       createPollCoordinatorHost: () => ({
         fastInterval: () => 1000,
         setTimeout: () => 0,
@@ -255,11 +253,9 @@ before(async () => {
       localStorage: { getItem: () => null, setItem() {}, removeItem() {}, clear() {} },
       // 视图 token 的 switchEpoch / generation 取真实 ESM 状态（session-view-commit-host
       // 的 host 面就是这些 live binding）
-      captureSessionViewToken: (runtimeId) => ({
-        runtimeId: String(runtimeId || '').trim(),
-        switchEpoch: orchestration._switchEpoch,
-        generation: sessionIdentity._sessionViewGeneration,
-      }),
+      // P4 T2 起 captureSessionViewToken / commitSessionViewPatch 是 session-view-state /
+      // session-view-commit-host 的真实桥键（下面 sse-client 的 import 会注册它们并把
+      // 本处同名桩顶掉），token 因此是真实冻结对象。
       getRuntimeRecord: () => null,
       // 排队投影已由 sse-client 具名 import（applyQueuedInputsTexts）：它的
       // classic 直调依赖按生产签名供桩，投影状态经 input-queue owner 模块读取。
@@ -619,8 +615,10 @@ test('sse-client：焦点会话的 notification 帧带视图 token 走 updateNot
   assert.equal(calls.updateNotificationStatus.length, 1);
   assert.equal(calls.updateNotificationStatus[0].runtimeId, 'rt-focus');
   assert.equal(calls.updateNotificationStatus[0].payload.state.type, 'call.start');
-  assert.deepEqual(calls.updateNotificationStatus[0].token, { runtimeId: 'rt-focus', switchEpoch: 0, generation: 0 },
-    'token 在事件抵达时捕获，用于提交期 stale 判定');
+  assert.deepEqual({ ...calls.updateNotificationStatus[0].token }, {
+    runtimeId: 'rt-focus', identity: null, switchEpoch: 0, generation: 0,
+    inputRequestsRevision: 0, messagesRevision: 0,
+  }, 'token 在事件抵达时捕获（真实冻结快照），用于提交期 stale 判定');
 });
 
 test('sse-client：非焦点会话只更新侧栏 call 状态，边沿变化才重绘', () => {

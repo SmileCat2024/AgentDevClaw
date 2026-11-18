@@ -17,6 +17,7 @@ import fs from 'node:fs';
 import { Renderer } from 'marked';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
 import { createDomHarness } from './helpers/dom-harness.js';
+import { prepareEsmModules, SESSION_VIEW_DOMAIN } from './p2-classic-hosts.js';
 
 const PANEL_HOST = 'public/src/modules/debug-panel-host.js';
 const markedStub = { Renderer, setOptions() {} };
@@ -74,7 +75,7 @@ async function withPanelHost(fn, { beforeModules } = {}) {
       sandbox.loadSource('public/src/modules/action-dispatcher.js');
       sandbox.loadSource('public/src/modules/claw-host.js');
       sandbox.loadSource('public/src/modules/right-panel-registry.js');
-      sandbox.loadSource('public/src/modules/session-view-state.js');
+      prepareEsmModules(sandbox, SESSION_VIEW_DOMAIN);
       sandbox.loadSource('public/src/app-core.js');
       // 打开面板的 deferBody 路径经双 rAF 提交：本文件同步化 rAF，body 挂载可同步断言。
       sandbox.requestAnimationFrame = (callback) => { callback(); return 0; };

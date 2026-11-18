@@ -25,7 +25,7 @@ import { createAgentSnapshotLoader } from '../public/src/modules/agent-snapshot-
 import { sanitizeSidebarDiagnosticEvent } from '../server/shared/sidebar-diagnostics.js';
 import { createFrontendSandbox } from './helpers/frontend-vm.js';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
-import { prepareSidebarDomain } from './p2-classic-hosts.js';
+import { prepareEsmModules, prepareSidebarDomain, SESSION_VIEW_DOMAIN } from './p2-classic-hosts.js';
 
 /**
  * 成功路径的缺键异常守卫：console 直通宿主（不静音），用例结束后只对
@@ -164,7 +164,7 @@ async function withLoadAgentsCase({ connectedPlan = [], viewerPlan = [], initial
       sandbox.loadSource('public/src/modules/action-dispatcher.js');
       sandbox.loadSource('public/src/app-core.js');
       // 会话快照提交宿主的 classic 实现（侧栏域装载期取用，生产同源）
-      sandbox.loadSource('public/src/modules/session-view-state.js');
+      prepareEsmModules(sandbox, SESSION_VIEW_DOMAIN);
       // 桥初值与身份工具：生产由 app-core 的 defineKey 提供，这里按生产语义写出
       // 同一批键（accessors 由 app-core 注册，赋值经 setter 落到 owner）。
       sandbox.allAgents = initialAgents === null ? [richHost(), richChild()] : initialAgents;
@@ -285,7 +285,7 @@ async function captureDiagnosticQueueRequest(event) {
       // 生产加载序：runtime-status 提供调用状态宿主读的容器，session-view-state
       // 提供会话快照提交宿主；sidebar-operations → project-data 的静态图装载期
       // 会取这两个工厂（本用例只驱动诊断队列）。
-      sandbox.loadSource('public/src/modules/session-view-state.js');
+      prepareEsmModules(sandbox, SESSION_VIEW_DOMAIN);
       // 侧栏域（runtime-status / sidebar-render / call 状态引擎）自 P4 T2 起是 ESM：
       // 经 prepareSidebarDomain 在 classic 之后进模块相。
       prepareSidebarDomain(sandbox);

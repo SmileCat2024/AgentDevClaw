@@ -18,6 +18,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
+import { prepareEsmModules, SESSION_VIEW_DOMAIN } from './p2-classic-hosts.js';
 
 const INPUT_ACTIONS = 'public/src/modules/input-actions.js';
 
@@ -57,7 +58,7 @@ function createHarness({ response } = {}) {
   const options = {
     classic: (sandbox) => {
       sandbox.run(BRIDGE_PRELUDE);
-      sandbox.loadSource('public/src/modules/session-view-state.js');
+      prepareEsmModules(sandbox, SESSION_VIEW_DOMAIN);
     },
     globals: {
       createCallInterruptHost: () => ({ pending: new Map(), now: () => Date.now() }),

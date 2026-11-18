@@ -13,7 +13,6 @@
 
 import fs from 'node:fs';
 import { marked as markedModule } from 'marked';
-import { installSessionViewCommit } from './session-view-commit.js';
 import { installI18n } from './install-i18n.js';
 import { installRuntimeSwitch } from './runtime-switch.js';
 import { createRuntimeStatusLoader } from '../../public/src/modules/runtime-status-loader.js';
@@ -237,9 +236,9 @@ export function createFrontendSandbox(overrides = {}) {
       })()`, context));
       delete context.__createChatLoading;
     }
-    // Classic first-paint code stays synchronous; async producers exercise the
-    // real ESM eligibility policy against the same live sandbox state.
-    if (relativePath === 'public/src/modules/session-view-state.js') installSessionViewCommit(context);
+    // session-view-state（P4 T2 起 ESM）不再经 loadSource 装载：本沙箱路线只剩
+    // classic script。需要它时用 withP2EsmCase + `c.load('.../session-view-state.js')`
+    // （或 p2-classic-hosts 的 prepareEsmModules），桥键会装到同一个沙箱 window 上。
     if (relativePath === 'public/src/modules/agent-data-loader.js') {
       Object.assign(context, createRuntimeStatusLoader(vm.runInContext('createRuntimeStatusLoaderHost()', context)));
       Object.assign(context, createSessionDataLoader(vm.runInContext('createSessionDataLoaderHost()', context)));

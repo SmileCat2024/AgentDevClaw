@@ -17,6 +17,7 @@
  */
 import { loadModuleOnce } from './esm-module-loader.js';
 import { withThreadCaseEnv } from '../p2-thread-case.js';
+import { prepareEsmModules, SESSION_VIEW_DOMAIN } from '../p2-classic-hosts.js';
 
 export const THREAD_ENGINE = 'public/src/modules/thread-store.js';
 
@@ -98,7 +99,9 @@ export async function withThreadEngineCase({ fixtures = {}, fetch: fetchImpl, th
     fetch: fetchImpl,
     globals: fixtures,
     classic: (sandbox) => {
-      sandbox.loadSource('public/src/modules/session-view-state.js'); // ADR-0026：会话视图提交原语
+      // ADR-0026：会话视图提交原语（P4 T2 起是 ESM）在模块相装载；classic 相只登记，
+      // 桥键在 case 图求值后可见。
+      prepareEsmModules(sandbox, SESSION_VIEW_DOMAIN);
       // 用例自带的 classic 实现切片（真实的宿主 / 绑定段），先于夹具覆盖执行。
       if (typeof classicExtra === 'function') classicExtra(sandbox);
       // 夹具在 classic 源之后落地：真实现的同名函数（readCurrentSessionViewState 等）
@@ -107,6 +110,9 @@ export async function withThreadEngineCase({ fixtures = {}, fetch: fetchImpl, th
       for (const [key, domain] of Object.entries(THREAD_STATE_DOMAINS)) {
         sandbox.KernelState.defineKey(domain, key, sandbox[key]);
       }
+      // 会话视图桥键在模块相注册（访问器会顶掉 classic 相的夹具赋值）：交给
+      // withThreadCaseEnv 在模块相之后原样重放一次，夹具语义（无条件覆盖）不变。
+      sandbox.__caseOverrides = fixtures;
       if (!threads.length) return;
       // classic 相没有真实 ClawThreads（引擎是 ESM）：放占位对象并由
       // withThreadCaseEnv 在引擎求值后把写入整体回放到真实 owner。

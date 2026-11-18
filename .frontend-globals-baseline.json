@@ -697,22 +697,10 @@
     ]
   },
   "public/src/modules/session-view-state.js": {
-    "state": [
-      "EMPTY_SESSION_META"
-    ],
+    "state": [],
     "behavior": [
-      "applySessionViewPatch",
-      "captureSessionViewToken",
-      "createSessionViewCommitHost",
-      "getCurrentSessionViewIdentity",
-      "lastInputRequests",
-      "normalizeSessionMeta",
-      "normalizeSessionMetaCount",
-      "normalizeSessionMetaField",
-      "normalizeSessionModelState",
-      "normalizeSessionViewIdentity",
-      "normalizeSessionViewRuntimeId",
-      "readCurrentSessionViewState"
+      "currentRuntimeConnected",
+      "lastInputRequests"
     ]
   },
   "public/src/modules/sidebar-render.js": {

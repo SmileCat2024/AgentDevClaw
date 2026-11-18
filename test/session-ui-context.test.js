@@ -2,10 +2,10 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import test from 'node:test';
 import vm from 'node:vm';
-import { installSessionViewCommit } from './helpers/session-view-commit.js';
 import { installRuntimeViewCache } from './helpers/runtime-view-cache.js';
 import { installI18n } from './helpers/install-i18n.js';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
+import { beginCaseGraph, endCaseGraph } from './helpers/p2-esm-graph.js';
 import { prepareClassicSandbox } from './p2-classic-hosts.js';
 
 /** Raw VM contexts install the real kernel with window/global unified. */
@@ -15,10 +15,7 @@ const inputRenderSource = fs.readFileSync(
   'utf8',
 );
 const uiSource = fs.readFileSync(new URL('../public/src/app-ui.js', import.meta.url), 'utf8');
-const sessionViewStateSource = fs.readFileSync(
-  new URL('../public/src/modules/session-view-state.js', import.meta.url),
-  'utf8',
-);
+let caseSeq = 0;
 // 工单 036：会话草稿缓存已从 voice-input.js 迁至 input-composer.js
 const inputComposerSource = fs.readFileSync(
   new URL('../public/src/modules/input-composer.js', import.meta.url),
@@ -34,22 +31,31 @@ function sourceBetween(source, startMarker, endMarker) {
   return source.slice(start, end);
 }
 
-function createCoreContext() {
+/**
+ * 会话视图状态键（迁移前是本夹具的裸属性，生产里由 app-core 逐条 defineKey）。
+ * session-view-state 自 P4 T2 起是 ESM：状态 owner 是 session-view-storage /
+ * session-view-identity-state，本夹具的初值必须经同一批 defineKey 注册，owner
+ * 认领时才吸收它们；此后裸名读写经访问器转发到 owner（与生产同一路径）。
+ */
+const STATE_KEYS = [
+  ['agent-store', 'focusedAgentId', 'flow-workspace'],
+  ['orchestration', 'currentRuntimeAgentId', 'runtime-1'],
+  ['orchestration', '_switchEpoch', 0],
+  ['runtime-status', 'currentRuntimeConnected', true],
+  ['session-view-storage', 'currentMessages', []],
+  ['session-view-storage', 'currentInputRequests', []],
+  ['session-view-storage', 'currentHookInspector', {}],
+  ['session-view-storage', 'currentHookInspectorSignature', ''],
+  ['session-view-storage', 'currentOverviewSnapshot', {}],
+  ['session-view-storage', 'currentOverviewSignature', ''],
+  ['session-view-storage', 'currentTodoPlan', {}],
+  ['session-view-storage', 'currentTodoPlanSignature', ''],
+  ['session-view-storage', 'toolRenderConfigs', {}],
+  ['session-view-storage', 'TOOL_NAMES', {}],
+];
+
+function buildCoreClassicContext() {
   const context = {
-    focusedAgentId: 'flow-workspace',
-    currentRuntimeAgentId: 'runtime-1',
-    currentMessages: [],
-    currentInputRequests: [],
-    currentHookInspector: {},
-    currentHookInspectorSignature: '',
-    currentOverviewSnapshot: {},
-    currentOverviewSignature: '',
-    currentTodoPlan: {},
-    currentTodoPlanSignature: '',
-    currentRuntimeConnected: true,
-    _switchEpoch: 0,
-    toolRenderConfigs: {},
-    TOOL_NAMES: {},
     allAgents: [],
     window: { lastInputRequests: [] },
     followLatestEnabled: true,
@@ -78,16 +84,15 @@ function createCoreContext() {
   vm.runInContext(fs.readFileSync(new URL('../public/src/modules/kernel-state.js', import.meta.url), 'utf8'), context);
   // i18n 已迁 ESM（P4）：t 桥键按生产同款 defineKey + claim 装进裸 vm 上下文
   installI18n(context);
+  for (const [domain, key, initialValue] of STATE_KEYS) {
+    context.KernelState.defineKey(domain, key, initialValue);
+  }
   const cacheBlock = sourceBetween(
     coreSource,
     'const MAX_CACHED_RUNTIME_VIEWS = 4;',
     '\nfunction getFeatureStatus',
   );
-  vm.runInContext(
-    `${sessionViewStateSource}
-${cacheBlock}
-`, context);
-  installSessionViewCommit(context);
+  vm.runInContext(cacheBlock, context);
   installRuntimeViewCache(context);
   vm.runInContext(`globalThis.__uiContext = {
   getActiveWorkspaceSessionId,
@@ -103,46 +108,74 @@ ${cacheBlock}
   return context;
 }
 
-test('runtime context key isolates sessions sharing one runtime', () => {
-  const context = createCoreContext();
-  const api = context.__uiContext;
+/**
+ * classic 切片夹具 + 真实会话视图域（ESM）。
+ *
+ * 逐用例一代模块图（p2-esm-graph 的 case query）：owner 状态与桥键认领都落在本
+ * 用例自己的 window 上，跨用例不残留。`globalThis.window` 必须在用例体执行期间
+ * 保持指向本 context——域模块的 `window.X` 是调用时解析的全局。
+ */
+async function withCoreContext(fn) {
+  const previousWindow = globalThis.window;
+  const context = buildCoreClassicContext();
+  globalThis.window = context;
+  const caseId = `session-ui-context-${++caseSeq}`;
+  beginCaseGraph(caseId);
+  try {
+    await import(`../public/src/modules/session-view-commit-host.js?${caseId}`);
+  } finally {
+    endCaseGraph(caseId);
+  }
+  try {
+    return await fn(context);
+  } finally {
+    if (previousWindow === undefined) delete globalThis.window;
+    else globalThis.window = previousWindow;
+  }
+}
 
-  assert.equal(api.getActiveWorkspaceSessionId(), 'session-a');
-  const sessionAKey = api.getRuntimeContextKey();
-  context.currentAgent.workspace_sessions.activeSessionId = 'session-b';
-  const sessionBKey = api.getRuntimeContextKey();
+test('runtime context key isolates sessions sharing one runtime', async () => {
+  await withCoreContext((context) => {
+    const api = context.__uiContext;
 
-  assert.notEqual(sessionAKey, sessionBKey);
-  assert.equal(sessionAKey, 'host:flow-workspace|session:session-a');
-  assert.equal(sessionBKey, 'host:flow-workspace|session:session-b');
+    assert.equal(api.getActiveWorkspaceSessionId(), 'session-a');
+    const sessionAKey = api.getRuntimeContextKey();
+    context.currentAgent.workspace_sessions.activeSessionId = 'session-b';
+    const sessionBKey = api.getRuntimeContextKey();
+
+    assert.notEqual(sessionAKey, sessionBKey);
+    assert.equal(sessionAKey, 'host:flow-workspace|session:session-a');
+    assert.equal(sessionBKey, 'host:flow-workspace|session:session-b');
+  });
 });
 
-test('viewer session binding freezes context key against host active drift', () => {
-  const context = createCoreContext();
-  const api = context.__uiContext;
-  context.allAgents = [{ id: 'runtime-1', active_workspace_session_id: 'session-a' }];
+test('viewer session binding freezes context key against host active drift', async () => {
+  await withCoreContext((context) => {
+    const api = context.__uiContext;
+    context.allAgents = [{ id: 'runtime-1', active_workspace_session_id: 'session-a' }];
 
-  assert.equal(api.getRuntimeContextKey(), 'host:flow-workspace|session:session-a');
+    assert.equal(api.getRuntimeContextKey(), 'host:flow-workspace|session:session-a');
 
-  // 用户主动切换时刻冻结 viewer 绑定
-  api.setViewerSessionBinding('runtime-1', 'session-a');
+    // 用户主动切换时刻冻结 viewer 绑定
+    api.setViewerSessionBinding('runtime-1', 'session-a');
 
-  // 外部入口（IM 转接/CLI/调度/其他标签页）创建并激活新会话：
-  // allAgents 刷新后 host 与 runtime 记录的 active 均被抢占
-  context.allAgents[0].active_workspace_session_id = 'session-hijacked';
-  context.currentAgent.workspace_sessions.activeSessionId = 'session-hijacked';
+    // 外部入口（IM 转接/CLI/调度/其他标签页）创建并激活新会话：
+    // allAgents 刷新后 host 与 runtime 记录的 active 均被抢占
+    context.allAgents[0].active_workspace_session_id = 'session-hijacked';
+    context.currentAgent.workspace_sessions.activeSessionId = 'session-hijacked';
 
-  // 正在查看的会话身份不漂移：草稿 key / 录音归属 / 输入签名全部稳定
-  assert.equal(api.getRuntimeContextKey(), 'host:flow-workspace|session:session-a');
-  assert.equal(api.getRuntimeWorkspaceSessionId('runtime-1'), 'session-a');
+    // 正在查看的会话身份不漂移：草稿 key / 录音归属 / 输入签名全部稳定
+    assert.equal(api.getRuntimeContextKey(), 'host:flow-workspace|session:session-a');
+    assert.equal(api.getRuntimeWorkspaceSessionId('runtime-1'), 'session-a');
 
-  // 用户主动切到新会话后绑定更新，contextKey 跟随
-  api.setViewerSessionBinding('runtime-1', 'session-hijacked');
-  assert.equal(api.getRuntimeContextKey(), 'host:flow-workspace|session:session-hijacked');
+    // 用户主动切到新会话后绑定更新，contextKey 跟随
+    api.setViewerSessionBinding('runtime-1', 'session-hijacked');
+    assert.equal(api.getRuntimeContextKey(), 'host:flow-workspace|session:session-hijacked');
 
-  // 绑定清除（空 sessionId）后回退 server 派生值（初始恢复路径）
-  api.setViewerSessionBinding('runtime-1', '');
-  assert.equal(api.getRuntimeContextKey(), 'host:flow-workspace|session:session-hijacked');
+    // 绑定清除（空 sessionId）后回退 server 派生值（初始恢复路径）
+    api.setViewerSessionBinding('runtime-1', '');
+    assert.equal(api.getRuntimeContextKey(), 'host:flow-workspace|session:session-hijacked');
+  });
 });
 
 test('submit success clears the live textarea, not a detached reference', () => {
@@ -171,72 +204,74 @@ test('submit success clears the live textarea, not a detached reference', () => 
   );
 });
 
-test('optimistic runtime cache restores data by session context', () => {
-  const context = createCoreContext();
-  const api = context.__uiContext;
+test('optimistic runtime cache restores data by session context', async () => {
+  await withCoreContext((context) => {
+    const api = context.__uiContext;
 
-  context.currentMessages = [{ role: 'assistant', content: 'session A' }];
-  context.currentInputRequests = [{ requestId: 'request-a', mode: 'text' }];
-  api.saveCurrentRuntimeToCache('runtime-1');
+    context.currentMessages = [{ role: 'assistant', content: 'session A' }];
+    context.currentInputRequests = [{ requestId: 'request-a', mode: 'text' }];
+    api.saveCurrentRuntimeToCache('runtime-1');
 
-  context.currentAgent.workspace_sessions.activeSessionId = 'session-b';
-  context.currentMessages = [{ role: 'assistant', content: 'session B' }];
-  context.currentInputRequests = [{ requestId: 'request-b', mode: 'text' }];
-  api.saveCurrentRuntimeToCache('runtime-1');
+    context.currentAgent.workspace_sessions.activeSessionId = 'session-b';
+    context.currentMessages = [{ role: 'assistant', content: 'session B' }];
+    context.currentInputRequests = [{ requestId: 'request-b', mode: 'text' }];
+    api.saveCurrentRuntimeToCache('runtime-1');
 
-  context.currentAgent.workspace_sessions.activeSessionId = 'session-a';
-  context.currentMessages = [];
-  context.currentInputRequests = [];
-  assert.equal(api.restoreRuntimeFromCache('runtime-1'), true);
-  assert.equal(context.currentMessages[0].content, 'session A');
-  assert.equal(context.currentInputRequests[0].requestId, 'request-a');
+    context.currentAgent.workspace_sessions.activeSessionId = 'session-a';
+    context.currentMessages = [];
+    context.currentInputRequests = [];
+    assert.equal(api.restoreRuntimeFromCache('runtime-1'), true);
+    assert.equal(context.currentMessages[0].content, 'session A');
+    assert.equal(context.currentInputRequests[0].requestId, 'request-a');
+  });
 });
 
-test('cache restore restores the session identity together with the transcript', () => {
+test('cache restore restores the session identity together with the transcript', async () => {
   // 缺陷现场：离开会话回工作空间首页会把视图身份清成空会话；切回已缓存的
   // 会话时只恢复内容不恢复身份，界面上有对话、身份却停在空会话，模型切换
   // 与输入面因此判定「当前会话不支持模型切换」。缓存条目里的 sessionMeta
   // 在会话元数据尚未加载时本就是空值，不能作为身份来源。
-  const context = createCoreContext();
-  const api = context.__uiContext;
+  await withCoreContext((context) => {
+    const api = context.__uiContext;
 
-  context.currentAgent.workspace_sessions.activeSessionId = 'session-a';
-  context.currentMessages = [{ role: 'assistant', content: 'session A' }];
-  api.saveCurrentRuntimeToCache('runtime-1');
+    context.currentAgent.workspace_sessions.activeSessionId = 'session-a';
+    context.currentMessages = [{ role: 'assistant', content: 'session A' }];
+    api.saveCurrentRuntimeToCache('runtime-1');
 
-  // 回工作空间首页：身份被清成空会话
-  context.run?.('void 0');
-  vm.runInContext("applySessionViewPatch({ identity: { agentId: 'flow-workspace', sessionId: '' } })", context);
-  context.currentMessages = [];
-  context.currentAgent.workspace_sessions.activeSessionId = 'session-a';
+    // 回工作空间首页：身份被清成空会话
+    vm.runInContext("applySessionViewPatch({ identity: { agentId: 'flow-workspace', sessionId: '' } })", context);
+    context.currentMessages = [];
+    context.currentAgent.workspace_sessions.activeSessionId = 'session-a';
 
-  assert.equal(api.restoreRuntimeFromCache('runtime-1'), true);
-  assert.equal(context.currentMessages[0].content, 'session A');
-  assert.equal(
-    vm.runInContext('readCurrentSessionViewState().identity.sessionId', context),
-    'session-a',
-  );
+    assert.equal(api.restoreRuntimeFromCache('runtime-1'), true);
+    assert.equal(context.currentMessages[0].content, 'session A');
+    assert.equal(
+      vm.runInContext('readCurrentSessionViewState().identity.sessionId', context),
+      'session-a',
+    );
+  });
 });
 
-test('runtime cache retains the most recently visited views without holding every transcript', () => {
-  const context = createCoreContext();
-  const api = context.__uiContext;
-  for (let index = 0; index < 4; index++) {
-    context.currentAgent.workspace_sessions.activeSessionId = `session-${index}`;
-    context.currentMessages = [{ role: 'assistant', content: `message-${index}` }];
+test('runtime cache retains the most recently visited views without holding every transcript', async () => {
+  await withCoreContext((context) => {
+    const api = context.__uiContext;
+    for (let index = 0; index < 4; index++) {
+      context.currentAgent.workspace_sessions.activeSessionId = `session-${index}`;
+      context.currentMessages = [{ role: 'assistant', content: `message-${index}` }];
+      api.saveCurrentRuntimeToCache('runtime-1');
+    }
+    context.currentAgent.workspace_sessions.activeSessionId = 'session-0';
+    assert.equal(api.restoreRuntimeFromCache('runtime-1'), true);
     api.saveCurrentRuntimeToCache('runtime-1');
-  }
-  context.currentAgent.workspace_sessions.activeSessionId = 'session-0';
-  assert.equal(api.restoreRuntimeFromCache('runtime-1'), true);
-  api.saveCurrentRuntimeToCache('runtime-1');
-  context.currentAgent.workspace_sessions.activeSessionId = 'session-4';
-  context.currentMessages = [{ role: 'assistant', content: 'message-4' }];
-  api.saveCurrentRuntimeToCache('runtime-1');
-  assert.equal(api.cacheKeys().length, 4);
-  assert.ok(api.cacheKeys().some(key => key.endsWith('session:session-0')));
-  assert.ok(!api.cacheKeys().some(key => key.endsWith('session:session-1')));
-  context.currentAgent.workspace_sessions.activeSessionId = 'session-1';
-  assert.equal(api.restoreRuntimeFromCache('runtime-1'), false);
+    context.currentAgent.workspace_sessions.activeSessionId = 'session-4';
+    context.currentMessages = [{ role: 'assistant', content: 'message-4' }];
+    api.saveCurrentRuntimeToCache('runtime-1');
+    assert.equal(api.cacheKeys().length, 4);
+    assert.ok(api.cacheKeys().some(key => key.endsWith('session:session-0')));
+    assert.ok(!api.cacheKeys().some(key => key.endsWith('session:session-1')));
+    context.currentAgent.workspace_sessions.activeSessionId = 'session-1';
+    assert.equal(api.restoreRuntimeFromCache('runtime-1'), false);
+  });
 });
 
 test('persistent input render signature changes with session context', () => {

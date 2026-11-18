@@ -31,6 +31,7 @@ import { describe, it as nodeIt } from 'node:test';
 import assert from 'node:assert/strict';
 import { Renderer } from 'marked';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
+import { prepareEsmModules, SESSION_VIEW_DOMAIN } from './p2-classic-hosts.js';
 
 // ── Mini DOM：与 frontend-input-composer.test.js 同款最小元素树 ─────────────
 
@@ -579,7 +580,7 @@ function convergenceCaseOptions() {
         // 断言以 state.liveKey 为会话键），按既有宿主 seam 恢复。
         sandbox.getRuntimeContextKey = () => state.liveKey;
         sandbox.run(CONVERGENCE_STATE_PRELUDE);
-        sandbox.loadSource('public/src/modules/session-view-state.js');
+        prepareEsmModules(sandbox, SESSION_VIEW_DOMAIN);
         // input-composer / persistent-input 已迁 ESM（P4 输入面批次）：改由用例体
         // 真实 import（模式判定 / 常驻渲染 / 排队重绑 / 交互面守卫的桥键来源）。
         sandbox.run(`

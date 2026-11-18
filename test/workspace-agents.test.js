@@ -87,7 +87,8 @@ before(async () => {
   classicBoot.setInterval = () => 0;
   classicBoot.loadSource('public/src/modules/action-dispatcher.js');
   classicBoot.loadSource('public/src/app-core.js');
-  classicBoot.loadSource('public/src/modules/session-view-state.js');
+  // session-view-state 自 P4 T2 起是 ESM，且会话提交策略宿主改由 session-view-commit-host
+  // 具名 import（不再在求值期经 window 抓 classic 实现）——本夹具也不需要它的 classic 前置。
   // project-data 具名边带进来的宿主工厂全部按真源接出（createCallInterruptHost /
   // createRuntimeViewCacheHost / 各 P2 引导宿主）；app-ui / app-main 的最小 seam
   // 由下面的 assign 补齐。
@@ -105,9 +106,6 @@ before(async () => {
   })) {
     if (typeof window[name] !== 'function') window[name] = factory;
   }
-  window.createSessionViewCommitHost = () => ({
-    identity: () => null, read: () => ({}), apply() {}, normalizeModel: (value) => value || {},
-  });
   // 无唯一 query → 与域模块内部 import 同址，共用同一模块实例（状态唯一 owner）
   agentStore = await import('../public/src/modules/agent-store-state.js');
   orchestration = await import('../public/src/modules/orchestration-state.js');

@@ -26,7 +26,7 @@
 import { describe, it as nodeIt } from 'node:test';
 import assert from 'node:assert/strict';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
-import { installForegroundSyncOwner, prepareSidebarDomain } from './p2-classic-hosts.js';
+import { installForegroundSyncOwner, prepareEsmModules, prepareSidebarDomain, SESSION_VIEW_DOMAIN } from './p2-classic-hosts.js';
 
 const OPS = 'public/src/modules/sidebar-operations.js';
 const CTX_MENU = 'public/src/modules/ctx-menu-items.js';
@@ -50,7 +50,7 @@ function bootstrapClassic(sandbox, fixture) {
   // i18n 已迁 ESM（P4）：t 桥键由 createFrontendSandbox 自动装载，见 test/helpers/install-i18n.js
   sandbox.loadSource('public/src/app-core.js');
   prepareSidebarDomain(sandbox);
-  sandbox.loadSource('public/src/modules/session-view-state.js');
+  prepareEsmModules(sandbox, SESSION_VIEW_DOMAIN);
   // app-main 的 classic 同步引擎（唯一 owner）：装载期组合真实 host 并注册
   // sidebar-render 轮询/裁剪路径消费的两个桥键。
   installForegroundSyncOwner(sandbox);

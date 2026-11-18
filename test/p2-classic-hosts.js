@@ -2,12 +2,13 @@
  * p2-classic-hosts.js — P2 用例的 classic 相装载链（测试支撑，不是产品代码）。
  *
  * 为什么需要：ESM 化后，一个域模块的静态依赖链可能触达 agent-loader-host /
- * session-view-state / sidebar-render / app-ui / app-main，这些模块在**装载期**
- * 就调用 classic 相提供的宿主工厂：
- *   - createSessionViewCommitHost      ← session-view-state.js
+ * sidebar-render / app-ui / app-main，这些模块在**装载期**就调用 classic 相提供的
+ * 宿主工厂：
  *   - createAgentCallStatesHost        ← sidebar-render.js（读 runtime-status 的词法容器）
  *   - createRuntimeSwitchHost / createCompactResumeHost ← app-main.js
  *   - createWorkspaceSurfaceHost       ← app-ui.js
+ * （session-view-state 在 P4 T2 批次迁 ESM 后不再取 classic 工厂：提交策略宿主
+ * 由 session-view-commit-host 具名 import，见 SESSION_VIEW_DOMAIN 的注释。）
  * 手写同形桩会把「宿主工厂契约」复制到测试里，生产改动无法被用例发现；
  * 这里改为**执行真实的 classic 脚本**（顺序同 public/index.html 的先行脚本），
  * 宿主工厂因此就是生产实现本身。
@@ -36,9 +37,26 @@ export const CLASSIC_BOOTSTRAP = [
   'public/src/modules/claw-host.js',
   'public/src/modules/right-panel-registry.js',
   'public/src/app-core.js',
-  'public/src/modules/session-view-state.js',
+  // session-view-state 在 P4 T2 批次进模块相（原 classic 标签已从 index.html 删除）：
+  // 它在 SESSION_VIEW_DOMAIN 里、排在 SIDEBAR_DOMAIN 之前装载——classic 消费方
+  // （app-ui / app-main / app-core）按桥键晚绑定取用，不需要 classic 相实现。
   'public/src/app-ui.js',
   'public/src/app-main.js',
+];
+
+/**
+ * 会话视图提交边界（P4 T2 批次）。必须先于 SIDEBAR_DOMAIN：sidebar-render /
+ * runtime-status 的桥接期调用点在函数体内晚绑定，但它们的用例常在同一 case 里
+ * 同步读 `readCurrentSessionViewState()` 的结果，桥键注册要在此之前完成。
+ *
+ * commit-host 一并登记：迁移前夹具装载 classic `session-view-state.js` 时，
+ * frontend-vm 的 installSessionViewCommit 钩子会把真实 `commitSessionViewPatch` /
+ * `isSessionViewTokenCurrent` 装进沙箱；该钩子随 classic 装载路线一并退役，等价面
+ * 改由 session-view-commit-host 在模块相注册的桥键提供（同一份 ESM 策略实例）。
+ */
+export const SESSION_VIEW_DOMAIN = [
+  'public/src/modules/session-view-state.js',
+  'public/src/modules/session-view-commit-host.js',
 ];
 
 /**
@@ -50,6 +68,9 @@ export const SIDEBAR_DOMAIN = [
   'public/src/modules/sidebar-render.js',
   'public/src/modules/agent-call-states-engine.js',
 ];
+
+/** 全部 P4 域模块（装载序：会话视图边界 → 侧栏 / 运行时状态 / call 引擎）。 */
+export const P4_DOMAINS = [...SESSION_VIEW_DOMAIN, ...SIDEBAR_DOMAIN];
 
 /**
  * classic 链夹具「顺手」发起的 ESM 域装载（pending prep）。
@@ -102,6 +123,7 @@ function applyEsmDomain(sandbox, loaded) {
   // `_agentSuspended`、引擎实例）在 classic 沙箱里没有 window 形态，用例经
   // `__esmDomain.<域>` 取真实模块实例——与 `c.load(...)` 同一实例，不建第二份状态。
   sandbox.__esmDomain = Object.freeze({
+    sessionViewState: loaded.get('public/src/modules/session-view-state.js'),
     runtimeStatus: loaded.get('public/src/modules/runtime-status.js'),
     sidebarRender,
     agentCallStatesEngine: loaded.get('public/src/modules/agent-call-states-engine.js'),
@@ -109,24 +131,26 @@ function applyEsmDomain(sandbox, loaded) {
   // 夹具投影（**测试支撑面，生产没有这些全局**）：迁移前这些名字是 classic 顶层
   // 函数，夹具有大量 `sandbox.run('renderSidebarChildItems(...)')` 式的经典字符串
   // 直接按裸名调用真实实现。投影的是同一份模块导出（不是副本、不是另一套实现）。
+  // 只投影本次登记清单里实际装载的域：裁剪链夹具（只登记 SESSION_VIEW_DOMAIN）不
+  // 装侧栏 / 运行时状态，不必为它们补这一层。
   const projection = {
-    renderSidebarChildItems: sidebarRender.renderSidebarChildItems,
-    resolveFocusedAgentAfterRefresh: sidebarRender.resolveFocusedAgentAfterRefresh,
-    createAgentCallStatesHost: sidebarRender.createAgentCallStatesHost,
-    createAgentSnapshotLoaderHost: sidebarRender.createAgentSnapshotLoaderHost,
-    createP2BootstrapSidebarRenderHost: sidebarRender.createP2BootstrapSidebarRenderHost,
-    collectRuntimeEntriesForPrebuilt: sandbox.__esmDomain.runtimeStatus.collectRuntimeEntriesForPrebuilt,
-    isRuntimeCalling: sandbox.__esmDomain.runtimeStatus.isRuntimeCalling,
-    isRuntimeSuspended: sandbox.__esmDomain.runtimeStatus.isRuntimeSuspended,
-    isSidebarRuntimeDisconnected: sandbox.__esmDomain.runtimeStatus.isSidebarRuntimeDisconnected,
-    isSuspendedNotificationPayload: sandbox.__esmDomain.runtimeStatus.isSuspendedNotificationPayload,
-    resolveNotificationCallingState: sandbox.__esmDomain.runtimeStatus.resolveNotificationCallingState,
+    renderSidebarChildItems: sidebarRender?.renderSidebarChildItems,
+    resolveFocusedAgentAfterRefresh: sidebarRender?.resolveFocusedAgentAfterRefresh,
+    createAgentCallStatesHost: sidebarRender?.createAgentCallStatesHost,
+    createAgentSnapshotLoaderHost: sidebarRender?.createAgentSnapshotLoaderHost,
+    createP2BootstrapSidebarRenderHost: sidebarRender?.createP2BootstrapSidebarRenderHost,
+    collectRuntimeEntriesForPrebuilt: sandbox.__esmDomain.runtimeStatus?.collectRuntimeEntriesForPrebuilt,
+    isRuntimeCalling: sandbox.__esmDomain.runtimeStatus?.isRuntimeCalling,
+    isRuntimeSuspended: sandbox.__esmDomain.runtimeStatus?.isRuntimeSuspended,
+    isSidebarRuntimeDisconnected: sandbox.__esmDomain.runtimeStatus?.isSidebarRuntimeDisconnected,
+    isSuspendedNotificationPayload: sandbox.__esmDomain.runtimeStatus?.isSuspendedNotificationPayload,
+    resolveNotificationCallingState: sandbox.__esmDomain.runtimeStatus?.resolveNotificationCallingState,
   };
   for (const [name, value] of Object.entries(projection)) {
     if (typeof value === 'function' && typeof sandbox[name] !== 'function') sandbox[name] = value;
   }
   // 状态容器同款投影：`_agentSuspended`（B4 具名导出的同一 Map 引用）。
-  if (sandbox._agentSuspended === undefined) {
+  if (sandbox.__esmDomain.runtimeStatus && sandbox._agentSuspended === undefined) {
     sandbox._agentSuspended = sandbox.__esmDomain.runtimeStatus._agentSuspended;
   }
   ensureSidebarRenderHostSeam(sandbox);
@@ -170,9 +194,9 @@ export function ensureSidebarRenderHostSeam(sandbox) {
  *
  * @param {object} sandbox 已注入为 globalThis.window 的 classic 沙箱
  * @param {(modulePath: string) => Promise<object>} loadModule 相对仓库根的模块装载器
- * @param {string[]} [modules] 默认 SIDEBAR_DOMAIN
+ * @param {string[]} [modules] 默认 P4_DOMAINS（会话视图边界 + 侧栏域）
  */
-export async function loadEsmDomain(sandbox, loadModule, modules = SIDEBAR_DOMAIN) {
+export async function loadEsmDomain(sandbox, loadModule, modules = P4_DOMAINS) {
   const loaded = new Map();
   for (const modulePath of modules) loaded.set(modulePath, await loadModule(modulePath));
   return applyEsmDomain(sandbox, loaded);
@@ -186,6 +210,14 @@ export function prepareSidebarDomain(sandbox) {
   return scheduleEsmDomain(sandbox, SIDEBAR_DOMAIN);
 }
 
+/**
+ * 登记「classic 相之后装载 P4_DOMAINS」。裁剪链夹具只缺会话视图边界时用它，
+ * 比 prepareClassicSandbox 少装首屏链；与同沙箱的其它登记合并，不互相顶掉。
+ */
+export function prepareEsmModules(sandbox, modules) {
+  return scheduleEsmDomain(sandbox, modules);
+}
+
 function scheduleEsmDomain(sandbox, modules) {
   if (domainBySandbox.has(sandbox)) return domainBySandbox.get(sandbox);
   if (typeof sandbox?.loadEsm !== 'function') {
@@ -194,7 +226,15 @@ function scheduleEsmDomain(sandbox, modules) {
   if (pendingClassicPrep && pendingClassicPrep.sandbox !== sandbox) {
     throw new Error('p2-classic-hosts: 上一个 classic 链的 ESM 域装载尚未被消费（用例串行契约被破坏）');
   }
-  if (!pendingClassicPrep) pendingClassicPrep = { sandbox, modules };
+  // 同一沙箱的多处登记（典型：夹具自己 prepareEsmModules + 随后 prepareClassicSandbox）
+  // 合并成一个待装载清单，保持「先登记的模块先装载」。
+  if (!pendingClassicPrep) {
+    pendingClassicPrep = { sandbox, modules: [...modules] };
+  } else {
+    for (const modulePath of modules) {
+      if (!pendingClassicPrep.modules.includes(modulePath)) pendingClassicPrep.modules.push(modulePath);
+    }
+  }
   return null;
 }
 
@@ -225,7 +265,7 @@ export function prepareClassicSandbox(sandbox, { deferEsmDomain = true } = {}) {
   // （不消费 pending prep 的用例）也需要它，否则真实 renderAgentList 触发时
   // `window.ClawSidebarLayout` 缺席。
   ensureSidebarRenderHostSeam(sandbox);
-  return deferEsmDomain ? prepareSidebarDomain(sandbox) : null;
+  return deferEsmDomain ? prepareEsmModules(sandbox, P4_DOMAINS) : null;
 }
 
 /**

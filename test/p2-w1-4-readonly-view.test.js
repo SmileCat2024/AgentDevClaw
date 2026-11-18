@@ -23,25 +23,23 @@ let orchestration = null;
 let renderEntry = null;
 let i18n = null;
 let identityState = null;
+let sessionStorageState = null;
 let chatLoading = null;
 let calls = null;
 const elements = new Map();
 const runtimeCache = new Map();
 
 /* 真实宿主适配器的依赖桩：只读视图 import 会话提交、视图缓存与 chat-loading
- * 三个已迁宿主，它们在装载期经 window.createXHost() 取 classic 适配面。 */
+ * 三个已迁宿主，它们在装载期经 window.createXHost() 取 classic 适配面。
+ * 会话提交策略自 P4 T2 起由 session-view-commit-host 具名 import（window 桩不再参与），
+ * 本夹具因此用**真实的** applySessionViewPatch / captureSessionViewToken 桥键，
+ * 断言改读 readCurrentSessionViewState() 的真实出口。 */
 function installHostFactories() {
-  window.createSessionViewCommitHost = () => ({
-    identity: () => calls.identity,
-    read: () => calls.view,
-    apply: (patch) => { calls.applied.push(patch); },
-    normalizeModel: (value) => value || {},
-  });
   window.createRuntimeViewCacheHost = () => ({
     cache: runtimeCache,
     capacity: 20,
     contextKey: (runtimeId) => `ctx:${runtimeId}`,
-    readView: () => calls.view,
+    readView: () => window.readCurrentSessionViewState(),
     signatures: () => ({}),
     todoSignature: (plan) => JSON.stringify(plan || {}),
     emptyTodo: () => ({}),
@@ -91,12 +89,18 @@ before(async () => {
     },
   });
   await loadModuleOnce('public/src/modules/kernel-state.js', { installGlobals: false });
+  // 会话视图边界读的三个跨域状态键（生产由 app-core 注册、owner claim 吸收）：
+  // 夹具不装 app-core，这里等价登记，owner 认领后沙箱访问器与活绑定同一份状态。
+  window.KernelState.defineKey('orchestration', 'currentRuntimeAgentId', null);
+  window.KernelState.defineKey('orchestration', '_switchEpoch', 0);
+  window.KernelState.defineKey('agent-store', 'focusedAgentId', null);
   installHostFactories();
   agentStore = await import('../public/src/modules/agent-store-state.js');
   orchestration = await import('../public/src/modules/orchestration-state.js');
   renderEntry = await import('../public/src/modules/render-entry-state.js');
   i18n = await import('../public/src/modules/i18n-environment-state.js');
   identityState = await import('../public/src/modules/session-view-identity-state.js');
+  sessionStorageState = await import('../public/src/modules/session-view-storage.js');
   chatLoading = await import('../public/src/modules/chat-loading-host.js');
   // toast 已是 ESM 依赖：替换真实 ClawToast 的 show 接口观察通知（同一实例）
   const { ClawToast } = await import('../public/src/modules/toast-notify.js');
@@ -109,7 +113,7 @@ after(() => { cleanupGlobals(); });
 
 function reset() {
   calls = {
-    patches: [], applied: [], tokens: [], toasts: [], cacheSaves: [], identity: null, view: {},
+    applied: [], toasts: [], cacheSaves: [],
     navGuard: 0, renders: 0, listRenders: 0, beginLoading: 0, clearLoading: 0,
     scrollSaves: 0, draftStores: 0, statusResets: 0, threadSyncs: 0, headerUpdates: 0,
     indicatorInserted: null, indicatorRemoved: 0,
@@ -119,22 +123,10 @@ function reset() {
       calls.navGuard += 1;
       orchestration.setNavigationGuardEpoch(orchestration._navigationGuardEpoch + 1);
     },
-    applySessionViewPatch: (patch) => {
-      calls.patches.push(patch);
-      if (patch?.identity) calls.identity = patch.identity;
-    },
-    // classic 适配器语义的最小复刻：token 取自实时身份与版本计数。
-    captureSessionViewToken: (runtimeId, identity) => {
-      calls.tokens.push(identity);
-      return {
-        runtimeId: runtimeId ?? '',
-        identity,
-        switchEpoch: orchestration._switchEpoch,
-        generation: identityState._sessionViewGeneration,
-        inputRequestsRevision: identityState._sessionViewInputRequestsRevision,
-        messagesRevision: identityState._sessionViewMessagesRevision,
-      };
-    },
+    // 会话视图 patch 的外部写入面（owner: overview-data / todo-plan；本文件不装这两个域）
+    setCurrentHookInspector: (value) => sessionStorageState.setCurrentHookInspector(value || {}),
+    setCurrentOverviewSnapshot: (value) => sessionStorageState.setCurrentOverviewSnapshot(value || {}),
+    setCurrentTodoPlan: (value) => sessionStorageState.setCurrentTodoPlan(value || {}),
     getRuntimeContextKey: (runtimeId) => `ctx:${runtimeId}`,
     saveCurrentWorkspaceSurfaceScroll: () => { calls.scrollSaves += 1; },
     _storeVisibleSessionInputDraft: () => { calls.draftStores += 1; },
@@ -165,6 +157,9 @@ function reset() {
   threads.activeConversation = { stale: true };
   threads.browseOnly = true;
   threads.browseOnlyThreadId = 'wt-stale';
+  // 真实会话视图状态复位（桥键在模块相已就位）：身份清空会连带清空消息 / 输入面，
+  // 「本次是否提交了记录」的断言因此读的是真实出口，不再是夹具的记录数组。
+  window.applySessionViewPatch({ identity: { agentId: '', sessionId: '' } });
 }
 
 const recordFetch = (payload) => async () => ({ ok: true, json: async () => payload });
@@ -186,7 +181,8 @@ test('openReadOnlySession freezes the view on the archived Session record', asyn
   assert.equal(orchestration.currentRuntimeAgentId, null, '只读视图不持有 runtime');
   assert.equal(agentStore.readOnlyMode, true);
   assert.equal(renderEntry.currentWorkspaceTab, 'chat');
-  assert.deepEqual(calls.patches[0], { identity: { agentId: 'programming-helper', sessionId: 's1' } });
+  const frozenView = window.readCurrentSessionViewState();
+  assert.deepEqual({ ...frozenView.identity }, { agentId: 'programming-helper', sessionId: 's1' });
   assert.deepEqual(threads.activeConversation, {
     agentId: 'programming-helper',
     threadId: 'wt-s1',
@@ -197,8 +193,8 @@ test('openReadOnlySession freezes the view on the archived Session record', asyn
   });
   assert.equal(threads.browseOnly, false);
   assert.equal(threads.browseOnlyThreadId, '');
-  assert.equal(calls.applied.length, 1, 'record 经真实 token 事务提交');
-  assert.deepEqual(calls.applied[0].messages, [
+  // record 经真实 token 事务提交：读的是真实会话视图（一次提交只可能产出这一份正文）。
+  assert.deepEqual(frozenView.messages, [
     { role: 'user', content: 'hi', _ts: 11 },
     { role: 'assistant', content: 'hello', _ts: 12 },
   ], '真实 attachMessagesTimestamps 把时间锚并入消息副本');
@@ -235,7 +231,7 @@ test('a navigation started during the record request drops the late response', a
   release();
 
   assert.deepEqual(await pending, { ok: false, reason: 'superseded' });
-  assert.equal(calls.applied.length, 0, '过期响应不得提交');
+  assert.equal(window.readCurrentSessionViewState().messages.length, 0, '过期响应不得提交正文');
 });
 
 test('the read-only indicator follows the frozen target and disappears on close', async () => {
@@ -265,5 +261,5 @@ test('a failed record response reports through the toast and keeps the view moun
   assert.equal(calls.toasts.length, 1);
   assert.equal(calls.toasts[0].status, 'error');
   assert.equal(orchestration._chatLoadingSession, false, '失败也要解除加载态');
-  assert.equal(calls.applied.length, 0);
+  assert.equal(window.readCurrentSessionViewState().messages.length, 0, '失败响应不得提交正文');
 });

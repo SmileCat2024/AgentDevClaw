@@ -41,7 +41,6 @@ test('loader host preserves early template resets, const Set identity and real s
         FEATURE_TEMPLATE_MAP = { early: '/early.js' };
         currentRuntimeAgentId = 'runtime';
         allAgents = [{ id: 'host' }];
-        applySessionViewPatch({ identity: { agentId: 'host', sessionId: 'selected' } });
       `);
     },
   }, async (c) => {
@@ -49,6 +48,8 @@ test('loader host preserves early template resets, const Set identity and real s
     const earlyMap = ctx.FEATURE_TEMPLATE_MAP;
 
     const detailIds = ctx.run('loadedAgentDetailIds');
+    // 会话视图 patch 是桥键（模块相才有）：classic 回调里调不到，初值在用例体设置。
+    ctx.run("applySessionViewPatch({ identity: { agentId: 'host', sessionId: 'selected' } })");
     const module = await c.load('public/src/modules/agent-loader-host.js');
     assert.strictEqual(module.FEATURE_TEMPLATE_MAP, earlyMap);
     assert.strictEqual(ctx.AgentLoaderHost.loadedAgentDetailIds, detailIds);

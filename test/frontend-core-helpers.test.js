@@ -12,7 +12,7 @@ import { getRuntimeCacheTodoPlanSignature } from '../public/src/modules/runtime-
 import { installCallInterruptState } from './helpers/call-interrupt.js';
 import { createTimeFormat } from '../public/src/modules/time-format.js';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
-import { prepareSidebarDomain } from './p2-classic-hosts.js';
+import { prepareEsmModules, prepareSidebarDomain, SESSION_VIEW_DOMAIN } from './p2-classic-hosts.js';
 
 /**
  * Helper: create a sandbox with app-core.js loaded.
@@ -406,21 +406,24 @@ async function withRuntimeStatusCase(fn) {
       sandbox.loadSource('public/src/app-core.js');
       installCallInterruptState(sandbox);
       Object.assign(sandbox, createTimeFormat(() => sandbox.currentLanguage));
-      sandbox.loadSource('public/src/modules/session-view-state.js');
+      prepareEsmModules(sandbox, SESSION_VIEW_DOMAIN);
       sandbox.run(`
         currentRuntimeAgentId = "runtime-1";
         currentRuntimeConnected = true;
         currentHookInspector = null;
         currentOverviewSnapshot = {};
         currentTodoPlan = {};
-        applySessionViewPatch({ identity: { agentId: 'runtime-1', sessionId: 'session-1' } });
         currentInputRequests = [];
         lastRenderedInputMode = "persistent";
       `);
       prepareSidebarDomain(sandbox);
     },
     globals,
-  }, async (c) => fn(c.window, elements));
+  }, async (c) => {
+    // 会话视图 patch 是桥键（模块相才有）：classic 回调里调不到，初值在用例体前设置。
+    c.window.run("applySessionViewPatch({ identity: { agentId: 'runtime-1', sessionId: 'session-1' } })");
+    return fn(c.window, elements);
+  });
 }
 
 describe('runtime-status: interrupt suppression', () => {

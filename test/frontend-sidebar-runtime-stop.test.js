@@ -29,7 +29,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
-import { installForegroundSyncOwner, prepareSidebarDomain } from './p2-classic-hosts.js';
+import { installForegroundSyncOwner, prepareEsmModules, prepareSidebarDomain, SESSION_VIEW_DOMAIN } from './p2-classic-hosts.js';
 
 const OPS = 'public/src/modules/sidebar-operations.js';
 const MUTATION = 'public/src/modules/session-mutation.js';
@@ -81,7 +81,7 @@ function bootstrap(sandbox) {
   // i18n 已迁 ESM（P4）：t 桥键由 createFrontendSandbox 自动装载，见 test/helpers/install-i18n.js
   sandbox.loadSource('public/src/app-core.js');
   prepareSidebarDomain(sandbox);
-  sandbox.loadSource('public/src/modules/session-view-state.js');
+  prepareEsmModules(sandbox, SESSION_VIEW_DOMAIN);
 
   // 宿主替身（owner 不在本链）：切换事务（app-main）、表面选择（app-ui）、
   // 详情加载器、布局宿主、面板渲染入口。调用状态宿主按真实工厂的键集合补齐。

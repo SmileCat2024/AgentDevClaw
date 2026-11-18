@@ -1,92 +1,58 @@
+/**
+ * session-view-identity-state（identity 域 owner）的认领 / 活绑定契约。
+ *
+ * 迁移前本文件还覆盖「classic session-view-state 经 window 访问器写、owner 认领后
+ * 吸收同一份值」——P4 T2 批次把 session-view-state 迁成 ESM 后，那 5 条
+ * `session-view-identity-state` 域注册已注销（唯一生产消费方 session-view-commit-host
+ * 改具名 import），classic 访问器面不存在了，因此该覆盖点改为两个真实出口：
+ *   1. 认领语义本身：classic 相 `defineKey` 注册的初值被 claim 一次性吸收（同一引用，
+ *      不复制）——这是 kernel-state 契约在 identity 域上的实例；
+ *   2. setter ↔ 活绑定 ↔ window 访问器三者同一份状态（生产里 classic 消费方仍按
+ *      访问器读，owner 内部按活绑定读写）。
+ * session-view-state 侧的写入 / 代次守卫由 frontend-session-view-commit.test.js 与
+ * frontend-session-view-matrix.test.js 经桥键（applySessionViewPatch /
+ * captureSessionViewToken / commitSessionViewPatch）覆盖。
+ */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createFrontendSandbox } from './helpers/frontend-vm.js';
-import { loadModuleOnce } from './helpers/esm-module-loader.js';
+import { withP2EsmCase } from './helpers/p2-esm-case.js';
 
 const MODULE_PATH = 'public/src/modules/session-view-identity-state.js';
-async function loadIdentityOwner(ctx) {
-  const previousWindow = globalThis.window;
-  globalThis.window = ctx;
-  try {
-    return await loadModuleOnce(MODULE_PATH, { installGlobals: false });
-  } finally {
-    if (previousWindow === undefined) delete globalThis.window;
-    else globalThis.window = previousWindow;
-  }
-}
 
-function loadSessionViewHarness() {
-  const ctx = createFrontendSandbox();
-  ctx.loadSource('public/src/modules/session-view-state.js');
-  ctx.run("currentRuntimeAgentId = 'runtime-a'; focusedAgentId = 'agent-a';");
-  return ctx;
-}
-
-test('identity owner absorbs classic state and keeps real session-view patches and token guards live', async () => {
-  const ctx = loadSessionViewHarness();
-  const initialMessages = [{ role: 'user', content: 'before claim' }];
-  ctx.initialMessages = initialMessages;
-  ctx.run("applySessionViewPatch({ identity: { agentId: 'agent-a', sessionId: 'session-a' } });");
-  ctx.run('applySessionViewPatch({ messages: initialMessages });');
-  const preClaimMeta = ctx.run('_sessionMeta');
-  const preClaimIdentity = ctx.run('_sessionViewIdentity');
-  const preClaimGeneration = ctx.run('_sessionViewGeneration');
-  const { module, cleanup } = await loadIdentityOwner(ctx);
-
-  try {
-    assert.strictEqual(module._sessionMeta, preClaimMeta);
-    assert.strictEqual(module._sessionViewIdentity, preClaimIdentity);
-    assert.equal(module._sessionViewGeneration, preClaimGeneration);
-    assert.strictEqual(ctx._sessionMeta, preClaimMeta);
-    assert.strictEqual(ctx._sessionViewIdentity, preClaimIdentity);
-
-    const firstToken = ctx.run('captureSessionViewToken()');
-    ctx.firstToken = firstToken;
-    ctx.run("applySessionViewPatch({ identity: { agentId: 'agent-a', sessionId: 'session-b' } });");
-    ctx.run("applySessionViewPatch({ identity: { agentId: 'agent-a', sessionId: 'session-a' } });");
-    assert.equal(ctx.run('isSessionViewTokenCurrent(firstToken)'), false, 'A→B→A invalidates the original token even on the same runtime');
-    const revisitedMessages = ctx.currentMessages;
-    assert.equal(revisitedMessages.length, 0, 'changing Session identity clears its transcript');
-    assert.equal(ctx.run("commitSessionViewPatch(firstToken, { messages: [{ content: 'stale revisit' }] })"), false);
-    assert.strictEqual(ctx.currentMessages, revisitedMessages, 'a stale response cannot overwrite the cleared revisit view');
-
-    const currentToken = ctx.run('captureSessionViewToken()');
-    ctx.currentToken = currentToken;
-    const updatedMessages = [{ role: 'assistant', content: 'current message observation' }];
-    ctx.updatedMessages = updatedMessages;
-    ctx.run('applySessionViewPatch({ messages: updatedMessages });');
-    assert.equal(module._sessionViewMessagesRevision, currentToken.messagesRevision + 1);
-    assert.equal(ctx.run('isSessionViewMessagesCurrent(currentToken)'), false, 'message revision detects an old snapshot independently');
-
-    const requestToken = ctx.run('captureSessionViewToken()');
-    ctx.requestToken = requestToken;
-    const latestRequests = [{ id: 'latest' }];
-    ctx.latestRequests = latestRequests;
-    ctx.run('applySessionViewPatch({ inputRequests: latestRequests });');
-    assert.equal(module._sessionViewInputRequestsRevision, requestToken.inputRequestsRevision + 1);
-    assert.equal(ctx.run('isSessionViewInputRequestsCurrent(requestToken)'), false, 'input revision detects an old response independently');
-
-    const committed = ctx.run("commitSessionViewPatch(requestToken, { messages: [{ content: 'accepted message' }], inputRequests: [{ id: 'stale' }] })");
-    assert.equal(committed, true, 'a still-current identity token may commit non-input fields');
-    assert.equal(ctx.currentMessages[0].content, 'accepted message');
-    assert.strictEqual(ctx.currentInputRequests, latestRequests, 'the old input snapshot is dropped without discarding other fields');
-    assert.strictEqual(ctx._sessionViewInputRequestsRevision, module._sessionViewInputRequestsRevision);
-  } finally {
-    cleanup();
-  }
+test('identity owner absorbs pre-claim registered values without copying', async () => {
+  const meta = Object.freeze({ sessionId: 'session-a' });
+  await withP2EsmCase({
+    label: 'identity-claim-absorb',
+    classic: (sandbox) => {
+      sandbox.KernelState.defineKey('session-view-identity-state', '_sessionMeta', meta);
+      sandbox.KernelState.defineKey('session-view-identity-state', '_sessionViewGeneration', 7);
+      sandbox.KernelState.defineKey('session-view-identity-state', '_sessionViewModelRuntimeId', 'runtime-a');
+    },
+  }, async (c) => {
+    const identity = await c.load(MODULE_PATH);
+    assert.strictEqual(identity._sessionMeta, meta, '认领吸收的是同一引用，不是副本');
+    assert.equal(identity._sessionViewGeneration, 7);
+    assert.equal(identity._sessionViewModelRuntimeId, 'runtime-a');
+    // 认领后 classic 侧访问器与活绑定仍是同一份状态
+    assert.strictEqual(c.read('_sessionMeta'), meta);
+    assert.equal(c.read('_sessionViewGeneration'), 7);
+  });
 });
 
-test('identity owner setter updates the claimed binding and classic accessor reads the same value', async () => {
-  const ctx = loadSessionViewHarness();
-  const { module, cleanup } = await loadIdentityOwner(ctx);
-  try {
-    module.setSessionViewGeneration(42);
-    module.setSessionViewModelRuntimeId('runtime-z');
-    assert.equal(module._sessionViewGeneration, 42);
-    assert.equal(module._sessionViewModelRuntimeId, 'runtime-z');
-    assert.equal(ctx._sessionViewGeneration, 42);
-    assert.equal(ctx._sessionViewModelRuntimeId, 'runtime-z');
-  } finally {
-    cleanup();
-  }
+test('identity owner setters update the claimed binding and the classic accessor reads the same value', async () => {
+  await withP2EsmCase({
+    label: 'identity-setter-liveness',
+    classic: (sandbox) => {
+      sandbox.KernelState.defineKey('session-view-identity-state', '_sessionViewGeneration', 0);
+      sandbox.KernelState.defineKey('session-view-identity-state', '_sessionViewModelRuntimeId', '');
+    },
+  }, async (c) => {
+    const identity = await c.load(MODULE_PATH);
+    identity.setSessionViewGeneration(42);
+    identity.setSessionViewModelRuntimeId('runtime-z');
+    assert.equal(identity._sessionViewGeneration, 42);
+    assert.equal(identity._sessionViewModelRuntimeId, 'runtime-z');
+    assert.equal(c.read('_sessionViewGeneration'), 42);
+    assert.equal(c.read('_sessionViewModelRuntimeId'), 'runtime-z');
+  });
 });

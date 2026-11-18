@@ -1,20 +1,28 @@
+/**
+ * SessionView 提交策略（session-view-commit.js）与真实会话视图边界的对接。
+ *
+ * P4 T2 起 session-view-state / session-view-commit-host 都是 ESM：classic 相只剩
+ * app-core 的状态键注册面，域模块在模块相真实求值（桥键装到同一个沙箱 window 上，
+ * 用例里的 `ctx.x` 调用因此与迁移前同义）。
+ */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createFrontendSandbox } from './helpers/frontend-vm.js';
-import { loadModuleOnce } from './helpers/esm-module-loader.js';
+import { withP2EsmCase } from './helpers/p2-esm-case.js';
+import { prepareEsmModules, SESSION_VIEW_DOMAIN } from './p2-classic-hosts.js';
 
 test('ESM commit host rejects stale visits without effects while preserving newer input and model fields', async () => {
-  const ctx = createFrontendSandbox();
-  ctx.loadSource('public/src/app-core.js');
-  ctx.loadSource('public/src/modules/session-view-state.js');
-  ctx.currentRuntimeAgentId = 'runtime';
-  ctx.focusedAgentId = 'host';
-  ctx.applySessionViewPatch({ identity: { agentId: 'host', sessionId: 'a' } });
-  const beforeModule = ctx.captureSessionViewToken();
-  const previousWindow = globalThis.window;
-  globalThis.window = ctx;
-  try {
-    const { module } = await loadModuleOnce('public/src/modules/session-view-commit-host.js', { installGlobals: false });
+  await withP2EsmCase({
+    label: 'session-view-commit',
+    classic: (sandbox) => {
+      sandbox.loadSource('public/src/app-core.js');
+      sandbox.run("currentRuntimeAgentId = 'runtime'; focusedAgentId = 'host';");
+      prepareEsmModules(sandbox, SESSION_VIEW_DOMAIN);
+    },
+  }, async (c) => {
+    const ctx = c.sandbox;
+    const { module } = { module: await c.load('public/src/modules/session-view-commit-host.js') };
+    ctx.applySessionViewPatch({ identity: { agentId: 'host', sessionId: 'a' } });
+    const beforeModule = ctx.captureSessionViewToken();
     let callbacks = 0;
     assert.equal(module.commitSessionViewPatch(beforeModule, { messages: [{ content: 'first' }] }, () => { callbacks++; }), true);
     assert.equal(ctx.currentMessages[0].content, 'first');
@@ -47,8 +55,5 @@ test('ESM commit host rejects stale visits without effects while preserving newe
     assert.equal(callbacks, 2);
     assert.throws(() => module.commitSessionViewState(token, null), /synchronous apply function/);
     assert.throws(() => module.commitSessionViewPatch(token, {}, null), /afterCommit must be a function/);
-  } finally {
-    if (previousWindow === undefined) delete globalThis.window;
-    else globalThis.window = previousWindow;
-  }
+  });
 });

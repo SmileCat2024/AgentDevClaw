@@ -21,6 +21,7 @@ import { BasicAgent } from '@agentdevjs/core';
 import { ModelSelectionFeature } from '../local-features/dist/model-selection/src/index.js';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
 import { sourceBetween } from './helpers/frontend-vm.js';
+import { prepareEsmModules, SESSION_VIEW_DOMAIN } from './p2-classic-hosts.js';
 
 const MODULE = 'public/src/modules/input-model-switcher.js';
 const CONTEXT_BAR = 'public/src/modules/chat-context-bar.js';
@@ -213,7 +214,7 @@ async function withSandbox(fn, { presets = DEFAULT_PRESETS, channels = DECLARED_
       sandbox.loadSource('public/src/modules/action-dispatcher.js');
       // i18n 已迁 ESM（P4）：t 桥键由 createFrontendSandbox 自动装载，见 test/helpers/install-i18n.js
       sandbox.loadSource('public/src/app-core.js');
-      sandbox.loadSource('public/src/modules/session-view-state.js');
+      prepareEsmModules(sandbox, SESSION_VIEW_DOMAIN);
       // chat-context-bar 已迁 ESM（P4 L1）：classic 相只补 markdown-utils 的 classic
       // 实现（escapeHtml / renderer），模块本体在 async 相 c.load。
     },

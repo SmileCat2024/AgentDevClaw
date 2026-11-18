@@ -35,6 +35,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { Renderer } from 'marked';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
+import { prepareEsmModules, SESSION_VIEW_DOMAIN } from './p2-classic-hosts.js';
 
 const DEBUG_LOGS = 'public/src/modules/debug-logs.js';
 const DEBUG_MCP = 'public/src/modules/debug-mcp.js';
@@ -173,7 +174,7 @@ function loadClassicChain(sandbox, { beforeLogs } = {}) {
   sandbox.loadSource('public/src/modules/action-dispatcher.js');
   // i18n 已迁 ESM（P4）：t 桥键由 createFrontendSandbox 自动装载，见 test/helpers/install-i18n.js
   sandbox.loadSource('public/src/app-core.js');
-  sandbox.loadSource('public/src/modules/session-view-state.js');
+  prepareEsmModules(sandbox, SESSION_VIEW_DOMAIN);
   sandbox.loadSource('public/src/modules/right-panel-registry.js');
   // 插件宿主最小面（生产实现是 classic claw-host）：debug-panel-host 只在存在时
   // 订阅面板摘除 / 插件落定，这里给出可调用的宿主以免订阅路径落空。

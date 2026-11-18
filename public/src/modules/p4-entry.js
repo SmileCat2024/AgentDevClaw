@@ -15,6 +15,12 @@
  */
 
 // ── T2 渲染层批次 ──
+// session-view-state：会话视图提交边界（token 捕获 / patch 门 / 代次守卫）。
+// 求值期已由 kernel-entry 的首条 import（session-view-commit-host）经具名导出带入，
+// 此处显式登记两层含义：批次归属，以及「桥键必须在首屏 boot 之前注册」的时相。
+// 6 个桥键 ← app-core / app-ui / app-main（classic）与 SSE / 轮询 / 输入面等
+// window 晚绑定消费方；状态族 owner 是 session-view-storage / session-view-identity-state。
+import './session-view-state.js';
 // sidebar-layout：用户自有侧栏布局（拖拽/键盘整理 + 持久化）。对外 API 仍经
 // window.ClawSidebarLayout 桥键供 classic sidebar-render 与诊断面取用。
 import './sidebar-layout.js';

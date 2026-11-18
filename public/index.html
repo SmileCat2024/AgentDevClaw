@@ -429,7 +429,11 @@
        这些文件原先各自的 classic 标签已删除；新增 module 入口须登记
        frontend-script-tags-gate 的 MODULE_ENTRIES。 -->
   <script type="module" src="./src/modules/kernel-entry.js"></script>
-  <script src="./src/modules/session-view-state.js"></script>
+  <!-- session-view-state 已迁 ESM（P4 T2）：classic 标签删除，由 p4-entry 装载
+       （经 kernel-entry 的首条 import session-view-commit-host 带入具名导出）。
+       对外 API 仍是 6 个桥键（normalizeSessionViewIdentity /
+       normalizeSessionModelState / getCurrentSessionViewIdentity /
+       captureSessionViewToken / readCurrentSessionViewState / applySessionViewPatch）。 -->
   <!-- sidebar-layout 已迁 ESM（P4 T2）：classic 标签删除，由 p4-entry 装载；
        对外 API 仍是 window.ClawSidebarLayout 桥键。 -->
   <!-- sidebar-render 已迁 ESM（P4 T2 收尾批次）：classic 标签删除，由 p4-entry

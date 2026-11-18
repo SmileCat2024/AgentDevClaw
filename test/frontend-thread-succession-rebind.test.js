@@ -31,6 +31,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
+import { prepareEsmModules, SESSION_VIEW_DOMAIN } from './p2-classic-hosts.js';
 
 const THREAD_ENGINE = 'public/src/modules/thread-store.js';
 
@@ -113,7 +114,7 @@ async function withRebindCase(options, probe) {
         sandbox.KernelState.defineKey(domain, key, sandbox[key]);
       }
       // thread-store 的会话视图提交原语依赖（ADR-0026）。
-      sandbox.loadSource('public/src/modules/session-view-state.js');
+      prepareEsmModules(sandbox, SESSION_VIEW_DOMAIN);
     },
     globals: fixture.globals,
   }, async (c) => {

@@ -28,6 +28,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
+import { prepareEsmModules, SESSION_VIEW_DOMAIN } from './p2-classic-hosts.js';
 
 const OVERVIEW_DATA = 'public/src/modules/overview-data.js';
 
@@ -35,7 +36,8 @@ const OVERVIEW_DATA = 'public/src/modules/overview-data.js';
 const CLASSIC_STACK = [
   'public/src/modules/action-dispatcher.js',
   'public/src/app-core.js',
-  'public/src/modules/session-view-state.js',
+  // session-view-state 自 P4 T2 起是 ESM：由 prepareEsmModules(sandbox, SESSION_VIEW_DOMAIN)
+  // / prepareClassicSandbox 在模块相装载，classic 链里不再有它。
 ];
 
 /** vendor 解析器 / 高亮库：markdown-utils 求值期构造 Renderer，渲染期查 hljs。 */
@@ -48,6 +50,7 @@ function loadOverviewDataCase(probe) {
   return withP2EsmCase({
     classic: (sandbox) => {
       for (const file of CLASSIC_STACK) sandbox.loadSource(file);
+      prepareEsmModules(sandbox, SESSION_VIEW_DOMAIN);
     },
     globals: VENDOR_STUBS,
   }, async (c) => {
@@ -73,10 +76,12 @@ function loadContextBarCase({ overview, agent }, probe) {
       sandbox.isChatSurfaceActive = () => false;
       sandbox.getRuntimeAwareAgentRecord = () => agent;
       sandbox.notifyChatViewportMutation = () => {};
-      sandbox.applySessionViewPatch({ overview });
+      prepareEsmModules(sandbox, SESSION_VIEW_DOMAIN);
     },
     globals: VENDOR_STUBS,
   }, async (c) => {
+    // 视图 patch 走会话视图桥键（模块相才有）：classic 回调里调不到。
+    c.sandbox.applySessionViewPatch({ overview });
     // chat-context-bar 已迁 ESM（P4 L1）：模块相装载，classic 侧经桥键调用同名入口。
     const contextBar = await c.load('public/src/modules/chat-context-bar.js');
     return probe(c, contextBar);

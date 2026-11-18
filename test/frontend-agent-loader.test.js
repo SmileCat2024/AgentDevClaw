@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { loadModuleOnce } from './helpers/esm-module-loader.js';
-import { createFrontendSandbox } from './helpers/frontend-vm.js';
+import { withP2EsmCase } from './helpers/p2-esm-case.js';
+import { prepareEsmModules, SESSION_VIEW_DOMAIN } from './p2-classic-hosts.js';
 
 function deferred() {
   let resolve;
@@ -36,15 +37,22 @@ async function loadLoader(hostOverrides = {}) {
   return { loader: module.createAgentLoader(host), host, agents, loadedAgentDetailIds, cleanup };
 }
 
-function createSessionViewHost() {
-  const ctx = createFrontendSandbox();
-  ctx.loadSource('public/src/app-core.js');
-  ctx.loadSource('public/src/modules/session-view-state.js');
-  ctx.run(`
+/**
+ * 会话视图边界的 classic 相：app-core 的状态键注册面 + 模块相的域装载。
+ * 迁移前的 `applySessionViewPatch(...)` 初值设置移到用例体（它是桥键，注册在
+ * 模块相；classic 回调里调用会拿到 undefined）。
+ */
+function classicSessionViewPrelude(sandbox) {
+  sandbox.loadSource('public/src/app-core.js');
+  sandbox.run(`
     currentRuntimeAgentId = 'runtime-a';
     allAgents = [{ id: 'host-a', workspace_sessions: { sessions: [{ id: 'old' }] } }];
-    applySessionViewPatch({ identity: { agentId: 'host-a', sessionId: 'selected' } });
   `);
+  prepareEsmModules(sandbox, SESSION_VIEW_DOMAIN);
+}
+
+function createSessionViewHost(ctx) {
+  ctx.run("applySessionViewPatch({ identity: { agentId: 'host-a', sessionId: 'selected' } });");
   const args = (expression, values = []) => {
     ctx.__testArgs = values;
     try { return ctx.run(expression.replaceAll('$ARGS', '__testArgs')); }
@@ -109,18 +117,21 @@ test('template-map loads are explicit-runtime scoped, retain the prior map on em
 test('agent detail uses the real SessionView commit to reject metadata from a prior visit', async () => {
   const gate = deferred();
   const requests = [];
-  const host = createSessionViewHost();
-  host.fetch = async (url) => {
-    requests.push(url);
-    await gate.promise;
-    return { ok: true, json: async () => ({ workspace_sessions: { sessions: [
-      { id: 'selected', sessionType: 'thread', workspaceAgentId: 'coder', openDirectory: '/picked', messageCount: 7 },
-      { id: 'another', openDirectory: '/wrong' },
-    ] } }) };
-  };
-  const { module, cleanup } = await loadModuleOnce('public/src/modules/agent-loader.js');
-  const loader = module.createAgentLoader(host);
-  try {
+  await withP2EsmCase({
+    label: 'agent-loader-sessionview-commit',
+    classic: classicSessionViewPrelude,
+  }, async (c) => {
+    const host = createSessionViewHost(c.sandbox);
+    host.fetch = async (url) => {
+      requests.push(url);
+      await gate.promise;
+      return { ok: true, json: async () => ({ workspace_sessions: { sessions: [
+        { id: 'selected', sessionType: 'thread', workspaceAgentId: 'coder', openDirectory: '/picked', messageCount: 7 },
+        { id: 'another', openDirectory: '/wrong' },
+      ] } }) };
+    };
+    const { module } = { module: await c.load('public/src/modules/agent-loader.js') };
+    const loader = module.createAgentLoader(host);
     const first = loader.loadAgentDetail('host-a');
     await loader.loadAgentDetail('host-a');
     assert.equal(requests.length, 1, 'the in-flight request is deduplicated');
@@ -138,7 +149,7 @@ test('agent detail uses the real SessionView commit to reject metadata from a pr
     const late = host.captureSessionViewToken();
     assert.equal(host.commitSessionViewPatch(late, { sessionMeta: { sessionId: 'another', openDirectory: '/committed' } }), true);
     assert.equal(host.ctx.run('readCurrentSessionViewState().sessionMeta.openDirectory'), '/committed');
-  } finally { cleanup(); }
+  });
 });
 
 test('detail failure permits retry and never replaces the previous successful payload', async () => {
@@ -165,18 +176,21 @@ test('detail failure permits retry and never replaces the previous successful pa
 });
 
 test('detail metadata commits only to the selected session through real SessionView state', async () => {
-  const host = createSessionViewHost();
-  host.fetch = async () => ({ ok: true, json: async () => ({ workspace_sessions: { sessions: [
-    { id: 'selected', sessionType: 'thread', workspaceAgentId: 'coder', openDirectory: '/picked', messageCount: 7 },
-    { id: 'active-but-not-selected', openDirectory: '/wrong' },
-  ] } }) });
-  const { module, cleanup } = await loadModuleOnce('public/src/modules/agent-loader.js');
-  const loader = module.createAgentLoader(host);
-  try {
+  await withP2EsmCase({
+    label: 'agent-loader-selected-session',
+    classic: classicSessionViewPrelude,
+  }, async (c) => {
+    const host = createSessionViewHost(c.sandbox);
+    host.fetch = async () => ({ ok: true, json: async () => ({ workspace_sessions: { sessions: [
+      { id: 'selected', sessionType: 'thread', workspaceAgentId: 'coder', openDirectory: '/picked', messageCount: 7 },
+      { id: 'active-but-not-selected', openDirectory: '/wrong' },
+    ] } }) });
+    const { module } = { module: await c.load('public/src/modules/agent-loader.js') };
+    const loader = module.createAgentLoader(host);
     await loader.loadAgentDetail('host-a');
     const state = host.ctx.run('readCurrentSessionViewState()');
     assert.equal(state.sessionMeta.sessionId, 'selected');
     assert.equal(state.sessionMeta.openDirectory, '/picked');
     assert.equal(state.sessionMeta.messageCount, 7);
-  } finally { cleanup(); }
+  });
 });

@@ -1,21 +1,29 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createFrontendSandbox } from './helpers/frontend-vm.js';
-import { loadModuleOnce } from './helpers/esm-module-loader.js';
+import { withP2EsmCase } from './helpers/p2-esm-case.js';
+import { prepareEsmModules, SESSION_VIEW_DOMAIN } from './p2-classic-hosts.js';
 
 // Exercise the production module graph and real SessionView patch mechanism.
+// P4 T2 起 session-view-state 是 ESM：classic 相只留 app-core 的状态键注册面，
+// 域模块在模块相求值后经桥键（applySessionViewPatch / readCurrentSessionViewState）
+// 读写同一份 owner 状态。
 test('cache restores synchronously with session identity, follow mode and bounded eviction', async () => {
   const events = [];
-  const ctx = createFrontendSandbox({
-    getCurrentAgentRecord: () => ({ id: 'host' }),
-    notifyInputSurfaceChanged: () => events.push(ctx.run('followLatestEnabled')),
-  });
-  ctx.loadSource('public/src/app-core.js');
-  ctx.loadSource('public/src/modules/session-view-state.js');
-  const previous = globalThis.window;
-  globalThis.window = ctx;
-  try {
-    const { module } = await loadModuleOnce('public/src/modules/runtime-view-cache-host.js', { installGlobals: false });
+  let sandbox = null;
+  await withP2EsmCase({
+    label: 'runtime-view-cache',
+    classic: (caseSandbox) => {
+      sandbox = caseSandbox;
+      caseSandbox.loadSource('public/src/app-core.js');
+      prepareEsmModules(caseSandbox, SESSION_VIEW_DOMAIN);
+    },
+    globals: {
+      getCurrentAgentRecord: () => ({ id: 'host' }),
+      notifyInputSurfaceChanged: () => events.push(sandbox.run('followLatestEnabled')),
+    },
+  }, async (c) => {
+    const ctx = c.sandbox;
+    const { module } = { module: await c.load('public/src/modules/runtime-view-cache-host.js') };
     assert.equal(typeof module.restoreRuntimeFromCache, 'function');
     ctx.run(`currentRuntimeAgentId = 'runtime'; focusedAgentId = 'host';
       applySessionViewPatch({ identity: { agentId: 'host', sessionId: 'a' } });
@@ -49,8 +57,5 @@ test('cache restores synchronously with session identity, follow mode and bounde
     module.saveCurrentRuntimeToCache('runtime', 'runtime:runtime');
     module.clearAgentRuntimeCache();
     assert.equal(module.restoreRuntimeFromCache('runtime', 'runtime:runtime'), false);
-  } finally {
-    if (previous === undefined) delete globalThis.window;
-    else globalThis.window = previous;
-  }
+  });
 });

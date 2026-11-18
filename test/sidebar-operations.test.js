@@ -22,7 +22,7 @@ import assert from 'node:assert/strict';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
 import { createOperationTrace, normalizeOperationId } from '../server/shared/operation-trace.js';
 import { sessionIndexContentSignature } from '../server/shared/session-access.js';
-import { ensureSidebarRenderHostSeam, prepareSidebarDomain } from './p2-classic-hosts.js';
+import { ensureSidebarRenderHostSeam, prepareEsmModules, prepareSidebarDomain, SESSION_VIEW_DOMAIN } from './p2-classic-hosts.js';
 
 const OPS = 'public/src/modules/sidebar-operations.js';
 
@@ -41,7 +41,7 @@ function bootstrapClassic(sandbox) {
   // 侧栏渲染自 P4 T2 起在模块相（真实 renderAgentList 经 window 晚绑定取 app-main /
   // app-ui 的协作面）；本文件不驱动侧栏 DOM，按生产宿主面补齐。
   ensureSidebarRenderHostSeam(sandbox);
-  sandbox.loadSource('public/src/modules/session-view-state.js');
+  prepareEsmModules(sandbox, SESSION_VIEW_DOMAIN);
   sandbox.renderAgentList = () => {};
   sandbox.renderCurrentMainView = () => {};
   // updateAgentRecord 已改具名 import（project-data 的真实 owner，写 agent-store

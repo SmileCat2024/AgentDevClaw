@@ -14,7 +14,7 @@ import fs from 'node:fs';
 import test from 'node:test';
 import { Renderer } from 'marked';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
-import { prepareClassicSandbox, prepareSidebarDomain } from './p2-classic-hosts.js';
+import { prepareClassicSandbox, prepareEsmModules, prepareSidebarDomain, SESSION_VIEW_DOMAIN } from './p2-classic-hosts.js';
 
 const OVERVIEW_DATA = 'public/src/modules/overview-data.js';
 const POLL_COORDINATOR = 'public/src/modules/poll-coordinator.js';
@@ -111,12 +111,26 @@ test('session view read snapshots are frozen and identity-bound', async () => {
   });
 });
 
-test('session view ownership module loads before app-main', () => {
-  const boundaryIndex = indexSource.indexOf('/modules/session-view-state.js');
-  const mainIndex = indexSource.indexOf('/app-main.js');
-  assert.notEqual(boundaryIndex, -1);
-  assert.notEqual(mainIndex, -1);
-  assert.ok(boundaryIndex < mainIndex);
+test('session view ownership module is an ESM entry, evaluated before first paint', () => {
+  // 迁移前的断言是「classic 标签排在 app-main 之前」。P4 T2 起它不再占 classic 标签
+  // （classic 相解析 export 会 SyntaxError，gate 也会拦），时序保证改钉装载图：
+  // kernel-entry 的首条 import 即 session-view-commit-host（具名 import 会话视图边界），
+  // 而首屏 boot.js 是 index.html 的最后一条 module 标签——桥键必先于首屏渲染就位。
+  assert.equal(
+    /<script\b[^>]*\bsrc=["']\.\/src\/modules\/session-view-state\.js["']/.test(indexSource),
+    false,
+    'session-view-state 不得回到 classic 标签',
+  );
+  const read = (rel) => fs.readFileSync(new URL(`../${rel}`, import.meta.url), 'utf8');
+  const kernelEntry = read('public/src/modules/kernel-entry.js');
+  const staticImports = [...kernelEntry.matchAll(/^import\s+'([^']+)';/gm)].map((match) => match[1]);
+  assert.equal(staticImports[0], './session-view-commit-host.js', '会话视图边界是 ESM 图的首个求值点');
+  assert.match(
+    read('public/src/modules/session-view-commit-host.js'),
+    /import \{ createSessionViewCommitHost \} from '\.\/session-view-state\.js';/,
+    '提交策略宿主改具名 import（不再经 window 晚抓 classic 实现）',
+  );
+  assert.match(read('public/src/modules/p4-entry.js'), /import '\.\/session-view-state\.js';/);
 });
 
 test('runtime status cannot commit after the same runtime is re-entered', async () => {
@@ -330,7 +344,7 @@ async function withPollHarness({ blockStatus = true } = {}, fn) {
       sandbox.loadSource('public/src/modules/action-dispatcher.js');
       // i18n 已迁 ESM（P4）：t 桥键由 createFrontendSandbox 自动装载，见 test/helpers/install-i18n.js
       sandbox.loadSource('public/src/app-core.js');
-      sandbox.loadSource('public/src/modules/session-view-state.js');
+      prepareEsmModules(sandbox, SESSION_VIEW_DOMAIN);
       // app-main 的 classic 同步引擎在装载期组合 sidebar-render 的
       // createAgentCallStatesHost（读 runtime-status 的 _agentSuspended）：按生产
       // 先行脚本序装真链，不给它造宿主桩。
@@ -841,7 +855,7 @@ test('runtime-aware session projection uses the selected runtime session over st
       sandbox.loadSource('public/src/modules/action-dispatcher.js');
       // i18n 已迁 ESM（P4）：t 桥键由 createFrontendSandbox 自动装载，见 test/helpers/install-i18n.js
       sandbox.loadSource('public/src/app-core.js');
-      sandbox.loadSource('public/src/modules/session-view-state.js');
+      prepareEsmModules(sandbox, SESSION_VIEW_DOMAIN);
       // todo-plan 已迁 ESM（P4 L1）：模块相 c.load（app-ui 的 plan 面板闭包经桥键调用）。
       sandbox.loadSource('public/src/modules/right-panel-registry.js');
       sandbox.loadSource('public/src/app-ui.js');

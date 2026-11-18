@@ -45,7 +45,8 @@ const I18N_STATE = 'public/src/modules/i18n-environment-state.js';
 const CLASSIC_BOOTSTRAP = [
   'public/src/modules/action-dispatcher.js',
   'public/src/app-core.js',
-  'public/src/modules/session-view-state.js',
+  // session-view-state 自 P4 T2 起是 ESM：由 prepareEsmModules(sandbox, SESSION_VIEW_DOMAIN)
+  // / prepareClassicSandbox 在模块相装载，classic 链里不再有它。
 ];
 
 /**

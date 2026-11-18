@@ -65,7 +65,8 @@ const CLASSIC_STACK = [
   'public/src/modules/claw-host.js',
   'public/src/modules/right-panel-registry.js',
   'public/src/app-core.js',
-  'public/src/modules/session-view-state.js',
+  // session-view-state 自 P4 T2 起是 ESM：由 prepareEsmModules(sandbox, SESSION_VIEW_DOMAIN)
+  // / prepareClassicSandbox 在模块相装载，classic 链里不再有它。
   'public/src/app-ui.js',
   'public/src/app-main.js',
 ];

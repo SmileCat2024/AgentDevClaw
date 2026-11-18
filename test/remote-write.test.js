@@ -12,6 +12,7 @@ import { setupSessionRoutes } from '../server/routes/session.js';
 import { createConnectionHealth } from '../server/remote-connections/connection-health.js';
 import { createCatalogAggregator } from '../server/remote-connections/catalog-aggregator.js';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
+import { prepareEsmModules, SESSION_VIEW_DOMAIN } from './p2-classic-hosts.js';
 
 const MODEL_PRESET_CACHE = 'public/src/modules/model-preset-cache.js';
 
@@ -642,7 +643,7 @@ describe('thinking effort switcher preset refetch', () => {
         sandbox.loadSource('public/src/modules/action-dispatcher.js');
         // i18n 已迁 ESM（P4）：t 桥键由 createFrontendSandbox 自动装载，见 test/helpers/install-i18n.js
         sandbox.loadSource('public/src/app-core.js');
-        sandbox.loadSource('public/src/modules/session-view-state.js');
+        prepareEsmModules(sandbox, SESSION_VIEW_DOMAIN);
       },
       globals: {
         document: doc,
