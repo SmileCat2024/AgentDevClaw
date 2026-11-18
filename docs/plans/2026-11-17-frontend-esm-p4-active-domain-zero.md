@@ -120,6 +120,7 @@ runtime-status、remote-connections、bg-panel、rail-customize、voice-input、
 | `2bf6ef91` | 第八批：app-ui 迁 ESM（T2 渲染层收尾）。35 处 export + 23 桥键；app-core 两处最小 seam；`workspace-surface-host` 改首调惰性装配（破静态环）；**回归修复**：resources-viewer 改为直接调注册表本体，并在生产浏览器回归里加 work-group 面板断言 | src 标签 41 → 40；桥债 382/109 → 383/110；台账 50 / 247 / 544 → 50 / 238 / 490 |
 | `1108b73f` | 第九批：app-core 拆解——dom-refs / identity / transport / format-utils 四族抽出 ESM（app-core 1439 → 838 行）。桥债反向 383/110 → 398/114（抽出后 classic 消费方仍需桥，注销条件逐键写在模块尾注） | src 标签 40（不变，新模块由 p4-entry 装载）；台账 50 / 238 / 490 → 51 / 189 / 464 |
 | `746d9155` | 第十批：app-main 迁 ESM（活跃域最后一件大文件）。新增独立 module 入口并排在 kernel-entry 之前（12 个宿主工厂的求值期取用）；启动编排保持未 await 的 async IIFE（TLA 变异实测不死锁但会推迟 load）；visibilitychange 移到模块相并补 typeof 守卫；newIdempotencyKey 保持模块私有（wg 侧已建 non-configurable 全局） | src 标签 40（classic → module 平移）；桥债 398/114 → 399/115；台账 51 / 189 / 464 → 51 / 187 / 430 |
+| `47358368` | 第十一批：auth-client 迁 ESM（独立 module 入口，排在 app-main 之前）；claw-host 判定阻断 B1 保留 classic（resources-viewer 在解析期经 ClawPanels 调 `window.ClawHost.panels.register`，实测 pageerror 且不可解） | 桥债 399/115 → 402/116；台账不变（51 / 187 / 430） |
 
 转换中确立的几条约定（后续批次沿用）：
 
@@ -206,6 +207,14 @@ app-main 907 → 1196 行。它的特殊之处是「宿主工厂提供方」：1
 4. **裸标识符的判定口径**：83 个具名 import（22 个模块）+ 110 个键经 window 晚绑定。判据是「该域的求值是否依赖本文件提供的宿主工厂」——依赖者不能具名 import，否则会在工厂注册前求值。转换后用 `eslint-scope` 复核模块作用域零未解析裸标识符，比人眼 grep 可靠。
 
 验收（实跑）：`test:core` 6651 项 / 6644 通过 / 3 失败（已知平台项）/ 4 跳过；`p2-production-boot` 主链 + 7 面板 PASS、零 pageerror；`bg-panel-browser-check` PASS；`check-import-cycles` 零新增环；两个门禁 12 项通过。
+
+### 第十一批：auth-client（完成）与 claw-host（阻断保留）
+
+**auth-client 已迁**：272 → 338 行，3 个桥键 + 1 次 claim，`ClawAuth` 与内部状态收敛模块私有。装载为独立 module 入口并排在 app-main 之前——这一条是必须的：认证闸 `__clawAuthReady` 要在编排域读取前发布。`initialize()` 的等待判据改为 `readyState === 'complete' ? 立刻 : 等事件`（模块相 `readyState` 是 `interactive`），与 `chat-nav-timeline` 的同型先例一致。
+
+**claw-host 判定阻断（B1），保留 classic**。触达点是 `resources-viewer.js`（classic 顶层 IIFE）经 `right-panel-registry.js:8` 无条件调用 `window.ClawHost.panels.register`。实测把 claw-host 改成模块语法、标签改 `type="module"` 后，生产浏览器回归直接报 `Cannot read properties of undefined (reading 'panels')`，resources-viewer 整条脚本中断、work-group 两个面板消失。
+
+这条无法用装载序解开：deferred module 的求值必然晚于一切 classic 解析，**即使 module 入口排在最早也修不掉**。解除条件只有一个方向——把 resources-viewer 的面板注册移出解析相，而该文件属悬置域（配方第四节：即使看到问题也不转），或等 T4 把它退役。转换成本已经探明：19 个对外裸标识符里 17 个已是桥键，需改写约 20 处引用，无 classic 顶层触达，条件解除后是低风险批次。
 
 ### 剩余核心批次的阻断清单（2026-11-17 实测）
 
