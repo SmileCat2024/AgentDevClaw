@@ -118,6 +118,7 @@ runtime-status、remote-connections、bg-panel、rail-customize、voice-input、
 | `12b04b0a` | 第六批（T2 收尾）：sidebar-render + runtime-status 迁 ESM，app-main 顶层 call-state IIFE 搬出为 `modules/agent-call-states-engine.js`，B2/B3 两处求值期抓取改具名 import，app-core 补两处最小 seam（B5/B6） | src 标签 44 → 42；桥债 368/106 → 382/108；台账 50 / 261 / 606 → 50 / 248 / 554 |
 | `2608fe1d` | 第七批：session-view-state 迁 ESM（T2 渲染层最后一件）。8 命名导出 + 6 桥键；identity 族 6 条 defineKey 注销；`session-view-commit-host` 的 window 抓取改具名 import（与 B2/B3 同型）；57 test 文件 + 3 helper 改造，`test/helpers/session-view-commit.js` 删除 | src 标签 42 → 41；桥债 382/108 → 382/109；台账 50 / 248 / 554 → 50 / 247 / 544 |
 | `2bf6ef91` | 第八批：app-ui 迁 ESM（T2 渲染层收尾）。35 处 export + 23 桥键；app-core 两处最小 seam；`workspace-surface-host` 改首调惰性装配（破静态环）；**回归修复**：resources-viewer 改为直接调注册表本体，并在生产浏览器回归里加 work-group 面板断言 | src 标签 41 → 40；桥债 382/109 → 383/110；台账 50 / 247 / 544 → 50 / 238 / 490 |
+| `1108b73f` | 第九批：app-core 拆解——dom-refs / identity / transport / format-utils 四族抽出 ESM（app-core 1439 → 838 行）。桥债反向 383/110 → 398/114（抽出后 classic 消费方仍需桥，注销条件逐键写在模块尾注） | src 标签 40 → 41（app-core 尚存 + 新模块经 p4-entry，标签数不变口径见门禁）；台账 50 / 238 / 490 → 51 / 189 / 464 |
 
 转换中确立的几条约定（后续批次沿用）：
 
@@ -130,7 +131,7 @@ runtime-status、remote-connections、bg-panel、rail-customize、voice-input、
 
 剩余工作按依赖分组（每批仍按配方验收、独立提交）：
 
-- **T1 剩 app-core 拆解**（dom-refs / identity / 传输域）。前置已解除：app-ui / chat-scroll / chat-viewport 三处 classic 顶层 `container` / `agentList` 监听均已随文件迁入模块相，dom-refs 现在可以独立立项。`markdown-bootstrap` 已并入 markdown-utils（第五批）。
+- **T1 已完成**（第五批 markdown-bootstrap、第九批 app-core 四族）。app-core 剩余 838 行的 owner 迁移与 app-main 同批（见第九批记录）。
 - **T2 已完成**（第六、七、八批：sidebar-render / runtime-status / session-view-state / app-ui）。
 - **T3**：remote-connections / runtime-status（第六批解除 R1）已迁。`auth-client` **R1/R2/R4 触线保留 classic**：它创建 `__clawAuthReady` 并被 app-main 顶层 IIFE 等待，创建时点不能后移到模块相。`desktop-open` / `desktop-notify` 按 R4 保留；head 四件中 `action-dispatcher` 在配方禁区，需单独立项。app-main 残余（`visibilitychange` 注册与 `startApplication` 编排）是下一步。
 - **T5 收尾**：`kernel-entry` 与 `p2-entry` / `p4-entry` 合并为单一入口；台账 / script-tags / 桥债基线收敛；`AGENT.md` 与 `frontend-rendering-patterns.md` 中"classic 相 / 首屏同步链"表述同步。
@@ -177,6 +178,20 @@ app-ui.js 是最后一件大文件（2281 行）。时序审计的结论是「�
 **债务处置（已收口）**：只有 `bg-panel` 有独占的、针对真实布局与滚动的断言（`scrollTop` / `scrollHeight` / 计算色，单元测试面没有真值），改写为装载真实 `index.html` 生产链（feature-comms 通道发现 / 请求面 / SSE 全由脚本内 HTTP 契约 mock 供出），断言集合保留并补了两条路径取证（轻量更新同节点、骨架变化新节点）。其余 10 个脚本的断言各有单元测试承接，已退役——逐条对照见 `test/frontend-agent-loader-host.test.js` / `frontend-agent-loader.test.js` / `frontend-agent-snapshot-loader.test.js` / `frontend-msg-probe.test.js` / `frontend-metadata-commit.test.js` / `p2-w2-7-context-menu.test.js` / `frontend-runtime-poll.test.js`（及 switch / handoff-409 / compact-resume / chat-loading 各自的专测）/ `frontend-runtime-view-cache.test.js` / `frontend-agent-load-latency.test.js` / `frontend-session-view-commit.test.js` / `frontend-sidebar-freshness.test.js`。
 
 验收（实跑）：`test:core` 6647 项 / 6640 通过 / 3 失败（已知平台项）/ 4 跳过；浏览器回归主链 + 7 面板 + work-group 面板断言 PASS、零 pageerror；`check-import-cycles` 零新增环；三个门禁通过。
+
+### 第九批：app-core 拆解（T1 收尾）
+
+app-core 从 1439 行降到 838 行，四族抽出：`dom-refs`（140 行，37 个静态 DOM 引用 + 3 条顶层 click 监听）、`identity`（251 行，身份解析 + viewer 会话绑定 Map）、`transport`（348 行，fetch 分流 / invoke / 文件选择器 / Viewer 就绪宿主）、`format-utils`（71 行）。抽出后 app-core 内同名函数定义清零，内部调用一律走桥键——没有留第二份实现。
+
+三处值得记的判断：
+
+1. **桥债这批是反向的**（registered 383 → 398、claimed 110 → 114）。抽出状态必然要给仍留在 classic 的消费方（app-main / desktop-notify / 悬置域 wg-* / im-ui）留桥；已迁但仍按桥接期语义读 window 的四个域（sidebar-render / runtime-status / app-ui / input-render）也是。注销条件逐键写在四个模块的尾注，收敛点有两个：classic 侧改具名（随 app-main 迁移）、已迁侧收敛（T5 清零批次）。把这条写进记录，是为了避免后来人把这批读数当成债务增长。
+2. **`p2-bootstrap-dom.js` 退化为纯转发壳**，而不是把 20+ 消费方的 import 路径改一遍——转发壳的寿命由 `dom-refs` 的桥键注销条件决定，届时一并删除。
+3. **6 个零消费方元素引用随搬迁删除**（prebuilt-agent-list / tool-agent-list / prebuilt-group / tool-group / prebuilt-count / tool-count）：它们连 classic 宿主工厂都没交出，属于历史上就该清的死键，不是本批新产生的。
+
+app-core 保留的 838 行不是剩余垃圾：47 个 `defineKey` 的真相被 app-main 与多个 ESM 域双向读写，owner 迁移必须与 app-main 同批；9 个 `createP2Bootstrap*Host` 工厂是 classic 词法状态到 ESM 域的窄宿主面，状态一迁走即消亡。
+
+验收（实跑）：`test:core` 6651 项 / 6644 通过 / 3 失败（已知平台项）/ 4 跳过；浏览器回归主链 + 7 面板 + work-group 面板 PASS、零 pageerror；`check-import-cycles` 零新增环；两个门禁 12 项通过。
 
 ### 剩余核心批次的阻断清单（2026-11-17 实测）
 
