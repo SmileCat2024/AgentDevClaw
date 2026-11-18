@@ -55,7 +55,11 @@ async function withSettingsCase(fn) {
       // 等宿主面，markdown-utils 求值期就依赖它）
       sandbox.window.ClawFW = sandbox.window.ClawFW || {};
       sandbox.window.ClawFW.appSettingsPanels = registry.appSettingsPanels;
+      // 同样附加式：workspace-actions 已是 ESM，装载它会重新求值 app-ui 模块，
+      // 而 app-ui 在求值期经 ClawHost.blocks.registerPrimitive 注册宿主基础
+      // block。整体覆写会让这条真实注册路径拿到 undefined（生产里 blocks 恒在）。
       sandbox.window.ClawHost = {
+        ...(sandbox.window.ClawHost || {}),
         onPluginLoadSettled: (cb) => {
           settle.listeners.push(cb);
           return () => {
@@ -79,24 +83,28 @@ async function withSettingsCase(fn) {
 test('open_app_settings：注册表已就绪时立即打开，不订阅装载落定', async () => {
   await withSettingsCase(async ({ c, requests, opens, settle, registerMemoPanel }) => {
     registerMemoPanel();
+    // 沙箱内其它真实前端模块（app-ui / debug-panel-host）在求值期就订阅了
+    // 装载落定，基线不为零；本用例只关心这次动作是否新增订阅。
+    const baseline = settle.listeners.length;
     await c.sandbox.run(`window.runWorkspaceAction(${JSON.stringify({ type: 'open_app_settings', settings: 'memo' })}, null)`);
     assert.deepEqual(opens, ['memo'], 'hero 路径零等待直通');
-    assert.equal(settle.listeners.length, 0, '已就绪路径不得订阅装载落定（零成本）');
+    assert.equal(settle.listeners.length - baseline, 0, '已就绪路径不得订阅装载落定（零成本）');
     assert.deepEqual(requests, [], '打开设置面板不发任何网络请求');
   });
 });
 
 test('open_app_settings：注册表未就绪时等装载落定后打开，订阅用毕即撤', async () => {
   await withSettingsCase(async ({ c, opens, settle, registerMemoPanel }) => {
+    const baseline = settle.listeners.length;
     const started = c.sandbox.run(`window.runWorkspaceAction(${JSON.stringify({ type: 'open_app_settings', settings: 'memo' })}, null)`);
     await new Promise((resolve) => setTimeout(resolve, 10));
     assert.deepEqual(opens, [], '插件装载落定前不得误开');
-    assert.equal(settle.listeners.length, 1, '等待路径订阅装载落定通知');
+    assert.equal(settle.listeners.length - baseline, 1, '等待路径订阅装载落定通知（恰好一次）');
     // 生产顺序语义：mount（注册面板）先于落定通知
     registerMemoPanel();
     settle.fire('memo');
     await started;
     assert.deepEqual(opens, ['memo'], '落定且注册在案后恰好打开一次');
-    assert.equal(settle.listeners.length, 0, '打开后撤销落定订阅（不留悬挂回调）');
+    assert.equal(settle.listeners.length - baseline, 0, '打开后撤销落定订阅（不留悬挂回调）');
   });
 });
