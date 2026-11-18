@@ -441,8 +441,13 @@ const threadSuccession = createThreadSuccessionService({
 });
 const threadRecovery = createThreadRecoveryService({
   threadControl,
-  // 惰性取用：ensureHeadRuntime（const）定义晚于本构造，直接传引用会 TDZ。
+  // 惰性取用：ensureHeadRuntime / adoptHeadIdentity（const）定义晚于本构造，
+  // 直接传引用会 TDZ。
   getEnsureHeadRuntime: () => ensureHeadRuntime,
+  // 条目在位形态的滞留对账（构造性复现钉住的死锁形态自愈）：强制重投 +
+  // 身份采纳重试（与重启路径 spawn 注入收敛同构）。
+  getForceDeliver: () => (threadId) => threadIntegration.tryDeliver(threadId, { force: true }),
+  getHeadIdentityAdopter: () => adoptHeadIdentity,
 });
 const threadLifecycle = createThreadLifecycleService({
   control: threadControl,

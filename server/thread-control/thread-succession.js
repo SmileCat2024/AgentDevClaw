@@ -348,7 +348,13 @@ export function createThreadSuccessionService({
  *        （server.js 侧 ensureHeadRuntime 定义晚于本 service 构造，经 getter
  *        注入规避 TDZ）。运行期滞留 pending 兜底扫描（requeueStalledPendingThreads）用。
  */
-export function createThreadRecoveryService({ threadControl, rotationRegistry = null, getEnsureHeadRuntime = null } = {}) {
+export function createThreadRecoveryService({
+  threadControl,
+  rotationRegistry = null,
+  getEnsureHeadRuntime = null,
+  getForceDeliver = null,
+  getHeadIdentityAdopter = null,
+} = {}) {
   if (!threadControl?.core) {
     throw new Error('createThreadRecoveryService requires threadControl');
   }
@@ -512,22 +518,32 @@ export function createThreadRecoveryService({ threadControl, rotationRegistry = 
   // 滞留 pending 运行期兜底（C 修复）：唤醒/补投链任何一环反复失败（共享
   // 进程 add-session 超时+对账前错位、拉起崩溃等）都会让线程 pending 指令
   // 无限暂存——前端表现为「已暂存，等接续后自动继续」永久挂起，与接续无关。
-  // 本扫描对「pending 滞留超阈值且 head runtime 缺位」的线程重发唤醒：
-  // ensureHeadRuntime → add-session 加入；若 runtime 侧会话早已就绪（历史
-  // 错位），already-exists 对账路径会重建宿主记录，随后 runtime-ready 补投
-  // 既有机制自然完成投递。本模块不直接经手投递。
+  // 本扫描对「pending 滞留超阈值」的线程行动，按宿主侧条目事实分流：
+  //   - 条目缺位：ensureHeadRuntime → add-session 加入；若 runtime 侧会话
+  //     早已就绪（历史错位），already-exists 对账路径会重建宿主记录，随后
+  //     runtime-ready 补投既有机制自然完成投递。
+  //   - 条目在位：不再无条件跳过（构造性复现钉住的死锁形态：宿主条目在位
+  //     而 viewer 侧身份未采纳，投递被 fencing 永拒且三个触发点全被同一
+  //     宿主事实挡死，见 test/thread-pending-stall-deadlock-repro.test.js）。
+  //     行动 = 强制重投（覆盖触发点丢失类滞留，不受退避约束）；仍有滞留时
+  //     重试身份采纳 adopt-thread-head（与重启路径 spawn 注入身份的收敛
+  //     语义同构——运行期也能发生），采纳后再投一次。仍失败由下一轮扫描
+  //     自然重试，本模块不直接经手投递语义本身。
   const requeueInFlight = new Set();
   const STALL_THRESHOLD_MS = 60_000;
   const TERMINAL_LIKE_STATUS = new Set(['archived', 'closed', 'deleting', 'hold']);
 
   async function requeueStalledPendingThreads() {
-    const report = { examined: 0, requeued: [], skipped: [] };
+    const report = { examined: 0, requeued: [], reconciled: [], skipped: [] };
     const ensureHead = typeof getEnsureHeadRuntime === 'function' ? getEnsureHeadRuntime() : null;
+    const forceDeliver = typeof getForceDeliver === 'function' ? getForceDeliver() : null;
+    const adoptIdentity = typeof getHeadIdentityAdopter === 'function' ? getHeadIdentityAdopter() : null;
     const resolveViewer = typeof threadControl?.resolveSessionViewerId === 'function'
       ? threadControl.resolveSessionViewerId.bind(threadControl)
       : null;
     if (typeof ensureHead !== 'function') return report;
 
+    const actions = [];
     const summaries = await core.listThreads();
     for (const summary of summaries) {
       // 摘要预筛：无 pending 指令的线程不读记录（健康线程零记录级开销）。
@@ -547,19 +563,78 @@ export function createThreadRecoveryService({ threadControl, rotationRegistry = 
         Number.POSITIVE_INFINITY,
       );
       if (!Number.isFinite(oldest) || Date.now() - oldest < STALL_THRESHOLD_MS) continue;
-      // runtime 在位：正常投递路径自会处理（可能正在处理中），不重复唤醒。
-      if (resolveViewer && resolveViewer(record.agentId, record.headSessionId)) continue;
+
+      const viewerPresent = resolveViewer
+        ? Boolean(resolveViewer(record.agentId, record.headSessionId))
+        : false;
+      if (viewerPresent && typeof forceDeliver !== 'function') {
+        // 条目在位且无 reconcile 注入面：保持旧语义不行动，但如实报告——
+        // 漏装配不静默。
+        report.skipped.push({ threadId, reason: 'viewer_present_no_reconciler' });
+        continue;
+      }
 
       report.examined += 1;
       requeueInFlight.add(threadId);
-      // fire-and-forget：扫描 tick 不等待拉起（add-session 本身可等 10s），
-      // 单线程失败下一轮扫描自然重试（滞留事实仍在盘上）。
-      Promise.resolve(ensureHead(record.agentId, record.headSessionId))
-        .catch((error) => console.warn(`[thread-recovery] stalled requeue wake failed for ${threadId}:`, error?.message || error))
-        .finally(() => requeueInFlight.delete(threadId));
-      report.requeued.push(threadId);
+      // 行动并发发起，tick 结束前统一等待 settle（report 完整、调用方可
+      // 确定性观测；janitor 为间隔定时器不重入，tick 漂移无害）。单线程
+      // 失败下一轮扫描自然重试（滞留事实仍在盘上）。
+      const action = viewerPresent
+        ? reconcileStalledDelivery(record, { forceDeliver, adoptIdentity, threadId })
+          .then((outcome) => {
+            report.reconciled.push({ threadId, ...outcome });
+            if (outcome.delivered > 0) {
+              console.warn(`[thread-recovery] reconciled stalled pending on ${threadId}: delivered ${outcome.delivered}, adopt=${outcome.adopt}`);
+            } else {
+              console.warn(`[thread-recovery] reconcile did not clear stall on ${threadId} (adopt=${outcome.adopt}); next sweep will retry`);
+            }
+          })
+        : Promise.resolve(ensureHead(record.agentId, record.headSessionId))
+          .then(() => { report.requeued.push(threadId); });
+      actions.push(Promise.resolve(action)
+        .catch((error) => console.warn(`[thread-recovery] stalled ${viewerPresent ? 'reconcile' : 'requeue wake'} failed for ${threadId}:`, error?.message || error))
+        .finally(() => requeueInFlight.delete(threadId)));
     }
+    await Promise.allSettled(actions);
     return report;
+  }
+
+  /**
+   * 条目在位形态的滞留对账：先强制重投（新事实通道，不受退避约束；覆盖
+   * 触发点丢失类滞留——runtime 已就绪且身份正确，只是没人再调投递），
+   * 仍有滞留且注入了身份采纳器时重试 adopt-thread-head（viewer 侧身份
+   * 错位形态的唯一运行期收敛路径，重启路径经 spawn 注入等价实现），
+   * 采纳成功后再投一次。
+   */
+  async function reconcileStalledDelivery(record, { forceDeliver, adoptIdentity, threadId }) {
+    const first = await forceDeliver(threadId);
+    const firstDelivered = Number(first?.delivered) || 0;
+    const fresh = await core.getThread(threadId).catch(() => null);
+    const stillPending = (fresh?.commands || []).some((c) => c?.status === 'pending');
+    if (!stillPending) {
+      return { delivered: firstDelivered, adopt: 'not_needed' };
+    }
+    if (typeof adoptIdentity !== 'function') {
+      return { delivered: firstDelivered, adopt: 'unavailable' };
+    }
+    let adopted;
+    try {
+      adopted = await adoptIdentity(record.agentId, record.headSessionId, {
+        threadId,
+        headGeneration: core.headGeneration(record),
+      });
+    } catch (error) {
+      return { delivered: firstDelivered, adopt: `error:${error?.message || error}` };
+    }
+    if (adopted?.ok !== true) {
+      const why = adopted?.skipped ? 'skipped_no_live_runtime' : (adopted?.error || 'rejected');
+      return { delivered: firstDelivered, adopt: `failed:${why}` };
+    }
+    const second = await forceDeliver(threadId);
+    return {
+      delivered: firstDelivered + (Number(second?.delivered) || 0),
+      adopt: adopted?.skipped ? 'skipped' : 'ok',
+    };
   }
 
   return { convergeInterruptedSuccessions, convergePhantomRotating, requeueStalledPendingThreads };
