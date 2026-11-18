@@ -41,6 +41,7 @@ import {
 } from './feature-catalog.js';
 import { getCurrentLanguage } from './i18n-environment-state.js';
 import { escapeHtml } from './markdown-utils.js';
+import { uploadTgzChunked } from './tgz-chunked-upload.js';
 // 与 ph-settings 的静态环：本模块取它的装配清单刷新入口，ph-settings 取本模块
 // 的商店入口；两侧相互引用都只发生在函数体 / 动作回调内（顶层不读对方绑定）。
 import { _phRefreshMountsView } from './ph-settings.js';
@@ -576,9 +577,11 @@ let _pmState = {
   error: '',
   busy: false,          // 单飞：装配/卸载进行中禁用其他写操作（全局装配瞬时，无计时器）
   lastFailed: null,     // 最近一次装配失败的包（错误横幅重试入口）
-  // tgz 上传导入的待确认状态（parse_upload 的 { uploadId, summary }）。
+  // tgz 上传导入的待确认状态（parse_upload / 分片上传的 { uploadId, summary }）。
   // 导入只入仓库，装配仍走货架卡片——与 ADR-0045「导入与装配分离」一致
   import: null,
+  // 上传进行中状态（{ name, done, total }）：大包走分片上传期间显示进度
+  uploading: null,
 };
 
 // ── 插件设置弹窗（ADR-0046 落地第 1 步：配置入口从 Feature 配置编辑器归位）──
@@ -718,18 +721,47 @@ function _pmOpenUpload() {
   input.onchange = async () => {
     const file = input.files?.[0];
     if (!file) return;
+    // 大包自动分片（公网网关对单请求体积有限制，直传会被 413 拒绝）
+    _pmState.uploading = { name: file.name, done: 0, total: Math.max(1, Math.ceil(file.size / (512 * 1024))) };
+    _pmRender();
     try {
-      const formData = new FormData();
-      formData.append('file', file);
-      const resp = await fetch('/protoclaw/feature_repository/parse_upload', { method: 'POST', body: formData });
-      if (!resp.ok) throw new Error(await resp.text().catch(() => 'parse upload failed'));
-      _pmState.import = await resp.json();
-      _pmRender();
+      _pmState.import = await uploadTgzChunked(file, { onProgress: (fraction) => _pmUpdateUploadProgress(fraction) });
     } catch (error) {
-      window.alert((getCurrentLanguage() === 'zh' ? '解析 tgz 失败：' : 'Failed to parse tgz: ') + (error?.message || error));
+      window.alert((getCurrentLanguage() === 'zh' ? '上传 tgz 失败：' : 'Failed to upload tgz: ') + (error?.message || error));
+    } finally {
+      _pmState.uploading = null;
+      _pmRender();
     }
   };
   input.click();
+}
+
+/** 分片进度直写 DOM（几百片时不整体重渲染弹窗） */
+function _pmUpdateUploadProgress(fraction) {
+  if (!_pmState.uploading) return;
+  _pmState.uploading.done = Math.round(fraction * _pmState.uploading.total);
+  const el = document.getElementById('claw-pm-upload-progress');
+  if (el) el.textContent = _pmState.uploading.done + ' / ' + _pmState.uploading.total;
+}
+
+/** 上传进行中遮罩（无操作入口：失败自动中止，成功进入导入确认对话框） */
+function _pmRenderUploadingDialog() {
+  const u = _pmState.uploading;
+  if (!u) return '';
+  return [
+    '<div class="feature-detail-overlay">',
+    '<div class="feature-detail-window" style="max-width:420px;">',
+    '<div class="feature-detail-head"><div>',
+    '<div class="feature-detail-title">' + escapeHtml(_fsT('上传插件包', 'Uploading Plugin Package')) + '</div>',
+    '<div class="feature-detail-subtitle">' + escapeHtml(_fsT('大包自动分片传输，请勿关闭弹窗。', 'Large packages are transferred in chunks; keep this dialog open.')) + '</div>',
+    '</div></div>',
+    '<div style="padding:18px 22px;font-size:13px;">',
+    '<div style="margin-bottom:8px;word-break:break-all;">' + escapeHtml(u.name) + '</div>',
+    '<div id="claw-pm-upload-progress">' + u.done + ' / ' + u.total + '</div>',
+    '</div>',
+    '</div>',
+    '</div>',
+  ].join('');
 }
 
 async function _pmCancelImport() {
@@ -929,6 +961,7 @@ function _pmRender() {
     '</div>',
     '</div>',
     _pmRenderImportDialog(),
+    _pmRenderUploadingDialog(),
   ].join('');
 }
 
