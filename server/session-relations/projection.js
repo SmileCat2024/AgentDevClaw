@@ -501,14 +501,16 @@ export async function getTopicGroups({ agentId = 'programming-helper', projectId
     return { groups: [], builtAt: '', partial: true, scope: 'explicit session-reference connected components only' };
   }
   const groups = computeTopicGroupsFromSnapshot(snapshot, { agentId, projectId, openDirectory });
-  // 合并簇标注（自定义标题/简介）：精确命中簇 id，否则按成员真子集继承
-  // （簇增长场景），见 topic-notes.js。
+  // 合并簇标注（自定义标题/简介/参考文档/提交条目）：精确命中簇 id，否则按
+  // 成员真子集继承（簇增长场景），见 topic-notes.js。
   const notes = await loadTopicNotes(dataRoot, agentId);
   for (const group of groups) {
     const note = resolveTopicNote(notes, { clusterId: group.id, memberThreadIds: group.threadIds });
     group.title = note?.title || group.fallbackTitle || '';
     group.customTitle = Boolean(note?.title);
     group.summary = note?.summary || '';
+    group.docs = note?.docs || [];
+    group.commits = note?.commits || [];
   }
   return {
     groups,

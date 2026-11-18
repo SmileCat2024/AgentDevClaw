@@ -68,11 +68,27 @@ function _phTopicHtmlByKey(key) {
   // 已加载且为空才是「暂无主题」——两者不能混用。
   if (!state.loaded) return '<div class="ph-topic-status">' + escapeHtml(isZh ? '切换到 Topics 后加载' : 'Switch to Topics to load') + '</div>';
   if (!state.groups.length) return '<div class="ph-topic-status">' + escapeHtml(isZh ? '暂无关联主题' : 'No related topics yet') + '</div>';
+  // 锚点条带（参考文档 / 相关提交，agent 经工具维护、这里只读展示）：
+  // 条目是自由文本，http(s) 开头渲染为外链，其余纯文本；单行省略防挤乱卡片。
+  const anchorItems = (items) => items.map((item) => {
+    const safe = escapeHtml(item);
+    return /^https?:\/\//i.test(item)
+      ? '<a class="ph-topic-anchor-item" href="' + safe + '" target="_blank" rel="noopener noreferrer" title="' + safe + '">' + safe + '</a>'
+      : '<span class="ph-topic-anchor-item" title="' + safe + '">' + safe + '</span>';
+  }).join('');
+  const anchorField = (label, items) => items.length
+    ? '<div class="ph-topic-field"><span class="ph-topic-field-label">' + escapeHtml(label) + '</span>'
+      + '<div class="ph-topic-field-items">' + anchorItems(items) + '</div></div>'
+    : '';
+  const textList = (value) => (Array.isArray(value) ? value.map((item) => String(item).trim()).filter(Boolean) : []);
   return '<div class="ph-topic-list">' + state.groups.map((group) => {
     // 卡片主体是主题 + 简介（server 已合并自定义标注与会话标题回退）；
-    // 对话明细折叠在 details 里，不与主题争夺视觉。
+    // 参考文档 / 相关提交锚点条带跟在简介后；对话明细折叠在 details 里，
+    // 不与主题争夺视觉。
     const title = group.title || (isZh ? '未命名主题' : 'Untitled topic');
     const summary = group.summary || '';
+    const docs = textList(group.docs);
+    const commits = textList(group.commits);
     const threads = Array.isArray(group.threads) ? group.threads : [];
     const rows = threads.map((thread) => {
       const sessionId = Array.isArray(thread.sessionIds) ? thread.sessionIds.at(-1) : '';
@@ -86,6 +102,8 @@ function _phTopicHtmlByKey(key) {
       + '<div class="ph-topic-card-head"><div class="ph-topic-card-title">' + escapeHtml(title) + '</div>'
       + '<div class="ph-topic-card-meta">' + escapeHtml(String(group.memberCount || threads.length || 0)) + ' ' + escapeHtml(isZh ? '个对话' : 'conversations') + ' · ' + escapeHtml(formatWorkspaceDate(group.updatedAt)) + '</div></div>'
       + '<p class="ph-topic-summary' + (summary ? '' : ' ph-topic-summary-empty') + '">' + escapeHtml(summary || (isZh ? '暂无简介' : 'No summary yet')) + '</p>'
+      + anchorField(isZh ? '参考文档' : 'Docs', docs)
+      + anchorField(isZh ? '相关提交' : 'Commits', commits)
       + (threads.length ? '<details class="ph-topic-details"><summary class="ph-topic-details-toggle">' + escapeHtml(isZh ? '对话列表' : 'Conversations') + ' (' + threads.length + ')</summary>'
         + '<div class="ph-topic-thread-list">' + rows + '</div></details>' : '')
       + '</article>';

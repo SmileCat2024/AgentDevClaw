@@ -159,9 +159,11 @@ describe('programming-helper Topic board', () => {
       requests[0].resolve({ ok: true, status: 200, json: async () => ({
         partial: false,
         groups: [
-          { id: 'relation_recent', title: 'Topic 看板（自定义）', customTitle: true, summary: '一句话简介', updatedAt: '2026-11-15T14:32:00Z', memberCount: 2, threads: [
-            { threadId: 'wt-new', title: '最近主题', updatedAt: '2026-11-15T14:32:00Z', sessionIds: ['s-new'] },
-          ] },
+          { id: 'relation_recent', title: 'Topic 看板（自定义）', customTitle: true, summary: '一句话简介', updatedAt: '2026-11-15T14:32:00Z', memberCount: 2,
+            docs: ['docs/adr/0047-lease.md — 租约决策', 'https://example.com/topic-plan'], commits: ['55f981a6 主题标注风格落成技能'],
+            threads: [
+              { threadId: 'wt-new', title: '最近主题', updatedAt: '2026-11-15T14:32:00Z', sessionIds: ['s-new'] },
+            ] },
           { id: 'relation-older', title: '较早主题', customTitle: false, summary: '', updatedAt: '2026-11-14T10:00:00Z', memberCount: 1, threads: [
             { threadId: 'wt-old', title: '较早主题', updatedAt: '2026-11-14T10:00:00Z', sessionIds: ['s-old'] },
           ] },
@@ -175,6 +177,16 @@ describe('programming-helper Topic board', () => {
       assert.match(html, /class="ph-topic-summary">一句话简介</);
       // 无简介的主题显示弱化占位，不渲染空段落噪音。
       assert.match(html, /ph-topic-summary-empty">暂无简介</);
+      // 锚点条带：docs / commits 条目跟在简介后；URL 条目渲染为外链，
+      // 其余为纯文本；无条目的卡片不渲染条带（不占位）。
+      const recentCard = html.slice(html.indexOf('data-topic-id="relation_recent"'), html.indexOf('data-topic-id="relation-older"'));
+      assert.match(recentCard, /ph-topic-field-label">参考文档</);
+      assert.match(recentCard, /<span class="ph-topic-anchor-item" title="docs\/adr\/0047-lease\.md — 租约决策">/);
+      assert.match(recentCard, /<a class="ph-topic-anchor-item" href="https:\/\/example\.com\/topic-plan" target="_blank" rel="noopener noreferrer"/);
+      assert.match(recentCard, /ph-topic-field-label">相关提交</);
+      assert.match(recentCard, /55f981a6 主题标注风格落成技能/);
+      const olderCard = html.slice(html.indexOf('data-topic-id="relation-older"'));
+      assert.ok(!olderCard.includes('ph-topic-field'), 'cards without anchor entries render no anchor block');
       // 对话明细折叠在 details 中：默认收起，标记主题的对话仍可打开。
       assert.match(html, /<details class="ph-topic-details">/);
       assert.match(html, /ph-topic-details-toggle">对话列表 \(1\)</);

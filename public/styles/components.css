@@ -2385,6 +2385,14 @@ body[data-theme="light"] .workspace-docset-row {
 .ph-topic-card-meta { flex-shrink: 0; }
 .ph-topic-summary { margin: 7px 0 0; font-size: 13px; line-height: 1.6; color: var(--text-secondary, rgba(220, 226, 240, .78)); display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
 .ph-topic-summary-empty { color: var(--text-muted, #8b92a3); font-style: italic; -webkit-line-clamp: 1; }
+/* 锚点条带（agent 经工具维护的参考文档 / 相关提交，只读展示）：
+   小字标签 + 单行省略条目，与卡片次级文本同档，不与主题争夺视觉。 */
+.ph-topic-field { margin-top: 8px; }
+.ph-topic-field-label { display: block; font-size: 11px; color: var(--text-muted, #8b92a3); }
+.ph-topic-field-items { display: grid; gap: 3px; margin-top: 3px; min-width: 0; }
+.ph-topic-anchor-item { font-size: 12px; line-height: 1.5; color: var(--text-secondary, rgba(220, 226, 240, .78)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+a.ph-topic-anchor-item { color: var(--accent-text, var(--accent, #5b8def)); text-decoration: none; }
+a.ph-topic-anchor-item:hover { text-decoration: underline; }
 .ph-topic-details { margin-top: 4px; }
 .ph-topic-details-toggle { display: inline-block; color: var(--text-muted, #8b92a3); font-size: 12px; cursor: pointer; user-select: none; padding: 4px 0; list-style: none; transition: color .15s ease; }
 .ph-topic-details-toggle::-webkit-details-marker { display: none; }

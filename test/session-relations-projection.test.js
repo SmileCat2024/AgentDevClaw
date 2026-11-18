@@ -238,6 +238,8 @@ describe('getTopicGroups', () => {
     await saveTopicNote({
       dataRoot, agentId: 'programming-helper', clusterId,
       title: '自定义主题名', summary: '一句话简介',
+      docs: ['docs/adr/0002-continuity.md — 连续性决策'],
+      commits: ['55f981a6 标注风格落成技能'],
       threadIds: before.groups[0].threadIds,
     });
     const after = await getTopicGroups({ agentId: 'programming-helper', dataRoot, force: true });
@@ -245,6 +247,8 @@ describe('getTopicGroups', () => {
     assert.equal(merged.title, '自定义主题名');
     assert.equal(merged.summary, '一句话简介');
     assert.equal(merged.customTitle, true);
+    assert.deepEqual(merged.docs, ['docs/adr/0002-continuity.md — 连续性决策']);
+    assert.deepEqual(merged.commits, ['55f981a6 标注风格落成技能']);
   });
 
   it('inherits notes from a subset snapshot when the cluster grows, never from diverged ones', async () => {
@@ -254,14 +258,17 @@ describe('getTopicGroups', () => {
     // 隔离上一用例写入的精确标注：本用例考察的是「当前簇 id 无精确命中
     // 时」的继承行为。
     await fs.rm(path.join(dataRoot, 'workspaces', 'programming-helper', 'topic-notes.json'), { force: true });
-    // 簇早期快照（成员真子集）带标注：簇增长换 id 后标注应被继承。
+    // 簇早期快照（成员真子集）带标注：簇增长换 id 后标注应被继承
+    // （docs / commits 随标注整体继承）。
     await saveTopicNote({
       dataRoot, agentId: 'programming-helper', clusterId: 'relation_earlysubset',
-      title: '早期标注', summary: '',
+      title: '早期标注', summary: '', docs: ['docs/early.md'],
       threadIds: threadIds.slice(0, 2),
     });
     const inherited = await getTopicGroups({ agentId: 'programming-helper', dataRoot, force: true });
-    assert.equal(inherited.groups.find(group => group.id === clusterId).title, '早期标注');
+    const inheritedGroup = inherited.groups.find(group => group.id === clusterId);
+    assert.equal(inheritedGroup.title, '早期标注');
+    assert.deepEqual(inheritedGroup.docs, ['docs/early.md']);
     // 分裂快照（含簇外成员）不继承。
     await fs.rm(path.join(dataRoot, 'workspaces', 'programming-helper', 'topic-notes.json'));
     await saveTopicNote({
