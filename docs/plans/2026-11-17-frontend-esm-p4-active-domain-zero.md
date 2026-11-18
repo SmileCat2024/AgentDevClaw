@@ -115,6 +115,7 @@ runtime-status、remote-connections、bg-panel、rail-customize、voice-input、
 | `412eccd2` | 第三批三组：chat-viewport（29 桥键）、chat-renderer（12 桥键，折叠偏好经 app-core 新增的 chatSurface getter/setter）、remote-connections（10 桥键）。同批判定 `runtime-status` R1 触线未转 | src 标签 52 → 49；桥债 289/99 → 340/102；台账 56 / 323 / 823 → 54 / 286 / 678 |
 | `7c3720e5` | 第四批两组：输入面两件（input-composer / persistent-input，函数键另立 `*-api` 域）、线程引擎与插件清单（thread-store / plugin-manifest）。**装载序修正**：kernel-entry 里 p4-entry 改到 p2-entry 之前——P2 图消费方在求值期经桥键取 P4 能力，顺序颠倒会让整图求值中断（Chromium 回归的 pageerror 面抓到，单元测试各自的夹具没覆盖） | src 标签 49 → 45；桥债 340/102 → 369/106；台账 54 / 286 / 678 → 50 / 261 / 606 |
 | `7f4c2e63` | 第五批：markdown-bootstrap 并入 markdown-utils（escapeHtml 与 renderer 配置逐字搬入，`markdown-utils:renderer` 桥键注销）；frontend-vm 补 marked 面（每沙箱一份实例） | src 标签 45 → 44；桥债 369/106 → 368/106 |
+| `12b04b0a` | 第六批（T2 收尾）：sidebar-render + runtime-status 迁 ESM，app-main 顶层 call-state IIFE 搬出为 `modules/agent-call-states-engine.js`，B2/B3 两处求值期抓取改具名 import，app-core 补两处最小 seam（B5/B6） | src 标签 44 → 42；桥债 368/106 → 382/108；台账 50 / 261 / 606 → 50 / 248 / 554 |
 
 转换中确立的几条约定（后续批次沿用）：
 
@@ -128,9 +129,24 @@ runtime-status、remote-connections、bg-panel、rail-customize、voice-input、
 剩余工作按依赖分组（每批仍按配方验收、独立提交）：
 
 - **T1 未做**：`markdown-bootstrap` 并入 markdown-utils（代价在测试面：46 个用例装载该 classic 文件、15 个用例预注册 `escapeHtml` 桥键；收入低、改动面大，排在 T2/T3 之后）；app-core 拆解（dom-refs / identity / 传输域）。dom-refs 的真正落地要等 `app-ui` / `chat-scroll` / `chat-viewport` 里 9 处 classic 顶层 `container` / `agentList` 监听随文件迁移，否则 classic 相拿不到引用。
-- **T2**：sidebar-render（17 个沙箱装载点）、session-view-state（53 个）、debug 三件、chat-viewport / chat-scroll / chat-renderer、输入面四件、app-ui 本体。
-- **T3**：remote-connections 已迁；`runtime-status` **R1 触线待解**：其顶层 `const _agentSuspended = new Map()` 被 `sidebar-render` 的 `createAgentCallStatesHost()` 在 classic 加载期读取（调用方是 app-main 顶层 IIFE `bootstrapAgentCallStates`），实测跳过该文件装载 app-main 会 `ReferenceError`。处理路径是先把 sidebar-render 与 app-main 的 call-state bootstrap 迁出（或显式授权一条 classic 相预注册）。bg-panel / rail-customize / voice-input / generative-ui-panel / thread-store / plugin-manifest 已迁。`auth-client` **R1/R2/R4 触线保留 classic**：它创建 `__clawAuthReady` 并被 app-main 顶层 IIFE 等待，创建时点不能后移到模块相。`desktop-open` / `desktop-notify` 按 R4 保留；head 四件中 `action-dispatcher` 在配方禁区，需单独立项。
+- **T2**：sidebar-render 已完成（第六批）。剩 `session-view-state`（53 个沙箱装载点，与 dom-refs 同批排序）与 `app-ui` 本体（`renderCurrentMainView` 及支撑）。
+- **T3**：remote-connections / runtime-status（第六批解除 R1）已迁。`auth-client` **R1/R2/R4 触线保留 classic**：它创建 `__clawAuthReady` 并被 app-main 顶层 IIFE 等待，创建时点不能后移到模块相。`desktop-open` / `desktop-notify` 按 R4 保留；head 四件中 `action-dispatcher` 在配方禁区，需单独立项。app-main 残余（`visibilitychange` 注册与 `startApplication` 编排）是下一步。
 - **T5 收尾**：`kernel-entry` 与 `p2-entry` / `p4-entry` 合并为单一入口；台账 / script-tags / 桥债基线收敛；`AGENT.md` 与 `frontend-rendering-patterns.md` 中"classic 相 / 首屏同步链"表述同步。
+
+### 第六批：T2 收尾批次（sidebar-render + runtime-status + call 状态引擎）
+
+阻断清单 B1–B6 全部解除，处理方式如下（每条都对应一次实测，不是推断）：
+
+- **B1**：`app-main.js` 的 `bootstrapAgentCallStates` IIFE 逐字搬出为 `modules/agent-call-states-engine.js`，由 `p4-entry` 在模块相求值。两个桥键（`agent-call-states` 域）与 `window.ClawFW.CallStates` 协议面保持原样，app-main 的 `visibilitychange` 全量对账与 sidebar-render 的适配面语义不变。
+- **B2 / B3**：`agent-snapshot-loader-host.js` 与 `p2-bootstrap-sidebar.js` 改为具名 import 宿主工厂，不再在求值期经 window 抓 classic 全局。
+- **B4**：`runtime-status.js` 具名导出 `_agentSuspended`，`createAgentCallStatesHost()` 直接 import —— 同一 Map 引用，无双存储。
+- **B5 / B6**：`app-core.js` 的 `createP2BootstrapCallActivityHost()` 与 `createP2BootstrapSidebarHost()` 各增一个只读引用（`_interruptSuppression` / `pendingPrebuiltAgentIds`），与既有 `_agentCallActive` 同风格，未新增容器、未改 owner。
+
+**唯一计划外桥债（已评审接受）**：`sidebar-render` 的渲染签名需要项目实体缓存，具名 import `project-data` 会构成真实的值级环——`sidebar-render → project-data → session-ui → agent-snapshot-loader-host → sidebar-render`（最后一条边是本批 B2 建立的）。因此 `project-data` 注册 `phProjectEntities` 桥键（`+1 registered`），`sidebar-render` 经 `window.phProjectEntities` 读同一对象，不复制。收敛条件写进代码注释：先把 `agent-snapshot-loader-host → sidebar-render` 这条反向边解开（宿主工厂下沉到独立投影模块），再改具名 import 并注销该键。
+
+**测试面**：64 个测试文件改造（+1739 行），四类形态——classic 装载点改 ESM 域装载（`p2-classic-hosts.js` 增 `loadEsmDomain` / `applyEsmDomain`）、侧栏重绘观测点改用真实渲染入口（`updateCurrentAgentChrome`）或模块相后经桥 setter 覆盖、ADR-0019 那批用例改 `withRuntimeStatusCase` 真图 + `runtime-status-api` 桥键调用、桥面穷举补齐。`sidebar-empty-snapshot` 的三条降级诊断断言改为对 console 文案断言（`queueSidebarDiagnosticEvent` 是桥键访问器，测试内覆盖不生效），事件协议形状仍由同文件的 `captureDiagnosticQueueRequest` 用例覆盖。
+
+**验收（实跑）**：`test:core` 6646 项 / 6638 通过 / 4 失败（3 个已知平台项 + `oauth-codex` 的 `isTokenRefreshDue` 在满量并行下超时，单文件复跑 81/81 全过）/ 4 跳过；`node test/p2-production-boot-browser-check.mjs` 主链 + 延迟相 7 面板全 PASS、零 pageerror；`check-import-cycles` 零新增环（另报 1 个 `scripts/e2e-container-phase.mjs` 的既有失效导入，2026-11-02 起就存在，不在本批范围）；`check:frontend-globals` state 层无新增。变异抽查两项（删 `_agentSuspended` 的 export → import 侧 SyntaxError；`sidebar-render` 的 claim set 改空函数 → `p2-w2-6` 用例红）。
 
 ### 剩余核心批次的阻断清单（2026-11-17 实测）
 
