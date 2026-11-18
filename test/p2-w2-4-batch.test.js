@@ -66,9 +66,13 @@ async function setupBatch() {
 
   const prevWindow = globalThis.window;
   const prevDocument = globalThis.document;
+  const prevLocalStorage = globalThis.localStorage;
   const prevHljs = globalThis.hljs;
   globalThis.window = ctx;
   globalThis.document = ctx.document;
+  // app-core（P4 T5 起 ESM）在求值期读 localStorage（主题 / 语言持久值）：
+  // ESM 裸引用走宿主 realm，必须与沙箱的存储面同源。
+  globalThis.localStorage = ctx.localStorage;
   // vendor 高亮库（index.html 的 hljs 脚本）最小等价桩：转义后回填，与真实 hljs 同形。
   globalThis.hljs = {
     highlight(line) {
@@ -83,6 +87,8 @@ async function setupBatch() {
     if (prevWindow === undefined) delete globalThis.window; else globalThis.window = prevWindow;
     if (prevDocument === undefined) delete globalThis.document; else globalThis.document = prevDocument;
     if (prevHljs === undefined) delete globalThis.hljs; else globalThis.hljs = prevHljs;
+    if (prevLocalStorage === undefined) delete globalThis.localStorage;
+    else globalThis.localStorage = prevLocalStorage;
   };
 
   try {
@@ -268,15 +274,15 @@ describe('P2-4 兼容桥：仍有 classic 消费方的入口', () => {
 
   it('日志与 feature 选择仍写回 app-core 顶层声明（classic 写入口 / debugPanel 适配器，不持副本）', () => {
     resetCase();
-    // 日志写入走 classic app-core 的唯一同步实现（早期 onOpen 入口要求它在
-    // classic 相可用）；本用例经真实 classic 裸标识符调用，不再经 ESM 导出。
+    // 日志写入走 app-core 的唯一同步实现（早期 onOpen 入口要求它在装载期之后即可用）。
+    // app-core 自 P4 T5 起是 ESM：实现移到模块相，但仍经 domain `app-core` 的桥键
+    // 同步可达——裸标识符与 `window.setCurrentLogs` 读写的是同一份实现与同一份状态。
     env.ctx.run('setCurrentLogs([{ id: 3 }, { id: 7 }])');
     assert.deepEqual(Array.from(env.ctx.run('currentLogs'), (entry) => entry.id), [3, 7]);
     assert.equal(env.ctx.run('currentLogsSignature'), JSON.stringify({ count: 2, last: 7 }));
-    // 它是 classic 顶层函数（window 值属性），不是 KernelState 桥访问器
     const descriptor = Object.getOwnPropertyDescriptor(window, 'setCurrentLogs');
-    assert.equal(typeof descriptor.value, 'function');
-    assert.equal(descriptor.get, undefined, 'setCurrentLogs 不得再经桥键注册');
+    assert.equal(typeof descriptor.get, 'function', '经 KernelState 桥键（domain app-core）访问');
+    assert.equal(typeof window.setCurrentLogs, 'function');
 
     // feature 选择在提交的 inspector 里消失时才被清空（原语义）。
     env.ctx.run("selectedFeatureName = 'ghost'");

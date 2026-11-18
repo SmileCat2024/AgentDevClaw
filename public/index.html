@@ -420,7 +420,9 @@
   <!-- i18n 已迁 ESM（P4 T1 原料层）：classic 标签删除，由 kernel-entry 的
        i18n-host 装载并注册 t 桥键。 -->
   <script src="./src/modules/kernel-state.js"></script>
-  <script src="./src/app-core.js"></script>
+  <!-- app-core 已迁 ESM（P4 T5）：独立 module 入口，位置不动——它是桥键注册方，
+       必须最先求值（app-main 紧随其后，其求值期取 app-core 的宿主工厂）。 -->
+  <script type="module" src="./src/app-core.js"></script>
   <script type="module" src="./src/modules/i18n-environment-state.js"></script>
   <script type="module" src="./src/modules/panel-layout-state.js"></script>
   <script type="module" src="./src/modules/session-view-storage.js"></script>

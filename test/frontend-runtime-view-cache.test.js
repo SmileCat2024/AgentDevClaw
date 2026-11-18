@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
-import { prepareEsmModules, SESSION_VIEW_DOMAIN } from './p2-classic-hosts.js';
+import { APP_CORE_DOMAIN, prepareEsmModules, SESSION_VIEW_DOMAIN } from './p2-classic-hosts.js';
 
 // Exercise the production module graph and real SessionView patch mechanism.
 // P4 T2 起 session-view-state 是 ESM：classic 相只留 app-core 的状态键注册面，
@@ -14,7 +14,7 @@ test('cache restores synchronously with session identity, follow mode and bounde
     label: 'runtime-view-cache',
     classic: (caseSandbox) => {
       sandbox = caseSandbox;
-      caseSandbox.loadSource('public/src/app-core.js');
+      prepareEsmModules(caseSandbox, APP_CORE_DOMAIN);
       prepareEsmModules(caseSandbox, SESSION_VIEW_DOMAIN);
     },
     globals: {

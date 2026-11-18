@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { loadModuleOnce } from './helpers/esm-module-loader.js';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
-import { prepareEsmModules, SESSION_VIEW_DOMAIN } from './p2-classic-hosts.js';
+import { APP_CORE_DOMAIN, prepareEsmModules, SESSION_VIEW_DOMAIN } from './p2-classic-hosts.js';
 
 function deferred() {
   let resolve;
@@ -43,7 +43,7 @@ async function loadLoader(hostOverrides = {}) {
  * 模块相；classic 回调里调用会拿到 undefined）。
  */
 function classicSessionViewPrelude(sandbox) {
-  sandbox.loadSource('public/src/app-core.js');
+  prepareEsmModules(sandbox, APP_CORE_DOMAIN);
   sandbox.run(`
     currentRuntimeAgentId = 'runtime-a';
     allAgents = [{ id: 'host-a', workspace_sessions: { sessions: [{ id: 'old' }] } }];

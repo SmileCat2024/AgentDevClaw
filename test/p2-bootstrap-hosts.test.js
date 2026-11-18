@@ -19,7 +19,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
-import { prepareSidebarDomain } from './p2-classic-hosts.js';
+import { APP_CORE_DOMAIN, prepareEsmModules, prepareSidebarDomain } from './p2-classic-hosts.js';
 
 const FACTORY_NAMES = [
   'createP2BootstrapChatSurfaceHost',
@@ -43,9 +43,7 @@ const ADAPTER_FILES = {
   sessionSwitch: 'public/src/modules/p2-bootstrap-session-switch.js',
 };
 
-/** classic 状态 owner（app-core）：侧栏渲染域在它之后按模块相装载。 */
-const APP_CORE = 'public/src/app-core.js';
-
+/** app-core（P4 T5 起 ESM）：侧栏渲染域在它之后按模块相装载。 */
 /**
  * 用例基座：`fn(c, ctx)`，`ctx` 就是本用例的 window（`ctx.run` 读 classic 词法绑定）。
  * `beforeDomain(sandbox)` 用来模拟「classic 在模块求值之前写入」的时序（动态 import
@@ -57,11 +55,16 @@ function withHostsCase(fn, { beforeDomain } = {}) {
       // action-dispatcher 先于一切 classic：markdown-utils（侧栏域的 escapeHtml 依赖）
       // 在求值期注册 window.ClawFW.actions 处理器。
       sandbox.loadSource('public/src/modules/action-dispatcher.js');
-      sandbox.loadSource(APP_CORE);
+      prepareEsmModules(sandbox, APP_CORE_DOMAIN);
       prepareSidebarDomain(sandbox);
-      if (beforeDomain) beforeDomain(sandbox);
     },
-  }, async (c) => fn(c, c.window));
+  }, async (c) => {
+    // 适配模块装载前的写入在**模块图求值之后**执行（app-core 自 P4 T5 起是 ESM，
+    // 它在图首注册桥键与状态 owner；迁移前这条写入落在 classic 相的同名词法/窗口面上，
+    // 位置等价）。写入经桥键落到 owner，适配器装载后读到的仍是同一份状态。
+    if (beforeDomain) beforeDomain(c.window);
+    return fn(c, c.window);
+  });
 }
 
 /** 逐个真实 import 适配模块（同一张图，不建第二份状态、不需要再清理全局）。 */

@@ -24,14 +24,13 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { deepEqual as deepLoose } from 'node:assert';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
-import { prepareSidebarDomain } from './p2-classic-hosts.js';
+import { prepareEsmModules, APP_CORE_DOMAIN, prepareSidebarDomain } from './p2-classic-hosts.js';
 
 const SESSION_UI = 'public/src/modules/session-ui.js';
 
 /** classic 真实加载序（session-ui import 图的宿主工厂来源）。 */
 const CLASSIC_STACK = [
   'public/src/modules/action-dispatcher.js',
-  'public/src/app-core.js',
   // session-view-state 自 P4 T2 起是 ESM：由 prepareEsmModules(sandbox, SESSION_VIEW_DOMAIN)
   // / prepareClassicSandbox 在模块相装载，classic 链里不再有它。
 ];
@@ -46,6 +45,7 @@ async function withSessionUi({ language = 'zh', sortMode = '' } = {}, probe) {
     classic: (sandbox) => {
       sandbox.setInterval = () => 0;
       for (const file of CLASSIC_STACK) sandbox.loadSource(file);
+      prepareEsmModules(sandbox, APP_CORE_DOMAIN);
       prepareSidebarDomain(sandbox);
       // session-ui 经 sidebar-operations → project-data 拉入的静态图在装载期取
       // classic 宿主工厂（生产由 app-ui / app-main 提供）；本文件只驱动会话列表
@@ -58,9 +58,11 @@ async function withSessionUi({ language = 'zh', sortMode = '' } = {}, probe) {
       sandbox.createWorkspaceSurfaceHost = () => ({});
       sandbox.createCompactResumeHost = () => ({});
       if (language !== 'zh') sandbox.currentLanguage = language;
-      if (sortMode) sandbox.createP2BootstrapPhSessionHost().phSessionSortMode = sortMode;
+      // phSessionSortMode 的 owner 在 app-core（P4 T5 起 ESM）：工厂在模块相才可用，
+      // 故本项在用例体（模块图求值后）写入，语义与迁移前的 classic 写一致。
     },
   }, async (c) => {
+    if (sortMode) c.window.createP2BootstrapPhSessionHost().phSessionSortMode = sortMode;
     // agent-data-loader 已迁 ESM（P2 W2-4 二段）：host 工厂经 KernelState 桥
     // 供下游 loader host 模块求值期取用，必须先装载。
     await c.load('public/src/modules/agent-data-loader.js');

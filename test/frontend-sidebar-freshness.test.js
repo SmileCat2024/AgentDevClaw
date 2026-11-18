@@ -16,7 +16,7 @@
 import assert from 'node:assert/strict';
 import { test as nodeTest } from 'node:test';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
-import { installForegroundSyncOwner, prepareEsmModules, prepareSidebarDomain, SESSION_VIEW_DOMAIN } from './p2-classic-hosts.js';
+import { APP_CORE_DOMAIN, installForegroundSyncOwner, prepareEsmModules, prepareSidebarDomain, SESSION_VIEW_DOMAIN } from './p2-classic-hosts.js';
 
 const SESSION_UI = 'public/src/modules/session-ui.js';
 const OPS = 'public/src/modules/sidebar-operations.js';
@@ -33,7 +33,7 @@ function fillMissingGlobals(sandbox, stubs) {
 function bootstrapClassic(sandbox) {
   sandbox.loadSource('public/src/modules/action-dispatcher.js');
   // i18n 已迁 ESM（P4）：t 桥键由 createFrontendSandbox 自动装载，见 test/helpers/install-i18n.js
-  sandbox.loadSource('public/src/app-core.js');
+  prepareEsmModules(sandbox, APP_CORE_DOMAIN);
   prepareSidebarDomain(sandbox);
   prepareEsmModules(sandbox, SESSION_VIEW_DOMAIN);
   // app-main 的 classic 同步引擎（唯一 owner）：在装载期组合真实 host 并注册

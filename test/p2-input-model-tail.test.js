@@ -20,7 +20,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
 import { sourceBetween } from './helpers/frontend-vm.js';
-import { prepareEsmModules, SESSION_VIEW_DOMAIN } from './p2-classic-hosts.js';
+import { APP_CORE_DOMAIN, prepareEsmModules, SESSION_VIEW_DOMAIN } from './p2-classic-hosts.js';
 
 const MODULE = 'public/src/modules/input-model-switcher.js';
 const PRESET_CACHE = 'public/src/modules/model-preset-cache.js';
@@ -130,7 +130,7 @@ function classicGlobals(doc, fetchImpl) {
 function loadClassicPrefix(sandbox) {
   sandbox.loadSource('public/src/modules/action-dispatcher.js');
   // i18n 已迁 ESM（P4）：t 桥键由 createFrontendSandbox 自动装载，见 test/helpers/install-i18n.js
-  sandbox.loadSource('public/src/app-core.js');
+  prepareEsmModules(sandbox, APP_CORE_DOMAIN);
   prepareEsmModules(sandbox, SESSION_VIEW_DOMAIN);
 }
 

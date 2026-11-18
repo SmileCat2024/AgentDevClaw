@@ -14,6 +14,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
+import { APP_CORE_DOMAIN, prepareEsmModules } from './p2-classic-hosts.js';
 
 const CHAT_VIEWPORT = 'public/src/modules/chat-viewport.js';
 const NAV_TIMELINE = 'public/src/modules/chat-nav-timeline.js';
@@ -151,7 +152,7 @@ test('clicking the conversation navigation cancels follow-latest before jumping'
       // index.html 真实加载序：分发器 → i18n → app-core → 业务 classic。
       sandbox.loadSource('public/src/modules/action-dispatcher.js');
       // i18n 已迁 ESM（P4）：t 桥键由 createFrontendSandbox 自动装载，见 test/helpers/install-i18n.js
-      sandbox.loadSource('public/src/app-core.js');
+      prepareEsmModules(sandbox, APP_CORE_DOMAIN);
     },
     globals,
   }, async (c) => {

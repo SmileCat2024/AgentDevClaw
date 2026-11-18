@@ -87,7 +87,6 @@ test('real loadAgents reuses an in-flight request across owner claim and release
     console: { ...console, error() {}, warn() {} },
   });
   ctx.loadSource('public/src/modules/action-dispatcher.js');
-  ctx.loadSource('public/src/app-core.js');
   // session-view-state 自 P4 T2 起是 ESM，且 session-view-commit-host 改具名 import
   // （不再在求值期经 `window.createSessionViewCommitHost()` 取 classic 实现）——
   // 装载链不再需要它的 classic 前置，本用例也不触达会话视图 API。
@@ -105,7 +104,10 @@ test('real loadAgents reuses an in-flight request across owner claim and release
   const previousWindow = globalThis.window;
   const previousDocument = globalThis.document;
   const previousFetch = globalThis.fetch;
+  const previousLocalStorage = globalThis.localStorage;
   globalThis.window = ctx;
+  // app-core 求值期读 localStorage（主题 / 语言持久值）：ESM 裸引用走宿主 realm。
+  globalThis.localStorage = ctx.localStorage;
   // dom-refs（随 sidebar-render → p2-bootstrap-dom 进图）在模块相解析 DOM 引用。
   globalThis.document = ctx.document;
   // 装载器宿主的 viewer 快照走裸 fetch（模块在宿主 realm 求值）：给确定性响应，
@@ -119,6 +121,9 @@ test('real loadAgents reuses an in-flight request across owner claim and release
     // 只注册一次（两次独立 import 会得到两个入口实例 → 桥键重复注册）。
     // 无 query 的真实图入口：本文件只在这一处装载它，且图内其它模块（session-ui）
     // 也按无 query 路径 import 同一文件——加 query 会让它求出第二份实例并撞桥键。
+    // app-core（P4 T5 起 ESM）必须与整图共享同一实例：本文件只有本用例装载它，
+    // 且导入发生在 globalThis.window 指向本沙箱之后（模块求值期读 window.KernelState）。
+    await import(new URL('../public/src/app-core.js', import.meta.url).href);
     await import(new URL('../public/src/modules/agent-snapshot-loader-host.js', import.meta.url).href);
     ctx.invoke = async () => { calls += 1; await pending; throw new Error('controlled read failure'); };
     const first = ctx.run('loadAgents()');
@@ -139,5 +144,7 @@ test('real loadAgents reuses an in-flight request across owner claim and release
     else globalThis.document = previousDocument;
     if (previousFetch === undefined) delete globalThis.fetch;
     else globalThis.fetch = previousFetch;
+    if (previousLocalStorage === undefined) delete globalThis.localStorage;
+    else globalThis.localStorage = previousLocalStorage;
   }
 });

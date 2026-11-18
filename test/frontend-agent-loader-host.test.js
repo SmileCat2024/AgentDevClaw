@@ -53,7 +53,9 @@ test('loader host preserves early template resets, const Set identity and real s
     const module = await c.load('public/src/modules/agent-loader-host.js');
     assert.strictEqual(module.FEATURE_TEMPLATE_MAP, earlyMap);
     assert.strictEqual(ctx.AgentLoaderHost.loadedAgentDetailIds, detailIds);
-    assert.throws(() => ctx.run('loadedAgentDetailIds = new Set()'), { name: 'TypeError' });
+    // const 容器桥槽（P4 T5）：窗口面按引用交出同一 Set；整替只影响窗口面、
+    // 不动 owner 容器（与迁移前「classic const + 同名 window 普通属性」分叉一致）。
+    assert.strictEqual(ctx.run('loadedAgentDetailIds'), detailIds);
     assert.strictEqual(ctx.loadAgentDetail, module.loadAgentDetail);
     assert.strictEqual(ctx.loadFeatureTemplateMap, module.loadFeatureTemplateMap);
     assert.equal(await module.loadFeatureTemplateMap(), true);

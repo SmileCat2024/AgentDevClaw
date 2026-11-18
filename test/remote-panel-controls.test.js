@@ -5,6 +5,7 @@ import { createAgentLifecycleModule } from '../server/routes/agent-lifecycle.js'
 import { setupCapabilityRoutes } from '../server/routes/capability.js';
 import { setProxyConnectionLookup } from '../server/shared/proxy.js';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
+import { APP_CORE_DOMAIN, prepareEsmModules } from './p2-classic-hosts.js';
 
 // R2-04：面板资源远程扩列——会话控制面板（force continuation / context guard /
 // capability）。覆盖工单最低测试集：
@@ -640,14 +641,8 @@ async function panelCase({
     classic: (sandbox) => {
       // 真实 classic bootstrap：app-core 注册内核桥键与生产全局函数，沙箱即
       // window（ESM 侧的 window.* 读到同一个宿主面）。
-      sandbox.loadSource('public/src/app-core.js');
+      prepareEsmModules(sandbox, APP_CORE_DOMAIN);
       sandbox.fetch = fetchStub;
-      sandbox.currentRuntimeAgentId = currentRuntimeAgentId;
-      sandbox.focusedAgentId = focusedAgentId;
-      sandbox.currentHookInspector = {
-        features: [{ name: 'force-continuation' }, { name: 'context-guard' }, { name: 'stylized-output' }],
-      };
-      sandbox.activeFeaturePanel = '';
       sandbox.featurePanelBody = { addEventListener() {} };
       sandbox.renderFeaturePanel = () => {};
       sandbox.renderAgentList = () => {};
@@ -657,6 +652,15 @@ async function panelCase({
     },
     globals: { URLSearchParams },
   }, async (c) => {
+    // 状态键 owner 在 ESM 域（orchestration / agent-store / session-view-storage /
+    // render-entry）：桥访问器此时已注册，写入落到域状态（classic 相提前写会被
+    // 注册行覆盖，与生产时序不符）。
+    c.window.currentRuntimeAgentId = currentRuntimeAgentId;
+    c.window.focusedAgentId = focusedAgentId;
+    c.window.currentHookInspector = {
+      features: [{ name: 'force-continuation' }, { name: 'context-guard' }, { name: 'stylized-output' }],
+    };
+    c.window.activeFeaturePanel = '';
     // 远程目录 accessor（已迁 ESM，P4 T3）：真实 import 后 window.RemoteConnections
     // 才存在，面板的身份解析与 capabilityFor 门控都经它取数。
     await c.load('public/src/modules/remote-connections.js');

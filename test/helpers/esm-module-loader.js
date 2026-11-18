@@ -53,6 +53,7 @@ function applyOverrides(base, overrides) {
 export function installBrowserStubs({ window: windowOverrides, document: documentOverrides } = {}) {
   const prevWindow = globalThis.window;
   const prevDocument = globalThis.document;
+  const prevLocalStorage = globalThis.localStorage;
   const element = {
     // children / dataset 是真实 DOM 元素的必备面（模块在求值期或事件回调里遍历
     // 子节点、读写 data-*），桩缺它们会把真实路径误判成 TypeError。
@@ -111,7 +112,11 @@ export function installBrowserStubs({ window: windowOverrides, document: documen
     URL: globalThis.URL,
     getComputedStyle: () => ({ gap: '0px', getPropertyValue: () => '' }),
     matchMedia: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
+    // 浏览器 window.localStorage 恒在：app-core（主题 / 语言持久值）一类模块在求值期
+    // 读取它。ESM 裸引用走宿主 realm，因此同时装到 globalThis（cleanup 一并恢复）。
+    localStorage: createLocalStorageStub(),
   }, windowOverrides);
+  globalThis.localStorage = globalThis.window.localStorage;
   globalThis.document = applyOverrides({
     // 每次返回独立元素对象：模块对「当前 DOM 是否挂载」的判断靠 getElementById 命中
     getElementById(id) { return RUNTIME_CREATED_IDS.has(id) ? null : { ...element }; },
@@ -131,6 +136,20 @@ export function installBrowserStubs({ window: windowOverrides, document: documen
   return () => {
     if (prevWindow === undefined) delete globalThis.window; else globalThis.window = prevWindow;
     if (prevDocument === undefined) delete globalThis.document; else globalThis.document = prevDocument;
+    if (prevLocalStorage === undefined) delete globalThis.localStorage; else globalThis.localStorage = prevLocalStorage;
+  };
+}
+
+/** 内存版 localStorage（浏览器持久面；用例之间按 install/cleanup 隔离）。 */
+function createLocalStorageStub() {
+  const data = new Map();
+  return {
+    getItem: (key) => (data.has(String(key)) ? data.get(String(key)) : null),
+    setItem: (key, value) => { data.set(String(key), String(value)); },
+    removeItem: (key) => { data.delete(String(key)); },
+    clear: () => { data.clear(); },
+    key: (index) => [...data.keys()][index] ?? null,
+    get length() { return data.size; },
   };
 }
 

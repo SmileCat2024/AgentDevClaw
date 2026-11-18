@@ -22,7 +22,7 @@ import assert from 'node:assert/strict';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
 import { createOperationTrace, normalizeOperationId } from '../server/shared/operation-trace.js';
 import { sessionIndexContentSignature } from '../server/shared/session-access.js';
-import { ensureSidebarRenderHostSeam, prepareEsmModules, prepareSidebarDomain, SESSION_VIEW_DOMAIN } from './p2-classic-hosts.js';
+import { APP_CORE_DOMAIN, ensureSidebarRenderHostSeam, prepareEsmModules, prepareSidebarDomain, SESSION_VIEW_DOMAIN } from './p2-classic-hosts.js';
 
 const OPS = 'public/src/modules/sidebar-operations.js';
 
@@ -33,7 +33,7 @@ const OPS = 'public/src/modules/sidebar-operations.js';
 function bootstrapClassic(sandbox) {
   sandbox.loadSource('public/src/modules/action-dispatcher.js');
   // i18n 已迁 ESM（P4）：t 桥键由 createFrontendSandbox 自动装载，见 test/helpers/install-i18n.js
-  sandbox.loadSource('public/src/app-core.js');
+  prepareEsmModules(sandbox, APP_CORE_DOMAIN);
   // 生产加载序：runtime-status 提供 sidebar-render 调用状态宿主读的容器，
   // session-view-state 提供会话快照提交宿主；通知时钟周期不属于本文件验收面。
   sandbox.setInterval = () => 0;

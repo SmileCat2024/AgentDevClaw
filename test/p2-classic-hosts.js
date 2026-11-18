@@ -26,6 +26,7 @@
  * （通知时钟 / 轮询 / rAF）一并关掉——用例不测它们，开着会让进程留下句柄。
  */
 
+import { readFileSync } from 'node:fs';
 import { createAgentSnapshotLoader } from '../public/src/modules/agent-snapshot-loader.js';
 
 /**
@@ -39,13 +40,27 @@ export const CLASSIC_BOOTSTRAP = [
   'public/src/modules/action-dispatcher.js',
   'public/src/modules/claw-host.js',
   'public/src/modules/right-panel-registry.js',
-  'public/src/app-core.js',
   // session-view-state 在 P4 T2 批次进模块相（原 classic 标签已从 index.html 删除）：
   // 它在 SESSION_VIEW_DOMAIN 里、排在 SIDEBAR_DOMAIN 之前装载——classic 消费方
   // （app-ui / app-core）按桥键晚绑定取用，不需要 classic 相实现。
+  // app-core 在 P4 T5 收尾批迁 ESM（原 classic 标签改为 module 入口）：本体由
+  // APP_CORE_DOMAIN 在模块相装载，且**必须最先**（它给其它域注册桥键，注册相位
+  // 必须早于那些域的 claim——见该常量与 consumePendingClassicPrep）。
   // app-main 在 P4 T3 收尾迁 ESM（原 classic 标签已删除）：本体由 APP_MAIN_DOMAIN
-  // 在模块相装载，且**必须最先**（见该常量与 consumePendingClassicPrep）。
+  // 在模块相装载，紧随 app-core（它求值期即取 app-core 的宿主工厂）。
 ];
+
+/**
+ * 首屏核心域（P4 T5 收尾：app-core 迁 ESM）。
+ *
+ * 为什么必须先于一切其它域：app-core 的 42 条 defineKey 是 agent-loader /
+ * agent-store / orchestration / session-view-storage / render-entry /
+ * panel-layout-state / i18n-environment 这些**别的域**的注册行；kernel-state 契约里
+ * 「域已认领时 defineKey 把初值写进域状态」，顺序颠倒就把注册初值变成运行期覆写。
+ * 生产侧由 index.html 的 module 标签序保证（该入口仍在 kernel-state 之后、其余
+ * module 标签之前），夹具里的等价物是「本域排在 ESM 装载清单最前」。
+ */
+export const APP_CORE_DOMAIN = ['public/src/app-core.js'];
 
 /**
  * 编排域（P4 T3 收尾：app-main 迁 ESM）。
@@ -120,7 +135,7 @@ export const APP_UI_DOMAIN = ['public/src/app-ui.js'];
  * P2 用例的墙钟推高一个量级。需要它的用例显式
  * `prepareEsmModules(sandbox, [...P4_DOMAINS, ...APP_UI_DOMAIN])`。
  */
-export const P4_DOMAINS = [...APP_MAIN_DOMAIN, ...DOM_REFS_DOMAIN, ...IDENTITY_DOMAIN, ...TRANSPORT_DOMAIN, ...SESSION_VIEW_DOMAIN, ...SIDEBAR_DOMAIN];
+export const P4_DOMAINS = [...APP_CORE_DOMAIN, ...APP_MAIN_DOMAIN, ...DOM_REFS_DOMAIN, ...IDENTITY_DOMAIN, ...TRANSPORT_DOMAIN, ...SESSION_VIEW_DOMAIN, ...SIDEBAR_DOMAIN];
 
 /**
  * classic 链夹具「顺手」发起的 ESM 域装载（pending prep）。
@@ -136,10 +151,17 @@ export const P4_DOMAINS = [...APP_MAIN_DOMAIN, ...DOM_REFS_DOMAIN, ...IDENTITY_D
  * 常先后调用）。
  */
 const APP_MAIN_PATH = 'public/src/app-main.js';
+const APP_CORE_PATH = 'public/src/app-core.js';
+/**
+ * 提供方域的装载优先级：它们的求值期导出（宿主工厂 / 桥键注册）是后续域静态 import
+ * 触达的宿主模块在求值期取用的对象，必须最先求值。生产侧由 index.html 的 module
+ * 标签序表达（app-core → app-main → kernel-entry）。
+ */
+const PROVIDER_ORDER = [APP_CORE_PATH, APP_MAIN_PATH];
 let pendingClassicPrep = null;   // { sandbox, modules }
 const domainBySandbox = new WeakMap(); // sandbox → 已启动的装载 promise
 
-export function consumePendingClassicPrep() {
+export function consumePendingClassicPrep(classicBaseline = null) {
   const entry = pendingClassicPrep;
   pendingClassicPrep = null;
   if (!entry) return null;
@@ -150,14 +172,20 @@ export function consumePendingClassicPrep() {
     const loaded = new Map();
     // 编排域（app-main）总是最先求值：它的 createXHost 工厂是其余域静态 import
     // 触达的宿主模块在求值期取用的对象（生产侧由 index.html 标签序表达）。
-    const ordered = [...entry.modules].sort((a, b) => Number(b === APP_MAIN_PATH) - Number(a === APP_MAIN_PATH));
+    const priority = (p) => {
+      const index = PROVIDER_ORDER.indexOf(p);
+      return index === -1 ? PROVIDER_ORDER.length : index;
+    };
+    const ordered = [...entry.modules].sort((a, b) => priority(a) - priority(b));
     for (const modulePath of ordered) {
       loaded.set(modulePath, await entry.sandbox.loadEsm(modulePath));
-      // 编排域求值完、其余域尚未装载时回放夹具覆盖：迁移前 app-main 是 classic
-      // 顶层 function，夹具在 classic 链之后的 `sandbox.X = 替身` 会被随后装载的
-      // 消费方（poll-coordinator-host 等宿主模块）读到；迁 ESM 后这些名字成了
-      // 桥键，注册时以模块实现为初值，classic 相的同名普通属性会被覆盖。
-      if (modulePath === APP_MAIN_PATH) replayAppMainOverrides(entry.sandbox, loaded.get(modulePath), overrides);
+      // 提供方域（app-core / app-main）求值完、其余域尚未装载时回放夹具覆盖：
+      // 迁移前它们是 classic 顶层 function，夹具在 classic 链之后的
+      // `sandbox.X = 替身` 会被随后装载的消费方读到；迁 ESM 后这些名字成了桥键，
+      // 注册时以模块实现为初值，classic 相的同名普通属性会被覆盖。
+      if (PROVIDER_ORDER.includes(modulePath)) {
+        replayProviderOverrides(entry.sandbox, loaded.get(modulePath), modulePath, overrides, classicBaseline);
+      }
     }
     return applyEsmDomain(entry.sandbox, loaded);
   })().catch((error) => {
@@ -183,32 +211,77 @@ function snapshotOwnDataProps(sandbox) {
 }
 
 /**
- * 回放夹具对编排域（app-main）对外符号的覆盖。
+ * 回放夹具对提供方域（app-core / app-main）对外符号的覆盖。
  *
- * 为什么需要：迁移前 app-main 是 classic script，它的顶层 function 直接是 window
- * 上的同名属性；夹具在 classic 链之后 `sandbox.X = 替身` 就是**覆盖生产实现**，
- * 随后装载的消费者（poll-coordinator-host / runtime-switch-host 等宿主模块在求值
- * 期取宿主工厂）看到的就是替身。迁 ESM（P4 T3 收尾）后这些名字是桥键：注册时以
- * 模块实现为初值，classic 相写入的普通属性会在模块求值期被覆盖掉——覆盖失效。
+ * 为什么需要：迁移前这两个域是 classic script，顶层 function 直接是 window 上的
+ * 同名属性；夹具在 classic 链之后 `sandbox.X = 替身` 就是**覆盖生产实现**，随后
+ * 装载的消费者（求值期取宿主工厂的宿主模块、按窗口面取谓词 / 导航 helper 的域）
+ * 看到的就是替身。迁 ESM 后这些名字成了桥键：注册时以模块实现为初值，classic 相
+ * 写入的普通属性会在模块求值期被覆盖掉——覆盖失效。
  *
- * 因此本支撑面在「编排域求值完、其余域尚未装载」的那一刻把夹具写过的同名值经
+ * 因此本支撑面在「提供方域求值完、其余域尚未装载」的那一刻把夹具写过的同名值经
  * 桥 setter 写回，恢复迁移前的可观察语义（窗口面 = 夹具替身，消费方读到的同一份）。
- * 只回放 app-main 的对外符号；其余名字保持原样（它们的 owner 没变）。
+ * 判据是「该名字由提供方域的注册行登记」——用 provider 的 `bridgeApi`（app-main）
+ * 或静态扫描其源码里的 `KernelState.defineKey('domain', 'key'…` 字面键（app-core，
+ * 与桥债门禁同口径）求交；其余名字保持原样（它们的 owner 是别的域）。
+ *
+ * 状态键同样回放：迁移前夹具在 classic 相写同名状态（`sandbox.allAgents = [...]`）
+ * 会落到 `defineKey` 的哑存储里、被后续 claim 吸收——迁 ESM 后注册行晚于这次写入，
+ * 普通属性会被注册行覆盖。整替回放走 setter，正是同一语义。沙箱自带默认值（classic
+ * 相开始前就有、之后未被夹具改写）不回放——迁移前它们同样被注册行覆盖。
  *
  * 边界（如实记录）：模块**内部**对自身函数的调用走模块实现，不读桥键——迁移前
  * 那种"覆盖连内部调用一起改"的效果不再成立。依赖该效果的用例须改为自带替身宿主
- * （`APP_MAIN_DOMAIN` 之外的显式 stub），不要反过来放宽断言。
+ * （`APP_CORE_DOMAIN` / `APP_MAIN_DOMAIN` 之外的显式 stub），不要反过来放宽断言。
  */
-function replayAppMainOverrides(sandbox, appMainModule, overrides) {
-  const bridged = appMainModule?.bridgeApi;
-  if (!bridged || !overrides) return;
+function replayProviderOverrides(sandbox, providerModule, providerModulePath, overrides, baseline = null) {
+  if (!providerModule || !overrides) return;
+  const constKeys = providerModule?.CONST_BRIDGE_KEYS;
+  // 只回放「provider 自己注册的键」：其它名字的 owner 是别的域（例如 sidebar-render
+  // 的 renderAgentList），provider 的注册行碰不到它们，夹具的替身在迁移前后都生效
+  // （或都被注册行覆盖），不需要也不该在这里回放。
+  const owned = providerModule?.bridgeApi
+    ? new Set(Object.keys(providerModule.bridgeApi))
+    : providerRegisteredKeys(providerModulePath);
+  if (!owned || owned.size === 0) return;
   for (const [name, value] of overrides) {
-    if (!(name in bridged)) continue;
+    if (!owned.has(name)) continue;
+    if (constKeys instanceof Set && constKeys.has(name)) continue;
+    // 沙箱自带默认值（classic 相开始前就有、之后未被夹具改写）不回放：迁移前它们
+    // 同样被 provider 的注册行覆盖（例：i18n 的 localStorage 初值 vs 沙箱 'zh' 默认），
+    // 回放会颠倒这个优先级。
+    if (baseline && baseline.get(name) === value) continue;
     const descriptor = Object.getOwnPropertyDescriptor(sandbox, name);
     if (!descriptor || typeof descriptor.set !== 'function') continue;
     if (descriptor.get && descriptor.get() === value) continue;
     sandbox[name] = value;
   }
+}
+
+/**
+ * 提供方模块静态注册的桥键名（`KernelState.defineKey('domain', 'key', …)` 的字面键）。
+ *
+ * 为什么不要求模块导出清单：桥债门禁按文本统计 `KernelState.defineKey(`，清单若靠
+ * 生产侧维护会同时产生两份真相；这里与门禁同口径做静态扫描——注册行是唯一事实，
+ * 不改生产代码的注册形态（也不引入门禁看不见的注册入口）。
+ */
+const registeredKeysCache = new Map();
+function providerRegisteredKeys(modulePath) {
+  if (registeredKeysCache.has(modulePath)) return registeredKeysCache.get(modulePath);
+  const keys = new Set();
+  try {
+    const source = readFileSync(new URL(`../${modulePath}`, import.meta.url), 'utf8');
+    for (const match of source.matchAll(/KernelState\.defineKey\('([^']+)',\s*'([^']+)'/g)) keys.add(match[2]);
+  } catch (error) {
+    keys.clear();
+  }
+  registeredKeysCache.set(modulePath, keys);
+  return keys;
+}
+
+/** classic 相开始前的沙箱自有数据属性快照（供 consumePendingClassicPrep 区分夹具写入与默认值）。 */
+export function captureSandboxDataProps(sandbox) {
+  return snapshotOwnDataProps(sandbox);
 }
 
 /**
@@ -231,6 +304,7 @@ function applyEsmDomain(sandbox, loaded) {
   // `__esmDomain.<域>` 取真实模块实例——与 `c.load(...)` 同一实例，不建第二份状态。
   const appUi = loaded.get('public/src/app-ui.js');
   sandbox.__esmDomain = Object.freeze({
+    appCore: loaded.get('public/src/app-core.js'),
     appMain: loaded.get('public/src/app-main.js'),
     domRefs: loaded.get('public/src/modules/dom-refs.js'),
     identity: loaded.get('public/src/modules/identity.js'),

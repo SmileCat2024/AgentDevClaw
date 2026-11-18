@@ -32,6 +32,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
 import { installRuntimeViewCache } from './helpers/runtime-view-cache.js';
+import { APP_CORE_DOMAIN, prepareEsmModules } from './p2-classic-hosts.js';
 
 // ═══════════════════════════════════════════════════════════════
 // Part A — generative-ui chart ResizeObserver
@@ -249,7 +250,7 @@ async function createEvictionSandbox(fn) {
       });
       // 分发器先于一切声明 data-action 的模块装载（markdown-utils 求值期注册动作）。
       sandbox.loadSource('public/src/modules/action-dispatcher.js');
-      sandbox.loadSource('public/src/app-core.js');
+      prepareEsmModules(sandbox, APP_CORE_DOMAIN);
       installRuntimeViewCache(sandbox);
     },
     // captureChatViewportAnchor requires an active chat surface and non-follow

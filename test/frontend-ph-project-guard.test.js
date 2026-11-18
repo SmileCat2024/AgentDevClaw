@@ -26,7 +26,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
-import { ensureSidebarRenderHostSeam } from './p2-classic-hosts.js';
+import { prepareEsmModules, APP_CORE_DOMAIN, ensureSidebarRenderHostSeam } from './p2-classic-hosts.js';
 
 const PROJECT_DATA = 'public/src/modules/project-data.js';
 const PH_PROJECT_ACTIONS = 'public/src/modules/ph-project-actions.js';
@@ -131,7 +131,7 @@ async function withGuard(probe) {
   return withP2EsmCase({
     classic: (sandbox) => {
       sandbox.loadSource('public/src/modules/action-dispatcher.js');
-      sandbox.loadSource('public/src/app-core.js');
+      prepareEsmModules(sandbox, APP_CORE_DOMAIN);
       // classic 宿主面：当前 agent 记录与主视图重绘（app-main / app-ui 仍 classic）。
       sandbox.__phAgent = phAgent;
       sandbox.allAgents = [phAgent];

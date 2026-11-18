@@ -20,7 +20,7 @@
 import { describe, it as nodeIt } from 'node:test';
 import assert from 'node:assert/strict';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
-import { installForegroundSyncOwner, prepareEsmModules, prepareSidebarDomain, SESSION_VIEW_DOMAIN } from './p2-classic-hosts.js';
+import { APP_CORE_DOMAIN, installForegroundSyncOwner, prepareEsmModules, prepareSidebarDomain, SESSION_VIEW_DOMAIN } from './p2-classic-hosts.js';
 
 const OPS = 'public/src/modules/sidebar-operations.js';
 const MUTATION = 'public/src/modules/session-mutation.js';
@@ -39,7 +39,7 @@ function bootstrapClassic(sandbox) {
   sandbox.setInterval = () => 0;
   sandbox.loadSource('public/src/modules/action-dispatcher.js');
   // i18n 已迁 ESM（P4）：t 桥键由 createFrontendSandbox 自动装载，见 test/helpers/install-i18n.js
-  sandbox.loadSource('public/src/app-core.js');
+  prepareEsmModules(sandbox, APP_CORE_DOMAIN);
   prepareSidebarDomain(sandbox);
   prepareEsmModules(sandbox, SESSION_VIEW_DOMAIN);
   // resetRuntimeStatusForSwitch / patchRuntimeStatusForSwitch 的真实 owner：

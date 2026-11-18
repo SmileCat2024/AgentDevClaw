@@ -23,7 +23,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
-import { APP_MAIN_DOMAIN, prepareEsmModules, prepareSidebarDomain, SESSION_VIEW_DOMAIN } from './p2-classic-hosts.js';
+import { APP_CORE_DOMAIN, APP_MAIN_DOMAIN, prepareEsmModules, prepareSidebarDomain, SESSION_VIEW_DOMAIN } from './p2-classic-hosts.js';
 
 const OVERVIEW_DATA = 'public/src/modules/overview-data.js';
 
@@ -100,7 +100,7 @@ async function withHeaderSandbox(fn) {
       ctx.window.setTimeout = () => 0;
       // action-dispatcher：markdown-utils（ESM）求值期登记 markdown.* 动作需要 ClawFW。
       ctx.loadSource('public/src/modules/action-dispatcher.js');
-      ctx.loadSource('public/src/app-core.js');
+      prepareEsmModules(ctx, APP_CORE_DOMAIN);
       prepareSidebarDomain(ctx);
       // app-main 的 classic 同步引擎在装载期组合 sidebar-render 的
       // createAgentCallStatesHost：按生产先行脚本序装真链，不造宿主桩。

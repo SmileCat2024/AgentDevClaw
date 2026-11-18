@@ -28,7 +28,7 @@ import { dirname, join } from 'node:path';
 
 import { sourceBetween } from './helpers/frontend-vm.js';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
-import { prepareEsmModules, prepareSidebarDomain, SESSION_VIEW_DOMAIN } from './p2-classic-hosts.js';
+import { APP_CORE_DOMAIN, prepareEsmModules, prepareSidebarDomain, SESSION_VIEW_DOMAIN } from './p2-classic-hosts.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CHAT_RENDERER = 'public/src/modules/chat-renderer.js';
@@ -190,7 +190,7 @@ async function withLocate(probe) {
   return withP2EsmCase({
     classic: (sandbox) => {
       sandbox.loadSource('public/src/modules/action-dispatcher.js');
-      sandbox.loadSource('public/src/app-core.js');
+      prepareEsmModules(sandbox, APP_CORE_DOMAIN);
       // i18n 已迁 ESM（P4）：t 桥键由 createFrontendSandbox 自动装载，见 test/helpers/install-i18n.js
       // 真实 workspace-surface 宿主工厂（classic app-ui）：selectWorkspaceSurface
       // 已改为直接 import，其宿主契约必须由真实工厂补全（不造空心面）。
@@ -644,7 +644,7 @@ async function withRemoteActionsCase({ bumpEpochDuringWait = false } = {}, probe
     classic: (sandbox) => {
       sandbox.loadSource('public/src/modules/action-dispatcher.js');
       // i18n 已迁 ESM（P4）：t 桥键由 createFrontendSandbox 自动装载，见 test/helpers/install-i18n.js
-      sandbox.loadSource('public/src/app-core.js');
+      prepareEsmModules(sandbox, APP_CORE_DOMAIN);
       prepareEsmModules(sandbox, SESSION_VIEW_DOMAIN);
       // runtime-status 是 classic 唯一实现：真实切换收尾的 loadAgentData 经
       // resetRuntimeStatusForSwitch 复位运行期状态。

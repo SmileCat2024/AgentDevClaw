@@ -17,7 +17,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
-import { installForegroundSyncOwner, prepareSidebarDomain } from './p2-classic-hosts.js';
+import { prepareEsmModules, APP_CORE_DOMAIN, installForegroundSyncOwner, prepareSidebarDomain } from './p2-classic-hosts.js';
 
 const CATALOG = {
   connections: [{
@@ -548,7 +548,6 @@ function createBranchDialogDom() {
  */
 const CLASSIC_BOOTSTRAP = [
   'public/src/modules/action-dispatcher.js',
-  'public/src/app-core.js',
   // session-view-state 自 P4 T2 起是 ESM：由 prepareEsmModules(sandbox, SESSION_VIEW_DOMAIN)
   // / prepareClassicSandbox 在模块相装载，classic 链里不再有它。
 ];
@@ -633,6 +632,7 @@ function loadClassicBootstrap(sandbox, hooks) {
   // 会调它）。宿主环境缺失不是被测契约，按浏览器能力补齐。
   sandbox.performance = { now: () => Date.now() };
   for (const file of CLASSIC_BOOTSTRAP) sandbox.loadSource(file);
+  prepareEsmModules(sandbox, APP_CORE_DOMAIN);
   prepareSidebarDomain(sandbox);
   // app-main 的 classic 同步引擎（唯一 owner）：登记 sidebar-render 轮询/裁剪
   // 路径消费的两个桥键；boot 体挂在永不 resolve 的 __clawAuthReady 上。

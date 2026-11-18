@@ -24,6 +24,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
+import { APP_CORE_DOMAIN, prepareEsmModules } from './p2-classic-hosts.js';
 
 const LAZY_TOOL_CONTENT = 'public/src/modules/lazy-tool-content.js';
 
@@ -204,7 +205,7 @@ async function withHarness(fn) {
       // index.html 真实加载序：分发器 → i18n → app-core。
       sandbox.loadSource('public/src/modules/action-dispatcher.js');
       // i18n 已迁 ESM（P4）：t 桥键由 createFrontendSandbox 自动装载，见 test/helpers/install-i18n.js
-      sandbox.loadSource('public/src/app-core.js');
+      prepareEsmModules(sandbox, APP_CORE_DOMAIN);
     },
     globals,
   }, async (c) => {

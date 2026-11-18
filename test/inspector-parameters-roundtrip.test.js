@@ -19,6 +19,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
+import { APP_CORE_DOMAIN, prepareEsmModules } from './p2-classic-hosts.js';
 
 const OVERVIEW_DATA = 'public/src/modules/overview-data.js';
 
@@ -26,7 +27,7 @@ const OVERVIEW_DATA = 'public/src/modules/overview-data.js';
 function loadClassicBootstrap(sandbox) {
   sandbox.loadSource('public/src/modules/action-dispatcher.js');
   // i18n 已迁 ESM（P4）：t 桥键由 createFrontendSandbox 自动装载，见 test/helpers/install-i18n.js
-  sandbox.loadSource('public/src/app-core.js');
+  prepareEsmModules(sandbox, APP_CORE_DOMAIN);
 }
 
 function buildSnapshotWithParameters() {

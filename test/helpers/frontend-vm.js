@@ -7,7 +7,10 @@
  * Usage:
  *   import { createFrontendSandbox } from './helpers/frontend-vm.js';
  *   const ctx = createFrontendSandbox();
- *   ctx.loadSource('../public/src/app-core.js');
+ *   ctx.loadSource('../public/src/modules/action-dispatcher.js');
+ *
+ * 注：app-core 已是 ESM（P4 T5），不走 loadSource；见 loadSource 内该路径的报错与
+ * p2-classic-hosts 的 APP_CORE_DOMAIN。
  *   // access functions: ctx.run('getFeatureStatus({ enabled: true })')
  */
 
@@ -16,7 +19,6 @@ import { marked as markedModule } from 'marked';
 import { installI18n } from './install-i18n.js';
 import { createRuntimeStatusLoader } from '../../public/src/modules/runtime-status-loader.js';
 import { createSessionDataLoader } from '../../public/src/modules/session-data-loader.js';
-import { createChatLoading } from '../../public/src/modules/chat-loading.js';
 import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -219,26 +221,18 @@ export function createFrontendSandbox(overrides = {}) {
    * @param {string} relativePath — path relative to project root
    */
   context.loadSource = function (relativePath) {
+    if (relativePath === 'public/src/app-core.js') {
+      // app-core 已迁 ESM（P4 T5 收尾批）：classic 相解析 export 直接 SyntaxError。
+      // 装载路线改为模块相——withP2EsmCase 里 `prepareEsmModules(sandbox, APP_CORE_DOMAIN)`
+      // （或 prepareClassicSandbox 的 P4_DOMAINS，已含该域；app-core 总是最先求值）。
+      throw new Error(
+        'frontend-vm: app-core.js 已是 ESM 模块，不能经 loadSource 装载；'
+        + '用 p2-classic-hosts 的 APP_CORE_DOMAIN / prepareClassicSandbox 在模块相装载。',
+      );
+    }
     const fullPath = join(__dirname, '..', '..', relativePath);
     const source = fs.readFileSync(fullPath, 'utf8');
     vm.runInContext(source, context, { filename: fullPath });
-    if (relativePath === 'public/src/app-core.js') {
-      context.__createChatLoading = createChatLoading;
-      // 计时句柄是本沙箱私有的：生产的 _chatLoadingTimeout 已归 ESM owner
-      // （orchestration-state），classic 相没有该全局，也不为测试重建桥。
-      Object.assign(context, vm.runInContext(`(() => {
-        let chatLoadingTimeout = null;
-        return __createChatLoading({
-          loading: () => _chatLoadingSession, timer: () => chatLoadingTimeout,
-          setLoading: value => { _chatLoadingSession = value; },
-          setTimer: value => { chatLoadingTimeout = value; },
-          setTimeout: (callback, delay) => setTimeout(callback, delay),
-          clearTimeout: id => clearTimeout(id),
-          render: () => { if (typeof renderCurrentMainView === 'function') renderCurrentMainView(); },
-        });
-      })()`, context));
-      delete context.__createChatLoading;
-    }
     // session-view-state（P4 T2 起 ESM）不再经 loadSource 装载：本沙箱路线只剩
     // classic script。需要它时用 withP2EsmCase + `c.load('.../session-view-state.js')`
     // （或 p2-classic-hosts 的 prepareEsmModules），桥键会装到同一个沙箱 window 上。

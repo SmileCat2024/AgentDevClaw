@@ -31,6 +31,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Renderer } from 'marked';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
+import { APP_CORE_DOMAIN, prepareEsmModules } from './p2-classic-hosts.js';
 
 const BOOTSTRAP = 'public/src/modules/p2-w2-8-project-domain-bootstrap.js';
 
@@ -254,7 +255,7 @@ function caseOptions({ agent = makePhAgent(), projects = null, fetchTable = {}, 
     classic: (sandbox) => {
       sandbox.loadSource('public/src/modules/action-dispatcher.js');
       // i18n 已迁 ESM（P4）：t 桥键由 createFrontendSandbox 自动装载，见 test/helpers/install-i18n.js
-      sandbox.loadSource('public/src/app-core.js');
+      prepareEsmModules(sandbox, APP_CORE_DOMAIN);
       sandbox.run(CLASSIC_HOSTS);
       sandbox.__testAgent = agent;
       sandbox.allAgents = [agent];

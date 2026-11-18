@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import test from 'node:test';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
 import { createMetadataCommit } from '../public/src/modules/metadata-commit.js';
-import { prepareEsmModules, SESSION_VIEW_DOMAIN } from './p2-classic-hosts.js';
+import { APP_CORE_DOMAIN, prepareEsmModules, SESSION_VIEW_DOMAIN } from './p2-classic-hosts.js';
 
 const mainSource = fs.readFileSync(new URL('../public/src/app-main.js', import.meta.url), 'utf8');
 const loaderSource = fs.readFileSync(new URL('../public/src/modules/session-data-loader.js', import.meta.url), 'utf8');
@@ -27,7 +27,7 @@ function withView(options, fn) {
       // app-core 是状态键的生产注册面（orchestration / agent-store / session-view-storage
       // 三域的 defineKey 与初值都在它里面）：本域 ESM 化后，owner 的活绑定与沙箱
       // 访问器必须经这些注册行接上，否则用例的裸名写入只落在沙箱属性上。
-      caseSandbox.loadSource('public/src/app-core.js');
+      prepareEsmModules(caseSandbox, APP_CORE_DOMAIN);
       caseSandbox.run(`currentRuntimeAgentId = ${JSON.stringify(runtimeId)};
         focusedAgentId = ${JSON.stringify(hostId)};
         _switchEpoch = ${epoch};`);

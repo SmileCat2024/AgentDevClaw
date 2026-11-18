@@ -12,6 +12,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
+import { APP_CORE_DOMAIN, prepareEsmModules } from './p2-classic-hosts.js';
 
 const PH_THREAD_HISTORY = 'public/src/modules/ph-thread-history.js';
 const TOAST_NOTIFY = 'public/src/modules/toast-notify.js';
@@ -81,7 +82,7 @@ async function withThreadHistory({ fetchImpl }, probe) {
   return withP2EsmCase({
     classic: (sandbox) => {
       sandbox.loadSource('public/src/modules/action-dispatcher.js');
-      sandbox.loadSource('public/src/app-core.js');
+      prepareEsmModules(sandbox, APP_CORE_DOMAIN);
       sandbox.runWorkspaceAction = (action) => actions.push(action);
     },
     globals: {

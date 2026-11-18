@@ -35,7 +35,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { Renderer } from 'marked';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
-import { prepareEsmModules, SESSION_VIEW_DOMAIN } from './p2-classic-hosts.js';
+import { APP_CORE_DOMAIN, prepareEsmModules, SESSION_VIEW_DOMAIN } from './p2-classic-hosts.js';
 
 const DEBUG_LOGS = 'public/src/modules/debug-logs.js';
 const DEBUG_MCP = 'public/src/modules/debug-mcp.js';
@@ -173,7 +173,7 @@ function loadClassicChain(sandbox, { beforeLogs } = {}) {
   sandbox.window.marked = markedStub;
   sandbox.loadSource('public/src/modules/action-dispatcher.js');
   // i18n 已迁 ESM（P4）：t 桥键由 createFrontendSandbox 自动装载，见 test/helpers/install-i18n.js
-  sandbox.loadSource('public/src/app-core.js');
+  prepareEsmModules(sandbox, APP_CORE_DOMAIN);
   prepareEsmModules(sandbox, SESSION_VIEW_DOMAIN);
   sandbox.loadSource('public/src/modules/right-panel-registry.js');
   // 插件宿主最小面（生产实现是 classic claw-host）：debug-panel-host 只在存在时
@@ -342,9 +342,11 @@ describe('debug 批次：模块求值相与 classic 消费方可达性', () => {
       await withP2EsmCase(env.options, async (c) => {
         await loadDebugBatch(c);
         // 日志状态 owner 仍是 classic app-core：写入面是 classic 值属性，不是桥。
+        // app-core 自 P4 T5 起是 ESM：setCurrentLogs 的实现移到模块相，仍经
+        // domain `app-core` 的桥键同步可达（访问器形态，读写同一份状态）。
         const seam = Object.getOwnPropertyDescriptor(c.window, 'setCurrentLogs');
-        assert.equal(typeof seam.value, 'function', 'setCurrentLogs 仍是 classic 同步实现');
-        assert.equal(seam.get, undefined, 'setCurrentLogs 不得是桥访问器');
+        assert.equal(typeof seam.get, 'function', 'setCurrentLogs 经 KernelState 桥键可达');
+        assert.equal(typeof c.window.setCurrentLogs, 'function');
         assert.equal(c.read('activeFeaturePanel'), null);
         assert.equal(c.read('logFilters.level'), 'all');
 

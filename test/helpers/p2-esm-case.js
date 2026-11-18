@@ -46,7 +46,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { pathToFileURL } from 'node:url';
 import { createFrontendSandbox } from './frontend-vm.js';
 import { beginCaseGraph, endCaseGraph } from './p2-esm-graph.js';
-import { consumePendingClassicPrep } from '../p2-classic-hosts.js';
+import { captureSandboxDataProps, consumePendingClassicPrep } from '../p2-classic-hosts.js';
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '..', '..');
 const caseStorage = new AsyncLocalStorage();
@@ -274,6 +274,10 @@ export async function withP2EsmCase(options, fn) {
     // classic 回调里的 ESM 装载入口（classic 相之后的模块相）。
     sandbox.loadEsm = loadModuleInCase;
 
+    // classic 相开始前的沙箱默认面：供提供方域的「夹具覆盖回放」区分夹具写入与
+    // createFrontendSandbox 的默认值（默认值不参与回放——迁移前它们同样会被
+    // provider 的注册行覆盖）。
+    const classicBaseline = captureSandboxDataProps(sandbox);
     if (typeof classic === 'function') await classic(sandbox);
 
     // 主 realm 注入：window 是沙箱本身；平台键取沙箱现值；调用方 globals 覆盖。
@@ -291,7 +295,7 @@ export async function withP2EsmCase(options, fn) {
     // classic 链夹具（p2-classic-hosts 的 prepareClassicSandbox /
     // installForegroundSyncOwner）会在 classic 相之后发起本域的 ESM 装载；
     // 历史调用形态不 await 返回值，这里统一收口（契约见 p2-classic-hosts）。
-    const pendingPrep = consumePendingClassicPrep();
+    const pendingPrep = consumePendingClassicPrep(classicBaseline);
     if (pendingPrep) await pendingPrep;
     activeStore = { caseId: id };
     return await caseStorage.run(activeStore, () => fn(p2case));

@@ -20,7 +20,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
-import { APP_MAIN_DOMAIN, CLASSIC_BOOTSTRAP, prepareClassicSandbox, prepareEsmModules } from './p2-classic-hosts.js';
+import { APP_CORE_DOMAIN, APP_MAIN_DOMAIN, CLASSIC_BOOTSTRAP, prepareClassicSandbox, prepareEsmModules } from './p2-classic-hosts.js';
 
 /**
  * 每个用例：真实 classic 先行链（app-main 注册 visibilitychange、app-core 交出
@@ -129,7 +129,9 @@ describe('foreground visibilitychange: sync owner contract (P4 T2 相位)', () =
           applyLanguage = () => {};
         `);
         for (const file of CLASSIC_BOOTSTRAP) sandbox.loadSource(file);
-        // 只装编排域：引擎（sidebar 域）留到用例体里显式装载。
+        // 只装首屏核心域 + 编排域：引擎（sidebar 域）留到用例体里显式装载。
+        // app-core（P4 T5 起 ESM）必须先于 app-main——后者的求值期就要它的宿主工厂。
+        prepareEsmModules(sandbox, APP_CORE_DOMAIN);
         prepareEsmModules(sandbox, APP_MAIN_DOMAIN);
       },
     }, async (c) => {

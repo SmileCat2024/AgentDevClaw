@@ -1,5 +1,72 @@
+/**
+ * app-core.js — 会话视图 / 编排瞬态 / 渲染入口状态与首屏宿主工厂（P4 收尾批：
+ * classic → ESM，活跃域最后一件）。
+ *
+ * 本文件此前是 index.html 的 classic 脚本，顶层语句在**解析相**执行；迁 ESM 后改在
+ * **模块相**执行，装载位置不变（index.html 中改为 `<script type="module">`，仍在
+ * kernel-state 之后、其余 module 标签之前）。位置是语义的一部分，见下。
+ *
+ * ## 相位：本文件必须最早求值（除了一个叶子状态模块）
+ *
+ * 46 条 `window.KernelState.defineKey()` 是**别的域**的注册行（agent-loader /
+ * agent-store / orchestration / session-view-storage / render-entry /
+ * panel-layout-state / i18n-environment / call-interrupt）。kernel-state 契约里
+ * 「域已认领时 defineKey 把初值经 impl.set 写进域状态」，因此注册相位必须早于
+ * 那些域的 claim。迁入模块相后，这条时序由「本文件是最早求值的 module 入口」表达。
+ *
+ * 唯一静态依赖是 `./modules/orchestration-state.js`（纯状态 owner，无自身依赖）：
+ * 本文件要写 `_pendingSessionNavigation` / `_restoredScrollTop` 并读活绑定，若走
+ * `window.X =` 会新增全局状态台账。代价是 orchestration 域的 claim 提前到本文件的
+ * 注册行之前——defineKey 随后把同一批初值经 impl.set 推进域状态，**终态与迁移前
+ * 逐键相同**（注册初值本身就是迁移前的初值；中间没有其它写方）。
+ *
+ * ## 对外面：domain `app-core` 的桥键
+ *
+ * 迁 ESM 后，原先「顶层 function = window 属性」「顶层 let/const = 全局词法绑定」两条
+ * 可达路径同时消失。仍从 window 取用本文件符号的三类消费方，按桥键唯一注册制逐键
+ * 承接（文件末尾 `bridgeSlots` + 逐键 defineKey；不用循环注册——桥债门禁按文本统计
+ * `KernelState.defineKey(` 调用数，循环会让整套桥面在门禁刻度里消失）：
+ *
+ *   1. 已迁 ESM 模块经 `window.<fn>()` / `window.<key>` 取用：app-main / app-ui /
+ *      project-data / sidebar-render / p2-bootstrap-* / debug-* / ctx-menu-* / ph-* /
+ *      chat-viewport / todo-plan 等 30+ 文件；
+ *   2. 仍 classic 的消费方：im-ui / im-actions（悬置域，配方第四节禁改）裸读写
+ *      `qqbotConfigState` / `qqbotConfigRequest` / `imWorkspaceState` /
+ *      `imWorkspaceRequest` / `imWorkspaceAutoSaveTimer`；desktop-notify（R4 触线保留
+ *      classic）裸调 `_recentlyFinishedRuntimes.delete()`；
+ *   3. 测试夹具把其中大部分当作沙箱全局（约 60 个 test 文件）。
+ *
+ * 槽位语义（`bridgeSlots`）：
+ *   - 函数键（fnSlot）→ 值槽：整替只改窗口面，本模块内部互调仍走模块绑定（与迁移前
+ *     「改写 window 属性会连内部调用一起改」的差异是 plan P4 第十批记录的已接受边界）；
+ *   - `let` 状态键（letSlot）→ 读写指向模块声明本身，不另存；
+ *   - const 容器（constSlot）→ 按引用交出模块里的容器，整替只改窗口面（迁移前
+ *     classic const 与同名 `window.X` 普通属性本就分叉）。
+ *
+ * 注销条件（逐键同口径）：第 1 类消费方改具名 import、第 3 类改经 `__esmDomain.appCore`
+ * 取用后，删除 `bridgeSlots` 里对应条目与 defineKey 行（消费面 grep 归零为准）。
+ * 第 2 类的 6 个状态键随悬置域重做 / desktop-notify 迁 ESM 一并注销。
+ *
+ * 其余零消费面符号（PREBUILT_AGENTS / loadChatProcessVisibility /
+ * _interruptTargetCache / getUserCollapseStateContextKey / getUserCollapseStateForContext /
+ * convertLegacyWorkspaceToUi / getLegacyActionLabel / getLegacyActionTarget）收敛为
+ * 模块私有：不注册、不上桥、不导出。`MAX_CACHED_RUNTIME_VIEWS` / `POLL_*` 两个常量
+ * 只经既有宿主工厂交出（`createRuntimeViewCacheHost` / `createP2BootstrapPollHost`），
+ * 也不单独上桥。
+ */
+
+import {
+  _navigationGuardEpoch,
+  _pendingSessionNavigation,
+  _chatLoadingSession,
+  currentRuntimeAgentId,
+  setNavigationGuardEpoch,
+  setPendingSessionNavigation,
+  setRestoredScrollTop,
+} from './modules/orchestration-state.js';
+
 // The const Set remains the unique classic reference until its consumers migrate.
-const loadedAgentDetailIds = new Set();
+export const loadedAgentDetailIds = new Set();
 window.AgentLoaderHost = Object.freeze({ loadedAgentDetailIds });
 // Template resets can occur before ESM execution; claim absorbs the latest value.
 window.KernelState.defineKey('agent-loader', 'FEATURE_TEMPLATE_MAP', {});
@@ -16,41 +83,41 @@ window.KernelState.defineKey('agent-loader', 'FEATURE_TEMPLATE_MAP', {});
 // 宿主工厂（createP2Bootstrap*Host）。
 
 const PREBUILT_AGENTS = [];
-const pendingPrebuiltAgentIds = new Set();
-let suppressSidebarRerender = false;
-const restartingRuntimeIds = new Set();
+export const pendingPrebuiltAgentIds = new Set();
+export let suppressSidebarRerender = false;
+export const restartingRuntimeIds = new Set();
 
 window.KernelState.defineKey('agent-store', 'focusedAgentId', null);
 window.KernelState.defineKey('orchestration', 'currentRuntimeAgentId', null);
 window.KernelState.defineKey('agent-store', 'readOnlyMode', false);
 window.KernelState.defineKey('agent-store', 'loadAgentsInFlight', null);
-const workspaceSurfaceModePreferences = {};
+export const workspaceSurfaceModePreferences = {};
 window.KernelState.defineKey('agent-store', 'allAgents', []);
 // 追踪每个 agent 的 call 运行状态（实时更新，比 3s 轮询更快）
-const _agentCallActive = new Map();
+export const _agentCallActive = new Map();
 // 中断中的 runtime：用户点击打断后，abort 生效与 call.finish 之间天然存在异步间隔。
 // 这里记录的是一个粘性生命周期状态，而不是定时“抑制窗口”。只有同一 call 的终态
 // （callActive:false / call.finish）、明确的请求失败，或一个更新的 callStartedAt 才能清除它。
-const _interruptSuppression = new Map();
+export const _interruptSuppression = new Map();
 
 // ── Polling intervals ──────────────────────────────────────────
 const POLL_INTERVAL_MS   = 1000; // 正常态轮询间隔
 const POLL_FAST_INTERVAL_MS = 300; // 忙碌态/会话切换加速轮询间隔
 // Keep the original const Map available to classic sidebar pruning. The ESM
 // policy receives the same reference, so pruning and notification reads agree.
-function createCallInterruptHost() {
+export function createCallInterruptHost() {
   return { pending: _interruptSuppression, now: () => Date.now() };
 }
 // 追踪刚完成调用的 runtimeId，用于在侧边栏显示"已完成"指示灯
-const _recentlyFinishedRuntimes = new Set();
+export const _recentlyFinishedRuntimes = new Set();
 // 全局 choice 请求提醒：跟踪已弹 toast 的 requestId，避免重复提醒
-const _seenChoiceAlertIds = new Set();
+export const _seenChoiceAlertIds = new Set();
 let _lastChoiceAlertCheckAt = 0;
 window.KernelState.defineKey('session-view-storage', 'currentMessages', []);
 window.KernelState.defineKey('session-view-storage', 'currentInputRequests', []);
 window.KernelState.defineKey('session-view-storage', 'toolRenderConfigs', {});
 window.KernelState.defineKey('session-view-storage', 'TOOL_NAMES', {});
-const _autoTitleTriggered = new Set();
+export const _autoTitleTriggered = new Set();
 let contextMenuAgentId = null;
 let contextMenuAgentMode = null;
 let contextMenuCompactAction = null;
@@ -117,13 +184,13 @@ window.KernelState.defineKey('session-view-storage', 'currentTodoPlan', {
 window.KernelState.defineKey('session-view-storage', 'currentTodoPlanSignature', '');
 let _interruptTargetCache = new Map(); // key: runtimeContextKey, value: taskId|null
 let _lastInterruptUserActionAt = 0; // timestamp of last user click on interrupt control
-function getInterruptTargetId() {
+export function getInterruptTargetId() {
   // 桥接期：定义于 identity.js（app-main 迁 ESM 后改具名 import）。
   const key = window.getRuntimeContextKey();
   if (!key) return null;
   return _interruptTargetCache.get(key) || null;
 }
-function setInterruptTargetId(taskId) {
+export function setInterruptTargetId(taskId) {
   const key = window.getRuntimeContextKey();
   if (!key) return;
   if (taskId) {
@@ -167,7 +234,7 @@ let imWorkspaceState = {
 };
 let imWorkspaceRequest = null;
 let imWorkspaceAutoSaveTimer = null;
-let logFilters = {
+export let logFilters = {
   search: '',
   level: 'all',
   feature: 'all',
@@ -218,33 +285,35 @@ window.KernelState.defineKey('orchestration', '_switchEpoch', 0);             //
 // workspace can show the chat loading surface without inventing a sidebar leaf.
 window.KernelState.defineKey('orchestration', '_pendingSessionNavigation', null);
 
-function beginPendingSessionNavigation(agentId, sessionId = '', phase = 'committing') {
+// 状态 owner 是 orchestration-state（domain orchestration，本文件只注册它的访问器）：
+// 读经具名 import 的活绑定、写经该域的 setter——同一份绑定，不经 window 转发。
+export function beginPendingSessionNavigation(agentId, sessionId = '', phase = 'committing') {
   const normalizedAgentId = String(agentId || '').trim();
   if (!normalizedAgentId) return null;
-  _pendingSessionNavigation = {
+  setPendingSessionNavigation({
     agentId: normalizedAgentId,
     sessionId: String(sessionId || '').trim(),
     phase: String(phase || 'committing'),
     navigationEpoch: _navigationGuardEpoch,
-  };
+  });
   return _pendingSessionNavigation;
 }
 
-function updatePendingSessionNavigation(sessionId, phase = 'starting-runtime') {
+export function updatePendingSessionNavigation(sessionId, phase = 'starting-runtime') {
   if (!_pendingSessionNavigation) return null;
-  _pendingSessionNavigation = {
+  setPendingSessionNavigation({
     ..._pendingSessionNavigation,
     sessionId: String(sessionId || _pendingSessionNavigation.sessionId || '').trim(),
     phase: String(phase || _pendingSessionNavigation.phase || 'committing'),
-  };
+  });
   return _pendingSessionNavigation;
 }
 
-function clearPendingSessionNavigation() {
-  _pendingSessionNavigation = null;
+export function clearPendingSessionNavigation() {
+  setPendingSessionNavigation(null);
 }
 
-function hasPendingSessionNavigation(agent = null) {
+export function hasPendingSessionNavigation(agent = null) {
   if (!_pendingSessionNavigation || _pendingSessionNavigation.navigationEpoch !== _navigationGuardEpoch) {
     return false;
   }
@@ -261,10 +330,10 @@ function hasPendingSessionNavigation(agent = null) {
 // silently instead of yanking the user back.
 window.KernelState.defineKey('orchestration', '_navigationGuardEpoch', 0);
 
-function bumpNavigationGuard() {
-  _navigationGuardEpoch++;
+export function bumpNavigationGuard() {
+  setNavigationGuardEpoch(_navigationGuardEpoch + 1);
   if (_pendingSessionNavigation) {
-    _pendingSessionNavigation = null;
+    setPendingSessionNavigation(null);
   }
 }
 let phSessionSortMode = 'updatedAt'; // 'updatedAt' | 'createdAt' — programming-helper session list sort preference
@@ -286,10 +355,12 @@ const MAX_CACHED_RUNTIME_VIEWS = 4;
 const _agentRuntimeCache = new Map();
 const _userCollapseStateByContext = new Map();
 
+// 桥接期：currentRuntimeAgentId 的 owner 是 orchestration-state（具名 import 活绑定）；
+// focusedAgentId 的 owner 是 agent-store-state（本文件只注册访问器，经 window 晚绑定）。
 function getUserCollapseStateContextKey(runtimeId = currentRuntimeAgentId) {
   const runtimeKey = typeof window.getRuntimeContextKey === 'function' ? window.getRuntimeContextKey(runtimeId) : null;
   if (runtimeKey) return runtimeKey;
-  const agentKey = String(focusedAgentId || '').trim();
+  const agentKey = String(window.focusedAgentId || '').trim();
   return agentKey ? `agent:${agentKey}` : 'global';
 }
 
@@ -307,14 +378,14 @@ function getUserCollapseStateForContext(contextKey = getUserCollapseStateContext
   return state;
 }
 
-function activateUserCollapseStateForContext(contextKey = getUserCollapseStateContextKey()) {
+export function activateUserCollapseStateForContext(contextKey = getUserCollapseStateContextKey()) {
   const state = getUserCollapseStateForContext(contextKey);
   _userExpandedReasoning = state.expandedReasoning;
   _userCollapsedMsgs = state.collapsedMsgs;
   _userExpandedMsgs = state.expandedMsgs;
 }
 
-function resetUserCollapseStateForContext(contextKey = getUserCollapseStateContextKey()) {
+export function resetUserCollapseStateForContext(contextKey = getUserCollapseStateContextKey()) {
   const key = contextKey || 'global';
   _userCollapseStateByContext.delete(key);
   activateUserCollapseStateForContext(key);
@@ -322,41 +393,42 @@ function resetUserCollapseStateForContext(contextKey = getUserCollapseStateConte
 
 // Temporary adapter for classic lexical state. Cache policy lives in ESM;
 // these closures keep viewport/collapse initialization at its original time.
-function createRuntimeViewCacheHost() {
+export function createRuntimeViewCacheHost() {
   return {
     cache: _agentRuntimeCache,
     capacity: MAX_CACHED_RUNTIME_VIEWS,
     contextKey: (runtimeId) => window.getRuntimeContextKey(runtimeId),
-    readView: () => readCurrentSessionViewState(),
-    signatures: () => ({ hookInspector: currentHookInspectorSignature,
-      overview: currentOverviewSignature,
-      todo: typeof currentTodoPlanSignature !== 'undefined' ? currentTodoPlanSignature : undefined }),
-    todoSignature: (plan) => typeof getTodoPlanSignature === 'function'
-      ? getTodoPlanSignature(plan) : JSON.stringify(plan),
-    emptyTodo: () => typeof getEmptyTodoPlan === 'function' ? getEmptyTodoPlan() : null,
+    // 以下外来键都是运行期调用，经 window 晚绑定取用（定义域见行尾）：
+    readView: () => window.readCurrentSessionViewState(),              // session-view-state
+    signatures: () => ({ hookInspector: window.currentHookInspectorSignature,
+      overview: window.currentOverviewSignature,
+      todo: typeof window.currentTodoPlanSignature !== 'undefined' ? window.currentTodoPlanSignature : undefined }),
+    todoSignature: (plan) => typeof window.getTodoPlanSignature === 'function'
+      ? window.getTodoPlanSignature(plan) : JSON.stringify(plan),                 // todo-plan
+    emptyTodo: () => typeof window.getEmptyTodoPlan === 'function' ? window.getEmptyTodoPlan() : null, // todo-plan
     followLatest: () => followLatestEnabled,
     setFollowLatest: (value) => { followLatestEnabled = value; },
-    captureAnchor: (contextKey) => typeof rememberChatViewportAnchorForContext === 'function'
-      && typeof getChatViewportContextKey === 'function' && getChatViewportContextKey() === contextKey
-      ? rememberChatViewportAnchorForContext(contextKey)
-      : (typeof getRememberedChatViewportAnchorForContext === 'function'
-        ? getRememberedChatViewportAnchorForContext(contextKey) : null),
-    // 桥接期：container 的 owner 已迁 dom-refs.js（app-main 迁 ESM 后改具名 import）。
+    captureAnchor: (contextKey) => typeof window.rememberChatViewportAnchorForContext === 'function'
+      && typeof window.getChatViewportContextKey === 'function' && window.getChatViewportContextKey() === contextKey
+      ? window.rememberChatViewportAnchorForContext(contextKey)                   // chat-viewport
+      : (typeof window.getRememberedChatViewportAnchorForContext === 'function'
+        ? window.getRememberedChatViewportAnchorForContext(contextKey) : null),   // chat-viewport
+    // 桥接期：container 的 owner 已迁 dom-refs.js。
     scrollTop: () => window.container ? window.container.scrollTop : 0,
     activeCollapseContext: () => getUserCollapseStateContextKey(),
     forgetContext(contextKey) {
       _userCollapseStateByContext.delete(contextKey);
-      if (typeof forgetChatViewportAnchorForContext === 'function') forgetChatViewportAnchorForContext(contextKey);
+      if (typeof window.forgetChatViewportAnchorForContext === 'function') window.forgetChatViewportAnchorForContext(contextKey);
     },
     activateCollapse: (contextKey) => activateUserCollapseStateForContext(contextKey),
-    normalizeIdentity: (identity) => typeof normalizeSessionViewIdentity === 'function'
-      ? normalizeSessionViewIdentity(identity) : identity,
-    patch: (patch) => applySessionViewPatch(patch),
-    setRestoredScrollTop: (value) => { _restoredScrollTop = value; },
+    normalizeIdentity: (identity) => typeof window.normalizeSessionViewIdentity === 'function'
+      ? window.normalizeSessionViewIdentity(identity) : identity,                 // session-view-state
+    patch: (patch) => window.applySessionViewPatch(patch),                        // session-view-state
+    setRestoredScrollTop: (value) => { setRestoredScrollTop(value); },
     restoreAnchor: (anchor) => {
-      if (typeof setPendingChatViewportAnchor === 'function') setPendingChatViewportAnchor(anchor);
+      if (typeof window.setPendingChatViewportAnchor === 'function') window.setPendingChatViewportAnchor(anchor); // chat-viewport
     },
-    updatePlanBadge: () => { if (typeof updatePlanBadge === 'function') updatePlanBadge(); },
+    updatePlanBadge: () => { if (typeof window.updatePlanBadge === 'function') window.updatePlanBadge(); }, // todo-plan
   };
 }
 
@@ -365,13 +437,16 @@ function createRuntimeViewCacheHost() {
 // modules/format-utils.js（P4 T1）：本文件零内部调用点，classic 消费方
 // （悬置域 im-ui）经 window.localizeWorkspaceValue 桥键。
 
-function getEmptyStateHtml() {
+// _chatLoadingSession 经具名 import 活绑定（owner：orchestration-state）；currentLanguage
+// 的 owner 是 i18n-environment、escapeHtml / t 的桥键定义于 markdown-utils / i18n-host，
+// 一律经 window 晚绑定（运行期调用）。
+export function getEmptyStateHtml() {
   if (_chatLoadingSession) {
     return '<div class="empty-state chat-loading"><span class="chat-loading-spinner"></span><span>'
-      + escapeHtml(currentLanguage === 'zh' ? '正在加载对话…' : 'Loading conversation…')
+      + window.escapeHtml(window.currentLanguage === 'zh' ? '正在加载对话…' : 'Loading conversation…')
       + '</span></div>';
   }
-  let _isZh = currentLanguage === 'zh';
+  let _isZh = window.currentLanguage === 'zh';
   const _displayName = window.ClawFW?.workspaceAgents?.getWelcomeName() || '';
   let _title = _displayName
     ? (_isZh ? '欢迎使用' : 'Welcome to')
@@ -379,20 +454,20 @@ function getEmptyStateHtml() {
   let _hint = _isZh ? '输入消息开始对话' : 'Type a message to begin';
   if (_displayName) {
     return '<div class="empty-state empty-welcome">'
-      + '<div class="empty-welcome-title">' + escapeHtml((_isZh ? '欢迎使用 ' : 'Welcome to ') + _displayName) + '</div>'
+      + '<div class="empty-welcome-title">' + window.escapeHtml((_isZh ? '欢迎使用 ' : 'Welcome to ') + _displayName) + '</div>'
       + '<div class="empty-welcome-deco"></div>'
-      + '<div class="empty-welcome-hint">' + escapeHtml(_hint) + '</div>'
+      + '<div class="empty-welcome-hint">' + window.escapeHtml(_hint) + '</div>'
       + '</div>';
   }
   return '<div class="empty-state empty-welcome">'
-    + '<div class="empty-welcome-title">' + escapeHtml(_title) + '</div>'
+    + '<div class="empty-welcome-title">' + window.escapeHtml(_title) + '</div>'
     + '<div class="empty-welcome-deco"></div>'
-    + '<div class="empty-welcome-hint">' + escapeHtml(_hint) + '</div>'
+    + '<div class="empty-welcome-hint">' + window.escapeHtml(_hint) + '</div>'
     + '</div>';
 }
 
-function getFeaturePanelEmptyHtml() {
-  return '<div class="feature-panel-empty"><div>' + escapeHtml(t('panel_hint')) + '</div></div>';
+export function getFeaturePanelEmptyHtml() {
+  return '<div class="feature-panel-empty"><div>' + window.escapeHtml(window.t('panel_hint')) + '</div></div>';
 }
 
 function convertLegacyWorkspaceToUi(workspace) {
@@ -447,18 +522,19 @@ function getLegacyActionTarget(action) {
   return null;
 }
 
-function getCurrentUnitUi(agent = getCurrentAgentRecord()) {
+// 桥接期：getCurrentAgentRecord 的桥键定义于 app-main（运行期取用）。
+export function getCurrentUnitUi(agent = window.getCurrentAgentRecord()) {
   if (!agent) return null;
   if (agent.ui && typeof agent.ui === 'object') return agent.ui;
   if (agent.workspace && typeof agent.workspace === 'object') return convertLegacyWorkspaceToUi(agent.workspace);
   return null;
 }
 
-function isUiOnlyUnit(agent) {
+export function isUiOnlyUnit(agent) {
   return !!(agent && agent.source === 'prebuilt' && agent.launchMode === 'ui-only');
 }
 
-function isWorkspaceHostUnit(agent) {
+export function isWorkspaceHostUnit(agent) {
   if (!agent || agent.source !== 'prebuilt') return false;
   // 声明驱动：metadata `kind: "workspace"` 即工作空间（点开进首页，不经
   // start_agent 拉起 runtime）。kind 的语义是「是否有首页的工作空间」，
@@ -466,7 +542,7 @@ function isWorkspaceHostUnit(agent) {
   return agent.kind === 'workspace';
 }
 
-function isTablessHostSurface(agent) {
+export function isTablessHostSurface(agent) {
   return isWorkspaceHostUnit(agent) && agent?.id !== 'agent-studio';
 }
 
@@ -474,31 +550,32 @@ function isTablessHostSurface(agent) {
 // 不在此列——其首页是线程视图（plugins/coder 前端插件，经 ui.home blocks 渲染）。
 const PH_STYLE_WORKSPACE_AGENT_IDS = new Set(['programming-helper']);
 
-function isPhStyleWorkspaceAgent(agent = getCurrentAgentRecord()) {
+export function isPhStyleWorkspaceAgent(agent = window.getCurrentAgentRecord()) {
   return !!(agent && agent.source === 'prebuilt' && PH_STYLE_WORKSPACE_AGENT_IDS.has(agent.id));
 }
 
-function isWorkspaceSurfaceUnit(agent) {
+export function isWorkspaceSurfaceUnit(agent) {
   return isUiOnlyUnit(agent) || isWorkspaceHostUnit(agent);
 }
 
-function isUiOnlyAgentId(agentId) {
-  const directAgent = allAgents.find((item) => item.id === agentId);
+// 桥接期：allAgents 的 owner 是 agent-store-state（本文件只注册访问器）。
+export function isUiOnlyAgentId(agentId) {
+  const directAgent = window.allAgents.find((item) => item.id === agentId);
   if (directAgent) {
     return isWorkspaceSurfaceUnit(directAgent);
   }
-  const runtimeAgent = allAgents.find((item) => !isWorkspaceSurfaceUnit(item) && window.getAgentRuntimeId(item) === agentId);
+  const runtimeAgent = window.allAgents.find((item) => !isWorkspaceSurfaceUnit(item) && window.getAgentRuntimeId(item) === agentId);
   return isWorkspaceSurfaceUnit(runtimeAgent);
 }
 
-function getRuntimeRecord(agentId = currentRuntimeAgentId) {
+export function getRuntimeRecord(agentId = currentRuntimeAgentId) {
   if (!agentId) return null;
-  return allAgents.find((item) => !isWorkspaceSurfaceUnit(item) && window.getAgentRuntimeId(item) === agentId) || null;
+  return window.allAgents.find((item) => !isWorkspaceSurfaceUnit(item) && window.getAgentRuntimeId(item) === agentId) || null;
 }
 
-function findAgentByIdentity(agentId) {
+export function findAgentByIdentity(agentId) {
   if (!agentId) return null;
-  return allAgents.find((item) =>
+  return window.allAgents.find((item) =>
     item.id === agentId
     || item.runtime_session_id === agentId
     || item.runtimeSessionId === agentId
@@ -506,17 +583,17 @@ function findAgentByIdentity(agentId) {
   ) || null;
 }
 
-function resolveWorkspaceFallbackAgentId(agent = getCurrentAgentRecord()) {
-  if (focusedAgentId && allAgents.some((item) => item.id === focusedAgentId)) {
-    return focusedAgentId;
+export function resolveWorkspaceFallbackAgentId(agent = window.getCurrentAgentRecord()) {
+  if (window.focusedAgentId && window.allAgents.some((item) => item.id === window.focusedAgentId)) {
+    return window.focusedAgentId;
   }
   const parentId = String(agent?.parent_id || '').trim();
-  if (parentId && allAgents.some((item) => item.id === parentId)) {
+  if (parentId && window.allAgents.some((item) => item.id === parentId)) {
     return parentId;
   }
-  if (allAgents.some((item) => item.id === 'agent-creator')) return 'agent-creator';
-  if (allAgents.some((item) => item.id === 'home')) return 'home';
-  return allAgents[0]?.id || null;
+  if (window.allAgents.some((item) => item.id === 'agent-creator')) return 'agent-creator';
+  if (window.allAgents.some((item) => item.id === 'home')) return 'home';
+  return window.allAgents[0]?.id || null;
 }
 
 // ── P2 bootstrap 消费接口（classic 侧唯一实现）─────────────────────────────
@@ -541,7 +618,7 @@ function resolveWorkspaceFallbackAgentId(agent = getCurrentAgentRecord()) {
  * 注：followLatestEnabled 另经 createRuntimeViewCacheHost 供 runtime-view-cache
  * ESM 使用——两处都是同一 classic 声明的转发，不构成双存储。
  */
-function createP2BootstrapChatSurfaceHost() {
+export function createP2BootstrapChatSurfaceHost() {
   return Object.freeze({
     CHAT_PROCESS_VISIBILITY_KEY, // 只读：localStorage 键名常量
     get showChatProcess() { return showChatProcess; },
@@ -605,7 +682,7 @@ function createP2BootstrapChatSurfaceHost() {
  * createAgentCallStatesHost（sidebar-render）交给 agent-call-states-engine（模块相
  * 唯一实例），同一容器，不构成双存储。
  */
-function createP2BootstrapCallActivityHost() {
+export function createP2BootstrapCallActivityHost() {
   return Object.freeze({
     _agentCallActive,            // 只读引用：Map 变异走既有方法
     _recentlyFinishedRuntimes,   // 只读引用：Set 变异走既有方法
@@ -634,7 +711,7 @@ function createP2BootstrapCallActivityHost() {
  * 轮询，app-main 迁入模块相后那条转发面随之改变——本工厂成为它唯一的 classic
  * 读写入口，同一份绑定，不构成第二份状态。
  */
-function createP2BootstrapPollHost() {
+export function createP2BootstrapPollHost() {
   return Object.freeze({
     POLL_INTERVAL_MS,
     POLL_FAST_INTERVAL_MS,
@@ -651,7 +728,7 @@ function createP2BootstrapPollHost() {
  * ph-search-locate / ph-session-move / session-ui / app-ui。
  * savedPhTabState 只读引用：classic 侧按 tabGroup 键就地改写（不整体替换）。
  */
-function createP2BootstrapPhSessionHost() {
+export function createP2BootstrapPhSessionHost() {
   return Object.freeze({
     get phSessionSortMode() { return phSessionSortMode; },
     set phSessionSortMode(value) { phSessionSortMode = value; },
@@ -669,7 +746,7 @@ function createP2BootstrapPhSessionHost() {
  * debug-features-hooks / workspace-blocks / debug-summary-upload。
  * logFilters 只读引用：classic 侧按字段就地赋值（updateLogFilter）。
  */
-function createP2BootstrapDebugPanelHost() {
+export function createP2BootstrapDebugPanelHost() {
   return Object.freeze({
     get currentLogs() { return currentLogs; },
     set currentLogs(value) { currentLogs = value; },
@@ -702,7 +779,7 @@ function createP2BootstrapDebugPanelHost() {
  * 就可点（rail-logs），因此该写入口必须在 classic 相同步可用——它不能住在
  * ESM 域（原在 overview-data，模块相才可达，早期点击会 ReferenceError）。
  */
-function setCurrentLogs(logs) {
+export function setCurrentLogs(logs) {
   const nextLogs = Array.isArray(logs) ? logs : [];
   currentLogs = nextLogs;
   currentLogsSignature = JSON.stringify({
@@ -715,7 +792,7 @@ function setCurrentLogs(logs) {
  * assembly 工作台 UI 状态：控制面板开合、草稿重渲染句柄、启动在飞标志、
  * 侧栏渐显句柄。消费方：assembly-actions / assembly-data / chat-viewport / app-ui。
  */
-function createP2BootstrapAssemblyHost() {
+export function createP2BootstrapAssemblyHost() {
   return Object.freeze({
     get assemblyControlPanelOpen() { return assemblyControlPanelOpen; },
     set assemblyControlPanelOpen(value) { assemblyControlPanelOpen = value; },
@@ -735,7 +812,7 @@ function createP2BootstrapAssemblyHost() {
  * 取用（渲染签名仍在 sidebar-render 自己的 host 里）。渲染签名（lastAgentListRenderSignature）在 sidebar-render.js
  * 自己的 host 里，见 createP2BootstrapSidebarRenderHost。
  */
-function createP2BootstrapSidebarHost() {
+export function createP2BootstrapSidebarHost() {
   return Object.freeze({
     restartingRuntimeIds,        // 只读引用：Set 变异走既有方法
     // B6（P4 T2 收尾批次）：待启动的 prebuilt 条目集合。sidebar-render 的
@@ -751,7 +828,7 @@ function createP2BootstrapSidebarHost() {
  * 预制工作空间会话切换引导标志：模板预热代次（template-engine 递增并比较）、
  * 会话切换在飞。消费方：template-engine / workspace-actions / app-main。
  */
-function createP2BootstrapSessionSwitchHost() {
+export function createP2BootstrapSessionSwitchHost() {
   return Object.freeze({
     get templateWarmupToken() { return templateWarmupToken; },
     set templateWarmupToken(value) { templateWarmupToken = value; },
@@ -767,7 +844,7 @@ function createP2BootstrapSessionSwitchHost() {
  * 适配模块的 domRefs 取用）。
  * 6 键都可写，因此 get/set 成对转发到原声明。
  */
-function createP2BootstrapContextMenuHost() {
+export function createP2BootstrapContextMenuHost() {
   return Object.freeze({
     get contextMenuAgentId() { return contextMenuAgentId; },
     set contextMenuAgentId(value) { contextMenuAgentId = value; },
@@ -799,7 +876,7 @@ function createP2BootstrapContextMenuHost() {
  * 收敛条件：工作空间 surface 域状态整体迁入 ESM owner（render-entry-state）时，
  * 这三个键随搬迁注销本工厂。
  */
-function createP2BootstrapAppUiStateHost() {
+export function createP2BootstrapAppUiStateHost() {
   return Object.freeze({
     workspaceSurfaceModePreferences,
     workspaceSurfaceScrollCache,
@@ -860,3 +937,254 @@ function createP2BootstrapAppUiStateHost() {
   window.KernelState.defineKey('call-interrupt', 'isInterruptSuppressed', policy.isInterruptSuppressed);
   window.KernelState.defineKey('call-interrupt', 'clearInterruptSuppression', policy.clearInterruptSuppression);
 })();
+
+// ── 对外面：domain `app-core` 的桥键（P4 收尾批）──────────────────────────
+// 逐键清单与注销条件见文件头注「对外面」一节。
+//
+// 两类槽：
+//   - 函数键 → `fnSlot`：槽里放模块实现，classic / 夹具整替某个函数时只改槽，
+//     因此 window 读到的仍是替换值；本模块**内部**互调仍走模块绑定（与迁移前
+//     "改写 window 属性连内部调用一起改"的差异是已接受的边界，见 plan P4 第十批）。
+//   - 状态键 → `letSlot` / `constSlot`：绑定槽（let 的读写直连模块声明，不另存）；
+//     const 容器按引用交出（数组 / Map / Set 变异照旧），整替只改窗口面。
+const fnSlot = (initial) => {
+  let value = initial;
+  return { get: () => value, set: (next) => { value = next; } };
+};
+/** let 绑定槽：读写都落在模块声明本身（不另存）。 */
+const letSlot = (read, write) => ({ get: read, set: write });
+/**
+ * const 容器槽：按引用交出模块里的容器；无论桥读还是 claim，模块内部继续持有原容器。
+ * 整替只改**窗口面**的值——与迁移前「classic 顶层 const 是词法绑定、同名
+ * `window.X = …` 只是另一个普通属性」的分叉语义一致，不新增也不收窄。
+ * 实现与 `fnSlot` 同为值槽；名字分开是为了让桥键清单能区分「函数键 / 容器键」，
+ * 两者的消费面与注销条件不同。
+ */
+const constSlot = (initial) => {
+  let value = initial;
+  return { get: () => value, set: (next) => { value = next; } };
+};
+
+/** 本域对外面：函数键（值槽）+ 状态键（绑定槽）。注销条件见文件头注。 */
+const bridgeSlots = {
+  createCallInterruptHost: fnSlot(createCallInterruptHost),
+  getInterruptTargetId: fnSlot(getInterruptTargetId),
+  setInterruptTargetId: fnSlot(setInterruptTargetId),
+  beginPendingSessionNavigation: fnSlot(beginPendingSessionNavigation),
+  updatePendingSessionNavigation: fnSlot(updatePendingSessionNavigation),
+  clearPendingSessionNavigation: fnSlot(clearPendingSessionNavigation),
+  hasPendingSessionNavigation: fnSlot(hasPendingSessionNavigation),
+  bumpNavigationGuard: fnSlot(bumpNavigationGuard),
+  activateUserCollapseStateForContext: fnSlot(activateUserCollapseStateForContext),
+  resetUserCollapseStateForContext: fnSlot(resetUserCollapseStateForContext),
+  createRuntimeViewCacheHost: fnSlot(createRuntimeViewCacheHost),
+  getEmptyStateHtml: fnSlot(getEmptyStateHtml),
+  getFeaturePanelEmptyHtml: fnSlot(getFeaturePanelEmptyHtml),
+  getCurrentUnitUi: fnSlot(getCurrentUnitUi),
+  isUiOnlyUnit: fnSlot(isUiOnlyUnit),
+  isWorkspaceHostUnit: fnSlot(isWorkspaceHostUnit),
+  isTablessHostSurface: fnSlot(isTablessHostSurface),
+  isPhStyleWorkspaceAgent: fnSlot(isPhStyleWorkspaceAgent),
+  isWorkspaceSurfaceUnit: fnSlot(isWorkspaceSurfaceUnit),
+  isUiOnlyAgentId: fnSlot(isUiOnlyAgentId),
+  getRuntimeRecord: fnSlot(getRuntimeRecord),
+  findAgentByIdentity: fnSlot(findAgentByIdentity),
+  resolveWorkspaceFallbackAgentId: fnSlot(resolveWorkspaceFallbackAgentId),
+  setCurrentLogs: fnSlot(setCurrentLogs),
+  createP2BootstrapChatSurfaceHost: fnSlot(createP2BootstrapChatSurfaceHost),
+  createP2BootstrapCallActivityHost: fnSlot(createP2BootstrapCallActivityHost),
+  createP2BootstrapPollHost: fnSlot(createP2BootstrapPollHost),
+  createP2BootstrapPhSessionHost: fnSlot(createP2BootstrapPhSessionHost),
+  createP2BootstrapDebugPanelHost: fnSlot(createP2BootstrapDebugPanelHost),
+  createP2BootstrapAssemblyHost: fnSlot(createP2BootstrapAssemblyHost),
+  createP2BootstrapSidebarHost: fnSlot(createP2BootstrapSidebarHost),
+  createP2BootstrapSessionSwitchHost: fnSlot(createP2BootstrapSessionSwitchHost),
+  createP2BootstrapContextMenuHost: fnSlot(createP2BootstrapContextMenuHost),
+  createP2BootstrapAppUiStateHost: fnSlot(createP2BootstrapAppUiStateHost),
+  _agentCallActive: constSlot(_agentCallActive),
+  _interruptSuppression: constSlot(_interruptSuppression),
+  _recentlyFinishedRuntimes: constSlot(_recentlyFinishedRuntimes),
+  _seenChoiceAlertIds: constSlot(_seenChoiceAlertIds),
+  _autoTitleTriggered: constSlot(_autoTitleTriggered),
+  loadedAgentDetailIds: constSlot(loadedAgentDetailIds),
+  restartingRuntimeIds: constSlot(restartingRuntimeIds),
+  followLatestEnabled: letSlot(() => followLatestEnabled, (value) => { followLatestEnabled = value; }),
+  suppressFollowScrollEvent: letSlot(() => suppressFollowScrollEvent, (value) => { suppressFollowScrollEvent = value; }),
+  suppressSidebarRerender: letSlot(() => suppressSidebarRerender, (value) => { suppressSidebarRerender = value; }),
+  lastManualScrollIntentAt: letSlot(() => lastManualScrollIntentAt, (value) => { lastManualScrollIntentAt = value; }),
+  showChatProcess: letSlot(() => showChatProcess, (value) => { showChatProcess = value; }),
+  chatViewportObserversReady: letSlot(() => chatViewportObserversReady, (value) => { chatViewportObserversReady = value; }),
+  chatViewportObserverSuppressDepth: letSlot(() => chatViewportObserverSuppressDepth, (value) => { chatViewportObserverSuppressDepth = value; }),
+  chatViewportObserverQuietUntil: letSlot(() => chatViewportObserverQuietUntil, (value) => { chatViewportObserverQuietUntil = value; }),
+  chatViewportSettlementToken: letSlot(() => chatViewportSettlementToken, (value) => { chatViewportSettlementToken = value; }),
+  chatViewportSettlementTimer: letSlot(() => chatViewportSettlementTimer, (value) => { chatViewportSettlementTimer = value; }),
+  chatViewportSettlementContext: letSlot(() => chatViewportSettlementContext, (value) => { chatViewportSettlementContext = value; }),
+  chatViewportFollowTransition: letSlot(() => chatViewportFollowTransition, (value) => { chatViewportFollowTransition = value; }),
+  prebuiltSessionSwitchInFlight: letSlot(() => prebuiltSessionSwitchInFlight, (value) => { prebuiltSessionSwitchInFlight = value; }),
+  templateWarmupToken: letSlot(() => templateWarmupToken, (value) => { templateWarmupToken = value; }),
+  phSessionSortMode: letSlot(() => phSessionSortMode, (value) => { phSessionSortMode = value; }),
+  phSearchQuery: letSlot(() => phSearchQuery, (value) => { phSearchQuery = value; }),
+  _phSearchTimer: letSlot(() => _phSearchTimer, (value) => { _phSearchTimer = value; }),
+  savedPhTabState: letSlot(() => savedPhTabState, (value) => { savedPhTabState = value; }),
+  contextMenuAgentId: letSlot(() => contextMenuAgentId, (value) => { contextMenuAgentId = value; }),
+  contextMenuAgentMode: letSlot(() => contextMenuAgentMode, (value) => { contextMenuAgentMode = value; }),
+  contextMenuCompactAction: letSlot(() => contextMenuCompactAction, (value) => { contextMenuCompactAction = value; }),
+  contextMenuProjectAgentId: letSlot(() => contextMenuProjectAgentId, (value) => { contextMenuProjectAgentId = value; }),
+  contextMenuProjectId: letSlot(() => contextMenuProjectId, (value) => { contextMenuProjectId = value; }),
+  contextMenuFeatureRepoPackageId: letSlot(() => contextMenuFeatureRepoPackageId, (value) => { contextMenuFeatureRepoPackageId = value; }),
+  assemblyLaunchInProgress: letSlot(() => assemblyLaunchInProgress, (value) => { assemblyLaunchInProgress = value; }),
+  assemblyControlPanelOpen: letSlot(() => assemblyControlPanelOpen, (value) => { assemblyControlPanelOpen = value; }),
+  currentLogs: letSlot(() => currentLogs, (value) => { currentLogs = value; }),
+  currentLogsSignature: letSlot(() => currentLogsSignature, (value) => { currentLogsSignature = value; }),
+  _lastInterruptUserActionAt: letSlot(() => _lastInterruptUserActionAt, (value) => { _lastInterruptUserActionAt = value; }),
+  logFilters: letSlot(() => logFilters, (value) => { logFilters = value; }),
+  selectedFeatureName: letSlot(() => selectedFeatureName, (value) => { selectedFeatureName = value; }),
+  _userCollapsedMsgs: letSlot(() => _userCollapsedMsgs, (value) => { _userCollapsedMsgs = value; }),
+  _userExpandedMsgs: letSlot(() => _userExpandedMsgs, (value) => { _userExpandedMsgs = value; }),
+  _userCollapseStateByContext: constSlot(_userCollapseStateByContext),
+  _agentRuntimeCache: constSlot(_agentRuntimeCache),
+  qqbotConfigState: letSlot(() => qqbotConfigState, (value) => { qqbotConfigState = value; }),
+  qqbotConfigRequest: letSlot(() => qqbotConfigRequest, (value) => { qqbotConfigRequest = value; }),
+  imWorkspaceState: letSlot(() => imWorkspaceState, (value) => { imWorkspaceState = value; }),
+  imWorkspaceRequest: letSlot(() => imWorkspaceRequest, (value) => { imWorkspaceRequest = value; }),
+  imWorkspaceAutoSaveTimer: letSlot(() => imWorkspaceAutoSaveTimer, (value) => { imWorkspaceAutoSaveTimer = value; }),
+  pendingPrebuiltAgentIds: constSlot(pendingPrebuiltAgentIds),
+  workspaceSurfaceModePreferences: constSlot(workspaceSurfaceModePreferences),
+  _lastChoiceAlertCheckAt: letSlot(() => _lastChoiceAlertCheckAt, (value) => { _lastChoiceAlertCheckAt = value; }),
+  _workGroupEventsWired: letSlot(() => _workGroupEventsWired, (value) => { _workGroupEventsWired = value; }),
+  assemblyDraftRenderTimer: letSlot(() => assemblyDraftRenderTimer, (value) => { assemblyDraftRenderTimer = value; }),
+  assemblySideRailRevealTimer: letSlot(() => assemblySideRailRevealTimer, (value) => { assemblySideRailRevealTimer = value; }),
+  CHAT_PROCESS_VISIBILITY_KEY: constSlot(CHAT_PROCESS_VISIBILITY_KEY),
+  currentLogsTruncation: letSlot(() => currentLogsTruncation, (value) => { currentLogsTruncation = value; }),
+  currentMcpInfo: letSlot(() => currentMcpInfo, (value) => { currentMcpInfo = value; }),
+  lastFeatureTemplateReloadAt: letSlot(() => lastFeatureTemplateReloadAt, (value) => { lastFeatureTemplateReloadAt = value; }),
+  selectedOverviewLifecycle: letSlot(() => selectedOverviewLifecycle, (value) => { selectedOverviewLifecycle = value; }),
+  selectedRepositoryPackageId: letSlot(() => selectedRepositoryPackageId, (value) => { selectedRepositoryPackageId = value; }),
+  repoSearchQuery: letSlot(() => repoSearchQuery, (value) => { repoSearchQuery = value; }),
+  repoSourceFilter: letSlot(() => repoSourceFilter, (value) => { repoSourceFilter = value; }),
+  _progScrollCooldownUntil: letSlot(() => _progScrollCooldownUntil, (value) => { _progScrollCooldownUntil = value; }),
+  followLatestEntryUntil: letSlot(() => followLatestEntryUntil, (value) => { followLatestEntryUntil = value; }),
+  chatViewportMutationObserver: letSlot(() => chatViewportMutationObserver, (value) => { chatViewportMutationObserver = value; }),
+  chatViewportResizeObserver: letSlot(() => chatViewportResizeObserver, (value) => { chatViewportResizeObserver = value; }),
+  chatViewportSettlementRaf: letSlot(() => chatViewportSettlementRaf, (value) => { chatViewportSettlementRaf = value; }),
+  chatViewportFollowRaf: letSlot(() => chatViewportFollowRaf, (value) => { chatViewportFollowRaf = value; }),
+  chatViewportFollowToken: letSlot(() => chatViewportFollowToken, (value) => { chatViewportFollowToken = value; }),
+  workspaceSurfaceScrollCache: constSlot(workspaceSurfaceScrollCache),
+  _userExpandedReasoning: letSlot(() => _userExpandedReasoning, (value) => { _userExpandedReasoning = value; }),
+  PH_STYLE_WORKSPACE_AGENT_IDS: constSlot(PH_STYLE_WORKSPACE_AGENT_IDS),
+};
+
+/** 只按引用交出、不接受整替的 const 容器键；测试支撑面据此跳过整替回放。 */
+export const CONST_BRIDGE_KEYS = new Set(['_agentCallActive', '_interruptSuppression', '_recentlyFinishedRuntimes', '_seenChoiceAlertIds', '_autoTitleTriggered', 'loadedAgentDetailIds', 'restartingRuntimeIds', '_userCollapseStateByContext', '_agentRuntimeCache']);
+
+// 逐键显式注册（不用循环）：桥债门禁按文本统计 `KernelState.defineKey(` 调用数，
+// 循环会把整套桥面压缩成一次调用，使债务在门禁刻度里消失。
+window.KernelState.defineKey('app-core', 'createCallInterruptHost', bridgeSlots.createCallInterruptHost.get());
+window.KernelState.defineKey('app-core', 'getInterruptTargetId', bridgeSlots.getInterruptTargetId.get());
+window.KernelState.defineKey('app-core', 'setInterruptTargetId', bridgeSlots.setInterruptTargetId.get());
+window.KernelState.defineKey('app-core', 'beginPendingSessionNavigation', bridgeSlots.beginPendingSessionNavigation.get());
+window.KernelState.defineKey('app-core', 'updatePendingSessionNavigation', bridgeSlots.updatePendingSessionNavigation.get());
+window.KernelState.defineKey('app-core', 'clearPendingSessionNavigation', bridgeSlots.clearPendingSessionNavigation.get());
+window.KernelState.defineKey('app-core', 'hasPendingSessionNavigation', bridgeSlots.hasPendingSessionNavigation.get());
+window.KernelState.defineKey('app-core', 'bumpNavigationGuard', bridgeSlots.bumpNavigationGuard.get());
+window.KernelState.defineKey('app-core', 'activateUserCollapseStateForContext', bridgeSlots.activateUserCollapseStateForContext.get());
+window.KernelState.defineKey('app-core', 'resetUserCollapseStateForContext', bridgeSlots.resetUserCollapseStateForContext.get());
+window.KernelState.defineKey('app-core', 'createRuntimeViewCacheHost', bridgeSlots.createRuntimeViewCacheHost.get());
+window.KernelState.defineKey('app-core', 'getEmptyStateHtml', bridgeSlots.getEmptyStateHtml.get());
+window.KernelState.defineKey('app-core', 'getFeaturePanelEmptyHtml', bridgeSlots.getFeaturePanelEmptyHtml.get());
+window.KernelState.defineKey('app-core', 'getCurrentUnitUi', bridgeSlots.getCurrentUnitUi.get());
+window.KernelState.defineKey('app-core', 'isUiOnlyUnit', bridgeSlots.isUiOnlyUnit.get());
+window.KernelState.defineKey('app-core', 'isWorkspaceHostUnit', bridgeSlots.isWorkspaceHostUnit.get());
+window.KernelState.defineKey('app-core', 'isTablessHostSurface', bridgeSlots.isTablessHostSurface.get());
+window.KernelState.defineKey('app-core', 'isPhStyleWorkspaceAgent', bridgeSlots.isPhStyleWorkspaceAgent.get());
+window.KernelState.defineKey('app-core', 'isWorkspaceSurfaceUnit', bridgeSlots.isWorkspaceSurfaceUnit.get());
+window.KernelState.defineKey('app-core', 'isUiOnlyAgentId', bridgeSlots.isUiOnlyAgentId.get());
+window.KernelState.defineKey('app-core', 'getRuntimeRecord', bridgeSlots.getRuntimeRecord.get());
+window.KernelState.defineKey('app-core', 'findAgentByIdentity', bridgeSlots.findAgentByIdentity.get());
+window.KernelState.defineKey('app-core', 'resolveWorkspaceFallbackAgentId', bridgeSlots.resolveWorkspaceFallbackAgentId.get());
+window.KernelState.defineKey('app-core', 'setCurrentLogs', bridgeSlots.setCurrentLogs.get());
+window.KernelState.defineKey('app-core', 'createP2BootstrapChatSurfaceHost', bridgeSlots.createP2BootstrapChatSurfaceHost.get());
+window.KernelState.defineKey('app-core', 'createP2BootstrapCallActivityHost', bridgeSlots.createP2BootstrapCallActivityHost.get());
+window.KernelState.defineKey('app-core', 'createP2BootstrapPollHost', bridgeSlots.createP2BootstrapPollHost.get());
+window.KernelState.defineKey('app-core', 'createP2BootstrapPhSessionHost', bridgeSlots.createP2BootstrapPhSessionHost.get());
+window.KernelState.defineKey('app-core', 'createP2BootstrapDebugPanelHost', bridgeSlots.createP2BootstrapDebugPanelHost.get());
+window.KernelState.defineKey('app-core', 'createP2BootstrapAssemblyHost', bridgeSlots.createP2BootstrapAssemblyHost.get());
+window.KernelState.defineKey('app-core', 'createP2BootstrapSidebarHost', bridgeSlots.createP2BootstrapSidebarHost.get());
+window.KernelState.defineKey('app-core', 'createP2BootstrapSessionSwitchHost', bridgeSlots.createP2BootstrapSessionSwitchHost.get());
+window.KernelState.defineKey('app-core', 'createP2BootstrapContextMenuHost', bridgeSlots.createP2BootstrapContextMenuHost.get());
+window.KernelState.defineKey('app-core', 'createP2BootstrapAppUiStateHost', bridgeSlots.createP2BootstrapAppUiStateHost.get());
+window.KernelState.defineKey('app-core', '_agentCallActive', bridgeSlots._agentCallActive.get());
+window.KernelState.defineKey('app-core', '_interruptSuppression', bridgeSlots._interruptSuppression.get());
+window.KernelState.defineKey('app-core', '_recentlyFinishedRuntimes', bridgeSlots._recentlyFinishedRuntimes.get());
+window.KernelState.defineKey('app-core', '_seenChoiceAlertIds', bridgeSlots._seenChoiceAlertIds.get());
+window.KernelState.defineKey('app-core', '_autoTitleTriggered', bridgeSlots._autoTitleTriggered.get());
+window.KernelState.defineKey('app-core', 'loadedAgentDetailIds', bridgeSlots.loadedAgentDetailIds.get());
+window.KernelState.defineKey('app-core', 'restartingRuntimeIds', bridgeSlots.restartingRuntimeIds.get());
+window.KernelState.defineKey('app-core', 'followLatestEnabled', bridgeSlots.followLatestEnabled.get());
+window.KernelState.defineKey('app-core', 'suppressFollowScrollEvent', bridgeSlots.suppressFollowScrollEvent.get());
+window.KernelState.defineKey('app-core', 'suppressSidebarRerender', bridgeSlots.suppressSidebarRerender.get());
+window.KernelState.defineKey('app-core', 'lastManualScrollIntentAt', bridgeSlots.lastManualScrollIntentAt.get());
+window.KernelState.defineKey('app-core', 'showChatProcess', bridgeSlots.showChatProcess.get());
+window.KernelState.defineKey('app-core', 'chatViewportObserversReady', bridgeSlots.chatViewportObserversReady.get());
+window.KernelState.defineKey('app-core', 'chatViewportObserverSuppressDepth', bridgeSlots.chatViewportObserverSuppressDepth.get());
+window.KernelState.defineKey('app-core', 'chatViewportObserverQuietUntil', bridgeSlots.chatViewportObserverQuietUntil.get());
+window.KernelState.defineKey('app-core', 'chatViewportSettlementToken', bridgeSlots.chatViewportSettlementToken.get());
+window.KernelState.defineKey('app-core', 'chatViewportSettlementTimer', bridgeSlots.chatViewportSettlementTimer.get());
+window.KernelState.defineKey('app-core', 'chatViewportSettlementContext', bridgeSlots.chatViewportSettlementContext.get());
+window.KernelState.defineKey('app-core', 'chatViewportFollowTransition', bridgeSlots.chatViewportFollowTransition.get());
+window.KernelState.defineKey('app-core', 'prebuiltSessionSwitchInFlight', bridgeSlots.prebuiltSessionSwitchInFlight.get());
+window.KernelState.defineKey('app-core', 'templateWarmupToken', bridgeSlots.templateWarmupToken.get());
+window.KernelState.defineKey('app-core', 'phSessionSortMode', bridgeSlots.phSessionSortMode.get());
+window.KernelState.defineKey('app-core', 'phSearchQuery', bridgeSlots.phSearchQuery.get());
+window.KernelState.defineKey('app-core', '_phSearchTimer', bridgeSlots._phSearchTimer.get());
+window.KernelState.defineKey('app-core', 'savedPhTabState', bridgeSlots.savedPhTabState.get());
+window.KernelState.defineKey('app-core', 'contextMenuAgentId', bridgeSlots.contextMenuAgentId.get());
+window.KernelState.defineKey('app-core', 'contextMenuAgentMode', bridgeSlots.contextMenuAgentMode.get());
+window.KernelState.defineKey('app-core', 'contextMenuCompactAction', bridgeSlots.contextMenuCompactAction.get());
+window.KernelState.defineKey('app-core', 'contextMenuProjectAgentId', bridgeSlots.contextMenuProjectAgentId.get());
+window.KernelState.defineKey('app-core', 'contextMenuProjectId', bridgeSlots.contextMenuProjectId.get());
+window.KernelState.defineKey('app-core', 'contextMenuFeatureRepoPackageId', bridgeSlots.contextMenuFeatureRepoPackageId.get());
+window.KernelState.defineKey('app-core', 'assemblyLaunchInProgress', bridgeSlots.assemblyLaunchInProgress.get());
+window.KernelState.defineKey('app-core', 'assemblyControlPanelOpen', bridgeSlots.assemblyControlPanelOpen.get());
+window.KernelState.defineKey('app-core', 'currentLogs', bridgeSlots.currentLogs.get());
+window.KernelState.defineKey('app-core', 'currentLogsSignature', bridgeSlots.currentLogsSignature.get());
+window.KernelState.defineKey('app-core', '_lastInterruptUserActionAt', bridgeSlots._lastInterruptUserActionAt.get());
+window.KernelState.defineKey('app-core', 'logFilters', bridgeSlots.logFilters.get());
+window.KernelState.defineKey('app-core', 'selectedFeatureName', bridgeSlots.selectedFeatureName.get());
+window.KernelState.defineKey('app-core', '_userCollapsedMsgs', bridgeSlots._userCollapsedMsgs.get());
+window.KernelState.defineKey('app-core', '_userExpandedMsgs', bridgeSlots._userExpandedMsgs.get());
+window.KernelState.defineKey('app-core', '_userCollapseStateByContext', bridgeSlots._userCollapseStateByContext.get());
+window.KernelState.defineKey('app-core', '_agentRuntimeCache', bridgeSlots._agentRuntimeCache.get());
+window.KernelState.defineKey('app-core', 'qqbotConfigState', bridgeSlots.qqbotConfigState.get());
+window.KernelState.defineKey('app-core', 'qqbotConfigRequest', bridgeSlots.qqbotConfigRequest.get());
+window.KernelState.defineKey('app-core', 'imWorkspaceState', bridgeSlots.imWorkspaceState.get());
+window.KernelState.defineKey('app-core', 'imWorkspaceRequest', bridgeSlots.imWorkspaceRequest.get());
+window.KernelState.defineKey('app-core', 'imWorkspaceAutoSaveTimer', bridgeSlots.imWorkspaceAutoSaveTimer.get());
+window.KernelState.defineKey('app-core', 'pendingPrebuiltAgentIds', bridgeSlots.pendingPrebuiltAgentIds.get());
+window.KernelState.defineKey('app-core', 'workspaceSurfaceModePreferences', bridgeSlots.workspaceSurfaceModePreferences.get());
+window.KernelState.defineKey('app-core', '_lastChoiceAlertCheckAt', bridgeSlots._lastChoiceAlertCheckAt.get());
+window.KernelState.defineKey('app-core', '_workGroupEventsWired', bridgeSlots._workGroupEventsWired.get());
+window.KernelState.defineKey('app-core', 'assemblyDraftRenderTimer', bridgeSlots.assemblyDraftRenderTimer.get());
+window.KernelState.defineKey('app-core', 'assemblySideRailRevealTimer', bridgeSlots.assemblySideRailRevealTimer.get());
+window.KernelState.defineKey('app-core', 'CHAT_PROCESS_VISIBILITY_KEY', bridgeSlots.CHAT_PROCESS_VISIBILITY_KEY.get());
+window.KernelState.defineKey('app-core', 'currentLogsTruncation', bridgeSlots.currentLogsTruncation.get());
+window.KernelState.defineKey('app-core', 'currentMcpInfo', bridgeSlots.currentMcpInfo.get());
+window.KernelState.defineKey('app-core', 'lastFeatureTemplateReloadAt', bridgeSlots.lastFeatureTemplateReloadAt.get());
+window.KernelState.defineKey('app-core', 'selectedOverviewLifecycle', bridgeSlots.selectedOverviewLifecycle.get());
+window.KernelState.defineKey('app-core', 'selectedRepositoryPackageId', bridgeSlots.selectedRepositoryPackageId.get());
+window.KernelState.defineKey('app-core', 'repoSearchQuery', bridgeSlots.repoSearchQuery.get());
+window.KernelState.defineKey('app-core', 'repoSourceFilter', bridgeSlots.repoSourceFilter.get());
+window.KernelState.defineKey('app-core', '_progScrollCooldownUntil', bridgeSlots._progScrollCooldownUntil.get());
+window.KernelState.defineKey('app-core', 'followLatestEntryUntil', bridgeSlots.followLatestEntryUntil.get());
+window.KernelState.defineKey('app-core', 'chatViewportMutationObserver', bridgeSlots.chatViewportMutationObserver.get());
+window.KernelState.defineKey('app-core', 'chatViewportResizeObserver', bridgeSlots.chatViewportResizeObserver.get());
+window.KernelState.defineKey('app-core', 'chatViewportSettlementRaf', bridgeSlots.chatViewportSettlementRaf.get());
+window.KernelState.defineKey('app-core', 'chatViewportFollowRaf', bridgeSlots.chatViewportFollowRaf.get());
+window.KernelState.defineKey('app-core', 'chatViewportFollowToken', bridgeSlots.chatViewportFollowToken.get());
+window.KernelState.defineKey('app-core', 'workspaceSurfaceScrollCache', bridgeSlots.workspaceSurfaceScrollCache.get());
+window.KernelState.defineKey('app-core', '_userExpandedReasoning', bridgeSlots._userExpandedReasoning.get());
+window.KernelState.defineKey('app-core', 'PH_STYLE_WORKSPACE_AGENT_IDS', bridgeSlots.PH_STYLE_WORKSPACE_AGENT_IDS.get());
+window.KernelState.claim('app-core', {
+  get: (key) => bridgeSlots[key].get(),
+  set: (key, value) => bridgeSlots[key].set(value),
+});

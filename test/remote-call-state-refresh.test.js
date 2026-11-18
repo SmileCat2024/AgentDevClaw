@@ -80,8 +80,6 @@ function withCallStateSandbox({ catalogResponses, notifications = {}, agents = [
       // classic 之后进模块相；`_agentSuspended` 是 runtime-status 的模块私有容器，
       // 经 `__esmDomain` 取同一 Map 引用。
       prepareClassicSandbox(sandbox);
-      agentCallActive = sandbox.run('_agentCallActive');
-      sandbox.run('_agentCallActive.clear(); _interruptSuppression.clear(); _recentlyFinishedRuntimes.clear();');
       sandbox.allAgents = agents;
       sandbox.currentRuntimeAgentId = null;
       sandbox._syncPersistentActionButton = () => {};
@@ -105,6 +103,9 @@ function withCallStateSandbox({ catalogResponses, notifications = {}, agents = [
   }, async (c) => {
     // 侧栏域就位后清一次挂起容器（runtime-status 的模块私有 Map，同一引用）。
     c.window.__esmDomain.runtimeStatus._agentSuspended.clear();
+    // call 活动容器由 app-core（P4 T5 起 ESM）持有：桥键按引用交出同一份容器。
+    agentCallActive = c.read('_agentCallActive');
+    c.read('_agentCallActive.clear(); _interruptSuppression.clear(); _recentlyFinishedRuntimes.clear();');
     const rc = await c.load(REMOTE_CONNECTIONS);
     return fn({
       ctx: c,

@@ -37,7 +37,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { Renderer } from 'marked';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
-import { prepareClassicSandbox, prepareEsmModules, SESSION_VIEW_DOMAIN } from './p2-classic-hosts.js';
+import { APP_CORE_DOMAIN, prepareClassicSandbox, prepareEsmModules, SESSION_VIEW_DOMAIN } from './p2-classic-hosts.js';
 
 const OVERVIEW_DATA = 'public/src/modules/overview-data.js';
 const AUTO_TITLE = 'public/src/modules/auto-title.js';
@@ -560,7 +560,7 @@ test('probe fields are stripped from the snapshot and do not change the signatur
     classic: (sandbox) => {
       sandbox.loadSource('public/src/modules/action-dispatcher.js');
       // i18n 已迁 ESM（P4）：t 桥键由 createFrontendSandbox 自动装载，见 test/helpers/install-i18n.js
-      sandbox.loadSource('public/src/app-core.js');
+      prepareEsmModules(sandbox, APP_CORE_DOMAIN);
       prepareEsmModules(sandbox, SESSION_VIEW_DOMAIN);
     },
   }, async (c) => {
@@ -589,7 +589,7 @@ test('extractMessagesProbe validates fields and returns null when unusable', () 
     classic: (sandbox) => {
       sandbox.loadSource('public/src/modules/action-dispatcher.js');
       // i18n 已迁 ESM（P4）：t 桥键由 createFrontendSandbox 自动装载，见 test/helpers/install-i18n.js
-      sandbox.loadSource('public/src/app-core.js');
+      prepareEsmModules(sandbox, APP_CORE_DOMAIN);
       prepareEsmModules(sandbox, SESSION_VIEW_DOMAIN);
     },
   }, async (c) => {

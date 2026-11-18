@@ -6,7 +6,6 @@ import { join } from 'node:path';
 import { normalizeWorkspaceAgents, resolveWorkspaceAgent, resolveNewSessionAgent, resolveWorkspaceAgentClass } from '../server/shared/workspace-agents.js';
 import { Marked } from 'marked';
 import { installBrowserStubs, loadModuleOnce } from './helpers/esm-module-loader.js';
-import { createFrontendSandbox } from './helpers/frontend-vm.js';
 
 const metadata = { id: 'programming-helper', name: '工作空间', defaultAgentId: 'main', agents: [
   { id: 'main', displayName: '编程小助手' }, { id: 'reviewer', displayName: { zh: '审查助手', en: 'Reviewer' } },
@@ -80,21 +79,12 @@ before(async () => {
   await loadModuleOnce('public/src/modules/kernel-state.js', { installGlobals: false });
   // agent-loader 宿主在装载期读取 classic 适配面（P1 已迁宿主，直接 import）
   window.AgentLoaderHost = { loadedAgentDetailIds: new Set() };
-  // agent-loader-host → template-engine → p2-bootstrap-session-switch 会取
-  // app-core 的 P2 bootstrap 宿主工厂：在真实 classic 加载序下求值 app-core，
-  // 把工厂原样接到当前 window（宿主状态仍由该 classic 实例持有，不造替身）。
-  const classicBoot = createFrontendSandbox();
-  classicBoot.setInterval = () => 0;
-  classicBoot.loadSource('public/src/modules/action-dispatcher.js');
-  classicBoot.loadSource('public/src/app-core.js');
+  // agent-loader-host → template-engine → p2-bootstrap-session-switch 会取 app-core 的
+  // P2 bootstrap 宿主工厂。app-core 自 P4 T5 起是 ESM：本模块在模块相求值，工厂与
+  // 桥键一起注册到当前 window（domain `app-core`），宿主状态仍是该模块那一份。
   // session-view-state 自 P4 T2 起是 ESM，且会话提交策略宿主改由 session-view-commit-host
   // 具名 import（不再在求值期经 window 抓 classic 实现）——本夹具也不需要它的 classic 前置。
-  // project-data 具名边带进来的宿主工厂全部按真源接出（createCallInterruptHost /
-  // createRuntimeViewCacheHost / 各 P2 引导宿主）；app-ui / app-main 的最小 seam
-  // 由下面的 assign 补齐。
-  for (const name of Object.keys(classicBoot)) {
-    if (/^create[A-Za-z0-9]*Host$/.test(name)) window[name] = classicBoot[name];
-  }
+  await import('../public/src/app-core.js');
   // sidebar-render / runtime-status 的宿主工厂面已全部接到 window（上一段循环），
   // 它们的 ESM 静态链随下面的 agentLoader / workspace-agents 求值装载（B2b：
   // sidebar-operations → p2-bootstrap-sidebar → sidebar-render → runtime-status）。

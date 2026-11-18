@@ -20,7 +20,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
-import { prepareSidebarDomain } from './p2-classic-hosts.js';
+import { prepareEsmModules, APP_CORE_DOMAIN, prepareSidebarDomain } from './p2-classic-hosts.js';
 
 /**
  * 装载路线（ESM 迁移配方第三节）：feature-config.js 已是 ESM，真实 import 其命名
@@ -44,7 +44,6 @@ const I18N_STATE = 'public/src/modules/i18n-environment-state.js';
 /** classic 相真实装载链（顺序同 index.html：classic 先行于 deferred ESM）。 */
 const CLASSIC_BOOTSTRAP = [
   'public/src/modules/action-dispatcher.js',
-  'public/src/app-core.js',
   // session-view-state 自 P4 T2 起是 ESM：由 prepareEsmModules(sandbox, SESSION_VIEW_DOMAIN)
   // / prepareClassicSandbox 在模块相装载，classic 链里不再有它。
 ];
@@ -116,6 +115,7 @@ function withFeatureConfig(fn, { language = 'en' } = {}) {
       // 语言初值经真实路径进入：app-core 读 localStorage 注册 i18n 桥键真初值
       sandbox.localStorage.setItem('agentdev-language', language);
       for (const file of CLASSIC_BOOTSTRAP) sandbox.loadSource(file);
+      prepareEsmModules(sandbox, APP_CORE_DOMAIN);
       prepareSidebarDomain(sandbox);
       installSeamFactories(sandbox);
     },

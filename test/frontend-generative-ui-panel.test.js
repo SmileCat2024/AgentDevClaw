@@ -2,6 +2,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
 import { createDomHarness } from './helpers/dom-harness.js';
+import { APP_CORE_DOMAIN, prepareEsmModules } from './p2-classic-hosts.js';
 
 /**
  * generative-ui-panel（P4 L2 已迁 ESM）：真实 import 路线。
@@ -30,7 +31,7 @@ function withGenUICase({ dom, globals = {}, runtimeAgentId = null } = {}, fn) {
       // 生产顺序：claw-host（面板注册表宿主）先于面板实现；app-core 提供内核桥
       // 初值与 P2 bootstrap 宿主工厂（callActivity）。
       sandbox.loadSource('public/src/modules/claw-host.js');
-      sandbox.loadSource('public/src/app-core.js');
+      prepareEsmModules(sandbox, APP_CORE_DOMAIN);
     },
   }, async (c) => {
     const module = await c.load(GENUI);

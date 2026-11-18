@@ -16,7 +16,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
-import { APP_MAIN_DOMAIN, prepareEsmModules, prepareSidebarDomain, SESSION_VIEW_DOMAIN } from './p2-classic-hosts.js';
+import { APP_CORE_DOMAIN, APP_MAIN_DOMAIN, prepareEsmModules, prepareSidebarDomain, SESSION_VIEW_DOMAIN } from './p2-classic-hosts.js';
 
 const READONLY_VIEW = 'public/src/modules/session-readonly-view.js';
 const TOAST_NOTIFY = 'public/src/modules/toast-notify.js';
@@ -68,7 +68,7 @@ async function withReadonlyView({ payload = recordPayload(), threads = [], loadM
       sandbox.clearTimeout = () => {};
       sandbox.clearInterval = () => {};
       sandbox.loadSource('public/src/modules/action-dispatcher.js');
-      sandbox.loadSource('public/src/app-core.js');
+      prepareEsmModules(sandbox, APP_CORE_DOMAIN);
       prepareEsmModules(sandbox, SESSION_VIEW_DOMAIN);
       // app-main 的 classic 同步引擎在装载期组合 sidebar-render 的
       // createAgentCallStatesHost（读 runtime-status 的 _agentSuspended）：

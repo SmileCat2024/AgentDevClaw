@@ -8,13 +8,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
-import { prepareEsmModules, SESSION_VIEW_DOMAIN } from './p2-classic-hosts.js';
+import { APP_CORE_DOMAIN, prepareEsmModules, SESSION_VIEW_DOMAIN } from './p2-classic-hosts.js';
 
 test('ESM commit host rejects stale visits without effects while preserving newer input and model fields', async () => {
   await withP2EsmCase({
     label: 'session-view-commit',
     classic: (sandbox) => {
-      sandbox.loadSource('public/src/app-core.js');
+      prepareEsmModules(sandbox, APP_CORE_DOMAIN);
       sandbox.run("currentRuntimeAgentId = 'runtime'; focusedAgentId = 'host';");
       prepareEsmModules(sandbox, SESSION_VIEW_DOMAIN);
     },

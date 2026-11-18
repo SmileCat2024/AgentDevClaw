@@ -31,7 +31,7 @@ import { describe, it as nodeIt } from 'node:test';
 import assert from 'node:assert/strict';
 import { Renderer } from 'marked';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
-import { prepareEsmModules, SESSION_VIEW_DOMAIN } from './p2-classic-hosts.js';
+import { APP_CORE_DOMAIN, prepareEsmModules, SESSION_VIEW_DOMAIN } from './p2-classic-hosts.js';
 
 // ── Mini DOM：与 frontend-input-composer.test.js 同款最小元素树 ─────────────
 
@@ -575,7 +575,7 @@ function convergenceCaseOptions() {
         // session-view-storage / orchestration 的桥键都在这里注册。本用例的
         // classic 与 ESM 两侧因此读同一 window 上的同一份状态与同一 policy 实例
         // （不再从第二个 sandbox 搬运访问器）。
-        sandbox.loadSource('public/src/app-core.js');
+        prepareEsmModules(sandbox, APP_CORE_DOMAIN);
         // app-core 的真实 getRuntimeContextKey 会覆盖夹具的会话上下文桩（本文件的
         // 断言以 state.liveKey 为会话键），按既有宿主 seam 恢复。
         sandbox.getRuntimeContextKey = () => state.liveKey;
@@ -1467,7 +1467,6 @@ it('action receipt cannot clear a newer input lease in the same session', async 
 // ── 收敛断言：手动戳协议灭绝（源码级锁死） ──────────────────────────────────
 
 const FILES_OUTSIDE_RENDERER = [
-  'public/src/app-core.js',
   'public/src/app-main.js',
   'public/src/app-ui.js',
   'public/src/modules/agent-data-loader.js',

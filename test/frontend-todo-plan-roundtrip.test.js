@@ -14,6 +14,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
+import { APP_CORE_DOMAIN, prepareEsmModules } from './p2-classic-hosts.js';
 
 const TODO_PLAN = 'public/src/modules/todo-plan.js';
 
@@ -31,7 +32,7 @@ function withTodoCase(fn) {
   return withP2EsmCase({
     classic: (sandbox) => {
       sandbox.loadSource('public/src/modules/action-dispatcher.js');
-      sandbox.loadSource('public/src/app-core.js');
+      prepareEsmModules(sandbox, APP_CORE_DOMAIN);
     },
     globals: {
       marked: MARKED_STUB,

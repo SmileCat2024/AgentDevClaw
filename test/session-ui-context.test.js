@@ -6,7 +6,7 @@ import { installRuntimeViewCache } from './helpers/runtime-view-cache.js';
 import { installI18n } from './helpers/install-i18n.js';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
 import { beginCaseGraph, endCaseGraph } from './helpers/p2-esm-graph.js';
-import { prepareClassicSandbox } from './p2-classic-hosts.js';
+import { prepareEsmModules, APP_CORE_DOMAIN, prepareClassicSandbox } from './p2-classic-hosts.js';
 
 /** Raw VM contexts install the real kernel with window/global unified. */
 const coreSource = fs.readFileSync(new URL('../public/src/app-core.js', import.meta.url), 'utf8');
@@ -96,11 +96,15 @@ function buildCoreClassicContext() {
     '// ── classic 兼容桥',
   ).replace(/^export /gm, '');
   vm.runInContext(identityBlock, context);
+  // app-core 自 P4 T5 起是 ESM：切片去掉 export 前缀，仍按 classic 等价面装载；
+  // 切片里对 orchestration 域 setter 的调用改为裸写同一桥键（等价面）。
+  context.KernelState.defineKey('orchestration', '_restoredScrollTop', null);
+  vm.runInContext('const setRestoredScrollTop = (value) => { window._restoredScrollTop = value; };', context);
   const cacheBlock = sourceBetween(
     coreSource,
     'const MAX_CACHED_RUNTIME_VIEWS = 4;',
-    '\nfunction getEmptyStateHtml',
-  );
+    '\nexport function getEmptyStateHtml',
+  ).replace(/^export /gm, '');
   vm.runInContext(cacheBlock, context);
   installRuntimeViewCache(context);
   vm.runInContext(`globalThis.__uiContext = {
@@ -660,7 +664,7 @@ test('context bar renders one supplied session view snapshot', async () => {
     classic: (sandbox) => {
       sandbox.setTimeout = () => 0; // 抑制 _initCcbPopup / _initTitlePopup 的定时器
       sandbox.loadSource('public/src/modules/action-dispatcher.js');
-      sandbox.loadSource('public/src/app-core.js');
+      prepareEsmModules(sandbox, APP_CORE_DOMAIN);
     },
   }, async (c) => {
     const contextBar = await c.load('public/src/modules/chat-context-bar.js');

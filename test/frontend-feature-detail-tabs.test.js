@@ -16,7 +16,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { Renderer } from 'marked';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
-import { prepareEsmModules, SESSION_VIEW_DOMAIN } from './p2-classic-hosts.js';
+import { APP_CORE_DOMAIN, prepareEsmModules, SESSION_VIEW_DOMAIN } from './p2-classic-hosts.js';
 
 const FEATURES = 'public/src/modules/debug-features-hooks.js';
 const DEBUG_PANEL = 'public/src/modules/p2-bootstrap-debug-panel.js';
@@ -171,7 +171,7 @@ async function withFeatureDetailCase(fn, { portalHarness, fetchImpl } = {}) {
     classic: (sandbox) => {
       sandbox.window.marked = markedStub;
       sandbox.loadSource('public/src/modules/action-dispatcher.js');
-      sandbox.loadSource('public/src/app-core.js');
+      prepareEsmModules(sandbox, APP_CORE_DOMAIN);
       prepareEsmModules(sandbox, SESSION_VIEW_DOMAIN);
     },
   }, async (c) => {

@@ -46,7 +46,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
-import { APP_MAIN_DOMAIN, CLASSIC_BOOTSTRAP, prepareEsmModules, prepareSidebarDomain } from './p2-classic-hosts.js';
+import { APP_CORE_DOMAIN, APP_MAIN_DOMAIN, CLASSIC_BOOTSTRAP, prepareEsmModules, prepareSidebarDomain } from './p2-classic-hosts.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..');
@@ -271,9 +271,11 @@ function loadClassicHostChain(sandbox, beforeAppMain) {
   `);
   for (const file of CLASSIC_HOST_CHAIN) sandbox.loadSource(file);
   if (typeof beforeAppMain === 'function') beforeAppMain(sandbox);
-  // 编排域（app-main）迁 ESM（P4 T3 收尾）：它在模块相最先求值（宿主工厂供
-  // 其余域静态 import 触达的宿主模块在求值期取用）；认证闸 prelude 已在 classic
-  // 相落定，模块求值时读到同一份。
+  // 首屏核心域（app-core，P4 T5 收尾迁 ESM）先求值：它给各域注册桥键，且 app-main
+  // 求值期就要它的宿主工厂。认证闸 prelude 已在 classic 相落定，模块求值时读到同一份。
+  prepareEsmModules(sandbox, APP_CORE_DOMAIN);
+  // 编排域（app-main）迁 ESM（P4 T3 收尾）：它在模块相紧随 app-core 求值（宿主工厂供
+  // 其余域静态 import 触达的宿主模块在求值期取用）。
   prepareEsmModules(sandbox, APP_MAIN_DOMAIN);
   // 侧栏渲染 / 运行时状态 / call 状态引擎（P4 T2 收尾批次进模块相）：classic 链
   // 之后按真实加载序装载，engine 的两个桥键（collectActiveCallRuntimeIds /
@@ -429,19 +431,26 @@ const selfBootCaseOptions = () => {
 
 describe('前端加载链（index.html 真实入口 + P2 ESM 图，P2 子集）', () => {
   it('入口与时序契约：classic 首屏链仍按 index.html 标签序在 classic 相加载，sse-client 经 module 入口图（kernel-entry → p2-entry）装载，SSE 与 boot 都由认证闸放行', async () => {
-    // ── classic 相：桥存储 / app-core 仍是 classic 标签（先于一切 module 求值，
-    //    这是 classic 相与模块相的时序事实，不是标签序约定）
-    const classicRequirements = [
-      './src/modules/kernel-state.js', // 桥存储：状态访问器必须先于一切域模块
-      './src/app-core.js', // DOM 引用与 createP2Bootstrap*Host 工厂
-    ];
-    for (const src of classicRequirements) {
-      assert.notEqual(classicIndex(src), -1, `${src} 必须是 classic 标签（classic 相先于模块相求值）`);
+    // ── 桥存储：仍是 classic 标签（先于一切 module 求值，这是 classic 相与模块相
+    //    的时序事实，不是标签序约定）。
+    assert.notEqual(classicIndex('./src/modules/kernel-state.js'), -1,
+      'kernel-state 必须是 classic 标签：桥存储先于一切域模块');
+    // ── app-core 的相位（P4 T5 收尾迁 ESM）：不变量是「它先于 kernel-entry 图求值」。
+    //    迁移期的两种合法形态：仍是 classic 标签（旧）或独立 module 入口且排在
+    //    kernel-entry 之前（新，与 app-main 同型——kernel-entry 图里的宿主模块在
+    //    求值期经 window.createXHost / window.<桥键> 取 app-core 的面）。
+    const appCoreClassicIdx = classicIndex('./src/app-core.js');
+    const appCoreEntryIdx = MODULE_ENTRIES.findIndex((entry) => entry.src === './src/app-core.js');
+    const kernelEntryIdxForCore = MODULE_ENTRIES.findIndex((entry) => entry.src === './src/modules/kernel-entry.js');
+    assert.ok(appCoreClassicIdx !== -1 || appCoreEntryIdx !== -1,
+      'app-core 必须出现在首屏装载链上（classic 标签或 module 入口）');
+    if (appCoreEntryIdx !== -1) {
+      assert.ok(appCoreEntryIdx < kernelEntryIdxForCore,
+        `app-core 的 module 入口必须早于 kernel-entry（实际 ${appCoreEntryIdx} / ${kernelEntryIdxForCore}）`);
+    } else {
+      assert.ok(classicIndex('./src/modules/kernel-state.js') < appCoreClassicIdx,
+        '桥存储必须先于 app-core 注册首个桥键');
     }
-    assert.ok(
-      classicIndex('./src/modules/kernel-state.js') < classicIndex('./src/app-core.js'),
-      '桥存储必须先于 app-core 注册首个桥键',
-    );
     // ── 认证客户端（P4 收尾）：已迁 ESM。classic 标签必须删除（解析期
     //    SyntaxError），且必须作为**独立 module 入口排在 app-main 之前**——
     //    auth-client 不再被 app-main 静态 import：它的求值期要求 action 分发器与

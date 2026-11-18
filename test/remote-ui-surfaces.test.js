@@ -19,6 +19,7 @@ import express from 'express';
 import { setupUISurfaceRoutes } from '../server/routes/ui-surfaces.js';
 import { setProxyConnectionLookup } from '../server/shared/proxy.js';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
+import { APP_CORE_DOMAIN, prepareEsmModules } from './p2-classic-hosts.js';
 
 const CONNECTIONS = [
   { id: 'server-a', name: 'Server A', enabled: true, mode: 'manual', localPort: 22101 },
@@ -408,7 +409,7 @@ function withPanelSandbox(currentRuntimeAgentId, fn) {
     },
     classic: (sandbox) => {
       sandbox.loadSource('public/src/modules/claw-host.js');
-      sandbox.loadSource('public/src/app-core.js');
+      prepareEsmModules(sandbox, APP_CORE_DOMAIN);
     },
   }, async (c) => {
     await c.load('public/src/modules/generative-ui-panel.js');

@@ -33,7 +33,7 @@ import path from 'node:path';
 import * as espreeModule from 'espree';
 
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
-import { prepareEsmModules, SESSION_VIEW_DOMAIN } from './p2-classic-hosts.js';
+import { APP_CORE_DOMAIN, prepareEsmModules, SESSION_VIEW_DOMAIN } from './p2-classic-hosts.js';
 
 const REPO = path.resolve(import.meta.dirname, '..');
 const PUBLIC = path.join(REPO, 'public');
@@ -425,7 +425,7 @@ test('动态：状态 owner 生效、ClawFW 纯 ESM 键缺席、保留桥可达'
     classic: (sandbox) => {
       sandbox.loadSource('public/src/modules/action-dispatcher.js');
       // i18n 已迁 ESM（P4）：t 桥键由 createFrontendSandbox 自动装载，见 test/helpers/install-i18n.js
-      sandbox.loadSource('public/src/app-core.js');
+      prepareEsmModules(sandbox, APP_CORE_DOMAIN);
       prepareEsmModules(sandbox, SESSION_VIEW_DOMAIN);
       sandbox.run(`
         window.getCurrentAgentRecord = () => null;

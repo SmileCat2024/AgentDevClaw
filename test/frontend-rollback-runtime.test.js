@@ -305,10 +305,22 @@ async function withRollbackCase(options, fn) {
     c.window.currentRuntimeAgentId = 'agent-1';
     c.window.currentMessages = options?.messages || [];
     c.window.currentInputRequests = options?.inputRequests || [];
-    // 真实 classic interrupt owner：独立 app-core 沙箱的唯一 policy 实例，
-    // 接到本用例 window（不复制实现、不建第二套 factory）。
+    // 真实 interrupt owner：app-core（P4 T5 起 ESM）在独立沙箱里求值（模块相），
+    // 四个 `call-interrupt` 桥键接到本用例 window。不复制实现、不建第二套 factory；
+    // 本夹具的 `createCallInterruptHost` 替身保持不动（它自己的 pending 容器是断言面）。
     const interruptOwner = createFrontendSandbox();
-    interruptOwner.loadSource('public/src/app-core.js');
+    const previousOwnerWindow = globalThis.window;
+    const previousOwnerStorage = globalThis.localStorage;
+    globalThis.window = interruptOwner;
+    globalThis.localStorage = interruptOwner.localStorage;
+    try {
+      await import('../public/src/app-core.js');
+    } finally {
+      if (previousOwnerWindow === undefined) delete globalThis.window;
+      else globalThis.window = previousOwnerWindow;
+      if (previousOwnerStorage === undefined) delete globalThis.localStorage;
+      else globalThis.localStorage = previousOwnerStorage;
+    }
     for (const name of ['getNotificationCallStartedAt', 'markInterruptPending',
       'isInterruptSuppressed', 'clearInterruptSuppression']) {
       c.window[name] = interruptOwner[name];

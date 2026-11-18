@@ -16,6 +16,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { marked } from 'marked';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
+import { APP_CORE_DOMAIN, prepareEsmModules } from './p2-classic-hosts.js';
 
 const PH_SESSION_LIST = 'public/src/modules/ph-session-list.js';
 const PH_PROJECT_ACTIONS = 'public/src/modules/ph-project-actions.js';
@@ -91,7 +92,7 @@ async function setup({ remoteConnections = false } = {}, probe) {
     classic: (sandbox) => {
       sandbox.loadSource('public/src/modules/action-dispatcher.js');
       // app-core 提供 p2-bootstrap 工厂与 i18n 桥初值；i18n 提供 classic t()。
-      sandbox.loadSource('public/src/app-core.js');
+      prepareEsmModules(sandbox, APP_CORE_DOMAIN);
       // ESM 图求值期读取的 loader host 工厂与 classic 宿主函数（最小契约替身）。
       sandbox.run(`
         renderCurrentMainView = function () {};

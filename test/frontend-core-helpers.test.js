@@ -13,7 +13,7 @@ import { getRuntimeCacheTodoPlanSignature } from '../public/src/modules/runtime-
 import { installCallInterruptState } from './helpers/call-interrupt.js';
 import { createTimeFormat } from '../public/src/modules/time-format.js';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
-import { prepareEsmModules, prepareSidebarDomain, SESSION_VIEW_DOMAIN } from './p2-classic-hosts.js';
+import { APP_CORE_DOMAIN, prepareEsmModules, prepareSidebarDomain, SESSION_VIEW_DOMAIN } from './p2-classic-hosts.js';
 
 // 身份解析域（P4 T1 从 app-core 抽出）：夹具按真实源码装载该域（去 export 前缀）。
 const identitySource = fs.readFileSync(new URL('../public/src/modules/identity.js', import.meta.url), 'utf8');
@@ -35,102 +35,101 @@ const identityBlock = identitySource
   .replace(/^export /gm, '');
 
 /**
- * Helper: create a sandbox with app-core.js loaded.
- * app-core.js is the shared utilities module — it defines i18n, status helpers,
- * date formatters, and runtime cache functions used across the front-end.
+ * 用例基座：真实 classic 沙箱 + 真实 ESM 图（app-core 自 P4 T5 起是 ESM）。
+ *
+ * app-core 的桥键 / 宿主工厂在模块相注册，因此 baseline 部分（identityBlock /
+ * formatBlock 的源码装载、call-interrupt owner、时间格式化面）都必须在
+ * withP2EsmCase 的 classic 回调之后就绪；断言在 `body(ctx)` 里跑，仍读到同一个
+ * 沙箱 window（`ctx.run` 的 classic 词法面与桥键）。
  */
-function createCoreSandbox(overrides = {}) {
-  const ctx = createFrontendSandbox();
-  ctx.getCurrentAgentRecord = () => null;
-  ctx.loadSource('public/src/app-core.js');
-  // 身份域与格式化族（真实实现，与生产模块同一份源码）
-  ctx.run(identityBlock);
-  ctx.run(formatBlock);
-  installCallInterruptState(ctx);
-  Object.assign(ctx, createTimeFormat(() => ctx.currentLanguage));
-  // Apply overrides AFTER loading source.
-  // `let`/`const` in VM don't become context properties, so use runInContext.
-  for (const [key, value] of Object.entries(overrides)) {
-    ctx[key] = value;
-    // Also set inside the VM context for `let`-declared globals
-    ctx.run(`if (typeof ${key} !== 'undefined') ${key} = ${JSON.stringify(value)};`);
-  }
-  return ctx;
+async function withCore(overrides, body) {
+  return withP2EsmCase({
+    classic: (sandbox) => prepareEsmModules(sandbox, APP_CORE_DOMAIN),
+  }, async (c) => {
+    const sandbox = c.window;
+    // 身份域与格式化族（真实实现，与生产模块同一份源码）
+    sandbox.run(identityBlock);
+    sandbox.run(formatBlock);
+    sandbox.run('window.getCurrentAgentRecord = () => null;');
+    Object.assign(sandbox, createTimeFormat(() => sandbox.currentLanguage));
+    // call-interrupt 的四个桥键由 app-core 在模块相注册：owner 校验在图求值后。
+    installCallInterruptState(sandbox);
+    // Apply overrides AFTER loading source（let/const 词法绑定要经 run 赋值；
+    // 状态键的桥访问器此时已注册，赋值落到 owner 的哑存储 / 域状态）。
+    for (const [key, value] of Object.entries(overrides || {})) {
+      sandbox[key] = value;
+      sandbox.run(`if (typeof ${key} !== 'undefined') ${key} = ${JSON.stringify(value)};`);
+    }
+    return body(sandbox);
+  });
 }
 
 // ── getCurrentControlAgentId（identity 域，P4 T1 起不再在 app-core）──
 
 describe('identity: getCurrentControlAgentId', () => {
-  // createCoreSandbox 的 overrides 循环用 JSON.stringify 注入值，函数值会被
-  // 置为 undefined；函数替身一律直接挂 context 属性（app-core 未用 let 声明
-  // 这些名字，属性不会被遮蔽）。currentRuntimeAgentId 在沙箱内有 let 绑定，
-  // 必须经 ctx.run 赋值才会被脚本看到。
-  function coreWithControlId() {
-    return createCoreSandbox();
-  }
-
-  it('prefers the logical id of the current local agent record', () => {
-    const ctx = coreWithControlId();
-    ctx.getCurrentAgentRecord = () => ({ source: 'prebuilt', id: 'programming-helper' });
-    assert.equal(ctx.run('getCurrentControlAgentId()'), 'programming-helper');
+  // 函数替身一律直接挂 context 属性（app-core 不把这些名字声明成词法绑定，
+  // 属性不会被遮蔽）；currentRuntimeAgentId 的 owner 在 orchestration-state，
+  // 必须经 ctx.run 赋值才会被模块看到。
+  it('prefers the logical id of the current local agent record', async () => {
+    await withCore({}, (ctx) => {
+      ctx.getCurrentAgentRecord = () => ({ source: 'prebuilt', id: 'programming-helper' });
+      assert.equal(ctx.run('getCurrentControlAgentId()'), 'programming-helper');
+    });
   });
 
-  it('falls back to the remote catalog entry host for remote sessions', () => {
-    const ctx = coreWithControlId();
-    ctx.getCurrentAgentRecord = () => null;
-    ctx.run('currentRuntimeAgentId = "remote:server-a:rt-1"');
-    ctx.window.RemoteConnections = {
-      getEntryHostAgentId: (ref) => (ref === 'remote:server-a:rt-1' ? 'programming-helper' : null),
-    };
-    assert.equal(ctx.run('getCurrentControlAgentId()'), 'programming-helper');
+  it('falls back to the remote catalog entry host for remote sessions', async () => {
+    await withCore({}, (ctx) => {
+      ctx.getCurrentAgentRecord = () => null;
+      ctx.run('currentRuntimeAgentId = "remote:server-a:rt-1"');
+      ctx.window.RemoteConnections = {
+        getEntryHostAgentId: (ref) => (ref === 'remote:server-a:rt-1' ? 'programming-helper' : null),
+      };
+      assert.equal(ctx.run('getCurrentControlAgentId()'), 'programming-helper');
+    });
   });
 
-  it('returns null for local ids without a record and without RemoteConnections', () => {
-    const ctx = coreWithControlId();
-    ctx.getCurrentAgentRecord = () => null;
-    ctx.run('currentRuntimeAgentId = "plain-agent"');
-    assert.equal(ctx.run('getCurrentControlAgentId()'), null);
-
-    const noModule = coreWithControlId();
-    noModule.getCurrentAgentRecord = () => null;
-    noModule.run('currentRuntimeAgentId = "remote:server-a:rt-1"');
-    assert.equal(noModule.run('getCurrentControlAgentId()'), null);
+  it('returns null for local ids without a record and without RemoteConnections', async () => {
+    await withCore({}, (ctx) => {
+      ctx.getCurrentAgentRecord = () => null;
+      ctx.run('currentRuntimeAgentId = "plain-agent"');
+      assert.equal(ctx.run('getCurrentControlAgentId()'), null);
+    });
+    await withCore({}, (noModule) => {
+      noModule.getCurrentAgentRecord = () => null;
+      noModule.run('currentRuntimeAgentId = "remote:server-a:rt-1"');
+      assert.equal(noModule.run('getCurrentControlAgentId()'), null);
+    });
   });
 });
 
 // ── getFeatureStatus ──
 
 describe('format-utils: getFeatureStatus', () => {
-  it('returns explicit status when present', () => {
-    const ctx = createCoreSandbox();
+  it('returns explicit status when present', () => withCore({}, (ctx) => {
     assert.equal(ctx.run('getFeatureStatus({ status: "enabled" })'), 'enabled');
     assert.equal(ctx.run('getFeatureStatus({ status: "disabled" })'), 'disabled');
     assert.equal(ctx.run('getFeatureStatus({ status: "partial" })'), 'partial');
-  });
+  }));
 
-  it('returns enabled when feature.enabled is true and no status', () => {
-    const ctx = createCoreSandbox();
+  it('returns enabled when feature.enabled is true and no status', () => withCore({}, (ctx) => {
     assert.equal(ctx.run('getFeatureStatus({ enabled: true })'), 'enabled');
-  });
+  }));
 
-  it('returns partial when no status and not enabled', () => {
-    const ctx = createCoreSandbox();
+  it('returns partial when no status and not enabled', () => withCore({}, (ctx) => {
     assert.equal(ctx.run('getFeatureStatus({ enabled: false })'), 'partial');
     assert.equal(ctx.run('getFeatureStatus({})'), 'partial');
-  });
+  }));
 
-  it('returns partial for null/undefined feature', () => {
-    const ctx = createCoreSandbox();
+  it('returns partial for null/undefined feature', () => withCore({}, (ctx) => {
     assert.equal(ctx.run('getFeatureStatus(null)'), 'partial');
     assert.equal(ctx.run('getFeatureStatus(undefined)'), 'partial');
-  });
+  }));
 });
 
 // ── getStatusBadgeClass ──
 
 describe('format-utils: getStatusBadgeClass', () => {
-  it('builds badge class from status', () => {
-    const ctx = createCoreSandbox();
+  it('builds badge class from status', () => withCore({}, (ctx) => {
     assert.equal(
       ctx.run('getStatusBadgeClass("enabled")'),
       'feature-badge status-enabled'
@@ -139,10 +138,9 @@ describe('format-utils: getStatusBadgeClass', () => {
       ctx.run('getStatusBadgeClass("disabled")'),
       'feature-badge status-disabled'
     );
-  });
+  }));
 
-  it('defaults to enabled when status is falsy', () => {
-    const ctx = createCoreSandbox();
+  it('defaults to enabled when status is falsy', () => withCore({}, (ctx) => {
     assert.equal(
       ctx.run('getStatusBadgeClass(null)'),
       'feature-badge status-enabled'
@@ -155,40 +153,35 @@ describe('format-utils: getStatusBadgeClass', () => {
       ctx.run('getStatusBadgeClass(undefined)'),
       'feature-badge status-enabled'
     );
-  });
+  }));
 
-  it('escapes HTML-special characters in status', () => {
-    const ctx = createCoreSandbox();
+  it('escapes HTML-special characters in status', () => withCore({}, (ctx) => {
     const result = ctx.run('getStatusBadgeClass("<script>")');
     assert.ok(!result.includes('<script>'));
     assert.ok(result.includes('&lt;script&gt;'));
-  });
+  }));
 });
 
 // ── localizeWorkspaceValue ──
 
 describe('format-utils: localizeWorkspaceValue', () => {
-  it('returns string values as-is', () => {
-    const ctx = createCoreSandbox();
+  it('returns string values as-is', () => withCore({}, (ctx) => {
     assert.equal(ctx.run('localizeWorkspaceValue("hello")'), 'hello');
     assert.equal(ctx.run('localizeWorkspaceValue(42)'), '42');
     assert.equal(ctx.run('localizeWorkspaceValue(true)'), 'true');
-  });
+  }));
 
-  it('returns fallback for null/undefined', () => {
-    const ctx = createCoreSandbox();
+  it('returns fallback for null/undefined', () => withCore({}, (ctx) => {
     assert.equal(ctx.run('localizeWorkspaceValue(null, "default")'), 'default');
     assert.equal(ctx.run('localizeWorkspaceValue(undefined, "default")'), 'default');
-  });
+  }));
 
-  it('extracts value by currentLanguage from object', () => {
-    const ctx = createCoreSandbox({ currentLanguage: 'zh' });
+  it('extracts value by currentLanguage from object', () => withCore({ currentLanguage: 'zh' }, (ctx) => {
     const result = ctx.run('localizeWorkspaceValue({ zh: "中文", en: "English" })');
     assert.equal(result, '中文');
-  });
+  }));
 
-  it('falls back to zh then en then fallback for objects', () => {
-    const ctx = createCoreSandbox({ currentLanguage: 'fr' });
+  it('falls back to zh then en then fallback for objects', () => withCore({ currentLanguage: 'fr' }, (ctx) => {
     assert.equal(
       ctx.run('localizeWorkspaceValue({ zh: "中文", en: "English" })'),
       '中文'
@@ -207,82 +200,74 @@ describe('format-utils: localizeWorkspaceValue', () => {
       ctx.run('localizeWorkspaceValue({ de: "Deutsch" }, "fallback")'),
       'fallback'
     );
-  });
+  }));
 });
 
 // ── formatWorkspaceDate ──
 
 describe('app-core: formatWorkspaceDate', () => {
-  it('returns dash for empty input', () => {
-    const ctx = createCoreSandbox();
+  it('returns dash for empty input', () => withCore({}, (ctx) => {
     assert.equal(ctx.run('formatWorkspaceDate("")'), '-');
     assert.equal(ctx.run('formatWorkspaceDate(null)'), '-');
     assert.equal(ctx.run('formatWorkspaceDate(undefined)'), '-');
-  });
+  }));
 
-  it('returns original string for invalid date', () => {
-    const ctx = createCoreSandbox();
+  it('returns original string for invalid date', () => withCore({}, (ctx) => {
     assert.equal(ctx.run('formatWorkspaceDate("not-a-date")'), 'not-a-date');
-  });
+  }));
 
-  it('formats valid ISO date string', () => {
-    const ctx = createCoreSandbox();
+  it('formats valid ISO date string', () => withCore({}, (ctx) => {
     const result = ctx.run('formatWorkspaceDate("2024-06-15T10:30:00Z")');
     assert.ok(result.includes('2024') || result.includes('6') || result.includes('15'));
     assert.ok(result !== '-');
-  });
+  }));
 });
 
 // ── isUiOnlyAgentId ──
 
 describe('app-core: pending session navigation', () => {
-  it('keeps a pending target scoped to the current navigation epoch and workspace', () => {
-    const ctx = createCoreSandbox();
+  it('keeps a pending target scoped to the current navigation epoch and workspace', () => withCore({}, (ctx) => {
     assert.equal(ctx.run('beginPendingSessionNavigation("programming-helper", "session-new")').sessionId, 'session-new');
     assert.equal(ctx.run('hasPendingSessionNavigation({ id: "programming-helper" })'), true);
     assert.equal(ctx.run('hasPendingSessionNavigation({ id: "other-workspace" })'), false);
     ctx.run('bumpNavigationGuard()');
     assert.equal(ctx.run('hasPendingSessionNavigation({ id: "programming-helper" })'), false);
-  });
+  }));
 
-  it('updates the committed target without losing its navigation scope', () => {
-    const ctx = createCoreSandbox();
+  it('updates the committed target without losing its navigation scope', () => withCore({}, (ctx) => {
     ctx.run('beginPendingSessionNavigation("programming-helper")');
     assert.equal(ctx.run('updatePendingSessionNavigation("session-new", "starting-runtime").phase'), 'starting-runtime');
     assert.equal(ctx.run('hasPendingSessionNavigation({ id: "programming-helper" })'), true);
     ctx.run('clearPendingSessionNavigation()');
     assert.equal(ctx.run('hasPendingSessionNavigation({ id: "programming-helper" })'), false);
-  });
+  }));
 });
 
 // ── isUiOnlyAgentId ──
 
 describe('app-core: isUiOnlyAgentId', () => {
-  it('returns true for known UI-only agent IDs', () => {
-    const ctx = createCoreSandbox({
+  it('returns true for known UI-only agent IDs', () => withCore({
       allAgents: [
         { id: 'feature-setup', source: 'prebuilt', launchMode: 'ui-only' },
       ],
-    });
+    }, (ctx) => {
     assert.equal(ctx.run('isUiOnlyAgentId("feature-setup")'), true);
-  });
+  }));
 
-  it('returns true for workspace host agents (kind: workspace)', () => {
-    // isUiOnlyAgentId checks isWorkspaceSurfaceUnit which includes both
-    // ui-only units and workspace host units (kind: "workspace" in metadata)
-    const ctx = createCoreSandbox({
+  it('returns true for workspace host agents (kind: workspace)', () => withCore({
       allAgents: [
         { id: 'programming-helper', source: 'prebuilt', kind: 'workspace' },
       ],
-    });
+    }, (ctx) => {
+    // isUiOnlyAgentId checks isWorkspaceSurfaceUnit which includes both
+    // ui-only units and workspace host units (kind: "workspace" in metadata)
     assert.equal(ctx.run('isUiOnlyAgentId("programming-helper")'), true);
-  });
+  }));
 
-  it('returns false for unknown/null IDs when allAgents is empty', () => {
-    const ctx = createCoreSandbox();
+  it('returns false for unknown/null IDs when allAgents is empty', () => withCore({}, (ctx) => {
     assert.equal(ctx.run('isUiOnlyAgentId("nonexistent")'), false);
     assert.equal(ctx.run('isUiOnlyAgentId(null)'), false);
-  });
+  }));
 });
 
 // ── getRuntimeCacheTodoPlanSignature ──
@@ -426,24 +411,27 @@ async function withRuntimeStatusCase(fn) {
     classic: (sandbox) => {
       // action-dispatcher 是 index.html 的先行脚本（模块图的动作注册面）。
       sandbox.loadSource('public/src/modules/action-dispatcher.js');
-      sandbox.loadSource('public/src/app-core.js');
-      installCallInterruptState(sandbox);
+      prepareEsmModules(sandbox, APP_CORE_DOMAIN);
       Object.assign(sandbox, createTimeFormat(() => sandbox.currentLanguage));
       prepareEsmModules(sandbox, SESSION_VIEW_DOMAIN);
-      sandbox.run(`
-        currentRuntimeAgentId = "runtime-1";
-        currentRuntimeConnected = true;
-        currentHookInspector = null;
-        currentOverviewSnapshot = {};
-        currentTodoPlan = {};
-        currentInputRequests = [];
-        lastRenderedInputMode = "persistent";
-      `);
       prepareSidebarDomain(sandbox);
     },
     globals,
   }, async (c) => {
-    // 会话视图 patch 是桥键（模块相才有）：classic 回调里调不到，初值在用例体前设置。
+    // 状态初值写在模块相之后：这些键的 owner 是 ESM 域（orchestration /
+    // runtime-status / session-view-storage），桥访问器此时已注册，写入落到域状态；
+    // classic 相提前写会变成普通 window 属性、被注册行覆盖（与生产时序不符）。
+    c.window.run(`
+      currentRuntimeAgentId = "runtime-1";
+      currentRuntimeConnected = true;
+      currentHookInspector = null;
+      currentOverviewSnapshot = {};
+      currentTodoPlan = {};
+      currentInputRequests = [];
+      lastRenderedInputMode = "persistent";
+    `);
+    // call-interrupt / 会话视图 patch 都是模块相才有的桥键：在用例体前校验与设置。
+    installCallInterruptState(c.window);
     c.window.run("applySessionViewPatch({ identity: { agentId: 'runtime-1', sessionId: 'session-1' } })");
     return fn(c.window, elements);
   });

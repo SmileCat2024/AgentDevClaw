@@ -18,6 +18,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
+import { APP_CORE_DOMAIN, prepareEsmModules } from './p2-classic-hosts.js';
 
 const CHAT_VIEWPORT = 'public/src/modules/chat-viewport.js';
 const CLIENT_HEIGHT = 600;
@@ -114,7 +115,7 @@ async function withFollowHarness(fn) {
     classic: (sandbox) => {
       Object.assign(sandbox, fakeTimers);
       sandbox.loadSource('public/src/modules/action-dispatcher.js');
-      sandbox.loadSource('public/src/app-core.js');
+      prepareEsmModules(sandbox, APP_CORE_DOMAIN);
     },
     globals: {
       document,

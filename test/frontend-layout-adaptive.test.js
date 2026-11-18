@@ -24,6 +24,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import vm from 'node:vm';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
+import { APP_CORE_DOMAIN, prepareEsmModules } from './p2-classic-hosts.js';
 
 const uiSource = fs.readFileSync(new URL('../public/src/app-ui.js', import.meta.url), 'utf8');
 const CHAT_VIEWPORT = 'public/src/modules/chat-viewport.js';
@@ -154,7 +155,7 @@ async function loadFollowPositionSandbox({ panelOpen = false, mainWidth = 1400, 
       // 真实加载序：分发器（ClawFW.actions）→ app-core（视口状态 owner +
       // createP2Bootstrap*Host 工厂）。
       sandbox.loadSource('public/src/modules/action-dispatcher.js');
-      sandbox.loadSource('public/src/app-core.js');
+      prepareEsmModules(sandbox, APP_CORE_DOMAIN);
     },
     globals: {
       document,

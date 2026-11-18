@@ -10,12 +10,13 @@
  *    读写同一份状态、同一对象引用；
  * 4. 无新增启动等待（不导出 ready/promise），也不发布 window 全局。
  *
- * classic 侧按真实加载序跑 app-core.js（frontend-vm 的 loadSource），ESM 侧用
- * withP2EsmCase 的真实 import（每 case 一张独立模块图）。
+ * app-core 自 P4 T5 起是 ESM：由 APP_CORE_DOMAIN 在模块相最先装载（原 classic 标签
+ * 已改 module 入口），ESM 侧用 withP2EsmCase 的真实 import（每 case 一张独立模块图）。
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
+import { APP_CORE_DOMAIN, prepareEsmModules } from './p2-classic-hosts.js';
 
 const ADAPTER = 'public/src/modules/p2-bootstrap-context-menu.js';
 const KEYS = [
@@ -28,14 +29,16 @@ const KEYS = [
 ];
 
 const caseOptions = () => ({
-  classic: (sandbox) => sandbox.loadSource('public/src/app-core.js'),
+  classic: (sandbox) => prepareEsmModules(sandbox, APP_CORE_DOMAIN),
 });
 
 test('classic 时点可用：初值、freeze 与 get/set 访问器语义', async () => {
   await withP2EsmCase(caseOptions(), async (c) => {
-    // 词法绑定不是 window 属性：只有工厂能取到，模块装载前、后都一样。
+    // app-core 自 P4 T5 起是 ESM：6 个键经 domain `app-core` 的桥键（非枚举访问器）
+    // 与工厂同源可达，模块装载前、后都是同一份状态。
     assert.equal(c.read('typeof createP2BootstrapContextMenuHost'), 'function');
-    assert.equal(c.read('window.hasOwnProperty("contextMenuAgentId")'), false);
+    assert.equal(c.read('window.hasOwnProperty("contextMenuAgentId")'), true);
+    assert.equal(c.read('Object.getOwnPropertyDescriptor(window, "contextMenuAgentId").enumerable'), false);
 
     const host = c.read('createP2BootstrapContextMenuHost()');
     assert.equal(Object.isFrozen(host), true, 'host 必须冻结，不能作为第二份状态容器');

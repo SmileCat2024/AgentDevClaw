@@ -13,6 +13,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
+import { APP_CORE_DOMAIN, prepareEsmModules } from './p2-classic-hosts.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PH_SESSION_LIST = 'public/src/modules/ph-session-list.js';
@@ -77,7 +78,7 @@ async function setup({ livePanels = [] } = {}, probe) {
       // app-core 提供 createP2BootstrapPhSessionHost / createP2BootstrapDomHost
       // 工厂与 i18n-environment 桥键初值；ESM 图上层的 classic 宿主函数用最小
       // 替身（本用例只消费会话列表与话题面板）。
-      sandbox.loadSource('public/src/app-core.js');
+      prepareEsmModules(sandbox, APP_CORE_DOMAIN);
       // ESM 图在模块求值期读取的 loader host 工厂：本用例只消费会话列表 /
       // 话题面板，其余宿主面按最小契约注入（不重写其实现）。
       sandbox.run(`

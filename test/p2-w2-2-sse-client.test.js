@@ -27,16 +27,6 @@ import assert from 'node:assert/strict';
 import { installBrowserStubs, loadModuleOnce } from './helpers/esm-module-loader.js';
 import { loadThreadEngine } from './helpers/thread-engine.js';
 
-/**
- * 以浏览器语义装载 classic desktop-notify：sandbox 就是 window 对象本身
- * （window === 全局 this），其顶层 function 声明因此直接成为 window 属性。
- * 装载是同步的——返回即代表「经典相同轮次」已完成。
- */
-function loadClassicSource(relPath) {
-  const source = fs.readFileSync(new URL(`../${relPath}`, import.meta.url), 'utf8');
-  vm.runInNewContext(source, globalThis.window, { filename: relPath.split('/').pop() });
-}
-
 function loadClassicDesktopNotify() {
   const source = fs.readFileSync(new URL('../public/src/modules/desktop-notify.js', import.meta.url), 'utf8');
   vm.runInNewContext(source, globalThis.window, { filename: 'desktop-notify.js' });
@@ -400,7 +390,7 @@ before(async () => {
   win.__clawAuthReady = new Promise(() => {});
   if (typeof win.applyTheme !== 'function') win.applyTheme = () => {};
   if (typeof win.applyLanguage !== 'function') win.applyLanguage = () => {};
-  loadClassicSource('public/src/app-core.js');
+  await import('../public/src/app-core.js');
   // app-core 的函数声明覆盖了本文件声明的宿主 seam：先恢复（引擎域与 ESM 图都读
   // 这些 seam），再装引擎域。
   Object.assign(win, windowSeams, HOST_SEAMS);

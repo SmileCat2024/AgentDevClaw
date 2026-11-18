@@ -28,14 +28,13 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
-import { prepareEsmModules, SESSION_VIEW_DOMAIN } from './p2-classic-hosts.js';
+import { APP_CORE_DOMAIN, prepareEsmModules, SESSION_VIEW_DOMAIN } from './p2-classic-hosts.js';
 
 const OVERVIEW_DATA = 'public/src/modules/overview-data.js';
 
 /** overview-data / session-view-state 的 classic 前置（生产装载顺序）。 */
 const CLASSIC_STACK = [
   'public/src/modules/action-dispatcher.js',
-  'public/src/app-core.js',
   // session-view-state 自 P4 T2 起是 ESM：由 prepareEsmModules(sandbox, SESSION_VIEW_DOMAIN)
   // / prepareClassicSandbox 在模块相装载，classic 链里不再有它。
 ];
@@ -50,6 +49,7 @@ function loadOverviewDataCase(probe) {
   return withP2EsmCase({
     classic: (sandbox) => {
       for (const file of CLASSIC_STACK) sandbox.loadSource(file);
+      prepareEsmModules(sandbox, APP_CORE_DOMAIN);
       prepareEsmModules(sandbox, SESSION_VIEW_DOMAIN);
     },
     globals: VENDOR_STUBS,
@@ -70,6 +70,7 @@ function loadContextBarCase({ overview, agent }, probe) {
     classic: (sandbox) => {
       sandbox.setTimeout = () => 0;   // 抑制 _initCcbPopup / _initTitlePopup 的定时器
       for (const file of CLASSIC_STACK) sandbox.loadSource(file);
+      prepareEsmModules(sandbox, APP_CORE_DOMAIN);
       sandbox.followLatestEnabled = false;
       sandbox.container = { scrollTop: 0 };
       sandbox.shouldRenderWorkspaceSurface = () => false;

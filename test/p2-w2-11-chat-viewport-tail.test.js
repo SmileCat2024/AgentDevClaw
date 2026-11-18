@@ -25,8 +25,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
 import { t as realT } from '../public/src/i18n.js';
+import { APP_CORE_DOMAIN, prepareEsmModules } from './p2-classic-hosts.js';
 
-const APP_CORE = 'public/src/app-core.js';
 const CHAT_VIEWPORT = 'public/src/modules/chat-viewport.js';
 const BOOTSTRAP_DOM = 'public/src/modules/p2-bootstrap-dom.js';
 const BOOTSTRAP_CHAT_SURFACE = 'public/src/modules/p2-bootstrap-chat-surface.js';
@@ -311,7 +311,7 @@ function loadClassicViewport(fixture) {
     sandbox.t = (key) => key;
     // 分发器先于一切声明 data-action 的模块装载（markdown-utils 求值期注册动作）。
     sandbox.loadSource('public/src/modules/action-dispatcher.js');
-    sandbox.loadSource(APP_CORE);
+    prepareEsmModules(sandbox, APP_CORE_DOMAIN);
     // chat-viewport 已迁 ESM（P4 T2）：不再走 classic 标签，由 async 相 c.load 装载。
     fixture.timers = installTimerQueue(sandbox, fixture.clock);
     fixture.sandbox = sandbox;

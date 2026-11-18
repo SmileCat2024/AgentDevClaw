@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { installBrowserStubs, loadModuleOnce } from './helpers/esm-module-loader.js';
-import { createFrontendSandbox } from './helpers/frontend-vm.js';
+import { withP2EsmCase } from './helpers/p2-esm-case.js';
+import { APP_CORE_DOMAIN, prepareEsmModules } from './p2-classic-hosts.js';
 
 const DOMAIN = 'orchestration';
 const MODULE = 'public/src/modules/orchestration-state.js';
@@ -30,27 +31,22 @@ function cleanupKeys() {
 }
 
 test('real pending navigation survives claim and is invalidated by subsequent user navigation', async () => {
-  const ctx = createFrontendSandbox();
-  ctx.loadSource('public/src/app-core.js');
-  // 生产 classic 相不再注册该桥键（_chatLoadingTimeout 归 ESM 域模块唯一持有）。
-  assert.equal(ctx.run("'_chatLoadingTimeout' in window"), false);
-  const pending = ctx.run("beginPendingSessionNavigation('agent-a', 'session-a')");
-  const previousWindow = globalThis.window;
-  globalThis.window = ctx;
-  try {
-    const { module } = await loadModuleOnce(MODULE, { installGlobals: false });
+  // app-core 自 P4 T5 起是 ESM：桥键在模块相注册，故整条用例走 withP2EsmCase 的
+  // 真实图（同一 case 内 app-core 与 orchestration-state 共享一代实例）。
+  await withP2EsmCase({ classic: (sandbox) => prepareEsmModules(sandbox, APP_CORE_DOMAIN) }, async (c) => {
+    // 生产不再注册该桥键（_chatLoadingTimeout 归 ESM 域模块唯一持有）。
+    assert.equal(c.read("'_chatLoadingTimeout' in window"), false);
+    const pending = c.read("beginPendingSessionNavigation('agent-a', 'session-a')");
+    const module = await c.load(MODULE);
     assert.strictEqual(module._pendingSessionNavigation, pending);
-    assert.equal(ctx.run("hasPendingSessionNavigation({ id: 'agent-a' })"), true);
-    ctx.run("updatePendingSessionNavigation('session-b', 'starting-runtime')");
+    assert.equal(c.read("hasPendingSessionNavigation({ id: 'agent-a' })"), true);
+    c.read("updatePendingSessionNavigation('session-b', 'starting-runtime')");
     assert.equal(module._pendingSessionNavigation.sessionId, 'session-b');
-    ctx.run('bumpNavigationGuard()');
+    c.read('bumpNavigationGuard()');
     assert.equal(module._navigationGuardEpoch, 1);
     assert.equal(module._pendingSessionNavigation, null);
-    assert.equal(ctx.run('hasPendingSessionNavigation()'), false);
-  } finally {
-    if (previousWindow === undefined) delete globalThis.window;
-    else globalThis.window = previousWindow;
-  }
+    assert.equal(c.read('hasPendingSessionNavigation()'), false);
+  });
 });
 
 test('orchestration claim absorbs runtime, epoch and navigation values without rewriting them', async () => {

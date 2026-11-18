@@ -43,7 +43,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
-import { prepareEsmModules, SESSION_VIEW_DOMAIN } from './p2-classic-hosts.js';
+import { APP_CORE_DOMAIN, prepareEsmModules, SESSION_VIEW_DOMAIN } from './p2-classic-hosts.js';
 
 const REPO = path.resolve(import.meta.dirname, '..');
 const ENTRY = 'public/src/modules/p2-w2-10-assembly-bootstrap.js';
@@ -319,7 +319,7 @@ function installWorkspaceSurfaceSeam(sandbox) {
 function loadClassicOwners(sandbox) {
   sandbox.loadSource('public/src/modules/action-dispatcher.js');
   // i18n 已迁 ESM（P4）：t 桥键由 createFrontendSandbox 自动装载，见 test/helpers/install-i18n.js
-  sandbox.loadSource('public/src/app-core.js');
+  prepareEsmModules(sandbox, APP_CORE_DOMAIN);
   prepareEsmModules(sandbox, SESSION_VIEW_DOMAIN);
   installSidebarHostSeams(sandbox);
   installRuntimeSwitchSeam(sandbox);
@@ -710,7 +710,7 @@ test('workspace-docset chrome 同步：真实 import 求值后即可执行，cla
       // 模块求值所需的 classic 前置：app-core（内核桥初值 + P2 bootstrap DOM 宿主工厂）
       // 与 markdown-utils 的 classic 实现（escapeHtml / renderer）、动作注册表。
       sandbox.loadSource('public/src/modules/action-dispatcher.js');
-      sandbox.loadSource('public/src/app-core.js');
+      prepareEsmModules(sandbox, APP_CORE_DOMAIN);
     },
   }, async (c) => {
     const { updateProjectDocsetChrome } = await c.load('public/src/modules/workspace-docset.js');

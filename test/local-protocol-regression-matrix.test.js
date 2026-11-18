@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { createFrontendSandbox } from './helpers/frontend-vm.js';
 import { createAgentLoader } from '../public/src/modules/agent-loader.js';
 import { proxyToViewer } from '../server/shared/proxy.js';
 import {
@@ -15,6 +14,8 @@ import {
   resolveSessionTarget,
 } from '../server/shared/operation-target.js';
 import { submitUserTurn } from '../server/shared/user-turn.js';
+import { withP2EsmCase } from './helpers/p2-esm-case.js';
+import { APP_CORE_DOMAIN, prepareEsmModules } from './p2-classic-hosts.js';
 
 function response(body, { ok = true, status = 200 } = {}) {
   return {
@@ -110,13 +111,16 @@ test('host operations remain local when page focus changes', () => {
 
 test('template loading addresses the explicit runtime rather than page focus', async () => {
   const requests = [];
-  const ctx = createFrontendSandbox({
-    fetch: async (url) => {
-      requests.push(String(url));
-      return { ok: true, json: async () => ({ read: '/tpl/mount/read.js' }) };
+  await withP2EsmCase({
+    globals: {
+      fetch: async (url) => {
+        requests.push(String(url));
+        return { ok: true, json: async () => ({ read: '/tpl/mount/read.js' }) };
+      },
     },
-  });
-  ctx.loadSource('public/src/app-core.js');
+    classic: (sandbox) => prepareEsmModules(sandbox, APP_CORE_DOMAIN),
+  }, async (c) => {
+  const ctx = c.window;
   ctx.window.loadFeatureTemplateMap = createAgentLoader({
     loadedAgentDetailIds: new Set(),
     currentRuntimeAgentId: () => ctx.run('currentRuntimeAgentId'),
@@ -133,6 +137,7 @@ test('template loading addresses the explicit runtime rather than page focus', a
 
   assert.equal(await ctx.run('window.loadFeatureTemplateMap()'), true);
   assert.deepEqual(requests, ['/api/templates/feature?agentId=runtime-a']);
+  });
 });
 
 test('user-turn delivery keeps explicit target and operation metadata on the local result', async () => {

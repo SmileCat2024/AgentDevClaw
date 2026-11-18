@@ -9,7 +9,7 @@ const { createConnectedAgentsQuery } = await import('../server/routes/agent-conn
 const { managedAgents } = await import('../server/shared/agent-access.js');
 after(() => rm(root, { recursive: true, force: true }));
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
-import { ensureSidebarRenderHostSeam, prepareEsmModules, prepareSidebarDomain, SESSION_VIEW_DOMAIN } from './p2-classic-hosts.js';
+import { APP_CORE_DOMAIN, ensureSidebarRenderHostSeam, prepareEsmModules, prepareSidebarDomain, SESSION_VIEW_DOMAIN } from './p2-classic-hosts.js';
 
 const { readSidebarSnapshot } = await import('../server/routes/sidebar-snapshot.js');
 test('unstable sidebar reads fail explicitly rather than publish a partial frame', async () => {
@@ -52,7 +52,7 @@ for (const agentId of ['programming-helper', 'coder', 'memo', 'custom-thread-hos
         sandbox.setInterval = () => 0;
         // action-dispatcher 是 index.html 的先行脚本（模块图的动作注册面）。
         sandbox.loadSource('public/src/modules/action-dispatcher.js');
-        sandbox.loadSource('public/src/app-core.js');
+        prepareEsmModules(sandbox, APP_CORE_DOMAIN);
         // 会话快照提交宿主的 classic 实现（侧栏域装载期取用，生产同源）
         prepareEsmModules(sandbox, SESSION_VIEW_DOMAIN);
         sandbox.ClawThreads = { threads: [{ ...thread, headSessionId: 'wrong', lifeState: 'executing', headRuntimeRunning: true }] };
