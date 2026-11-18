@@ -373,7 +373,18 @@ async function _resolveThreadRoute(viewerAgentId, integration) {
   if (!thread && typeof integration.findThreadBySession === 'function') {
     thread = await integration.findThreadBySession(agentId, sessionId);
   }
-  if (!thread) return { route: 'direct' };
+  if (!thread) {
+    // A declared thread host must not fall back to Viewer direct delivery when
+    // its session-to-thread ownership cannot be resolved: that bypasses Inbox
+    // and fencing precisely when the frontend route guard has failed to resolve.
+    return {
+      route: 'rejected',
+      error: new UserTurnDeliveryError(
+        'Thread ownership for this runtime session could not be resolved; input was not delivered',
+        { code: 'thread_ownership_unresolved', status: 503, retryable: true },
+      ),
+    };
+  }
 
   // 非 head Session 仍可查看，但不能把新输入写入历史分片；不要静默转投
   // 当前 head，避免用户误以为自己仍在编辑历史现场。

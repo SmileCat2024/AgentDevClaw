@@ -270,6 +270,28 @@ describe('input gateway thread-domain queueing (R6)', () => {
     assert.deepEqual(integration.calls.append[0].images, ['/uploads/a.png']);
   });
 
+  it('fails closed when a thread-host runtime has no thread record instead of direct-routing', async () => {
+    registerRuntime({ agentId: 'coder' });
+    const integration = buildIntegration({ thread: null });
+    let directCalls = 0;
+
+    await assert.rejects(
+      deliverUserInput({ viewerAgentId: 'viewer-1', text: 'must not bypass thread inbox' }, {
+        integration,
+        fetchImpl: async () => {
+          directCalls += 1;
+          return { ok: true, json: async () => ({ success: true, delivery: 'delivered' }) };
+        },
+      }),
+      (error) => error instanceof UserTurnDeliveryError
+        && error.code === 'thread_ownership_unresolved'
+        && error.status === 503
+        && error.retryable === true,
+    );
+    assert.equal(directCalls, 0, 'unresolved thread-host ownership must not reach Viewer direct delivery');
+    assert.equal(integration.calls.append.length, 0);
+  });
+
   it('direct-routes pure session input unchanged (no thread found)', async () => {
     registerRuntime({ agentId: 'programming-helper' });
     const integration = buildIntegration({ thread: null });
@@ -359,10 +381,10 @@ describe('input gateway thread-domain queueing (R6)', () => {
     assert.equal(integration.calls.append[0].kind, 'user_message');
 
     // 直投域同源归一：未知身份省略 kind 字段（user-turn 契约缺省即 user）
-    registerRuntime({ agentId: 'programming-helper' });
+    registerRuntime({ viewerAgentId: 'viewer-2', agentId: 'programming-helper' });
     const direct = buildIntegration({ thread: null });
     const directResult = await deliverUserInput(
-      { viewerAgentId: 'viewer-1', text: 'x', kind: 'bot' },
+      { viewerAgentId: 'viewer-2', text: 'x', kind: 'bot' },
       {
         integration: direct,
         fetchImpl: async (_url, init) => {

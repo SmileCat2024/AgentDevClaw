@@ -19,7 +19,7 @@ const output = mkdtempSync(path.join(here, 'artifacts/host-delivery-'));
 //     漂移风暴饥饿（janitor 两拍收敛 vs 无界漂移，D12-3）。
 const BOOLEANS = ['EnableReconcile', 'EnableHandoff', 'EnableCrash', 'InjectAdoptFail',
   'AdoptFailForever', 'SpawnInjectsIdentity', 'EnableReadyDrop', 'EnableBindDrift',
-  'MutateStaleDeliver', 'JanitorFairness', 'DeliverFairness', 'SpawnFairness',
+  'ThreadHostInput', 'MutateStaleDeliver', 'JanitorFairness', 'DeliverFairness', 'SpawnFairness',
   'BoundHandoff', 'BoundCrash', 'BoundDrift'];
 const cases = [
   {
@@ -28,7 +28,7 @@ const cases = [
     note: '移植：H2 身份错位死锁可达（legacy spawn 无身份注入 → fencing 永拒，修复前无对账）',
     constants: { EnableReconcile: false, EnableHandoff: false, EnableCrash: false, InjectAdoptFail: false,
       AdoptFailForever: false, SpawnInjectsIdentity: false, EnableReadyDrop: false, EnableBindDrift: false,
-      MutateStaleDeliver: false, JanitorFairness: false, DeliverFairness: false, SpawnFairness: false },
+      ThreadHostInput: true, MutateStaleDeliver: false, JanitorFairness: false, DeliverFairness: false, SpawnFairness: false },
     budget: { boundHandoff: true, handoff: 0, boundCrash: true, crash: 0, boundDrift: true, drift: 0 },
   },
   {
@@ -39,7 +39,7 @@ const cases = [
     note2: '修复前触发面上没有任何 action 对滞留指令负责（wt-1ab8a75b 09:52→11:24 静默窗口的精确形状）',
     constants: { EnableReconcile: false, EnableHandoff: false, EnableCrash: false, InjectAdoptFail: false,
       AdoptFailForever: false, SpawnInjectsIdentity: false, EnableReadyDrop: false, EnableBindDrift: false,
-      MutateStaleDeliver: false, JanitorFairness: false, DeliverFairness: false, SpawnFairness: false },
+      ThreadHostInput: true, MutateStaleDeliver: false, JanitorFairness: false, DeliverFairness: false, SpawnFairness: false },
     budget: { boundHandoff: true, handoff: 0, boundCrash: true, crash: 0, boundDrift: true, drift: 0 },
   },
   {
@@ -48,7 +48,7 @@ const cases = [
     note: '移植：修复前活性失守（错位 lasso 或全绿滞留 lasso）',
     constants: { EnableReconcile: false, EnableHandoff: true, EnableCrash: false, InjectAdoptFail: true,
       AdoptFailForever: false, SpawnInjectsIdentity: true, EnableReadyDrop: false, EnableBindDrift: false,
-      MutateStaleDeliver: false, JanitorFairness: true, DeliverFairness: true, SpawnFairness: true },
+      ThreadHostInput: true, MutateStaleDeliver: false, JanitorFairness: true, DeliverFairness: true, SpawnFairness: true },
     budget: { boundHandoff: true, handoff: 3, boundCrash: true, crash: 0, boundDrift: true, drift: 0 },
   },
   {
@@ -57,7 +57,7 @@ const cases = [
     note: '移植+加强：修复后活性通过，叠加有界绑定漂移干扰（唤醒→重绑→下轮对账两拍收敛也要活性成立）',
     constants: { EnableReconcile: true, EnableHandoff: true, EnableCrash: true, InjectAdoptFail: true,
       AdoptFailForever: false, SpawnInjectsIdentity: true, EnableReadyDrop: false, EnableBindDrift: true,
-      MutateStaleDeliver: false, JanitorFairness: true, DeliverFairness: true, SpawnFairness: true },
+      ThreadHostInput: true, MutateStaleDeliver: false, JanitorFairness: true, DeliverFairness: true, SpawnFairness: true },
     budget: { boundHandoff: true, handoff: 3, boundCrash: true, crash: 2, boundDrift: true, drift: 2 },
   },
   {
@@ -67,7 +67,7 @@ const cases = [
     note: '移植：全机制对撞下安全性不变式成立（队列内 FIFO 无超车是 FIFO+retryable-break 的数学后果）',
     constants: { EnableReconcile: true, EnableHandoff: true, EnableCrash: true, InjectAdoptFail: true,
       AdoptFailForever: false, SpawnInjectsIdentity: true, EnableReadyDrop: false, EnableBindDrift: true,
-      MutateStaleDeliver: false, JanitorFairness: false, DeliverFairness: false, SpawnFairness: false },
+      ThreadHostInput: true, MutateStaleDeliver: false, JanitorFairness: false, DeliverFairness: false, SpawnFairness: false },
     budget: { boundHandoff: true, handoff: 3, boundCrash: true, crash: 3, boundDrift: true, drift: 2 },
   },
   {
@@ -76,7 +76,7 @@ const cases = [
     note: '移植：变异辨别力——故意放行错位投递，fencing 不变式应击穿',
     constants: { EnableReconcile: true, EnableHandoff: true, EnableCrash: true, InjectAdoptFail: true,
       AdoptFailForever: false, SpawnInjectsIdentity: true, EnableReadyDrop: false, EnableBindDrift: true,
-      MutateStaleDeliver: true, JanitorFairness: false, DeliverFairness: false, SpawnFairness: false },
+      ThreadHostInput: true, MutateStaleDeliver: true, JanitorFairness: false, DeliverFairness: false, SpawnFairness: false },
     budget: { boundHandoff: true, handoff: 3, boundCrash: true, crash: 3, boundDrift: true, drift: 2 },
   },
   {
@@ -85,7 +85,7 @@ const cases = [
     note: '移植：条目缺位滞留的唤醒自愈链（requeue ensureHead，修复前后语义相同）在细化模型下仍活性成立',
     constants: { EnableReconcile: false, EnableHandoff: false, EnableCrash: true, InjectAdoptFail: false,
       AdoptFailForever: false, SpawnInjectsIdentity: true, EnableReadyDrop: false, EnableBindDrift: false,
-      MutateStaleDeliver: false, JanitorFairness: true, DeliverFairness: true, SpawnFairness: true },
+      ThreadHostInput: true, MutateStaleDeliver: false, JanitorFairness: true, DeliverFairness: true, SpawnFairness: true },
     budget: { boundHandoff: true, handoff: 0, boundCrash: true, crash: 2, boundDrift: true, drift: 0 },
   },
   {
@@ -94,7 +94,7 @@ const cases = [
     note: '移植（D12-1）：无限换头风暴饿死对账——投递活性依赖换头尝试收敛（生产的接续退避）',
     constants: { EnableReconcile: true, EnableHandoff: true, EnableCrash: false, InjectAdoptFail: true,
       AdoptFailForever: false, SpawnInjectsIdentity: true, EnableReadyDrop: false, EnableBindDrift: false,
-      MutateStaleDeliver: false, JanitorFairness: true, DeliverFairness: true, SpawnFairness: true },
+      ThreadHostInput: true, MutateStaleDeliver: false, JanitorFairness: true, DeliverFairness: true, SpawnFairness: true },
     budget: { boundHandoff: false, handoff: 0, boundCrash: true, crash: 0, boundDrift: true, drift: 0 },
   },
   {
@@ -103,7 +103,7 @@ const cases = [
     note: '移植（D12-2）：无限崩溃循环饿死投递（拉起即死 / 退出收割无预算）——与死锁无关的饥饿类',
     constants: { EnableReconcile: true, EnableHandoff: false, EnableCrash: true, InjectAdoptFail: false,
       AdoptFailForever: false, SpawnInjectsIdentity: true, EnableReadyDrop: false, EnableBindDrift: false,
-      MutateStaleDeliver: false, JanitorFairness: true, DeliverFairness: true, SpawnFairness: true },
+      ThreadHostInput: true, MutateStaleDeliver: false, JanitorFairness: true, DeliverFairness: true, SpawnFairness: true },
     budget: { boundHandoff: true, handoff: 0, boundCrash: false, crash: 0, boundDrift: true, drift: 0 },
   },
   {
@@ -114,7 +114,7 @@ const cases = [
     note2: '对账拍永不发生；WF(JanitorActs) 被 Wake 分支无限代偿满足。生产对应物：shared-by-project 机器速度借用 / 高频会话切换',
     constants: { EnableReconcile: true, EnableHandoff: false, EnableCrash: false, InjectAdoptFail: false,
       AdoptFailForever: false, SpawnInjectsIdentity: true, EnableReadyDrop: false, EnableBindDrift: true,
-      MutateStaleDeliver: false, JanitorFairness: true, DeliverFairness: true, SpawnFairness: true },
+      ThreadHostInput: true, MutateStaleDeliver: false, JanitorFairness: true, DeliverFairness: true, SpawnFairness: true },
     budget: { boundHandoff: true, handoff: 0, boundCrash: true, crash: 0, boundDrift: false, drift: 0 },
   },
   {
@@ -125,7 +125,7 @@ const cases = [
     note2: '修复后活性仍失守。投递活性隐含依赖「采纳最终成功或 runtime 重启」，这是 D12 之外第三条饥饿轴',
     constants: { EnableReconcile: true, EnableHandoff: false, EnableCrash: false, InjectAdoptFail: false,
       AdoptFailForever: true, SpawnInjectsIdentity: false, EnableReadyDrop: false, EnableBindDrift: false,
-      MutateStaleDeliver: false, JanitorFairness: true, DeliverFairness: true, SpawnFairness: true },
+      ThreadHostInput: true, MutateStaleDeliver: false, JanitorFairness: true, DeliverFairness: true, SpawnFairness: true },
     budget: { boundHandoff: true, handoff: 0, boundCrash: true, crash: 0, boundDrift: true, drift: 0 },
   },
   {
@@ -136,7 +136,7 @@ const cases = [
     note2: '就绪信号被丢后一切健康但永久静默',
     constants: { EnableReconcile: false, EnableHandoff: false, EnableCrash: false, InjectAdoptFail: false,
       AdoptFailForever: false, SpawnInjectsIdentity: true, EnableReadyDrop: true, EnableBindDrift: false,
-      MutateStaleDeliver: false, JanitorFairness: true, DeliverFairness: true, SpawnFairness: true },
+      ThreadHostInput: true, MutateStaleDeliver: false, JanitorFairness: true, DeliverFairness: true, SpawnFairness: true },
     budget: { boundHandoff: true, handoff: 0, boundCrash: true, crash: 0, boundDrift: true, drift: 0 },
   },
   {
@@ -145,27 +145,34 @@ const cases = [
     note: '新：ready 信号丢失 + janitor 对账 → 活性恢复（对账兜住了信号丢失的残余，量化 11-18 修复与 11-16 修复的覆盖关系）',
     constants: { EnableReconcile: true, EnableHandoff: false, EnableCrash: false, InjectAdoptFail: false,
       AdoptFailForever: false, SpawnInjectsIdentity: true, EnableReadyDrop: true, EnableBindDrift: false,
-      MutateStaleDeliver: false, JanitorFairness: true, DeliverFairness: true, SpawnFairness: true },
+      ThreadHostInput: true, MutateStaleDeliver: false, JanitorFairness: true, DeliverFairness: true, SpawnFairness: true },
     budget: { boundHandoff: true, handoff: 0, boundCrash: true, crash: 0, boundDrift: true, drift: 0 },
   },
   {
-    name: 'direct-overtake-reachable',
-    spec: 'Spec', invariant: 'NoCrossPathOvertake', expect: 'violation',
-    note: '新：跨路径超车可达——更早入箱的指令还在 pending，更晚的输入已直投落在 runtime 当前会话',
-    // eslint-disable-next-line @stylistic/max-len -- 场景注记
-    note2: '（wt-1ab8a75b 10:09 新消息秒达而旧 4 条纹丝不动；线程 FIFO 保证不跨路径成立）',
+    name: 'thread-host-no-cross-path-direct',
+    spec: 'Spec', invariant: 'NoCrossPathOvertake', expect: 'pass',
+    note: '线程宿主绑定漂移时不发生跨路径直投超车：运行时归属失败被拒收，线程 Inbox pending 保持待投',
     constants: { EnableReconcile: true, EnableHandoff: false, EnableCrash: false, InjectAdoptFail: false,
       AdoptFailForever: false, SpawnInjectsIdentity: true, EnableReadyDrop: false, EnableBindDrift: true,
-      MutateStaleDeliver: false, JanitorFairness: false, DeliverFairness: false, SpawnFairness: false },
+      ThreadHostInput: true, MutateStaleDeliver: false, JanitorFairness: false, DeliverFairness: false, SpawnFairness: false },
     budget: { boundHandoff: true, handoff: 0, boundCrash: true, crash: 0, boundDrift: true, drift: 2 },
   },
   {
-    name: 'offthread-direct-reachable',
-    spec: 'Spec', invariant: 'NoOffThreadDirect', expect: 'violation',
-    note: '新：输入静默落错地方可达——绑定漂移下直投成功 = 消息落在无关会话而非线程 head',
+    name: 'thread-host-foreign-rejected',
+    spec: 'Spec', invariant: 'NoOffThreadDirect', expect: 'pass',
+    note: '线程宿主绑定漂移时 fail-closed：归属解析失败拒收，不降级直投（ADR-0047 §4）',
     constants: { EnableReconcile: true, EnableHandoff: false, EnableCrash: false, InjectAdoptFail: false,
       AdoptFailForever: false, SpawnInjectsIdentity: true, EnableReadyDrop: false, EnableBindDrift: true,
-      MutateStaleDeliver: false, JanitorFairness: false, DeliverFairness: false, SpawnFairness: false },
+      ThreadHostInput: true, MutateStaleDeliver: false, JanitorFairness: false, DeliverFairness: false, SpawnFairness: false },
+    budget: { boundHandoff: true, handoff: 0, boundCrash: true, crash: 0, boundDrift: true, drift: 2 },
+  },
+  {
+    name: 'plain-session-foreign-direct',
+    spec: 'Spec', invariant: 'NoOffThreadDirect', expect: 'violation',
+    note: '普通会话（非线程宿主）在绑定漂移时仍直投——作为独立域行为探针，不推论线程语义',
+    constants: { EnableReconcile: true, EnableHandoff: false, EnableCrash: false, InjectAdoptFail: false,
+      AdoptFailForever: false, SpawnInjectsIdentity: true, EnableReadyDrop: false, EnableBindDrift: true,
+      ThreadHostInput: false, MutateStaleDeliver: false, JanitorFairness: false, DeliverFairness: false, SpawnFairness: false },
     budget: { boundHandoff: true, handoff: 0, boundCrash: true, crash: 0, boundDrift: true, drift: 2 },
   },
 ];

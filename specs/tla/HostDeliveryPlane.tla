@@ -53,6 +53,7 @@ CONSTANTS CommandCount,       \* 1..CommandCount 条用户输入（索引序 = �
            SpawnInjectsIdentity, \* spawn-for-head 注入线程身份（ADR-0047；FALSE=legacy）
            EnableReadyDrop,    \* ready 信号可无人消费而丢（TRUE=11-16 补偿前语义）
            EnableBindDrift,    \* 共享 runtime 绑定可漂移到无关会话
+           ThreadHostInput,    \* TRUE=宿主归属解析失败 fail-closed；FALSE=普通会话直投
            MutateStaleDeliver, \* 变异：错位也放行（验证不变式辨别力）
            JanitorFairness,    \* janitor 弱公平（15s 周期扫描持续发生）
            DeliverFairness,    \* 就绪补投弱公平（ready 信号总会被消费）
@@ -152,15 +153,18 @@ SendEnqueue ==
   /\ UNCHANGED <<hostHead, rt, rtBound, adoptedGen, barrier, readySignal,
                  adoptFailUsed, handoffLeft, crashLeft, sweepTick, driftLeft>>
 
-(* 用户输入 —— runtime 寻址未命中 head（缺位 / 历史成员 / 绑定漂移）：
-   member → 409 响亮拒收；foreign 且 running → 直投静默落在非 head 会话；
-   其余 → 直投无 runtime 可达，响亮失败。不经线程队列，不清偿 pending。 *)
+(* 用户输入 —— runtime 寻址未命中线程 head：
+   线程宿主（ThreadHostInput=TRUE）归属解析失败必须 fail-closed，等价 session_not_head /
+   thread_ownership_unresolved 的拒收，不会悄悄改走 Viewer 直投；普通会话（FALSE）
+   保持用户 turn 直投语义——绑定 foreign 时可达成 direct。旧版模型把两种 APP 域
+   合成一个行为，导致 offthread-direct 反例被错误写成生产事实。 *)
 SendRuntimeMiss ==
   /\ NoneSet # {}
   /\ rt = "absent" \/ rtBound # "head"
   /\ LET i == MinNone IN
      /\ cmd' = [cmd EXCEPT ![i] =
-                  IF rtBound = "foreign" /\ rt = "running" THEN "direct" ELSE "lost"]
+                  IF ThreadHostInput THEN "lost"
+                  ELSE IF rtBound = "foreign" /\ rt = "running" THEN "direct" ELSE "lost"]
   /\ UNCHANGED <<dgen, daligned, hostHead, rt, rtBound, adoptedGen, barrier,
                  backoff, readySignal, adoptFailUsed, handoffLeft, crashLeft, sweepTick, driftLeft>>
 
