@@ -117,6 +117,7 @@ runtime-status、remote-connections、bg-panel、rail-customize、voice-input、
 | `7f4c2e63` | 第五批：markdown-bootstrap 并入 markdown-utils（escapeHtml 与 renderer 配置逐字搬入，`markdown-utils:renderer` 桥键注销）；frontend-vm 补 marked 面（每沙箱一份实例） | src 标签 45 → 44；桥债 369/106 → 368/106 |
 | `12b04b0a` | 第六批（T2 收尾）：sidebar-render + runtime-status 迁 ESM，app-main 顶层 call-state IIFE 搬出为 `modules/agent-call-states-engine.js`，B2/B3 两处求值期抓取改具名 import，app-core 补两处最小 seam（B5/B6） | src 标签 44 → 42；桥债 368/106 → 382/108；台账 50 / 261 / 606 → 50 / 248 / 554 |
 | `2608fe1d` | 第七批：session-view-state 迁 ESM（T2 渲染层最后一件）。8 命名导出 + 6 桥键；identity 族 6 条 defineKey 注销；`session-view-commit-host` 的 window 抓取改具名 import（与 B2/B3 同型）；57 test 文件 + 3 helper 改造，`test/helpers/session-view-commit.js` 删除 | src 标签 42 → 41；桥债 382/108 → 382/109；台账 50 / 248 / 554 → 50 / 247 / 544 |
+| `2bf6ef91` | 第八批：app-ui 迁 ESM（T2 渲染层收尾）。35 处 export + 23 桥键；app-core 两处最小 seam；`workspace-surface-host` 改首调惰性装配（破静态环）；**回归修复**：resources-viewer 改为直接调注册表本体，并在生产浏览器回归里加 work-group 面板断言 | src 标签 41 → 40；桥债 382/109 → 383/110；台账 50 / 247 / 544 → 50 / 238 / 490 |
 
 转换中确立的几条约定（后续批次沿用）：
 
@@ -129,8 +130,8 @@ runtime-status、remote-connections、bg-panel、rail-customize、voice-input、
 
 剩余工作按依赖分组（每批仍按配方验收、独立提交）：
 
-- **T1 未做**：`markdown-bootstrap` 并入 markdown-utils（代价在测试面：46 个用例装载该 classic 文件、15 个用例预注册 `escapeHtml` 桥键；收入低、改动面大，排在 T2/T3 之后）；app-core 拆解（dom-refs / identity / 传输域）。dom-refs 的真正落地要等 `app-ui` / `chat-scroll` / `chat-viewport` 里 9 处 classic 顶层 `container` / `agentList` 监听随文件迁移，否则 classic 相拿不到引用。
-- **T2**：sidebar-render（第六批）与 session-view-state（第七批）已完成。剩 `app-ui` 本体（`renderCurrentMainView` 及支撑，约 2,400 行，最大单件）。
+- **T1 剩 app-core 拆解**（dom-refs / identity / 传输域）。前置已解除：app-ui / chat-scroll / chat-viewport 三处 classic 顶层 `container` / `agentList` 监听均已随文件迁入模块相，dom-refs 现在可以独立立项。`markdown-bootstrap` 已并入 markdown-utils（第五批）。
+- **T2 已完成**（第六、七、八批：sidebar-render / runtime-status / session-view-state / app-ui）。
 - **T3**：remote-connections / runtime-status（第六批解除 R1）已迁。`auth-client` **R1/R2/R4 触线保留 classic**：它创建 `__clawAuthReady` 并被 app-main 顶层 IIFE 等待，创建时点不能后移到模块相。`desktop-open` / `desktop-notify` 按 R4 保留；head 四件中 `action-dispatcher` 在配方禁区，需单独立项。app-main 残余（`visibilitychange` 注册与 `startApplication` 编排）是下一步。
 - **T5 收尾**：`kernel-entry` 与 `p2-entry` / `p4-entry` 合并为单一入口；台账 / script-tags / 桥债基线收敛；`AGENT.md` 与 `frontend-rendering-patterns.md` 中"classic 相 / 首屏同步链"表述同步。
 
@@ -160,6 +161,20 @@ runtime-status、remote-connections、bg-panel、rail-customize、voice-input、
 3. **测试桩的替换而非削弱**：`frontend-session-view-identity-state` 的「classic 经 window 写 → claim 吸收 + 代次守卫」拆成两条真实出口（claim 吸收 `defineKey` 初值为同一引用；setter ↔ 活绑定 ↔ 访问器同一份状态），patch 与代次守卫由 `frontend-session-view-commit` / `frontend-session-view-matrix` 承担。`test/helpers/session-view-commit.js` 删除，两个消费者改真实图。
 
 验收（实跑）：`test:core` 6647 项 / 6640 通过 / 3 失败（全部为已知平台项）/ 4 跳过；浏览器首屏回归主链 + 7 面板 PASS、零 pageerror；`check-import-cycles` 零新增环；三个门禁通过；`check:frontend-globals --update-baseline` 只做收敛（state 248 → 247、behavior 554 → 544，均为主助手复核后的纯删减）。
+
+### 第八批：app-ui（T2 渲染层收尾）
+
+app-ui.js 是最后一件大文件（2281 行）。时序审计的结论是「无装载期触达」：40 个顶层函数的 classic 消费点全在函数体或宿主闭包里，首屏链自时序切换后已在 `boot.js` 模块相。转换后 23 个键上桥、22 个函数收为模块私有，DOM 引用经 app-core 的 `domRefs` 取同一批加载期 `const`。
+
+三件事按重要性排列：
+
+1. **`workspace-surface-host` 的宿主面必须改成首调惰性**（阻断 B-A）。它原来在模块求值期 `...window.createWorkspaceSurfaceHost()`，而该工厂属于 app-ui；具名 import 会形成 `app-ui → assembly-actions / workspace-blocks / session-list-render → workspace-surface-host → app-ui` 的静态环，并把 app-ui 整张图拖进任何触达这些域的模块图（实测每个测试 case +29ms，7 个纯函数文件从 3.8s 涨到 8.2s）。改成首调时经桥键解析后，零静态环、零图膨胀；`selectWorkspaceSurface` 签名与桥键写值槽不变。
+2. **`resources-viewer` 的静默丢功能（本批发现并修复）**。它是 classic 脚本，在解析期自注册 work-group 的「资料 / 文档」两个 rail 面板，走的是 `window.registerFeaturePanel`（app-ui 的一行转发）＋ `typeof !== 'function'` 守卫。app-ui 进模块相后，解析期读不到该键，守卫静默返回——两个面板消失，而单元测试的金样本自己注入了转发函数，掩盖了这条路径。修复是让它直接调注册表本体 `window.ClawPanels.register`（`right-panel-registry.js` 早于它装载，是注册表的权威入口），并在生产浏览器回归里加断言：work-group 可用面板必须是 `resources / settings / threads / viewer`（把修复反向变异可打红，已验证）。
+3. **`APP_UI_DOMAIN` 为显式 opt-in**：app-ui 的静态依赖覆盖整片域，逐 case 实例化 +29ms 会把纯函数测试文件推过 1.5s 预算，因此只在真正需要真实渲染的用例里装载（生产侧仍由 p4-entry 装载）。
+
+**遗留债务（本批未修，需单独立项）**：11 个 `test/*browser-check.mjs` 手工拼页面，把已迁 ESM 的文件当 classic `<script src>` 装入，另有一个引用了 P4 T1 起已删除的 `markdown-bootstrap.js`（`p2-w2-7-context-menu-chromium-browser-check`）。它们不在 `npm test` 里，所以没有红灯信号，属于「看似可用的回归脚本」。清单：agent-loader / agent-snapshot / bg-panel / message-probe / metadata-commit / p2-w2-7-context-menu / runtime-poll / runtime-view-cache / session-data / session-view-commit / sidebar-freshness。修法是改为装载真实 `index.html` 链（与 `p2-production-boot-browser-check` 同路），或退役。
+
+验收（实跑）：`test:core` 6647 项 / 6640 通过 / 3 失败（已知平台项）/ 4 跳过；浏览器回归主链 + 7 面板 + work-group 面板断言 PASS、零 pageerror；`check-import-cycles` 零新增环；三个门禁通过。
 
 ### 剩余核心批次的阻断清单（2026-11-17 实测）
 
