@@ -362,7 +362,6 @@ const AGENT_ICONS = {
   'feature-creator': 'feature-creator.svg',
   'agent-studio': 'programming-helper.svg',
   'qqbot': 'qqbot.svg',
-  'dispatch-console': 'dispatch-console.svg',
   'programming-helper': 'programming-helper.svg',
   'coder': 'programming-helper.svg',
   'work-group': 'work-group.svg',

@@ -60,7 +60,6 @@ describe('constants', () => {
     assert.ok(HIDDEN_PREBUILT_AGENT_IDS.has('feature-repository'));
     assert.ok(HIDDEN_PREBUILT_AGENT_IDS.has('flow-test'));
     assert.ok(HIDDEN_PREBUILT_AGENT_IDS.has('flow-workspace'));
-    assert.ok(HIDDEN_PREBUILT_AGENT_IDS.has('dispatch-console'));
     assert.ok(HIDDEN_PREBUILT_AGENT_IDS.has('work-group'));
     assert.ok(!HIDDEN_PREBUILT_AGENT_IDS.has('qqbot'));
   });
@@ -118,7 +117,7 @@ describe('isWorkspaceSessionAgent', () => {
 
   it('should return false for non-workspace agents', () => {
     assert.strictEqual(isWorkspaceSessionAgent('qqbot'), false);
-    assert.strictEqual(isWorkspaceSessionAgent('dispatch-console'), false);
+    assert.strictEqual(isWorkspaceSessionAgent('work-group'), false);
   });
 
   it('should sanitize input before checking', () => {

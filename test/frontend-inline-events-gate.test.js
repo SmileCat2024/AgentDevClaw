@@ -16,7 +16,7 @@
  * 是部分 classic 模块的 querySelector 钩子约定（渲染后局部 addEventListener），
  * 不经分发器，不适用本断言。
  *
- * 悬置域文件（work-group / flow / dispatch-console / qqbot / home）不在
+ * 悬置域文件（work-group / flow / qqbot / home）不在
  * 收编范围，排除清单固化在基线里；这些域随各自大工程重做时一并处理。
  */
 import { test } from 'node:test';

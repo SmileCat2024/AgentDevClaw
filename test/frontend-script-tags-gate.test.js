@@ -7,7 +7,7 @@
  * 2. ratchet——src 标签总数只减不增，基线 .script-tags-baseline.json；
  *    历次迁移（插件化 + Phase C 各批）删模块时同步删标签已形成事实纪律，
  *    本防线把回潮（新增静态预载）变成测试期拦截；
- * 3. 悬置域清单——悬置工作空间（work-group / flow / dispatch-console）与转入
+ * 3. 悬置域清单——悬置工作空间（work-group / flow）与转入
  *    大工程（qqbot 线程化 / home 小组件）的标签集合固化：只许整体删除
  *    （随各自工程重做消亡），不许以任何形式新增。
  *
@@ -52,7 +52,8 @@ const SUSPENDED_TAGS = [
   // qqbot（转线程化工程，界面随重做消亡）
   './src/modules/im-ui.js',
   './src/modules/im-actions.js',
-  // dispatch-console（悬置）
+  // 调度面（dispatch-console 工作空间已删除；dispatch-actions 仍被 IM 工作空间
+  // 的 im-ui 消费，dispatch-ui 的表单路径已不可达，随 IM 重做一并处理）
   './src/modules/dispatch-ui.js',
   './src/modules/dispatch-actions.js',
   // flow（悬置）

@@ -106,4 +106,4 @@
 - **开发态 / 发布态** — package.json 中 `@agentdevjs/*` 声明形态：`file:`（junction 指向相邻框架仓库）vs semver（registry 实体）。安装形态与声明形态必须一致，`check-agentdev-local` 强制校验。
 - **agentdev:local / agentdev:published** — 切换脚本，语义不对称：local 只链接不改声明（临时调试框架源码）；published 改声明 + 摘链 + install + build（版本对齐）。
   _Avoid_: 用 `npm link` 做本地链接（触发依赖树 prune）；手动改 features/ 子包声明来切换形态。
-- **悬置区** — `flow-workspace`、`feature-creator`、`agent-creator`、`dispatch-console` 等代码保留但不再迭代的区域。原则：读懂现有代码、不引入新复杂度。
+- **悬置区** — `flow-workspace`、`feature-creator`、`agent-creator` 等代码保留但不再迭代的区域。原则：读懂现有代码、不引入新复杂度。
