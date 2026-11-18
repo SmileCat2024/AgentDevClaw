@@ -188,42 +188,6 @@ const CLASSIC_HOSTS = `
   closeCtxMenu = () => { window.__calls.push('closeCtxMenu'); };
   showCtxMenu = (x, y, items) => { window.__calls.push('showCtxMenu:' + items.length); };
   getRemoteHistoryProjectBuckets = () => [];
-  // agent-snapshot-loader 的宿主 seam（生产由 sidebar-render 提供同形契约）：
-  createAgentSnapshotLoaderHost = () => ({
-    state: { suppressRender: false },
-    detailIds: new Set(),
-    now: () => Date.now(),
-    captureToken: () => null,
-    isTokenCurrent: () => true,
-    ownership: (agent) => typeof getPhSessionOwnershipParams === 'function' && agent
-      ? getPhSessionOwnershipParams(agent) : {},
-    connected: (ownership) => invoke('get_connected_agents', ownership),
-    viewer: () => fetch('/api/agents'),
-    loadLayout: () => {},
-    loadProjects: () => {},
-    schedule: (callback, delay) => setTimeout(callback, delay),
-    diagnostic: () => {},
-    runtimeId: (agent) => agent?.id || '',
-    agentRuntimeId: (agent) => agent?.id || '',
-    logicalId: (agent) => agent?.id || '',
-    mergeSessions: (previous) => previous,
-    reconcileStops: () => {},
-    pruneCallStates: () => {},
-    renderList: () => { window.__calls.push('loader.renderList'); },
-    renderPanel: () => { window.__calls.push('loader.renderPanel'); },
-    refreshCalls: async () => { window.__calls.push('loader.refreshCalls'); },
-    isRemote: () => false,
-    fallback: () => null,
-    loadDetail: async () => {},
-    selectSurface: () => {},
-    preferHome: () => {},
-    resolveFocus: () => null,
-    clickPrebuilt: () => {},
-    loadData: async () => {},
-    error: (...args) => { window.__calls.push('loader.error'); },
-    log: () => {},
-    warn: () => {},
-  });
   // workspace-surface 的宿主 seam（生产由 app-ui 的 createWorkspaceSurfaceHost 提供）：
   createWorkspaceSurfaceHost = () => ({
     bumpNavigationGuard: () => { window.__calls.push('surface.bumpNavigationGuard'); },
@@ -271,6 +235,15 @@ const CLASSIC_HOSTS = `
   createSessionViewCommitHost = () => ({ state: {} });
   createRuntimeViewCacheHost = () => ({ state: {} });
   createP2BootstrapSidebarRenderHost = () => ({ lastAgentListRenderSignature: '' });
+  // 侧栏渲染自 P4 T2 起在模块相：真实 renderAgentList 的 classic 协作面。本条
+  // 用例断言「重投影后侧栏被重绘」，观测点就是渲染入口每次都会调用的顶栏 chrome。
+  groupConnectedAgents = (agents) => ({ external: Array.isArray(agents) ? agents : [], groups: [] });
+  updateCurrentAgentChrome = () => { window.__calls.push('renderAgentList'); };
+  // call 状态引擎的两个桥键（生产由 modules/agent-call-states-engine.js 注册；
+  // 本文件的裁剪链不装引擎，按「无存活轮次」的语义给替身）。
+  collectActiveCallRuntimeIds = () => [];
+  refreshAgentCallStates = async () => {};
+  ClawSidebarLayout = { load: async () => {}, signature: () => '', isInteracting: () => false, render: () => {} };
   AgentLoaderHost = { loadedAgentDetailIds: new Set() };
 `;
 
@@ -675,8 +648,9 @@ test('ph-session-move：多选状态与真实移动提交流水线（成功 + 40
     assert.equal(move.phSessionMove.selectMode, false, '多选状态复位');
     const after = callsOf(c).slice(callsBeforeSubmit);
     assert.ok(after.includes('refreshThreads'), '线程视图随移动事实刷新');
-    assert.ok(after.includes('loader.renderList'), '真实 loadAgents 重投影侧栏（宿主 renderList）');
-    assert.ok(after.includes('renderAgentList'), '重投影后显式渲染侧栏');
+    // 侧栏重绘的观测点：真实 renderAgentList 入口（每次调用都经顶栏 chrome），
+    // 既覆盖 loadAgents 的重投影，也覆盖移动链路随后的显式重渲。
+    assert.ok(after.includes('renderAgentList'), '重投影后侧栏重绘（真实 renderAgentList 入口）');
     assert.ok(fetchStub.calls.some((call) => call.url.startsWith('/protoclaw/get_connected_agents')),
       '真实 loadAgents 发起连线查询');
     assert.ok(fetchStub.calls.some((call) => call.url === '/api/agents'), '真实 loadAgents 发起 viewer 查询');

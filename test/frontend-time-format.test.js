@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { marked } from 'marked';
 import { createTimeFormat, getTimeOfDayLabel } from '../public/src/modules/time-format.js';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
+import { prepareSidebarDomain } from './p2-classic-hosts.js';
 
 /** 真实壳层 bootstrap（桥初值、宿主工厂与首屏同步面来源）。 */
 const CLASSIC_STACK = [
@@ -11,8 +12,6 @@ const CLASSIC_STACK = [
   'public/src/modules/right-panel-registry.js',
   'public/src/app-core.js',
   'public/src/modules/session-view-state.js',
-  'public/src/modules/runtime-status.js',
-  'public/src/modules/sidebar-render.js',
   'public/src/app-ui.js',
   'public/src/app-main.js',
 ];
@@ -86,6 +85,7 @@ test('real session rows retain their time indicator and escape content after the
         applyTheme = () => {};
       `);
       for (const file of CLASSIC_STACK) sandbox.loadSource(file);
+      prepareSidebarDomain(sandbox);
       sandbox.allAgents = [agent];
       sandbox.getCurrentAgentRecord = () => agent;
       sandbox.renderCurrentMainView = () => {};

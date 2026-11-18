@@ -20,6 +20,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
+import { prepareSidebarDomain } from './p2-classic-hosts.js';
 
 /**
  * 装载路线（ESM 迁移配方第三节）：feature-config.js 已是 ESM，真实 import 其命名
@@ -44,9 +45,7 @@ const I18N_STATE = 'public/src/modules/i18n-environment-state.js';
 const CLASSIC_BOOTSTRAP = [
   'public/src/modules/action-dispatcher.js',
   'public/src/app-core.js',
-  'public/src/modules/runtime-status.js',
   'public/src/modules/session-view-state.js',
-  'public/src/modules/sidebar-render.js',
 ];
 
 /**
@@ -116,6 +115,7 @@ function withFeatureConfig(fn, { language = 'en' } = {}) {
       // 语言初值经真实路径进入：app-core 读 localStorage 注册 i18n 桥键真初值
       sandbox.localStorage.setItem('agentdev-language', language);
       for (const file of CLASSIC_BOOTSTRAP) sandbox.loadSource(file);
+      prepareSidebarDomain(sandbox);
       installSeamFactories(sandbox);
     },
   }, async (c) => {

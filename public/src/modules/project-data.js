@@ -902,6 +902,10 @@ const bridgeApi = {
   updateAgentRecord,
 };
 window.KernelState.defineKey('project-data', 'getPathLeaf', getPathLeaf);
+// 实体缓存按引用交出：ESM 侧（sidebar-render 的列表渲染签名）与 classic 侧读同一
+// 对象。直接 import 会让侧栏域把 project-data → session-ui 的整条图拉进模块相，
+// 侧栏只有这一处需要项目名。
+window.KernelState.defineKey('project-data', 'phProjectEntities', phProjectEntities);
 window.KernelState.defineKey('project-data', 'resolveSidebarChildProjectGroup', resolveSidebarChildProjectGroup);
 window.KernelState.defineKey('project-data', 'ensurePhProjectEntitiesLoaded', ensurePhProjectEntitiesLoaded);
 window.KernelState.defineKey('project-data', 'getPhBrowsingTarget', getPhBrowsingTarget);

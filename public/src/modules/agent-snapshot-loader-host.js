@@ -4,8 +4,13 @@ import { loadAgentDetail } from './agent-loader-host.js';
 import { refreshAgentCallStates } from './agent-call-states-host.js';
 import { activeFeaturePanel } from './render-entry-state.js';
 import { loadAgentData } from './session-data-loader-host.js';
+// B2（P4 T2 收尾批次）：宿主工厂改具名 import（sidebar-render 已迁 ESM）。
+// 原 `window.createAgentSnapshotLoaderHost()` 在求值期抓 classic 全局：工厂定义方
+// 进模块相后该键不再存在 → 返回 undefined → 装载器构造抛错，kernel-entry 整图
+// 求值中断。
+import { createAgentSnapshotLoaderHost } from './sidebar-render.js';
 
-const host = window.createAgentSnapshotLoaderHost();
+const host = createAgentSnapshotLoaderHost();
 // 顶层读取一律惰性转调（不是直接放函数值）：agent-loader-host 已具名 import
 // project-data，静态环成立为
 // agent-loader-host → project-data → session-ui → 本模块 →

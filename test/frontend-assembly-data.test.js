@@ -59,6 +59,7 @@ function createBootstrapHosts() {
     // Object.freeze 宿主：Map/Set 只读引用 + 成对 get/set；此处按契约给最小面）。
     createP2BootstrapCallActivityHost: () => ({
       _agentCallActive: new Map(),
+      _interruptSuppression: new Map(),     // B5 seam（call 状态引擎的 interrupting 容器）
       _recentlyFinishedRuntimes: new Set(),
       _seenChoiceAlertIds: new Set(),
       _autoTitleTriggered: new Set(),
@@ -79,13 +80,21 @@ function createBootstrapHosts() {
     }),
     createP2BootstrapSidebarHost: () => ({
       restartingRuntimeIds: new Set(),
+      pendingPrebuiltAgentIds: new Set(),   // B6 seam（sidebar-render 渲染签名读）
       suppressSidebarRerender: false,
     }),
     createP2BootstrapSidebarRenderHost: () => ({ lastAgentListRenderSignature: '' }),
     // 跨批静态边（P2 输入面）：agent-data-loader → input-actions → p2-bootstrap-dom /
     // poll-coordinator-host。两个 classic 工厂的真实实现分别是 app-core 的 DOM 引用
     // 与 app-main 的轮询协调器宿主；本文件只跑装配数据纯函数，按契约给最小面。
-    createP2BootstrapDomHost: () => ({ container: {}, ctxMenu: {}, compactContextMenu: {}, agentContextMenu: {}, projectContextMenu: {}, featureRepoContextMenu: {} }),
+    createP2BootstrapDomHost: () => ({
+      container: {}, ctxMenu: {}, compactContextMenu: {}, agentContextMenu: {}, projectContextMenu: {},
+      featureRepoContextMenu: {},
+      // sidebar-render 在模块求值期给侧栏容器装 click/contextmenu 委托（P4 T2 起
+      // 这两个引用来自 domRefs）：按元素契约给最小面。
+      agentList: elementStub(), externalAgentList: elementStub(), externalGroup: elementStub(),
+      externalCount: elementStub(),
+    }),
     createPollCoordinatorHost: () => ({
       run: async () => {}, fastInterval: () => 1000, setTimeout: () => 0, clearTimeout: () => {},
     }),
@@ -135,6 +144,17 @@ function createBootstrapHosts() {
       saveScroll() {}, applyPatch() {}, setFollowLatest() {}, resetSurface() {},
       beginNavigation() {}, clearNavigation() {}, beginLoading() {}, clearLoading() {},
     }),
+  };
+}
+
+/** 侧栏 DOM 引用桩（真实元素的最小契约：委托注册 + innerHTML/textContent 写入）。 */
+function elementStub() {
+  return {
+    innerHTML: '', textContent: '', style: {},
+    classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
+    dataset: {}, dispatchEvent() {},
+    addEventListener() {}, removeEventListener() {},
+    querySelector() { return null; }, querySelectorAll() { return []; },
   };
 }
 

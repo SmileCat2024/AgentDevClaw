@@ -49,6 +49,11 @@ function installHostFactories() {
     projectContextMenu: domRefElement(),
     featureRepoContextMenu: domRefElement(),
     ctxMenu: domRefElement(),
+    // P4 T2 尾批：sidebar-render 迁 ESM 后在模块求值期给侧栏容器装委托。
+    container: domRefElement(),
+    agentList: domRefElement(),
+    externalAgentList: domRefElement(), externalGroup: domRefElement(),
+    externalCount: domRefElement(), currentAgentTitle: domRefElement(),
   });
   window.createP2BootstrapAssemblyHost = () => stateHost({});
   window.createP2BootstrapCallActivityHost = () => stateHost({

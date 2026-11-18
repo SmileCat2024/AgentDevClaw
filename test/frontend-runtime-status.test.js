@@ -32,7 +32,8 @@ const RUNTIME_STATUS = 'public/src/modules/runtime-status.js';
  * currentRuntimeAgentId / allAgents …）并交出自己的宿主工厂（重启中 runtime 集合、
  * 调用状态 Map、渲染缓存），sidebar-render 交出渲染去重状态——两者都是本文件
  * 被测链路（侧栏投影 / 渲染去重 / 桥键调用）的真实持有方，不能由测试自造。
- * runtime-status.js 自身仍是 classic（同步首屏边界），在 bootstrap 之后 loadSource。
+ * runtime-status.js 已迁 ESM（P4 T2 收尾批次），由 prepareClassicSandbox 在 classic
+ * 链之后按模块相装载；用例经真实模块命名空间调用被测函数（见 loadRuntimeStatus）。
  *
  * The module calls ensureNotificationClockTimer() at load time, which invokes
  * window.setInterval. We stub it to a no-op to avoid leaking real timers.
@@ -42,16 +43,6 @@ function bootstrapClassic(sandbox) {
   // app-ui 的宿主工厂都是生产实现，首屏 boot 与周期排程（含通知时钟）由基座关掉。
   sandbox.setInterval = () => 0;
   prepareClassicSandbox(sandbox);
-  // 窄行为观察面（真源之后覆盖，语义与迁移前一致）：本文件断言的是「标签取自 t /
-  // 语言取自 currentLanguage」这条契约本身，故 t 保持恒等映射、身份与时间工具保持
-  // 最小实现；侧栏列表与主视图渲染的 DOM 落地不在验收面（真实渲染需要整条页面 DOM）。
-  sandbox.t = (key) => key;
-  sandbox.currentMessages = [];
-  sandbox.normalizeAgentIdentity = (x) => String(x || '').trim();
-  sandbox.getPathLeaf = (value) => String(value || '').replace(/\\/g, '/').split('/').filter(Boolean).pop() || '';
-  sandbox.toEpochMs = (value) => Date.parse(value || '') || 0;
-  sandbox.renderAgentList = () => {};
-  sandbox.renderCurrentMainView = () => {};
 }
 
 
@@ -122,6 +113,20 @@ function it(name, fn) {
 function loadRuntimeStatus(overrides = {}) {
   if (!activeCase) throw new Error('loadRuntimeStatus 必须在用例体内调用');
   const ctx = activeCase.sandbox;
+  // 被测导出投影（迁移前它们是 classic 顶层函数，用例按裸名调用）：把**真实模块
+  // 的命名导出**放到本用例沙箱上，只服务断言，不建第二份实现、不进生产面。
+  Object.assign(ctx, ctx.__esmDomain.runtimeStatus);
+  // 窄行为观察面（域装载之后覆盖，语义与迁移前一致）：身份与时间工具保持最小
+  // 实现；侧栏列表与主视图渲染的 DOM 落地不在验收面（真实渲染需要整条页面
+  // DOM）。模块经 window 取用这些键，因此必须在模块求值后落位。
+  // `t` 不覆盖：模块直接 import 生产 `t`，文案断言与字典同源（`ctx.run('t(...)')`）。
+  ctx.currentMessages = [];
+  ctx.normalizeAgentIdentity = (x) => String(x || '').trim();
+  ctx.getPathLeaf = (value) => String(value || '').replace(/\\/g, '/').split('/').filter(Boolean).pop() || '';
+  ctx.toEpochMs = (value) => Date.parse(value || '') || 0;
+  ctx.renderAgentList = () => {};
+  ctx.renderCurrentMainView = () => {};
+  ctx.ClawSidebarLayout = { load: async () => {}, signature: () => '', isInteracting: () => false, render: () => {} };
   for (const [key, value] of Object.entries(overrides)) {
     if (key === '_agentCallActive') {
       ctx.run('_agentCallActive.clear()');
@@ -1273,32 +1278,32 @@ describe('runtime-status: getRuntimeTimerLabel', () => {
 describe('runtime-status: getRuntimeStageLabel', () => {
   it('llm_thinking → phase_thinking', () => {
     const ctx = loadRuntimeStatus();
-    assert.equal(ctx.run('getRuntimeStageLabel({ stage: "llm_thinking" })'), 'phase_thinking');
+    assert.equal(ctx.run('getRuntimeStageLabel({ stage: "llm_thinking" })'), ctx.run('t("phase_thinking")'));
   });
 
   it('llm_content → phase_content', () => {
     const ctx = loadRuntimeStatus();
-    assert.equal(ctx.run('getRuntimeStageLabel({ stage: "llm_content" })'), 'phase_content');
+    assert.equal(ctx.run('getRuntimeStageLabel({ stage: "llm_content" })'), ctx.run('t("phase_content")'));
   });
 
   it('llm_tool_call_building → phase_tool_calling', () => {
     const ctx = loadRuntimeStatus();
-    assert.equal(ctx.run('getRuntimeStageLabel({ stage: "llm_tool_call_building" })'), 'phase_tool_calling');
+    assert.equal(ctx.run('getRuntimeStageLabel({ stage: "llm_tool_call_building" })'), ctx.run('t("phase_tool_calling")'));
   });
 
   it('tool_executing → phase_tool_executing', () => {
     const ctx = loadRuntimeStatus();
-    assert.equal(ctx.run('getRuntimeStageLabel({ stage: "tool_executing" })'), 'phase_tool_executing');
+    assert.equal(ctx.run('getRuntimeStageLabel({ stage: "tool_executing" })'), ctx.run('t("phase_tool_executing")'));
   });
 
   it('completed → phase_completed', () => {
     const ctx = loadRuntimeStatus();
-    assert.equal(ctx.run('getRuntimeStageLabel({ stage: "completed" })'), 'phase_completed');
+    assert.equal(ctx.run('getRuntimeStageLabel({ stage: "completed" })'), ctx.run('t("phase_completed")'));
   });
 
   it('failed → phase_failed', () => {
     const ctx = loadRuntimeStatus();
-    assert.equal(ctx.run('getRuntimeStageLabel({ stage: "failed" })'), 'phase_failed');
+    assert.equal(ctx.run('getRuntimeStageLabel({ stage: "failed" })'), ctx.run('t("phase_failed")'));
   });
 
   it('idle, not callActive → ""', () => {
@@ -1308,7 +1313,7 @@ describe('runtime-status: getRuntimeStageLabel', () => {
 
   it('idle, callActive → phase_processing', () => {
     const ctx = loadRuntimeStatus();
-    assert.equal(ctx.run('getRuntimeStageLabel({ stage: "idle", callActive: true })'), 'phase_processing');
+    assert.equal(ctx.run('getRuntimeStageLabel({ stage: "idle", callActive: true })'), ctx.run('t("phase_processing")'));
   });
 });
 
@@ -1317,7 +1322,7 @@ describe('runtime-status: getRuntimeStageLabel', () => {
 describe('runtime-status: getCompactRuntimeLabel', () => {
   it('disconnected → runtime_status_disconnected', () => {
     const ctx = loadRuntimeStatus();
-    assert.equal(ctx.run('getCompactRuntimeLabel({ stage: "llm_thinking" }, false)'), 'runtime_status_disconnected');
+    assert.equal(ctx.run('getCompactRuntimeLabel({ stage: "llm_thinking" }, false)'), ctx.run('t("runtime_status_disconnected")'));
   });
 
   it('llm_thinking no chars (zh) → 思考中', () => {
@@ -1330,7 +1335,7 @@ describe('runtime-status: getCompactRuntimeLabel', () => {
     const result = ctx.run('getCompactRuntimeLabel({ stage: "llm_thinking", thinkingChars: 42 }, true)');
     assert.ok(result.includes('思考'));
     assert.ok(result.includes('42'));
-    assert.ok(result.includes('runtime_unit_chars'));
+    assert.ok(result.includes(ctx.run('t("runtime_unit_chars")')));
   });
 
   it('llm_content no chars (zh) → 生成中', () => {
@@ -1390,12 +1395,12 @@ describe('runtime-status: getCompactRuntimeLabel', () => {
       { role: "assistant", toolCalls: [{ id: "t1", name: "read" }] },
       { role: "tool", toolCallId: "t1" }
     ]`);
-    assert.equal(ctx.run('getCompactRuntimeLabel({ stage: "awaiting_runtime", callActive: true, toolCallCount: 1, activeToolCount: 0 }, true)'), 'runtime_status_waiting_model');
+    assert.equal(ctx.run('getCompactRuntimeLabel({ stage: "awaiting_runtime", callActive: true, toolCallCount: 1, activeToolCount: 0 }, true)'), ctx.run('t("runtime_status_waiting_model")'));
   });
 
   it('callActive, no tools → runtime_status_waiting_model', () => {
     const ctx = loadRuntimeStatus();
-    assert.equal(ctx.run('getCompactRuntimeLabel({ stage: "idle", callActive: true }, true)'), 'runtime_status_waiting_model');
+    assert.equal(ctx.run('getCompactRuntimeLabel({ stage: "idle", callActive: true }, true)'), ctx.run('t("runtime_status_waiting_model")'));
   });
 });
 
@@ -1404,23 +1409,23 @@ describe('runtime-status: getCompactRuntimeLabel', () => {
 describe('runtime-status: getRuntimeSummary', () => {
   it('disconnected → runtime_status_disconnected', () => {
     const ctx = loadRuntimeStatus();
-    assert.equal(ctx.run('getRuntimeSummary({ stage: "llm_thinking" }, false)'), 'runtime_status_disconnected');
+    assert.equal(ctx.run('getRuntimeSummary({ stage: "llm_thinking" }, false)'), ctx.run('t("runtime_status_disconnected")'));
   });
 
   it('llm_thinking → runtime_status_thinking_active', () => {
     const ctx = loadRuntimeStatus();
-    assert.equal(ctx.run('getRuntimeSummary({ stage: "llm_thinking" }, true)'), 'runtime_status_thinking_active');
+    assert.equal(ctx.run('getRuntimeSummary({ stage: "llm_thinking" }, true)'), ctx.run('t("runtime_status_thinking_active")'));
   });
 
   it('llm_content → runtime_status_streaming_active', () => {
     const ctx = loadRuntimeStatus();
-    assert.equal(ctx.run('getRuntimeSummary({ stage: "llm_content" }, true)'), 'runtime_status_streaming_active');
+    assert.equal(ctx.run('getRuntimeSummary({ stage: "llm_content" }, true)'), ctx.run('t("runtime_status_streaming_active")'));
   });
 
   it('tool_executing with tools → includes tool name', () => {
     const ctx = loadRuntimeStatus();
     const result = ctx.run('getRuntimeSummary({ stage: "tool_executing", activeToolNames: ["read"] }, true)');
-    assert.ok(result.includes('runtime_status_executing_tools'));
+    assert.ok(result.includes(ctx.run('t("runtime_status_executing_tools")')));
     assert.ok(result.includes('read'));
   });
 
@@ -1431,35 +1436,35 @@ describe('runtime-status: getRuntimeSummary', () => {
 
   it('failed without message → runtime_status_failed', () => {
     const ctx = loadRuntimeStatus();
-    assert.equal(ctx.run('getRuntimeSummary({ stage: "failed" }, true)'), 'runtime_status_failed');
+    assert.equal(ctx.run('getRuntimeSummary({ stage: "failed" }, true)'), ctx.run('t("runtime_status_failed")'));
   });
 
   it('completed → runtime_status_completed', () => {
     const ctx = loadRuntimeStatus();
-    assert.equal(ctx.run('getRuntimeSummary({ stage: "completed" }, true)'), 'runtime_status_completed');
+    assert.equal(ctx.run('getRuntimeSummary({ stage: "completed" }, true)'), ctx.run('t("runtime_status_completed")'));
   });
 
   it('callActive, no chars → runtime_status_waiting_model', () => {
     const ctx = loadRuntimeStatus();
-    assert.equal(ctx.run('getRuntimeSummary({ stage: "idle", callActive: true, charCount: 0, contentChars: 0, thinkingChars: 0 }, true)'), 'runtime_status_waiting_model');
+    assert.equal(ctx.run('getRuntimeSummary({ stage: "idle", callActive: true, charCount: 0, contentChars: 0, thinkingChars: 0 }, true)'), ctx.run('t("runtime_status_waiting_model")'));
   });
 
   it('callActive + pending tool calls in messages → runtime_status_waiting_tool_results', () => {
     const ctx = loadRuntimeStatus();
     ctx.run(`currentMessages = [{ role: "assistant", toolCalls: [{ id: "t1", name: "read" }] }]`);
-    assert.equal(ctx.run('getRuntimeSummary({ stage: "awaiting_runtime", callActive: true, toolCallCount: 1, activeToolCount: 0 }, true)'), 'runtime_status_waiting_tool_results');
+    assert.equal(ctx.run('getRuntimeSummary({ stage: "awaiting_runtime", callActive: true, toolCallCount: 1, activeToolCount: 0 }, true)'), ctx.run('t("runtime_status_waiting_tool_results")'));
   });
 
   it('callActive, stale data → runtime_status_stale', () => {
     const ctx = loadRuntimeStatus();
     ctx.run('var rt = { stage: "idle", callActive: true, charCount: 100, updatedAt: Date.now() - 10000 }');
-    assert.equal(ctx.run('getRuntimeSummary(rt, true)'), 'runtime_status_stale');
+    assert.equal(ctx.run('getRuntimeSummary(rt, true)'), ctx.run('t("runtime_status_stale")'));
   });
 
   it('llm_tool_call_building with streamToolNames → includes tool names', () => {
     const ctx = loadRuntimeStatus();
     const result = ctx.run('getRuntimeSummary({ stage: "llm_tool_call_building", streamToolNames: ["read", "edit"] }, true)');
-    assert.ok(result.includes('runtime_status_building_tools'));
+    assert.ok(result.includes(ctx.run('t("runtime_status_building_tools")')));
     assert.ok(result.includes('read'));
     assert.ok(result.includes('edit'));
   });
@@ -1467,7 +1472,7 @@ describe('runtime-status: getRuntimeSummary', () => {
   it('llm_tool_call_building without streamToolNames → just label', () => {
     const ctx = loadRuntimeStatus();
     const result = ctx.run('getRuntimeSummary({ stage: "llm_tool_call_building" }, true)');
-    assert.equal(result, 'runtime_status_building_tools');
+    assert.equal(result, ctx.run('t("runtime_status_building_tools")'));
   });
 });
 

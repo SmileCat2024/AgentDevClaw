@@ -80,14 +80,25 @@ function loadClassicDeps(sandbox) {
 function installClassicSeams(sandbox, sink) {
   sandbox.renderCurrentMainView = (view) => { sink.renders.push(view); };
   sandbox.renderFeaturePanel = () => { sink.panelRenders += 1; };
-  sandbox.resetRuntimeStatusForSwitch = () => { sink.resetStatus += 1; };
-  sandbox.updateNotificationStatus = (payload, runtimeId) => { sink.notifications.push({ payload, runtimeId }); };
+  // 运行时状态复位自 P4 T2 起由 runtime-status（ESM）的桥键提供，classic 阶段的
+  // 同名桩会被桥访问器顶掉；记账改挂在真实现必然调用的 call-elapsed 复位入口上
+  // （本图不装载该域，替身保留），语义仍是「切换时点触发了状态复位」。
+  sandbox.resetCallElapsedForSwitch = () => { sink.resetStatus += 1; };
+  // updateNotificationStatus 同属 runtime-status（ESM，桥键在模块求值时注册）：
+  // classic 阶段的替身会被顶掉，断言改为真实落地状态（见用例体的
+  // lastNotificationStatusPayload）。
   // 回滚按钮刷新已迁 ESM（input-actions 的具名导出）：不再注入同名桩，
   // 改用真实实现扫过的 DOM 面记账（生产中它遍历 .message-row）。
   sandbox.run(`
     window.__rollbackScans = 0;
     container.querySelectorAll = () => { window.__rollbackScans += 1; return []; };
   `);
+  // runtime-status（ESM）的通知落地面：输入面同步与队列同步入口由 persistent-input /
+  // 排队投影的桥键提供；本图不装载这两个域，按调用契约给替身（不改变语义：
+  // 本文件断言的是请求集合与提交时点，不看输入面 DOM）。
+  sandbox._syncPersistentActionButton = () => {};
+  sandbox._syncPersistentInputUi = () => {};
+  sandbox._syncQueueFromBackend = () => {};
   sandbox.getCurrentRuntimeRecord = () => sink.record;
   sandbox.getCurrentAgentRecord = () => sink.record;
 }
@@ -219,7 +230,8 @@ describe('P2-4L 原厂商行为（真实 ESM 整图）', () => {
       // 渲染/通知副作用仍经 classic 入口（这里由同形桩记录）
       assert.ok(sink.renders.length >= 1, '正文到达后应重绘主视图');
       assert.ok(sink.panelRenders >= 1, '辅助面板到达后应重绘面板');
-      assert.ok(sink.notifications.length >= 1, '运行时状态应回传通知');
+      assert.ok(c.window.lastNotificationStatusPayload !== null,
+        '运行时状态经真实 updateNotificationStatus 落地（桥键可为读）');
       assert.ok(c.read('window.__rollbackScans') >= 1, '正文与输入快照提交后应刷新回滚按钮');
       assert.equal(c.timerCount(), 0, '用例结束不应残留计时器');
     });

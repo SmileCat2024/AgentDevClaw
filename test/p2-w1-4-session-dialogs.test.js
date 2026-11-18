@@ -26,7 +26,7 @@ let created = [];
 /* 真实宿主适配器的依赖桩：session-dialogs 现在 import 运行时切换、列表快照
  * 加载与 chat-loading；这些宿主装载期经 window.createXHost() 取 classic 适配面。
  * 桩记录真实调用点（导航目标、加载态、列表快照请求），不替换被测模块依赖。 */
-const hostCalls = { switched: [], viewerRequests: 0 };
+const hostCalls = { switched: [], viewerRequests: 0, invokes: [] };
 const runtimeCache = new Map();
 // 真实 sidebar-operations 的 operation 收尾经 console.info('[SIDEBAR_OPERATION]') 播报
 // （settled 后记录即从存储删除，事后 getSidebarOperation 已查不到）。
@@ -74,7 +74,10 @@ function installHostFactories() {
   // classic P2 bootstrap 状态宿主（sidebar-operations / session-ui 装载期取用）：
   // 真实实现是 app-core/app-main/sidebar-render 的 Object.freeze 状态槽位，
   // 这里用可读写 bag 复刻其接口面。
-  window.createP2BootstrapSidebarHost = () => stateHost({ restartingRuntimeIds: new Set(), suppressSidebarRerender: false });
+  // B6（P4 T2）：待启动 prebuilt 集合与重启集合一样按引用交给侧栏渲染。
+  window.createP2BootstrapSidebarHost = () => stateHost({
+    restartingRuntimeIds: new Set(), pendingPrebuiltAgentIds: new Set(), suppressSidebarRerender: false,
+  });
   window.createP2BootstrapSidebarRenderHost = () => stateHost({ lastAgentListRenderSignature: '' });
   window.createP2BootstrapPhSessionHost = () => stateHost({ phSessionSortMode: 'default', phSearchQuery: '', _phSearchTimer: null, savedPhTabState: {} });
   // DOM 引用面：session-dialogs 现在 import context-menu 的 closeCompactMenu（真实
@@ -99,6 +102,75 @@ function installHostFactories() {
   window.createP2BootstrapDebugPanelHost = () => stateHost({ logFilters: {} });
   window.createP2BootstrapSessionSwitchHost = () => stateHost({});
   window.AgentLoaderHost = { loadedAgentDetailIds: new Set() };
+  // 侧栏装载链自 P4 T2 起是 ESM（agent-snapshot-loader-host import 真实
+  // createAgentSnapshotLoaderHost）：本文件下方的同名 window 工厂替身不再被它取用，
+  // 真实 host 的 classic 协作面按调用契约补齐（连线查询 / 布局 / 项目实体）。
+  window.invoke = async (command, payload) => {
+    hostCalls.invokes.push({ command, payload });
+    return command === 'get_connected_agents' ? [] : [];
+  };
+  window.ClawSidebarLayout = { load: async () => {}, signature: () => '', isInteracting: () => false, render() {} };
+  // call 状态引擎的桥键（生产由 modules/agent-call-states-engine.js 注册）：本文件
+  // 的裁剪链不装引擎，按「无存活轮次」语义给替身，让 loadAgents 走完清理路径。
+  window.collectActiveCallRuntimeIds = () => [];
+  window.refreshAgentCallStates = async () => {};
+  // call 状态引擎的协议面（生产由 modules/agent-call-states-engine.js 冻结发布；
+  // ESM 适配面 agent-call-states-host 对它是晚绑定 + 缺位即抛）。
+  window.ClawFW.CallStates = Object.freeze({
+    collectActiveCallRuntimeIds: () => [],
+    applyAgentCallStateFromNotification: () => false,
+    applyCallStateToAgentRecords: () => false,
+    refreshAgentCallStates: async () => {},
+  });
+  // 真实 host 的身份 / 合并工具（生产由 app-core 提供；本文件只装模块图，
+  // 不装 app-core，按生产语义给同名实现：身份归一 = trim，其余为恒等合并）。
+  window.normalizeAgentIdentity = (value) => String(value || '').trim();
+  window.getRuntimeId = (agent) => agent?.runtime_session_id || (agent?.source === 'child' ? agent?.id : null);
+  window.getAgentRuntimeId = (agent) => agent?.runtime_session_id || agent?.id || '';
+  window.getLogicalAgentId = (agent) => agent?.parent_id || agent?.id || null;
+  window.mergeWorkspaceSessionSnapshots = (previous) => previous;
+  window.reconcilePendingRuntimeStops = () => {};
+  window.isRemoteNamespaceAgentId = (value) => String(value || '').startsWith('remote:');
+  window.resolveWorkspaceFallbackAgentId = () => null;
+  window.resolveFocusedAgentAfterRefresh = () => null;
+  window.queueSidebarDiagnosticEvent = () => {};
+  window.captureSidebarSnapshotToken = () => null;
+  window.isSidebarSnapshotTokenCurrent = () => true;
+  window.ensurePhProjectEntitiesLoaded = async () => {};
+  // 首屏 DOM 引用宿主（生产由 app-core 的 createP2BootstrapDomHost 提供）：
+  // 模块相 domRefs 取用它，未给会让侧栏渲染读到 undefined 元素。
+  window.createP2BootstrapDomHost = () => {
+    const el = () => makeElement();
+    const refs = {};
+    // app-core 的 createP2BootstrapDomHost 键面（首屏元素引用全量）
+    for (const key of ['container', 'agentList', 'externalAgentList', 'externalGroup', 'externalCount',
+      'currentAgentTitle', 'featurePanel', 'featurePanelTitle', 'featurePanelBody',
+      'agentContextMenu', 'restartAgentAction', 'stopAgentAction', 'deleteAgentAction',
+      'compactContextMenu', 'compactSummaryAction', 'compactTrimAction', 'compactBranchAction',
+      'projectContextMenu', 'deleteProjectAction', 'featureRepoContextMenu', 'deleteFeatureAction',
+      'ctxMenu', 'followLatestButton', 'projectDocsetToggle', 'projectDocsetOverlay',
+      'projectDocsetSheet', 'chatProcessToggle', 'languageToggle', 'themeToggle']) {
+      refs[key] = el();
+    }
+    return refs;
+  };
+  // 侧栏渲染的 classic 协作面（生产由 app-ui / app-main 提供）
+  window.groupConnectedAgents = (agents) => ({ external: Array.isArray(agents) ? agents : [], groups: [] });
+  window.updateCurrentAgentChrome = () => {};
+  window.isAgentActive = () => false;
+  window.isRuntimeItemActive = () => false;
+  // 面板重绘（生产 app-ui 的 renderFeaturePanel）：装载器宿主在侧栏重投影后调用。
+  window.renderFeaturePanel = () => {};
+  // app-core 的 UI-only 判定（对话型 APP 的 home 壳）：本文件只驱动对话会话。
+  window.isUiOnlyAgentId = () => false;
+  window.getVisibleRemoteEntries = () => [];
+  window.getSidebarOperationVersion = () => 0;
+  window.getActiveThreadInputTarget = () => null;
+  window.isThreadHostAgentId = () => false;
+  window.captureSessionViewToken = (runtimeId) => ({ runtimeId });
+  window.isSessionViewTokenCurrent = () => true;
+  window.commitSessionViewState = (_token, apply) => { apply(); return true; };
+  window.getCurrentSessionViewIdentity = () => null;
   window.createCallInterruptHost = () => ({ pending: new Map(), now: () => 0 });
   window.createSessionViewCommitHost = () => ({
     identity: () => null, read: () => ({}), apply() {}, normalizeModel: (value) => value || {},
@@ -201,6 +273,16 @@ function makeElement() {
     style: {},
     dataset: {},
     parentNode: null,
+    classList: {
+      _set: new Set(),
+      add(name) { this._set.add(name); },
+      remove(name) { this._set.delete(name); },
+      toggle(name, force) { if (force === undefined ? !this._set.has(name) : force) this._set.add(name); else this._set.delete(name); },
+      contains(name) { return this._set.has(name); },
+    },
+    remove() {},
+    closest() { return null; },
+    contains() { return false; },
     focus() {},
     select() {},
     addEventListener(type, callback) { listeners.set(type, callback); },
@@ -251,7 +333,12 @@ before(async () => {
       requestAnimationFrame: (callback) => trackedSetTimeout(() => callback(Date.now()), 0),
     },
     document: {
-      getElementById(id) { return elements.get(id) || null; },
+      // 侧栏渲染域在模块相读一批首屏 DOM 引用（生产页面恒在）：未预置的 id 给
+      // 同形元素桩，本文件断言只落在预置元素上。
+      getElementById(id) {
+        if (!elements.has(id)) elements.set(id, makeElement());
+        return elements.get(id);
+      },
       createElement: () => overlayElement().overlay,
       addEventListener() {},
       body,
@@ -323,6 +410,7 @@ function reset(overrides = {}) {
   chatLoading.clearChatLoadingSession();
   hostCalls.switched.length = 0;
   hostCalls.viewerRequests = 0;
+  hostCalls.invokes.length = 0;
   runtimeCache.clear();
   sidebarPhases.length = 0;
   agentStore.setAllAgents([{
@@ -443,7 +531,11 @@ test('submitting a branch posts one idempotent delta request and switches to the
     .find((agent) => agent.id === 'programming-helper')
     ?.workspace_sessions.sessions.find((session) => session.id === 'session-1');
   assert.equal(archivedSession?.archived, true, '源会话先被乐观标记为已归档');
-  assert.ok(hostCalls.viewerRequests >= 1, '提交后经真实 loadAgents 刷新列表快照');
+  // 真实 loadAgents 的两个数据源（连线查询 + viewer 快照）都发生在提交之后
+  assert.ok(hostCalls.invokes.some((entry) => entry.command === 'get_connected_agents'),
+    '提交后经真实 loadAgents 刷新列表快照（连线查询）');
+  assert.ok(requests.some((entry) => entry.url === '/api/agents'),
+    '提交后经真实 loadAgents 刷新列表快照（viewer 查询）');
 });
 
 test('the rename dialog prefills the current title and saves through the PUT endpoint', async () => {

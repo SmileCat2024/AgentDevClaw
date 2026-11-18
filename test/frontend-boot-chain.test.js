@@ -44,7 +44,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
-import { CLASSIC_BOOTSTRAP } from './p2-classic-hosts.js';
+import { CLASSIC_BOOTSTRAP, prepareSidebarDomain } from './p2-classic-hosts.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, '..');
@@ -104,6 +104,17 @@ const INPUT_ESM_BATCH = [
 const WORKSPACE_ACTIONS_ESM = './src/modules/workspace-actions.js';
 /** P4 T3 迁出的刷新引擎：classic 标签必须删除，且须经 p4-entry 可达。 */
 const THREAD_ENGINE_ESM = './src/modules/thread-store.js';
+
+/**
+ * P4 T2 收尾批次迁出的侧栏 / 运行时状态域：classic 标签必须删除，且须经 p4-entry
+ * 进入 module 入口图（B1 起 app-main 顶层不再建 call 状态引擎，引擎与两个域同批
+ * 进模块相）。
+ */
+const SIDEBAR_DOMAIN_ESM = [
+  './src/modules/runtime-status.js',
+  './src/modules/sidebar-render.js',
+  './src/modules/agent-call-states-engine.js',
+];
 
 /** P4 T2 迁出的输入薄壳：classic 标签必须删除，且须经 p4-entry 可达。 */
 const INPUT_SHELL_ESM = [
@@ -259,6 +270,10 @@ function loadClassicHostChain(sandbox, beforeAppMain) {
   for (const file of CLASSIC_HOST_CHAIN) sandbox.loadSource(file);
   if (typeof beforeAppMain === 'function') beforeAppMain(sandbox);
   sandbox.loadSource(APP_MAIN_SOURCE);
+  // 侧栏渲染 / 运行时状态 / call 状态引擎（P4 T2 收尾批次进模块相）：classic 链
+  // 之后按真实加载序装载，engine 的两个桥键（collectActiveCallRuntimeIds /
+  // refreshAgentCallStates）由此注册——app-main 的顶层 IIFE 已搬出。
+  prepareSidebarDomain(sandbox);
 }
 
 /**
@@ -412,7 +427,6 @@ describe('前端加载链（index.html 真实入口 + P2 ESM 图，P2 子集）'
     const classicRequirements = [
       './src/modules/kernel-state.js', // 桥存储：状态访问器必须先于一切域模块
       './src/app-core.js', // DOM 引用与 createP2Bootstrap*Host 工厂
-      './src/modules/sidebar-render.js', // renderAgentList：首屏同步调用
       './src/modules/auth-client.js', // __clawAuthReady 的创建方
     ];
     for (const src of classicRequirements) {
@@ -477,6 +491,27 @@ describe('前端加载链（index.html 真实入口 + P2 ESM 图，P2 子集）'
       'input-model-switcher 必须由 p2-entry 显式 import：它没有批次入口文件，'
         + '不能靠偶然的 import 边进入生产装载链',
     );
+    // ── P4 T2 收尾批次：侧栏渲染 / 运行时状态 / call 状态引擎 ──
+    // 三者同批迁 ESM（B1–B6 的链式阻断）：classic 标签必须删除（解析期 SyntaxError），
+    // 且必须经 p4-entry 进入 module 入口图——p4-entry 早于 p2-entry 求值
+    // （kernel-entry 的 import 序），首屏渲染所需的桥键在模块相先注册。
+    for (const src of SIDEBAR_DOMAIN_ESM) {
+      assert.equal(
+        CLASSIC_SRCS.includes(src),
+        false,
+        `${src} 已迁 ESM（P4 T2）：classic 标签会在解析期 SyntaxError`,
+      );
+      assert.ok(
+        MODULE_GRAPH.has(src.replace(/^\.\//, 'public/')),
+        `${src} 必须经 p4-entry 进入 module 入口图`,
+      );
+    }
+    assert.ok(
+      (MODULE_GRAPH.get('public/src/modules/p4-entry.js') || [])
+        .includes('public/src/modules/sidebar-render.js'),
+      'sidebar-render 必须由 p4-entry 显式 import（首屏渲染的桥键在模块相注册）',
+    );
+
     for (const src of INPUT_SHELL_ESM) {
       assert.equal(
         CLASSIC_SRCS.includes(src),

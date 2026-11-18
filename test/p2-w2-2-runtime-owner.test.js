@@ -5,17 +5,21 @@
  * classic 沙箱 + 一张真实 ESM 图，计时器按用例记账并在结束时取消；不带
  * --test-force-exit 也应正常退出）。
  *
+ * P4 T2 收尾批次改变了相位：runtime-status 已迁 ESM，三个键的 `defineKey` 也随之
+ * 进入模块相（classic 相不再有同名词法绑定）。owner（p2-w2-2-runtime-status-owner）
+ * 仍是三个键的唯一物理持有方；注册与认领的先后顺序在本文件里两种都被钉住：
+ *   - owner 先 claim、模块后 defineKey → 初值经 impl.set 送入域模块（吸收语义）；
+ *   - 键的读写转发、访问器形态、未知键拒绝与桥键注册增量在模块相核对。
+ *
  * 钉住的事：
- *   1. 迁移边界：三个键在经典相同轮次带真初值可读（首屏
- *      `app-main` 顶层 `applyLanguage()` → `renderAgentList` / `renderCurrentMainView`
- *      → `readCurrentSessionViewState()` 读 `connected`）；侧栏投影、通知主逻辑、
- *      200ms 时钟、`resetRuntimeStatusForSwitch` 仍留在 classic；
- *   2. 逐键 claim 语义：每个键的 classic 写值被 owner 吸收（无双存储），此后
- *      双向转发；owner 不新增任何注册键；
+ *   1. 迁移边界：三个键在模块相由 runtime-status 的注册行安装访问器（首屏
+ *      `applyLanguage()` → `renderAgentList` / `readCurrentSessionViewState` 读
+ *      `connected` 发生在 boot.js，晚于本模块求值——见 P4 时序切换）；
+ *   2. 逐键 claim 语义：吸收 + 双向转发，owner 不新增任何注册键；
  *   3. 未知键：已 claim 域补注册未声明键**立即失败**，不返回 undefined、不吞写；
- *   4. 时钟：classic 相启动的 200ms 间隔可观测（delay + 一次 tick 的 DOM 写入）；
- *   5. 真实依赖：classic 复位块写入落在 owner 活绑定，并经 tool-progress 桥键
- *      清空真实进度状态（不复制业务、不静默跳过）。
+ *   4. 时钟：模块相启动的 200ms 间隔可观测（delay + 一次 tick 的 DOM 写入）；
+ *   5. 真实依赖：复位块写入落在 owner 活绑定，并经 tool-progress 桥键清空真实
+ *      进度状态（不复制业务、不静默跳过）。
  */
 
 import { test } from 'node:test';
@@ -33,6 +37,13 @@ const CHAIN_GLOBALS = {
   renderer: {},
   marked: { parse: () => '', setOptions() {}, use() {}, Renderer: class {} },
   ClawFW: { actions: { registerMany() {} } },
+  // classic 容器宿主（生产 owner: app-core）：runtime-status 经 callActivity 适配面
+  // 取用运行中 / 刚完成 / 打断抑制三个容器。本用例只关心状态键，容器给最小实例。
+  createP2BootstrapCallActivityHost: () => ({
+    _agentCallActive: new Map(), _recentlyFinishedRuntimes: new Set(),
+    _seenChoiceAlertIds: new Set(), _autoTitleTriggered: new Set(),
+    _interruptSuppression: new Map(), _lastInterruptUserActionAt: 0,
+  }),
 };
 
 /** 键映射表：classic 全局名 ↔ owner 导出名 ↔ setter（导出名与全局名唯一差异是下划线）。 */
@@ -41,21 +52,21 @@ const KEYS = [
     classic: 'currentRuntimeConnected',
     exported: 'currentRuntimeConnected',
     setter: 'setCurrentRuntimeConnected',
-    seed: false,
-    next: true,
+    initial: true,
+    next: { fromOwner: 'connected' },
   },
   {
     classic: 'lastNotificationStatusPayload',
     exported: 'lastNotificationStatusPayload',
     setter: 'setLastNotificationStatusPayload',
-    seed: { pre: 1 },
+    initial: null,
     next: { after: 1 },
   },
   {
     classic: '_lastRenderedNotificationRuntime',
     exported: 'lastRenderedNotificationRuntime',
     setter: 'setLastRenderedNotificationRuntime',
-    seed: { pre: 2 },
+    initial: null,
     next: { after: 2 },
   },
 ];
@@ -66,58 +77,36 @@ const KEYS = [
  */
 const plain = (value) => (value && typeof value === 'object' ? { ...value } : value);
 
-function loadClassicRuntimeStatus(sandbox) {
+function loadClassicKernel(sandbox) {
   sandbox.loadSource('public/src/modules/kernel-state.js');
-  sandbox.loadSource(RUNTIME_STATUS);
 }
 
-test('runtime-status：三键逐键 claim（吸收 + 双向转发），owner 不新增注册键', async () => {
-  await withP2EsmCase({ globals: CHAIN_GLOBALS, classic: loadClassicRuntimeStatus }, async (c) => {
-    // ── 经典相同轮次：键带真初值可读，且已不再是词法绑定（首屏同步链前提）──
+test('runtime-status：三键注册后逐键双向转发，owner 不新增注册键', async () => {
+  await withP2EsmCase({ globals: CHAIN_GLOBALS, classic: loadClassicKernel }, async (c) => {
+    // owner 先 claim（注册行尚未执行）→ 三个键此时既无访问器也无值。
+    const registeredBeforeOwner = c.read('window.KernelState.stats().registeredKeys');
+    const owner = await c.load(OWNER);
+    assert.equal(c.read('window.KernelState.stats().registeredKeys'), registeredBeforeOwner,
+      'owner 只 claim、不新增桥键注册');
     for (const { classic } of KEYS) {
-      assert.equal(c.read(`typeof ${classic}`) !== 'undefined', true, `${classic} 在经典相可读`);
-      assert.equal(c.read(`Object.prototype.hasOwnProperty.call(window, ${JSON.stringify(classic)})`), true,
-        `${classic} 由 classic 相 defineKey 注册（原词法声明已移除）`);
+      const descriptor = Object.getOwnPropertyDescriptor(c.window, classic);
+      assert.equal(descriptor?.get, undefined,
+        `${classic} 的访问器由 runtime-status 的注册行安装（模块相；此刻只有沙箱桩值）`);
     }
-    // ── 同步边界仍在 classic（首屏投影/指示块/时钟/复位块）──
-    for (const name of [
-      'collectRuntimeEntriesForPrebuilt', 'isRuntimeCalling', 'isRuntimeSuspended',
-      'isSidebarRuntimeDisconnected', 'isSuspendedNotificationPayload',
-      'resolveNotificationCallingState', 'updateNotificationStatus',
-      'applyNotificationStatus', 'ensureChatRuntimeIndicator', 'ensureNotificationClockTimer',
-      'applyContextGuardStatus', 'resetRuntimeStatusForSwitch',
-    ]) {
-      assert.equal(c.read(`typeof ${name}`), 'function', `${name} 必须保持经典相同轮次可用`);
-    }
-    // 引用被 ESM 宿主持有 / 闭包私有的 Map 留在 classic 原位
-    for (const map of ['_agentSuspended', '_runtimeStatusMemory', '_threadSidebarEntries']) {
-      assert.equal(c.read(`${map} instanceof Map`), true, `${map} 仍是 classic 顶层 Map`);
+    // runtime-status 模块相求值：三个 defineKey 把初值经 impl.set 送入 owner（吸收）。
+    const runtimeStatus = await c.load(RUNTIME_STATUS);
+    for (const { classic, exported, initial } of KEYS) {
+      assert.deepEqual(plain(owner[exported]), plain(initial), `${classic} 的注册初值必须进入 owner 活绑定`);
+      assert.deepEqual(plain(c.read(classic)), plain(initial), `${classic} 经访问器读到同一值`);
     }
 
-    // ── claim 前：逐键写入经典相哑存储 ──
-    for (const { classic, seed } of KEYS) {
-      c.read(`${classic} = ${JSON.stringify(seed)}`);
-    }
-
-    const registeredBefore = c.read('window.KernelState.stats().registeredKeys');
-    const mod = await c.load(OWNER);
-
-    // ── 逐键吸收：claim 时把哑存储现值送进 owner 活绑定 ──
-    for (const { classic, exported, seed } of KEYS) {
-      assert.deepEqual(plain(mod[exported]), plain(seed), `${classic} 的经典相写值必须被 claim 吸收`);
-      assert.deepEqual(plain(c.read(classic)), plain(seed), `${classic} 经访问器读到同一值`);
-    }
     // ── 逐键双向转发：classic 写 → owner 读；owner 写 → classic 读 ──
     for (const { classic, exported, setter, next } of KEYS) {
       c.read(`${classic} = ${JSON.stringify(next)}`);
-      assert.deepEqual(plain(mod[exported]), plain(next), `${classic} 的 classic 写方必须转发进 owner 活绑定`);
-      mod[setter]({ fromOwner: classic });
+      assert.deepEqual(plain(owner[exported]), plain(next), `${classic} 的 classic 写方必须转发进 owner 活绑定`);
+      owner[setter]({ fromOwner: classic });
       assert.deepEqual(plain(c.read(classic)), { fromOwner: classic }, `${setter} 的写入必须对 classic 读方可见`);
     }
-
-    // ── owner 只 claim、不新增注册键（增量口径，不依赖沙箱总键数）──
-    const registeredAfter = c.read('window.KernelState.stats().registeredKeys');
-    assert.equal(registeredAfter, registeredBefore, 'owner 不得新增桥键注册');
 
     // ── 私有 setter 不上桥 ──
     for (const { setter } of KEYS) {
@@ -131,11 +120,22 @@ test('runtime-status：三键逐键 claim（吸收 + 双向转发），owner 不
       assert.equal(descriptor.enumerable, false, `${classic} 不得进入枚举面`);
       assert.equal(descriptor.configurable, true, `${classic} 必须可撤桥`);
     }
+
+    // ── 侧栏 / 通知域的函数键与状态容器在模块相位就位 ──
+    for (const name of [
+      'updateNotificationStatus', 'applyContextGuardStatus', 'isRuntimeCalling',
+      'ensureChatRuntimeIndicator', 'resetRuntimeStatusForSwitch',
+    ]) {
+      assert.equal(c.read(`typeof window.${name}`), 'function', `${name} 由 runtime-status-api 域桥键提供`);
+    }
+    // `_agentSuspended`（B4）与两个缓存容器是模块私有 / 具名导出，不再是全局。
+    assert.equal(runtimeStatus._agentSuspended instanceof Map, true, '_agentSuspended 是模块私有 Map（B4 具名导出）');
+    assert.equal(c.read("typeof _agentSuspended"), 'undefined', 'B4 容器不再作为全局暴露');
   });
 });
 
 test('runtime-status：已 claim 域补注册未知键立即抛错，不吞值', async () => {
-  await withP2EsmCase({ globals: CHAIN_GLOBALS, classic: loadClassicRuntimeStatus }, async (c) => {
+  await withP2EsmCase({ globals: CHAIN_GLOBALS, classic: loadClassicKernel }, async (c) => {
     await c.load(OWNER);
 
     // 同域补注册未声明键：KernelState 会把初值经 impl.set 送进域模块，
@@ -151,34 +151,34 @@ test('runtime-status：已 claim 域补注册未知键立即抛错，不吞值',
     assert.equal(c.read("typeof window.ghostKey"), 'undefined', '失败后不得留下可读值');
 
     // 失败的补注册不得影响既有键：三键仍正常转发（错误只落在未知键上）。
-    const mod = await c.load(OWNER);
+    await c.load(RUNTIME_STATUS);
+    const owner = await c.load(OWNER);
     c.read('lastNotificationStatusPayload = { afterGhost: true }');
-    assert.equal(mod.lastNotificationStatusPayload.afterGhost, true,
+    assert.equal(owner.lastNotificationStatusPayload.afterGhost, true,
       '未知键报错后，已声明键的转发照常生效');
   });
 });
 
-test('runtime-status：classic 相启动的 200ms 通知时钟可观测（delay + tick 写入）', async () => {
+test('runtime-status：模块相启动的 200ms 通知时钟可观测（delay + tick 写入）', async () => {
   const intervals = [];
   await withP2EsmCase({
     globals: CHAIN_GLOBALS,
-    classic: (sandbox) => {
-      sandbox.loadSource('public/src/modules/kernel-state.js');
-      // 最小计时 spy：只记录 window.setInterval 的 delay 与回调，随后恢复完整。
-      const realSetInterval = sandbox.setInterval;
-      sandbox.setInterval = (callback, delay, ...rest) => {
-        intervals.push({ callback, delay });
-        return realSetInterval(callback, delay, ...rest);
-      };
-      try {
-        sandbox.loadSource(RUNTIME_STATUS);
-      } finally {
-        sandbox.setInterval = realSetInterval;
-      }
-    },
+    classic: loadClassicKernel,
   }, async (c) => {
+    // 最小计时 spy：只记录 window.setInterval 的 delay 与回调（模块经 window 取用）。
+    const realSetInterval = c.window.setInterval;
+    c.window.setInterval = (callback, delay, ...rest) => {
+      intervals.push({ callback, delay });
+      return realSetInterval(callback, delay, ...rest);
+    };
+    try {
+      await c.load(RUNTIME_STATUS);
+    } finally {
+      c.window.setInterval = realSetInterval;
+    }
+
     const clock = intervals.filter((entry) => entry.delay === 200);
-    assert.equal(clock.length, 1, 'classic 相恰好启动一个 200ms 间隔（通知时钟）');
+    assert.equal(clock.length, 1, '模块相恰好启动一个 200ms 间隔（通知时钟）');
     assert.equal(c.timerCount() >= 1, true, '该间隔按用例记账（dispose 时取消）');
 
     // tick 可观测：置上快照并手动跑一次回调，观察 metrics 的 DOM 写入。
@@ -189,20 +189,22 @@ test('runtime-status：classic 相启动的 200ms 通知时钟可观测（delay 
       if (id === 'notification-metrics') return metrics;
       return null;
     };
-    c.read(`_lastRenderedNotificationRuntime = { callStartedAt: Date.now() - 1500 }`);
+    const owner = await c.load(OWNER);
+    owner.setLastRenderedNotificationRuntime({ callStartedAt: Date.now() - 1500 });
     clock[0].callback();
     assert.match(metrics.innerHTML, /notification-metric/, '一次 tick 必须写出运行时计时块');
   });
 });
 
-test('runtime-status：classic 复位块写入落在 owner 活绑定，并清空真实工具进度', async () => {
-  await withP2EsmCase({ globals: CHAIN_GLOBALS, classic: loadClassicRuntimeStatus }, async (c) => {
+test('runtime-status：复位块写入落在 owner 活绑定，并清空真实工具进度', async () => {
+  await withP2EsmCase({ globals: CHAIN_GLOBALS, classic: loadClassicKernel }, async (c) => {
     const calls = [];
     c.expose('__resetCalls', calls);
     c.expose('resetCallElapsedForSwitch', () => { calls.push('elapsed'); });
     c.expose('runWithSuppressedChatViewportObservers', (work) => { calls.push('suppress'); work(); });
 
-    // 生产时序：复位块被调用时 tool-progress 的桥键已就位
+    // 生产时序：复位块被调用时 runtime-status 与 tool-progress 的桥键都已就位。
+    await c.load(RUNTIME_STATUS);
     const toolProgress = await c.load(TOOL_PROGRESS);
     const owner = await c.load(OWNER);
 
@@ -220,8 +222,7 @@ test('runtime-status：classic 复位块写入落在 owner 活绑定，并清空
       querySelectorAll: () => [],
     };
 
-    // 就地改造本案的 document 桩（globalThis.document 与 sandbox.document 是同一
-    // 对象，classic 与 ESM 两侧都读到同一份覆盖）。
+    // 就地改造本案的 document 桩（ESM 侧读 globalThis.document，与沙箱同一对象）。
     c.document.getElementById = (id) => {
       if (id === 'notification-status') return { style: {}, className: '', querySelector: () => null };
       if (id === 'chat-container') return chatStub;
@@ -231,13 +232,14 @@ test('runtime-status：classic 复位块写入落在 owner 活绑定，并清空
       return null;
     };
 
-    // 生产消费方路径：classic 裸标识符调用（thread-store 接续 rebind / runtime-switch）
-    c.read('resetRuntimeStatusForSwitch()');
+    // 生产消费方路径：经 runtime-status-api 桥键（thread-store 接续 rebind /
+    // runtime-switch 的切换宿主面）。
+    c.read('window.resetRuntimeStatusForSwitch()');
 
     assert.equal(owner.lastRenderedNotificationRuntime, null, '快照清空写入 owner 活绑定');
     assert.equal(owner.lastNotificationStatusPayload, null, '通知载荷清空写入 owner 活绑定');
     assert.equal(c.read('_lastRenderedNotificationRuntime'), null, 'classic 读方同步看到清空');
-    assert.deepEqual(calls, ['elapsed', 'suppress'], 'classic 依赖各调用一次（视口抑制只在有残留块时）');
+    assert.deepEqual(calls, ['elapsed', 'suppress'], '依赖各调用一次（视口抑制只在有残留块时）');
     assert.equal(removed, 1, '残留指示块被移除');
     assert.equal(toolProgress.resolveToolProgressForCall({ id: 'call-reset' }), null,
       '复位块经 tool-progress 桥键清空真实进度（不是副本，也不是静默跳过）');

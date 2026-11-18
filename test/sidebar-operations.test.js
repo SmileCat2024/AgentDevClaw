@@ -22,6 +22,7 @@ import assert from 'node:assert/strict';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
 import { createOperationTrace, normalizeOperationId } from '../server/shared/operation-trace.js';
 import { sessionIndexContentSignature } from '../server/shared/session-access.js';
+import { ensureSidebarRenderHostSeam, prepareSidebarDomain } from './p2-classic-hosts.js';
 
 const OPS = 'public/src/modules/sidebar-operations.js';
 
@@ -36,9 +37,11 @@ function bootstrapClassic(sandbox) {
   // 生产加载序：runtime-status 提供 sidebar-render 调用状态宿主读的容器，
   // session-view-state 提供会话快照提交宿主；通知时钟周期不属于本文件验收面。
   sandbox.setInterval = () => 0;
-  sandbox.loadSource('public/src/modules/runtime-status.js');
+  prepareSidebarDomain(sandbox);
+  // 侧栏渲染自 P4 T2 起在模块相（真实 renderAgentList 经 window 晚绑定取 app-main /
+  // app-ui 的协作面）；本文件不驱动侧栏 DOM，按生产宿主面补齐。
+  ensureSidebarRenderHostSeam(sandbox);
   sandbox.loadSource('public/src/modules/session-view-state.js');
-  sandbox.loadSource('public/src/modules/sidebar-render.js');
   sandbox.renderAgentList = () => {};
   sandbox.renderCurrentMainView = () => {};
   // updateAgentRecord 已改具名 import（project-data 的真实 owner，写 agent-store

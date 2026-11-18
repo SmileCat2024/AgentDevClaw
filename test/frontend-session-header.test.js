@@ -23,6 +23,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
+import { prepareSidebarDomain } from './p2-classic-hosts.js';
 
 const OVERVIEW_DATA = 'public/src/modules/overview-data.js';
 
@@ -100,10 +101,9 @@ async function withHeaderSandbox(fn) {
       // action-dispatcher：markdown-utils（ESM）求值期登记 markdown.* 动作需要 ClawFW。
       ctx.loadSource('public/src/modules/action-dispatcher.js');
       ctx.loadSource('public/src/app-core.js');
-      ctx.loadSource('public/src/modules/runtime-status.js');
+      prepareSidebarDomain(ctx);
       // app-main 的 classic 同步引擎在装载期组合 sidebar-render 的
       // createAgentCallStatesHost：按生产先行脚本序装真链，不造宿主桩。
-      ctx.loadSource('public/src/modules/sidebar-render.js');
       ctx.loadSource('public/src/modules/session-view-state.js');
       // todo-plan / chat-context-bar 已迁 ESM（P4 L1）：classic 相只补 markdown-utils
       // 的 classic 实现（escapeHtml / renderer），两个模块在 async 相 c.load。

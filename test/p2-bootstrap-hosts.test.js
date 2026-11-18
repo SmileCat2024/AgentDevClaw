@@ -9,14 +9,17 @@
  * 4. 初始写不丢失：适配模块装载前的 classic 写入在装载后仍可见（无重复初始化）；
  * 5. 无新增启动等待：适配器装载即同步可用，不引入 ready/promise。
  *
- * classic 侧用 frontend-vm 沙箱按真实加载序执行，ESM 侧用 esm-module-loader
- * 真实 import（唯一 query 拿全新实例），两侧共享同一 classic 状态。
+ * 装载路线（P4 T2 收尾批次后）：每个用例一份 window + 一张真实 ESM 图
+ * （withP2EsmCase）。classic 相按真实加载序执行 app-core；侧栏渲染域
+ * （runtime-status / sidebar-render / call 状态引擎）已迁 ESM，在 classic 链之后
+ * 按模块相装载并各自 claim；适配模块与本域共享同一张图与同一 KernelState，
+ * 两侧读写的就是同一份 classic 状态。
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { createFrontendSandbox } from './helpers/frontend-vm.js';
-import { installBrowserStubs, loadModuleOnce } from './helpers/esm-module-loader.js';
+import { withP2EsmCase } from './helpers/p2-esm-case.js';
+import { prepareSidebarDomain } from './p2-classic-hosts.js';
 
 const FACTORY_NAMES = [
   'createP2BootstrapDomHost',
@@ -41,36 +44,35 @@ const ADAPTER_FILES = {
   sessionSwitch: 'public/src/modules/p2-bootstrap-session-switch.js',
 };
 
-/** 按真实加载序跑 classic 文件（app-core 是状态 owner，sidebar-render 提供渲染签名）。 */
-function loadClassic() {
-  const ctx = createFrontendSandbox();
-  ctx.loadSource('public/src/app-core.js');
-  ctx.loadSource('public/src/modules/sidebar-render.js');
-  return ctx;
-}
+/** classic 状态 owner（app-core）：侧栏渲染域在它之后按模块相装载。 */
+const APP_CORE = 'public/src/app-core.js';
 
 /**
- * 把 classic 工厂装到真实 import 能解析到的 window 上，再逐个真实 import 适配模块。
- * 返回 { adapters, cleanup }；调用方负责在 finally 里 cleanup。
+ * 用例基座：`fn(c, ctx)`，`ctx` 就是本用例的 window（`ctx.run` 读 classic 词法绑定）。
+ * `beforeDomain(sandbox)` 用来模拟「classic 在模块求值之前写入」的时序（动态 import
+ * 是异步的，classic 回调里在 prepareSidebarDomain 之后的同步写入仍早于模块求值）。
  */
-async function importAdapters(ctx, names = Object.keys(ADAPTER_FILES)) {
-  const cleanup = installBrowserStubs();
-  try {
-    for (const factory of FACTORY_NAMES) globalThis.window[factory] = ctx[factory];
-    const adapters = {};
-    for (const name of names) {
-      const { module } = await loadModuleOnce(ADAPTER_FILES[name], { installGlobals: false });
-      Object.assign(adapters, module);
-    }
-    return { adapters, cleanup };
-  } catch (error) {
-    cleanup();
-    throw error;
-  }
+function withHostsCase(fn, { beforeDomain } = {}) {
+  return withP2EsmCase({
+    classic: (sandbox) => {
+      // action-dispatcher 先于一切 classic：markdown-utils（侧栏域的 escapeHtml 依赖）
+      // 在求值期注册 window.ClawFW.actions 处理器。
+      sandbox.loadSource('public/src/modules/action-dispatcher.js');
+      sandbox.loadSource(APP_CORE);
+      prepareSidebarDomain(sandbox);
+      if (beforeDomain) beforeDomain(sandbox);
+    },
+  }, async (c) => fn(c, c.window));
 }
 
-test('classic 时点可用：工厂在 classic 解析后即可调用，初值与引用与声明一致', () => {
-  const ctx = loadClassic();
+/** 逐个真实 import 适配模块（同一张图，不建第二份状态、不需要再清理全局）。 */
+async function importAdapters(c, names = Object.keys(ADAPTER_FILES)) {
+  const adapters = {};
+  for (const name of names) Object.assign(adapters, await c.load(ADAPTER_FILES[name]));
+  return adapters;
+}
+
+test('classic 时点可用：工厂在 classic 解析后即可调用，初值与引用与声明一致', async () => withHostsCase(async (c, ctx) => {
 
   assert.equal(typeof ctx.createP2BootstrapDomHost, 'function');
   assert.equal(typeof ctx.createP2BootstrapChatSurfaceHost, 'function');
@@ -125,7 +127,8 @@ test('classic 时点可用：工厂在 classic 解析后即可调用，初值与
   const sidebar = ctx.run('createP2BootstrapSidebarHost()');
   assert.equal(sidebar.restartingRuntimeIds, ctx.run('restartingRuntimeIds'));
   assert.equal(sidebar.suppressSidebarRerender, false);
-  const sidebarRender = ctx.run('createP2BootstrapSidebarRenderHost()');
+  // 渲染签名工厂随 sidebar-render 迁 ESM：经域的命名导出取（不再挂在 window 上）。
+  const sidebarRender = ctx.__esmDomain.sidebarRender.createP2BootstrapSidebarRenderHost();
   assert.equal(sidebarRender.lastAgentListRenderSignature, '');
 
   const sessionSwitch = ctx.run('createP2BootstrapSessionSwitchHost()');
@@ -136,13 +139,10 @@ test('classic 时点可用：工厂在 classic 解析后即可调用，初值与
   // 不再有 bootstrap 宿主工厂；确认 classic 侧没有该声明或工厂残留。
   assert.equal(ctx.run('typeof createP2BootstrapChoiceInputHost'), 'undefined');
   assert.equal(ctx.run('typeof choiceInputState'), 'undefined');
-});
+}));
 
-test('适配模块导出面就是后续工单的导入契约', async () => {
-  const ctx = loadClassic();
-  const cleanup = installBrowserStubs();
-  try {
-    for (const factory of FACTORY_NAMES) globalThis.window[factory] = ctx[factory];
+test('适配模块导出面就是后续工单的导入契约', async () => withHostsCase(async (c) => {
+  {
     const expected = {
       dom: ['domRefs'],
       chatSurface: ['chatSurface'],
@@ -154,18 +154,15 @@ test('适配模块导出面就是后续工单的导入契约', async () => {
       sessionSwitch: ['sessionSwitch'],
     };
     for (const [name, file] of Object.entries(ADAPTER_FILES)) {
-      const { module } = await loadModuleOnce(file, { installGlobals: false });
+      const module = await c.load(file);
       assert.deepEqual(Object.keys(module).sort(), expected[name], `${name} 导出面漂移`);
     }
-  } finally {
-    cleanup();
   }
-});
+}));
 
-test('const 只读语义：无可写入口的键在 ESM strict 下写入抛 TypeError', async () => {
-  const ctx = loadClassic();
-  const { adapters, cleanup } = await importAdapters(ctx);
-  try {
+test('const 只读语义：无可写入口的键在 ESM strict 下写入抛 TypeError', async () => withHostsCase(async (c, ctx) => {
+  const adapters = await importAdapters(c);
+  {
     // DOM 引用（classic 顶层 const）
     assert.throws(() => { adapters.domRefs.container = null; }, TypeError);
     // const Map / Set 容器：只交出引用，不允许整体替换
@@ -179,15 +176,12 @@ test('const 只读语义：无可写入口的键在 ESM strict 下写入抛 Type
     // 引用未被破坏
     assert.equal(adapters.domRefs.container, ctx.run('container'));
     assert.equal(adapters.callActivity._agentCallActive, ctx.run('_agentCallActive'));
-  } finally {
-    cleanup();
   }
-});
+}));
 
-test('classic 与 ESM 双向一致：同一状态、同一容器引用', async () => {
-  const ctx = loadClassic();
-  const { adapters, cleanup } = await importAdapters(ctx);
-  try {
+test('classic 与 ESM 双向一致：同一状态、同一容器引用', async () => withHostsCase(async (c, ctx) => {
+  const adapters = await importAdapters(c);
+  {
     // classic 写 → ESM 读
     ctx.run('showChatProcess = true');
     assert.equal(adapters.chatSurface.showChatProcess, true);
@@ -239,11 +233,14 @@ test('classic 与 ESM 双向一致：同一状态、同一容器引用', async (
     adapters.debugPanel.logFilters.level = 'all';
     assert.equal(ctx.run('logFilters.level'), 'all');
 
-    // 侧栏渲染签名：清空即强制下次重建，classic 写方与 ESM 共用同一 let
-    ctx.run('lastAgentListRenderSignature = "sig-classic"');
+    // 侧栏渲染签名：清空即强制下次重建。P4 T2 起它是 sidebar-render 的模块私有
+    // let（classic 侧已无同名词法绑定），双向一致改由适配面自身往返印证——
+    // 适配面就是消费方（sidebar-pin-color / session-mutation / sidebar-operations）
+    // 唯一写入口，渲染去重仍读同一绑定。
+    adapters.sidebarRender.lastAgentListRenderSignature = 'sig-classic';
     assert.equal(adapters.sidebarRender.lastAgentListRenderSignature, 'sig-classic');
     adapters.sidebarRender.lastAgentListRenderSignature = '';
-    assert.equal(ctx.run('lastAgentListRenderSignature'), '');
+    assert.equal(adapters.sidebarRender.lastAgentListRenderSignature, '');
 
     // 其余域的标量/句柄写入口（classic 读回同一状态）
     adapters.sidebarUi.suppressSidebarRerender = true;
@@ -255,23 +252,12 @@ test('classic 与 ESM 双向一致：同一状态、同一容器引用', async (
     const debounce = { id: 2 };
     adapters.phSessionUi._phSearchTimer = debounce;
     assert.equal(ctx.run('_phSearchTimer'), debounce);
-  } finally {
-    cleanup();
   }
-});
+}));
 
-test('初始写不丢失：适配模块装载前的 classic 写入装载后仍可见', async () => {
-  const ctx = loadClassic();
-  // 模拟 boot / 事件回调在 ESM 执行之前的经典写入（含定时器句柄与容器变异）
-  ctx.run('currentLogs = [{ message: "boot" }]');
-  ctx.run('repoSearchQuery = "needle"');
-  ctx.run('prebuiltSessionSwitchInFlight = true');
-  ctx.run('_recentlyFinishedRuntimes.add("rt-done")');
-  ctx.run('assemblyLaunchInProgress = true');
-  ctx.run('showChatProcess = true');
-
-  const { adapters, cleanup } = await importAdapters(ctx);
-  try {
+test('初始写不丢失：适配模块装载前的 classic 写入装载后仍可见', async () => withHostsCase(async (c, ctx) => {
+  const adapters = await importAdapters(c);
+  {
     assert.equal(JSON.stringify(adapters.debugPanel.currentLogs), JSON.stringify([{ message: 'boot' }]));
     assert.equal(adapters.debugPanel.repoSearchQuery, 'needle');
     assert.equal(adapters.sessionSwitch.prebuiltSessionSwitchInFlight, true);
@@ -280,15 +266,23 @@ test('初始写不丢失：适配模块装载前的 classic 写入装载后仍�
     // 装载适配模块不得重跑 classic 初始化：localStorage 初值优先的 showChatProcess
     // 仍是装载前写下的 true
     assert.equal(adapters.chatSurface.showChatProcess, true);
-  } finally {
-    cleanup();
   }
-});
+}, {
+  // 模拟 boot / 事件回调在 ESM 求值之前的经典写入（含定时器句柄与容器变异）：
+  // 动态 import 是异步的，classic 回调里这些同步写入仍早于模块求值。
+  beforeDomain: (sandbox) => {
+    sandbox.run('currentLogs = [{ message: "boot" }]');
+    sandbox.run('repoSearchQuery = "needle"');
+    sandbox.run('prebuiltSessionSwitchInFlight = true');
+    sandbox.run('_recentlyFinishedRuntimes.add("rt-done")');
+    sandbox.run('assemblyLaunchInProgress = true');
+    sandbox.run('showChatProcess = true');
+  },
+}));
 
-test('无新增启动等待：适配器装载后同步可用，不导出 ready/promise', async () => {
-  const ctx = loadClassic();
-  const { adapters, cleanup } = await importAdapters(ctx);
-  try {
+test('无新增启动等待：适配器装载后同步可用，不导出 ready/promise', async () => withHostsCase(async (c) => {
+  const adapters = await importAdapters(c);
+  {
     for (const [name, value] of Object.entries(adapters)) {
       assert.equal(/ready|wait/i.test(name), false, `不应导出等待面：${name}`);
       assert.equal(value instanceof Promise, false, `导出不得是 promise：${name}`);
@@ -297,10 +291,8 @@ test('无新增启动等待：适配器装载后同步可用，不导出 ready/p
     }
     assert.equal(typeof adapters.chatSurface.followLatestEnabled, 'boolean');
     assert.equal(typeof adapters.domRefs.container.querySelector, 'function');
-  } finally {
-    cleanup();
   }
-});
+}));
 
 test('适配模块不含状态副本：源码不出现 Object.assign/window 赋值式快照', () => {
   for (const [name, file] of Object.entries(ADAPTER_FILES)) {

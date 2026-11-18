@@ -11,6 +11,8 @@ import { createFrontendSandbox } from './helpers/frontend-vm.js';
 import { getRuntimeCacheTodoPlanSignature } from '../public/src/modules/runtime-view-cache.js';
 import { installCallInterruptState } from './helpers/call-interrupt.js';
 import { createTimeFormat } from '../public/src/modules/time-format.js';
+import { withP2EsmCase } from './helpers/p2-esm-case.js';
+import { prepareSidebarDomain } from './p2-classic-hosts.js';
 
 /**
  * Helper: create a sandbox with app-core.js loaded.
@@ -309,7 +311,7 @@ describe('frontend-vm sandbox', () => {
 
 // ── runtime status interrupt suppression ──
 
-function createRuntimeStatusSandbox() {
+async function withRuntimeStatusCase(fn) {
   const elements = new Map();
   function createElementStub(id) {
     return {
@@ -319,6 +321,13 @@ function createRuntimeStatusSandbox() {
       textContent: '',
       innerHTML: '',
       classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
+      // 首屏 DOM 引用的最小面（模块求值期装委托 / 读几何）
+      addEventListener() {}, removeEventListener() {},
+      appendChild() {}, remove() {}, focus() {},
+      querySelector() { return null; }, querySelectorAll() { return []; },
+      closest() { return null; }, contains() { return false; },
+      getBoundingClientRect() { return { top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0 }; },
+      dataset: {}, value: '', disabled: false,
     };
   }
   for (const id of ['notification-status', 'notification-phase', 'notification-summary', 'notification-metrics']) {
@@ -326,8 +335,11 @@ function createRuntimeStatusSandbox() {
   }
 
   const document = {
+    // 侧栏渲染域在模块求值期装事件委托（domRefs 取不到元素会直接 TypeError）：
+    // 未预置的 id 一律给同形元素桩（生产页面里这些节点恒在）。
     getElementById(id) {
-      return elements.get(id) || null;
+      if (!elements.has(id)) elements.set(id, createElementStub(id));
+      return elements.get(id);
     },
     querySelector() { return null; },
     querySelectorAll() { return []; },
@@ -339,7 +351,7 @@ function createRuntimeStatusSandbox() {
     readyState: 'complete',
   };
 
-  const ctx = createFrontendSandbox({
+  const globals = {
     document,
     currentRuntimeAgentId: 'runtime-1',
     _switchEpoch: 1,
@@ -369,75 +381,93 @@ function createRuntimeStatusSandbox() {
     getEmptyOverviewSnapshot: () => ({}),
     getEmptyTodoPlan: () => ({}),
     notifyInputSurfaceChanged() {},
-  });
-  ctx.loadSource('public/src/app-core.js');
-  installCallInterruptState(ctx);
-  Object.assign(ctx, createTimeFormat(() => ctx.currentLanguage));
-  ctx.loadSource('public/src/modules/session-view-state.js');
-  ctx.run(`
-    currentRuntimeAgentId = "runtime-1";
-    currentRuntimeConnected = true;
-    currentHookInspector = null;
-    currentOverviewSnapshot = {};
-    currentTodoPlan = {};
-    applySessionViewPatch({ identity: { agentId: 'runtime-1', sessionId: 'session-1' } });
-    currentInputRequests = [];
-    lastRenderedInputMode = "persistent";
-  `);
-  ctx.loadSource('public/src/modules/runtime-status.js');
-  return { ctx, elements };
+    // classic 宿主工厂（生产由 app-main / app-ui 提供）：侧栏装载链在求值期取用，
+    // 本文件不驱动轮询与工作区表面。
+    createPollCoordinatorHost: () => ({
+      run: async () => {}, fastInterval: () => 1000, setTimeout: () => 0, clearTimeout: () => {},
+    }),
+    createWorkspaceSurfaceHost: () => ({ state: {} }),
+    createRuntimeSwitchHost: () => ({ state: {} }),
+    createCompactResumeHost: () => ({ state: {}, now: () => Date.now() }),
+    createAgentCallStatesHost: () => ({ state: {} }),
+    // 对话视口观察器抑制（生产由 chat-viewport 的桥键提供）：本文件不驱动视口。
+    runWithSuppressedChatViewportObservers: (fn) => fn(),
+    // 首屏几何读取（浏览器恒在）：模块求值期读一次行高。
+    getComputedStyle: () => ({ getPropertyValue: () => '', gap: '0px' }),
+    ResizeObserver: class { observe() {} unobserve() {} disconnect() {} },
+  };
+  // 运行时状态自 P4 T2 起是 ESM（runtime-status）：本夹具走真实 import 路线，
+  // `updateNotificationStatus` / `isRuntimeCalling` 取模块导出，不再靠 classic
+  // 顶层名字（迁出后沙箱词法面里没有它们）。
+  return withP2EsmCase({
+    classic: (sandbox) => {
+      // action-dispatcher 是 index.html 的先行脚本（模块图的动作注册面）。
+      sandbox.loadSource('public/src/modules/action-dispatcher.js');
+      sandbox.loadSource('public/src/app-core.js');
+      installCallInterruptState(sandbox);
+      Object.assign(sandbox, createTimeFormat(() => sandbox.currentLanguage));
+      sandbox.loadSource('public/src/modules/session-view-state.js');
+      sandbox.run(`
+        currentRuntimeAgentId = "runtime-1";
+        currentRuntimeConnected = true;
+        currentHookInspector = null;
+        currentOverviewSnapshot = {};
+        currentTodoPlan = {};
+        applySessionViewPatch({ identity: { agentId: 'runtime-1', sessionId: 'session-1' } });
+        currentInputRequests = [];
+        lastRenderedInputMode = "persistent";
+      `);
+      prepareSidebarDomain(sandbox);
+    },
+    globals,
+  }, async (c) => fn(c.window, elements));
 }
 
 describe('runtime-status: interrupt suppression', () => {
-  it('keeps stale callActive notifications in sticky interrupting state', () => {
-    const { ctx, elements } = createRuntimeStatusSandbox();
-
-    ctx.run(`
-      markInterruptPending("runtime-1", 1000);
-      _agentCallActive.delete("runtime-1");
-      updateNotificationStatus({
+  it('keeps stale callActive notifications in sticky interrupting state', async () => {
+    // updateNotificationStatus / isRuntimeCalling 经 runtime-status-api 桥键取用
+    // （生产 classic 消费方同一通道；函数体是 ESM 唯一实现）。
+    await withRuntimeStatusCase((ctx, elements) => {
+      ctx.run('markInterruptPending("runtime-1", 1000)');
+      ctx.run('_agentCallActive.delete("runtime-1")');
+      ctx.window.updateNotificationStatus({
         callActive: true,
         runtime: {
           callActive: true,
-          stage: "awaiting_runtime",
+          stage: 'awaiting_runtime',
           updatedAt: Date.now(),
           callStartedAt: 1000,
-          stageStartedAt: Date.now()
+          stageStartedAt: Date.now(),
         },
-        state: { type: "llm.char_count", data: { phase: "content", charCount: 10 }, timestamp: Date.now() }
+        state: { type: 'llm.char_count', data: { phase: 'content', charCount: 10 }, timestamp: Date.now() },
       });
-    `);
 
-    assert.equal(elements.get('notification-status').style.display, 'flex');
-    assert.equal(elements.get('notification-phase').textContent, '正在停止…');
-    assert.equal(ctx.run('isRuntimeCalling("runtime-1")'), false);
-    assert.equal(ctx.run('isInterruptSuppressed("runtime-1", 1000)'), true);
-    ctx.run('if (typeof _notificationClockTimer !== "undefined" && _notificationClockTimer) clearInterval(_notificationClockTimer);');
+      assert.equal(elements.get('notification-status').style.display, 'flex');
+      assert.equal(elements.get('notification-phase').textContent, '正在停止…');
+      assert.equal(ctx.window.isRuntimeCalling('runtime-1'), false);
+      assert.equal(ctx.run('isInterruptSuppressed("runtime-1", 1000)'), true);
+    });
   });
 
-  it('only releases interrupting for a terminal event or a newer call identity', () => {
-    const { ctx } = createRuntimeStatusSandbox();
-    ctx.run(`
-      markInterruptPending("runtime-1", 1000);
-      updateNotificationStatus({
+  it('only releases interrupting for a terminal event or a newer call identity', async () => {
+    await withRuntimeStatusCase((ctx) => {
+      ctx.run('markInterruptPending("runtime-1", 1000)');
+      ctx.window.updateNotificationStatus({
         callActive: true,
-        runtime: { callActive: true, callStartedAt: 2000, stage: "llm_thinking" }
+        runtime: { callActive: true, callStartedAt: 2000, stage: 'llm_thinking' },
       });
-    `);
-    assert.equal(ctx.run('isInterruptSuppressed("runtime-1", 2000)'), false);
-    assert.equal(ctx.run('isRuntimeCalling("runtime-1")'), true);
+      assert.equal(ctx.run('isInterruptSuppressed("runtime-1", 2000)'), false);
+      assert.equal(ctx.window.isRuntimeCalling('runtime-1'), true);
 
-    ctx.run(`
-      markInterruptPending("runtime-1", 2000);
-      updateNotificationStatus({
+      ctx.run('markInterruptPending("runtime-1", 2000)');
+      ctx.window.updateNotificationStatus({
         callActive: false,
-        runtime: { callActive: false, callStartedAt: 2000, stage: "idle" },
-        state: { type: "call.finish", timestamp: Date.now() }
+        runtime: { callActive: false, callStartedAt: 2000, stage: 'idle' },
+        state: { type: 'call.finish', timestamp: Date.now() },
       });
-    `);
-    assert.equal(ctx.run('isInterruptSuppressed("runtime-1", 2000)'), false);
-    assert.equal(ctx.run('isRuntimeCalling("runtime-1")'), false);
-    ctx.run('if (typeof _notificationClockTimer !== "undefined" && _notificationClockTimer) clearInterval(_notificationClockTimer);');
+      assert.equal(ctx.run('isInterruptSuppressed("runtime-1", 2000)'), false);
+      assert.equal(ctx.window.isRuntimeCalling('runtime-1'), false);
+    });
   });
 });
 

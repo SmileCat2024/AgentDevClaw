@@ -29,7 +29,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
-import { installForegroundSyncOwner } from './p2-classic-hosts.js';
+import { installForegroundSyncOwner, prepareSidebarDomain } from './p2-classic-hosts.js';
 
 const OPS = 'public/src/modules/sidebar-operations.js';
 const MUTATION = 'public/src/modules/session-mutation.js';
@@ -80,7 +80,7 @@ function bootstrap(sandbox) {
   sandbox.loadSource('public/src/modules/action-dispatcher.js');
   // i18n 已迁 ESM（P4）：t 桥键由 createFrontendSandbox 自动装载，见 test/helpers/install-i18n.js
   sandbox.loadSource('public/src/app-core.js');
-  sandbox.loadSource('public/src/modules/sidebar-render.js');
+  prepareSidebarDomain(sandbox);
   sandbox.loadSource('public/src/modules/session-view-state.js');
 
   // 宿主替身（owner 不在本链）：切换事务（app-main）、表面选择（app-ui）、
@@ -88,6 +88,12 @@ function bootstrap(sandbox) {
   // 这些键都是真实工厂里 `typeof x === 'function' ? x() : …` 的调用目标，
   // 缺键会让成功路径变成 ReferenceError，因此显式提供而非依赖吞错。
   sandbox.createRuntimeSwitchHost = () => ({ state: {} });
+  // 常驻输入按钮同步（owner: persistent-input-api 桥键；本链不装输入面）：
+  // runtime-status 的收尾/复位路径会调用它。
+  sandbox._syncPersistentActionButton = () => {};
+  sandbox._syncPersistentInputUi = () => {};
+  sandbox._syncQueueFromBackend = () => {};
+  sandbox.runWithSuppressedChatViewportObservers = (fn) => fn?.();
   sandbox.createWorkspaceSurfaceHost = () => {};
   sandbox.AgentLoaderHost = { loadedAgentDetailIds: new Set() };
   // 数据加载图静态依赖（agent-data-loader → input-actions）在装载期取 app-main
@@ -121,7 +127,6 @@ function bootstrap(sandbox) {
   sandbox.getVisibleRemoteEntries = () => [];
   // 连接快照的 wire 形状是数组；默认给空快照（有读请求时用例自行覆盖）
   sandbox.invoke = async () => [];
-  sandbox.loadSource(RUNTIME_STATUS);
   // app-main 的 classic 同步引擎（唯一 owner）：runtime-status 就位后再装，
   // 引擎装载期组合真实 createAgentCallStatesHost 并登记 sidebar-render 轮询/裁剪
   // 路径消费的两个桥键。

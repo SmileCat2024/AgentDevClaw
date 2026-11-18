@@ -29,6 +29,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
+import { prepareSidebarDomain } from './p2-classic-hosts.js';
 
 const PH_MOVE = 'public/src/modules/ph-session-move.js';
 
@@ -97,7 +98,9 @@ function bootstrapClassic(sandbox) {
   // i18n 已迁 ESM（P4）：t 桥键由 createFrontendSandbox 自动装载，见 test/helpers/install-i18n.js
   sandbox.loadSource('public/src/app-core.js');
   sandbox.loadSource('public/src/modules/session-view-state.js');
-  sandbox.loadSource('public/src/modules/sidebar-render.js');
+  // sidebar-render / runtime-status 自 P4 T2 起是 ESM：经 prepareSidebarDomain 在
+  // classic 之后进模块相（真正装载由 withP2EsmCase 消费 pending prep 完成）。
+  prepareSidebarDomain(sandbox);
   sandbox.AgentLoaderHost = { loadedAgentDetailIds: new Set() };
   // 调用状态宿主：owner 是 classic sidebar-render 的 createAgentCallStatesHost，
   // 但它引用 app-main 的词法容器与未定义的通知钩子（_markAgentCallStartedForNotify）。

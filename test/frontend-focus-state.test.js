@@ -27,6 +27,8 @@ function extractFunction(source, signature, nextMarker) {
 
 function createFocusSandbox(storage = {}) {
   const sandbox = {
+    // 迁 ESM 后这两段纯函数经 `window.X` 桥式晚绑定取协作面：VM 里让 window 指向
+    // 沙箱本身（与浏览器 window === 全局对象同形），切片照常可执行。
     localStorage: {
       getItem(key) { return storage[key] ?? null; },
     },
@@ -34,6 +36,7 @@ function createFocusSandbox(storage = {}) {
     getAgentRuntimeId: (agent) => agent.runtimeId || agent.id || '',
     getRuntimeId: (agent) => agent.runtimeId || agent.runtime_session_id || agent.id || null,
   };
+  sandbox.window = sandbox;
   vm.createContext(sandbox);
   vm.runInContext(
     `${extractFunction(sidebarSource, 'function resolveFocusedAgentAfterRefresh(', '\n\n// Synchronous rendering stays classic.')}`

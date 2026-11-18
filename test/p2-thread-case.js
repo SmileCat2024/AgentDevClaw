@@ -177,6 +177,10 @@ export function prepareThreadClassicSandbox(sandbox, overrides = {}) {
   for (const [name, value] of Object.entries(overrides)) {
     sandbox[name] = value;
   }
+  // 侧栏渲染 / 运行时状态自 P4 T2 起在模块相（桥键访问器在模块求值时注册）：
+  // classic 相的夹具覆盖会被同一访问器顶掉。把夹具留在沙箱上，由 withThreadCaseEnv
+  // 在模块相之后原样重放一次——夹具语义（无条件覆盖）不变。
+  sandbox.__caseOverrides = overrides;
   return sandbox;
 }
 
@@ -349,6 +353,9 @@ export async function withThreadCaseEnv(options, fn) {
       if (pending.activeConversation != null) live.activeConversation = pending.activeConversation;
       delete window.__classicThreadFacts;
     })()`);
+    // 模块相之后重放 classic 夹具覆盖（桥键访问器此时已在位）
+    const overrides = c.sandbox.__caseOverrides;
+    if (overrides) for (const [name, value] of Object.entries(overrides)) c.sandbox[name] = value;
     const result = await fn({ c, requests });
     await settleCase();
     return result;

@@ -1,68 +1,73 @@
 /**
- * runtime-status.js — Phase B-1
- * 运行时状态 / 通知系统
+ * runtime-status.js — 运行时状态 / 通知系统（P4 T2 收尾批次：classic → ESM）
  *
  * 包含：
  * - 运行时快照构建与状态推导（domain AA helpers）
  * - 通知状态更新主逻辑 updateNotificationStatus（domain Z）
- * - 通知计时器刷新
+ * - 通知计时器刷新与对话区运行指示块
  *
- * 依赖（全局，由 app-core.js / app-main.js / 已有模块提供）：
- * - t, escapeHtml, currentLanguage (app-core.js)
- * - currentMessages, currentRuntimeAgentId, _agentCallActive,
- *   _agentCallActive, isInterruptSuppressed, clearInterruptSuppression
- *   (app-core.js / app-main.js)
- * - normalizeAgentIdentity, toEpochMs, renderAgentList (app-main.js)
- *   工单 037：calling 翻转不再手动戳输入面——calling 不进入显示模式矩阵，
- *   模式翻转由真正的状态写入（patch / 队列同步）声明，此前的三处
- *   reset+render 配对为死路径，已删除。
- * - _recapPendingTrigger, _maybeFetchRecap (recap-hint.js)
- * - _syncPersistentActionButton, _syncQueueFromBackend, _syncPersistentInputUi,
- *   _renderLastCallElapsed, _lastCallFinishTime, _pendingQueuedCount (persistent-input.js / app-main.js)
+ * 迁移归属（P4 T2 收尾批次，与 sidebar-render / agent-call-states-engine 同批）：
+ * 本文件原为 classic，因 B4（`_agentSuspended` 只经 `createAgentCallStatesHost()`
+ * 交给 classic 引擎）无法单独转换。本批把 call 状态引擎迁出 app-main 顶层 IIFE
+ * 之后，本文件与 sidebar-render 一起进模块相，`_agentSuspended` 改具名导出供
+ * sidebar-render 的 `createAgentCallStatesHost()` 直接 import（同一 Map 引用，
+ * 无双存储）。
  *
- * ESM 迁移（P2 W2-2，部分）：本文件保留**唯一 classic 实现**。三个跨文件可变
- * 状态键的 owner 已迁至 p2-w2-2-runtime-status-owner.js（本文件在原声明位置只
- * 保留 defineKey 注册真初值）。其余部分按两类依据留在经典相：
+ * 状态归属：
+ *   - `currentRuntimeConnected` / `lastNotificationStatusPayload` /
+ *     `lastRenderedNotificationRuntime` 的 owner 仍是 p2-w2-2-runtime-status-owner
+ *     （P2 W2-2），本文件 import 活绑定并按需经 setter 写；
+ *   - `_agentSuspended` 由本文件持有并导出（B4）；`_runtimeStatusMemory` /
+ *     `_threadSidebarEntries` / `_notificationClockTimer` / `_contextGuardToastKey` /
+ *     `_contextGuardPageLoadedAt` 收敛为模块私有；
+ *   - 函数键分两类：生产仍 classic 的消费方（app-main / app-ui / 各 classic 宿主
+ *     工厂）经 `runtime-status-api` 域桥键取用；仅测试消费的 helper 只作命名导出
+ *     （不上桥，见文件末尾清单）。
  *
- * 一、真实同步首屏触线（R1/R4：`app-main` 顶层 `applyLanguage()` 起的同步链，
- *     早于任何 deferred 模块执行）：
- *   - 侧栏条目投影：`applyLanguage` → `renderAgentList` → sidebar-render 调
- *     `collectRuntimeEntriesForPrebuilt` / `isSidebarRuntimeDisconnected` /
- *     `isRuntimeSuspended` / `isSuspendedNotificationPayload` /
- *     `resolveNotificationCallingState`；
- *   - 对话区运行指示块：chat-renderer 与 input-helpers 调 `ensureChatRuntimeIndicator`；
- *   - 200ms 通知时钟：文件尾部 `ensureNotificationClockTimer()` 在经典相启动，
- *     其 tick 驱动 `refreshNotificationTimerDisplay` 与指示块；
- *   - 上下文护栏的页面加载基准 `_contextGuardPageLoadedAt`：经典相 `Date.now()`
- *     的常量语义，迁走会改变判定时点。
- *
- * 二、保守留在经典相（**不是**首屏触线，本批不迁，迁移边界留待集中收口）：
- *   - `updateNotificationStatus` / `applyNotificationStatus` 及 snapshot/label
- *     helper：首屏 `applyLanguage` 时 `lastNotificationStatusPayload` 为 null，
- *     不会调用它；真实调用在语言切换（`app-ui` 再调 `applyLanguage`）与通知
- *     到达后的重绘，消费方是 classic 裸标识符 + `typeof` 守卫；
- *   - `resetRuntimeStatusForSwitch`：调用点全在运行期（thread-store 的接续
- *     rebind、runtime-switch 的切换宿主面），与首屏无关，同样保守留 classic。
- *
- * 不在本批迁移面内的状态：`_agentSuspended` / `_runtimeStatusMemory` /
- * `_threadSidebarEntries`。`_agentSuspended` 的 Map 引用经
- * `createAgentCallStatesHost()` 交给 app-main 的 classic 同步引擎持有
- * （agent-call-states ESM host 只做 late-bound 转发），另两个只在本文件闭包内
- * 读写——迁出改变的是引用与生命周期边界，而不是「const 不能迁」。
+ * 求值面决策（为什么不 import chat-viewport / persistent-input / sidebar-operations
+ * 等已迁模块的具名导出）：本模块由 kernel-entry 早期装载（agent-snapshot-loader-host
+ * → sidebar-render → 本模块），把它们拉进静态图会把 chat / input / 侧栏操作域的
+ * 模块相求值整体提前。这些键都已上桥（`chat-viewport` / `persistent-input-api` /
+ * `input-queue` / `recap-hint` / `tool-progress` / `sidebar-operations` 域），
+ * 本文件按桥接期语义用 `window.X` 晚绑定，收敛（改具名 import + 注销桥键）留给
+ * T5 清零批次。
  */
+
+// ─── ESM 依赖（状态 owner / 纯函数域 / 经典宿主适配面）───
+import { t } from '../i18n.js';
+import { escapeHtml } from './markdown-utils.js';
+import { getCurrentLanguage } from './i18n-environment-state.js';
+import { currentRuntimeAgentId } from './orchestration-state.js';
+import { currentMessages } from './session-view-storage.js';
+import { callActivity } from './p2-bootstrap-call-activity.js';
+import {
+  currentRuntimeConnected,
+  lastNotificationStatusPayload,
+  setLastNotificationStatusPayload,
+  lastRenderedNotificationRuntime,
+  setLastRenderedNotificationRuntime,
+} from './p2-w2-2-runtime-status-owner.js';
+import {
+  getNotificationCallStartedAt,
+  isInterruptSuppressed,
+  clearInterruptSuppression,
+} from './call-interrupt-host.js';
+import { setPendingQueuedCount } from './p2-w2-3a-input-queue-state.js';
+import { setLastCallFinishTime } from './p2-w2-3a-call-elapsed-state.js';
+import { recapPendingTrigger, setRecapPendingTrigger } from './p2-w2-3a-recap-state.js';
 
 // ─── 运行时状态变量 ───
 
-// 状态 owner 迁至 p2-w2-2-runtime-status-owner.js（P2 W2-2）：经典相在此原声明
-// 位置注册真初值，保证首屏同步链（app-main 顶层 applyLanguage →
-// renderCurrentMainView → readCurrentSessionViewState 读 connected）与 200ms
-// 通知时钟 / 1s 胶囊 tick 在 deferred 模块执行前就有可用值；owner 在 ESM 相
-// claim 时吸收现值（无双存储）。三个键都是 let（可替换语义），const Map 留在
-// 本文件原位、不注册为可替换槽。
+// 三个跨文件状态键的 owner 在 p2-w2-2-runtime-status-owner（上面 import 的活绑定）。
+// 注册行留在原位：桥键值域与初值（true / null / null）与撤桥前一致；owner 先
+// claim、这里再 defineKey 时，KernelState 会把初值经 impl.set 送入域模块（同值，
+// 无双存储）。初值语义见 kernel-state.js 头注释。
 window.KernelState.defineKey('runtime-status', 'currentRuntimeConnected', true);
 window.KernelState.defineKey('runtime-status', 'lastNotificationStatusPayload', null);
 const _runtimeStatusMemory = new Map();
-const _threadSidebarEntries = new Map();
+// 线程条目的页面内形状缓存（createdAt / 项目归属锚）。仅测试消费其重置语义，
+// 故作命名导出、不上桥（生产读写全部在本文件内）。
+export const _threadSidebarEntries = new Map();
 window.KernelState.defineKey('runtime-status', '_lastRenderedNotificationRuntime', null);
 let _notificationClockTimer = null;
 let _contextGuardToastKey = '';
@@ -75,8 +80,8 @@ const _contextGuardPageLoadedAt = Date.now();
  * 由用户自负。
  */
 function applyContextGuardStatus(payload, runtimeId = currentRuntimeAgentId) {
-  const normalizedRuntimeId = normalizeAgentIdentity(runtimeId);
-  if (!normalizedRuntimeId || normalizedRuntimeId !== normalizeAgentIdentity(currentRuntimeAgentId)) return;
+  const normalizedRuntimeId = window.normalizeAgentIdentity(runtimeId);
+  if (!normalizedRuntimeId || normalizedRuntimeId !== window.normalizeAgentIdentity(currentRuntimeAgentId)) return;
   // 状态缓存转发：上边栏 badge（ContextGuardToggle）从此处获得 armed/阈值/
   // trip 数据（poll 主循环拉取的唯一收口）；toast 逻辑继续走下方 trip 分支。
   window.ContextGuardToggle?.applyStatus?.(payload, normalizedRuntimeId);
@@ -95,7 +100,7 @@ function applyContextGuardStatus(payload, runtimeId = currentRuntimeAgentId) {
 
   const inputTokens = Number(trip.inputTokens);
   const thresholdTokens = Number(trip.thresholdTokens);
-  const zh = currentLanguage === 'zh';
+  const zh = getCurrentLanguage() === 'zh';
   const usage = Number.isFinite(inputTokens) && inputTokens > 0 && Number.isFinite(thresholdTokens) && thresholdTokens > 0
     ? `${inputTokens.toLocaleString()} / ${thresholdTokens.toLocaleString()} tokens`
     : '';
@@ -112,7 +117,7 @@ function applyContextGuardStatus(payload, runtimeId = currentRuntimeAgentId) {
 
 // ─── 运行时快照构建 ───
 
-function buildSyntheticRuntimeEntry(prebuiltAgent) {
+export function buildSyntheticRuntimeEntry(prebuiltAgent) {
   const runtimeId = prebuiltAgent.runtime_session_id || prebuiltAgent.runtimeSessionId || '';
   if (!runtimeId) return null;
   if (prebuiltAgent.connected === false) return null;
@@ -138,8 +143,8 @@ function buildChildRuntimeEntry(runtimeAgent) {
   const runtimeId = runtimeAgent.runtime_session_id || runtimeAgent.runtimeSessionId || runtimeAgent.id || '';
   const ownerId = String(runtimeAgent.parent_id || '').trim();
   if (!runtimeId || !ownerId) return null;
-  const mutation = typeof getSessionReplacementMutation === 'function'
-    ? getSessionReplacementMutation(ownerId, runtimeAgent.active_workspace_session_id || '')
+  const mutation = typeof window.getSessionReplacementMutation === 'function'
+    ? window.getSessionReplacementMutation(ownerId, runtimeAgent.active_workspace_session_id || '')
     : null;
   return {
     id: runtimeAgent.id || runtimeId,
@@ -173,33 +178,33 @@ function getSidebarOperationPendingName(operation) {
   // 由顶栏「上下文接力中…」统一承载（用户要求：接续 UI 只留这一个），
   // 侧栏操作文案回归通用形态，不再特化。
   if (operation?.kind === 'branch') {
-    return currentLanguage === 'zh' ? '正在创建分支…' : 'Creating branch…';
+    return getCurrentLanguage() === 'zh' ? '正在创建分支…' : 'Creating branch…';
   }
   if (operation?.kind === 'trim') {
-    return currentLanguage === 'zh' ? '正在生成精简会话…' : 'Creating trimmed session…';
+    return getCurrentLanguage() === 'zh' ? '正在生成精简会话…' : 'Creating trimmed session…';
   }
   if (operation?.kind === 'summary') {
-    return currentLanguage === 'zh' ? '正在生成摘要会话…' : 'Creating summarized session…';
+    return getCurrentLanguage() === 'zh' ? '正在生成摘要会话…' : 'Creating summarized session…';
   }
-  return currentLanguage === 'zh' ? '正在启动新会话…' : 'Starting new session…';
+  return getCurrentLanguage() === 'zh' ? '正在启动新会话…' : 'Starting new session…';
 }
 
 function getSidebarOperationFailureName(operation) {
   // A degraded target operation is reached only after the session mutation has
   // committed. Its failure describes the runtime startup, never session creation.
   if (operation?.kind === 'branch') {
-    return currentLanguage === 'zh' ? '分支会话启动失败' : 'Branch session failed to start';
+    return getCurrentLanguage() === 'zh' ? '分支会话启动失败' : 'Branch session failed to start';
   }
   if (operation?.kind === 'trim') {
-    return currentLanguage === 'zh' ? '精简会话启动失败' : 'Trimmed session failed to start';
+    return getCurrentLanguage() === 'zh' ? '精简会话启动失败' : 'Trimmed session failed to start';
   }
   if (operation?.kind === 'summary') {
-    return currentLanguage === 'zh' ? '摘要会话启动失败' : 'Summarized session failed to start';
+    return getCurrentLanguage() === 'zh' ? '摘要会话启动失败' : 'Summarized session failed to start';
   }
-  return currentLanguage === 'zh' ? '新会话启动失败' : 'New session failed to start';
+  return getCurrentLanguage() === 'zh' ? '新会话启动失败' : 'New session failed to start';
 }
 
-function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
+export function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
   const entries = [];
   const seenRuntimeIds = new Set();
 
@@ -275,9 +280,9 @@ function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
     if (thread && (thread.archivedAt || thread.status === 'closed')) return;
     // 乐观退场：归档已提交、stop_agent 进行中的源 runtime 不再作为侧栏叶子
     // （operation 合成条目是操作反馈本身，不在此列）。
-    if (typeof isRuntimeStopPending === 'function'
+    if (typeof window.isRuntimeStopPending === 'function'
       && !String(entry.source || '').startsWith('operation-')
-      && isRuntimeStopPending(entry.ownerId || hostAgentId, entry.sessionId, entry.runtimeId)) {
+      && window.isRuntimeStopPending(entry.ownerId || hostAgentId, entry.sessionId, entry.runtimeId)) {
       return;
     }
     // Session-owned display fields come from the revisioned index, shared by
@@ -308,11 +313,11 @@ function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
         if (identity.projectName) entry.projectName = identity.projectName;
       } else if (entry.openDirectory) {
         entry.projectDir = entry.openDirectory;
-        entry.projectName = getPathLeaf(entry.openDirectory);
+        entry.projectName = window.getPathLeaf(entry.openDirectory);
       }
     }
-    if (typeof findSidebarOperation === 'function') {
-      const operation = findSidebarOperation((item) => (
+    if (typeof window.findSidebarOperation === 'function') {
+      const operation = window.findSidebarOperation((item) => (
         item.agentId === hostAgentId
         && !['settled', 'failed'].includes(item.phase)
         && ((item.targetRuntimeId && item.targetRuntimeId === entry.runtimeId)
@@ -325,7 +330,7 @@ function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
         entry.sidebarOperation = operation;
         if (!entry.projectDir && operation.projectDir) {
           entry.projectDir = operation.projectDir;
-          entry.projectName = operation.projectName || getPathLeaf(operation.projectDir);
+          entry.projectName = operation.projectName || window.getPathLeaf(operation.projectDir);
         }
       }
     }
@@ -447,8 +452,8 @@ function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
       const cached = _threadSidebarEntries.get(threadId);
       if (cached && seenRuntimeIds.has(cached.runtimeId)) continue;
       const handoffInProgress = thread.status === 'rotating' && Number(thread.handoffStartedAt) > 0 && !thread.deleting;
-      const replacementPending = typeof findSidebarOperation === 'function'
-        && Boolean(findSidebarOperation((operation) => operation?.agentId === hostAgentId
+      const replacementPending = typeof window.findSidebarOperation === 'function'
+        && Boolean(window.findSidebarOperation((operation) => operation?.agentId === hostAgentId
           && operation?.type === 'create'
           && operation?.phase !== 'settled'
           && ((cached?.entry && operation?.sourceSessionId === cached.entry.sessionId)
@@ -474,7 +479,7 @@ function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
           runtimeId: `thread:${threadId}`,
           sessionId: String(thread.headSessionId || ''),
           name: String(thread.headSessionTitle || '').trim()
-            || (currentLanguage === 'zh' ? '新对话' : 'New conversation'),
+            || (getCurrentLanguage() === 'zh' ? '新对话' : 'New conversation'),
           status: 'disconnected',
           source: 'thread-relay',
           contextMenuEnabled: false,
@@ -487,8 +492,8 @@ function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
   }
 
   // operation 按 agentId 归属（APP 级）——无并列身份后无需二次分流。
-  const operations = typeof listSidebarOperations === 'function'
-    ? listSidebarOperations((operation) => operation.agentId === hostAgentId)
+  const operations = typeof window.listSidebarOperations === 'function'
+    ? window.listSidebarOperations((operation) => operation.agentId === hostAgentId)
     : [];
   for (const operation of operations) {
     if (['settled', 'failed'].includes(operation.phase)) continue;
@@ -514,7 +519,7 @@ function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
         sourceEntry.contextMenuEnabled = false;
         if (!sourceEntry.projectDir && operation.projectDir) {
           sourceEntry.projectDir = operation.projectDir;
-          sourceEntry.projectName = operation.projectName || getPathLeaf(operation.projectDir);
+          sourceEntry.projectName = operation.projectName || window.getPathLeaf(operation.projectDir);
         }
       } else if (operation.sourceRuntimeId && !['degraded'].includes(operation.phase)) {
         addEntry({
@@ -606,22 +611,24 @@ function collectRuntimeEntriesForPrebuilt(prebuiltAgent, agents) {
     });
   }
 
-  entries.sort((a, b) => toEpochMs(b.createdAt) - toEpochMs(a.createdAt));
+  entries.sort((a, b) => window.toEpochMs(b.createdAt) - window.toEpochMs(a.createdAt));
 
   return entries;
 }
 
-function isRuntimeCalling(runtimeId) {
-  return normalizeAgentIdentity(runtimeId) !== '' && _agentCallActive.get(runtimeId) === true;
+export function isRuntimeCalling(runtimeId) {
+  return window.normalizeAgentIdentity(runtimeId) !== '' && callActivity._agentCallActive.get(runtimeId) === true;
 }
 
 // ADR-0019：回合挂起（等待后台任务唤醒）聚合，与 _agentCallActive 同构
 // （poll 聚合 + 聚焦 runtime notification 即时维护），供侧栏指示灯消费。
 // 挂起事实源是 server runtime.lastOutcome（挂起 outcome 跨 poll 持久），
 // 下一个 call 开始后 calling 优先覆盖显示。
-const _agentSuspended = new Map();
+// B4：call 状态引擎（modules/agent-call-states-engine.js）经 sidebar-render 的
+// createAgentCallStatesHost() 按引用取用本 Map —— 同一容器，不复制。
+export const _agentSuspended = new Map();
 
-function isSuspendedNotificationPayload(payload) {
+export function isSuspendedNotificationPayload(payload) {
   if (!payload || typeof payload !== 'object') return false;
   const stateType = String(payload.state?.type || '').trim();
   if (stateType === 'call.finish' && isSuspendedCallOutcome(payload.state?.data)) return true;
@@ -629,18 +636,18 @@ function isSuspendedNotificationPayload(payload) {
   return isSuspendedCallOutcome(payload.runtime?.lastOutcome);
 }
 
-function isRuntimeSuspended(runtimeId) {
-  return normalizeAgentIdentity(runtimeId) !== '' && _agentSuspended.get(runtimeId) === true;
+export function isRuntimeSuspended(runtimeId) {
+  return window.normalizeAgentIdentity(runtimeId) !== '' && _agentSuspended.get(runtimeId) === true;
 }
 
-function isSidebarRuntimeDisconnected(entry) {
+export function isSidebarRuntimeDisconnected(entry) {
   // A degraded sidebar operation can describe cleanup of a different runtime
   // (for example, the archived source of a ready replacement). Transport state
   // must come from the entry itself, not from the attached operation.
   return entry?.status === 'disconnected';
 }
 
-function resolveNotificationCallingState(notifData) {
+export function resolveNotificationCallingState(notifData) {
   if (notifData?.runtime && notifData.runtime.callActive !== undefined) {
     return notifData.runtime.callActive === true;
   }
@@ -660,7 +667,7 @@ function resolveNotificationCallingState(notifData) {
   return notifData?.callActive === true;
 }
 
-function normalizeNotificationRuntimeSnapshot(runtime) {
+export function normalizeNotificationRuntimeSnapshot(runtime) {
   return {
     stage: typeof runtime?.stage === 'string' ? runtime.stage : 'idle',
     callActive: runtime?.callActive === true,
@@ -683,10 +690,10 @@ function normalizeNotificationRuntimeSnapshot(runtime) {
   };
 }
 
-function getRuntimeStageLabel(runtime) {
+export function getRuntimeStageLabel(runtime) {
   // ADR-0019：挂起的 stage 归一化为 completed，按 suspended 标志区分文案
   if (runtime.suspended && runtime.stage === 'completed') {
-    return currentLanguage === 'zh' ? '等待后台任务' : 'Waiting for Background Tasks';
+    return getCurrentLanguage() === 'zh' ? '等待后台任务' : 'Waiting for Background Tasks';
   }
   switch (runtime.stage) {
     case 'llm_thinking':
@@ -714,51 +721,51 @@ function getRuntimeStageLabel(runtime) {
   }
 }
 
-function getCompactRuntimeLabel(runtime, isConnected = true) {
+export function getCompactRuntimeLabel(runtime, isConnected = true) {
   if (!isConnected) {
     return t('runtime_status_disconnected');
   }
   if (runtime.stage === 'llm_thinking') {
     return runtime.thinkingChars > 0
-      ? `${currentLanguage === 'zh' ? '思考' : 'Thinking'} ${formatRuntimeCompactNumber(runtime.thinkingChars)} ${t('runtime_unit_chars')}`
-      : (currentLanguage === 'zh' ? '思考中' : 'Thinking');
+      ? `${getCurrentLanguage() === 'zh' ? '思考' : 'Thinking'} ${formatRuntimeCompactNumber(runtime.thinkingChars)} ${t('runtime_unit_chars')}`
+      : (getCurrentLanguage() === 'zh' ? '思考中' : 'Thinking');
   }
   if (runtime.stage === 'llm_content') {
     const outputCount = runtime.contentChars || runtime.charCount;
     return outputCount > 0
-      ? `${currentLanguage === 'zh' ? '生成' : 'Generating'} ${formatRuntimeCompactNumber(outputCount)} ${t('runtime_unit_chars')}`
-      : (currentLanguage === 'zh' ? '生成中' : 'Generating');
+      ? `${getCurrentLanguage() === 'zh' ? '生成' : 'Generating'} ${formatRuntimeCompactNumber(outputCount)} ${t('runtime_unit_chars')}`
+      : (getCurrentLanguage() === 'zh' ? '生成中' : 'Generating');
   }
   if (runtime.stage === 'llm_tool_call_building') {
     const toolSummary = summarizeRuntimeToolNames(runtime.streamToolNames || []);
     if (toolSummary) {
-      return `${currentLanguage === 'zh' ? '准备工具' : 'Preparing Tools'} · ${toolSummary}`;
+      return `${getCurrentLanguage() === 'zh' ? '准备工具' : 'Preparing Tools'} · ${toolSummary}`;
     }
-    return currentLanguage === 'zh' ? '准备工具' : 'Preparing Tools';
+    return getCurrentLanguage() === 'zh' ? '准备工具' : 'Preparing Tools';
   }
   if (runtime.stage === 'tool_executing') {
     const toolSummary = summarizeRuntimeToolNames(runtime.activeToolNames);
     return toolSummary
-      ? `${currentLanguage === 'zh' ? '执行工具' : 'Running Tools'} · ${toolSummary}`
-      : (currentLanguage === 'zh' ? '执行工具' : 'Running Tools');
+      ? `${getCurrentLanguage() === 'zh' ? '执行工具' : 'Running Tools'} · ${toolSummary}`
+      : (getCurrentLanguage() === 'zh' ? '执行工具' : 'Running Tools');
   }
   if (runtime.stage === 'retry_waiting') {
-    return formatRetryStatusLabel(runtime) || (currentLanguage === 'zh' ? '重试等待' : 'Retry Waiting');
+    return formatRetryStatusLabel(runtime) || (getCurrentLanguage() === 'zh' ? '重试等待' : 'Retry Waiting');
   }
   if (runtime.stage === 'retry_requesting') {
-    return formatRetryStatusLabel(runtime) || (currentLanguage === 'zh' ? '重新请求' : 'Retrying');
+    return formatRetryStatusLabel(runtime) || (getCurrentLanguage() === 'zh' ? '重新请求' : 'Retrying');
   }
   if (runtime.stage === 'failed') {
-    return currentLanguage === 'zh' ? '请求失败' : 'Failed';
+    return getCurrentLanguage() === 'zh' ? '请求失败' : 'Failed';
   }
   if (runtime.stage === 'cancelled') {
-    return currentLanguage === 'zh' ? '已停止' : 'Stopped';
+    return getCurrentLanguage() === 'zh' ? '已停止' : 'Stopped';
   }
   if (runtime.suspended && runtime.stage === 'completed') {
-    return currentLanguage === 'zh' ? '等待后台任务' : 'Waiting for Background Tasks';
+    return getCurrentLanguage() === 'zh' ? '等待后台任务' : 'Waiting for Background Tasks';
   }
   if (runtime.stage === 'completed') {
-    return currentLanguage === 'zh' ? '已完成' : 'Done';
+    return getCurrentLanguage() === 'zh' ? '已完成' : 'Done';
   }
   if (runtime.callActive) {
     // 判定与对话区指示器（buildRuntimeIndicatorContent）保持同一数据源：
@@ -768,18 +775,18 @@ function getCompactRuntimeLabel(runtime, isConnected = true) {
     if (runtime.activeToolCount > 0) {
       const toolSummary = summarizeRuntimeToolNames(runtime.activeToolNames);
       return toolSummary
-        ? `${currentLanguage === 'zh' ? '执行工具' : 'Running Tools'} · ${toolSummary}`
-        : (currentLanguage === 'zh' ? '执行工具' : 'Running Tools');
+        ? `${getCurrentLanguage() === 'zh' ? '执行工具' : 'Running Tools'} · ${toolSummary}`
+        : (getCurrentLanguage() === 'zh' ? '执行工具' : 'Running Tools');
     }
     if (getPendingToolCallsFromMessages().length > 0) {
-      return currentLanguage === 'zh' ? '等待工具结果' : 'Waiting for Tools';
+      return getCurrentLanguage() === 'zh' ? '等待工具结果' : 'Waiting for Tools';
     }
     return t('runtime_status_waiting_model');
   }
   return '';
 }
 
-function formatRuntimeCompactNumber(value) {
+export function formatRuntimeCompactNumber(value) {
   if (!Number.isFinite(value)) return '0';
   return Number(value).toLocaleString();
 }
@@ -794,12 +801,12 @@ function formatRetryStatusLabel(runtime) {
   const attemptPart = max !== undefined
     ? `${attempt}/${max}`
     : String(attempt);
-  return currentLanguage === 'zh'
+  return getCurrentLanguage() === 'zh'
     ? `等待响应 · 第 ${attemptPart} 次重试中`
     : `Waiting · Retry ${attemptPart}`;
 }
 
-function formatRuntimeDuration(ms) {
+export function formatRuntimeDuration(ms) {
   const safeMs = Math.max(0, Number(ms) || 0);
   const totalSeconds = Math.floor(safeMs / 1000);
   if (totalSeconds < 60) {
@@ -837,12 +844,12 @@ function formatRuntimeDurationZh(ms) {
 function getRuntimeStepElapsedLabel(runtime) {
   if (!runtime || runtime.stageStartedAt <= 0) return '';
   const elapsedMs = Date.now() - runtime.stageStartedAt;
-  return currentLanguage === 'zh'
+  return getCurrentLanguage() === 'zh'
     ? formatRuntimeDurationZh(elapsedMs)
     : formatRuntimeDuration(elapsedMs);
 }
 
-function summarizeRuntimeToolNames(toolNames) {
+export function summarizeRuntimeToolNames(toolNames) {
   const normalized = Array.isArray(toolNames)
     ? toolNames.map((item) => String(item || '').trim()).filter(Boolean)
     : [];
@@ -851,12 +858,12 @@ function summarizeRuntimeToolNames(toolNames) {
   }
   const visible = normalized.slice(0, 2).join(', ');
   const remaining = normalized.length - 2;
-  return currentLanguage === 'zh'
+  return getCurrentLanguage() === 'zh'
     ? `${visible} +${remaining}个`
     : `${visible} +${remaining}`;
 }
 
-function getPendingToolCallsFromMessages(messages = currentMessages) {
+export function getPendingToolCallsFromMessages(messages = currentMessages) {
   if (!Array.isArray(messages) || messages.length === 0) {
     return [];
   }
@@ -885,7 +892,7 @@ function isSuspendedCallOutcome(data) {
     && String(data.reason || '').trim() === 'suspended');
 }
 
-function getDerivedStageFromState(stateType = '', stateData = null, currentStage = 'idle') {
+export function getDerivedStageFromState(stateType = '', stateData = null, currentStage = 'idle') {
   if (stateType === 'call.start') return 'awaiting_runtime';
   if (stateType === 'call.finish') {
     // 结构化终态：failed / cancelled / completed（continued 由续接机制继续跑）
@@ -908,7 +915,7 @@ function getDerivedStageFromState(stateType = '', stateData = null, currentStage
   return currentStage;
 }
 
-function getNotificationActionSource(notifData) {
+export function getNotificationActionSource(notifData) {
   const state = notifData?.state && typeof notifData.state === 'object' ? notifData.state : null;
   const event = notifData?.event && typeof notifData.event === 'object' ? notifData.event : null;
   if (event && (!state || (Number(event.timestamp) || 0) >= (Number(state.timestamp) || 0))) {
@@ -921,8 +928,8 @@ function getEffectiveRuntimeSnapshot(notifData, options = {}) {
   const suppressCalling = options?.suppressCalling === true;
   const runtime = normalizeNotificationRuntimeSnapshot(notifData?.runtime);
   const nextCalling = suppressCalling ? false : resolveNotificationCallingState(notifData);
-  const runtimeId = normalizeAgentIdentity(currentRuntimeAgentId) || 'none';
-  const identity = typeof getCurrentSessionViewIdentity === 'function' ? getCurrentSessionViewIdentity() : null;
+  const runtimeId = window.normalizeAgentIdentity(currentRuntimeAgentId) || 'none';
+  const identity = typeof window.getCurrentSessionViewIdentity === 'function' ? window.getCurrentSessionViewIdentity() : null;
   const runtimeStatusKey = JSON.stringify([runtimeId, identity?.agentId || '', identity?.sessionId || '']);
   const actionSource = getNotificationActionSource(notifData);
   const stateType = String(actionSource?.type || '').trim();
@@ -1062,7 +1069,7 @@ function getEffectiveRuntimeSnapshot(notifData, options = {}) {
   return runtime;
 }
 
-function getRuntimeSummary(runtime, isConnected = true) {
+export function getRuntimeSummary(runtime, isConnected = true) {
   if (!isConnected) {
     return t('runtime_status_disconnected');
   }
@@ -1097,7 +1104,7 @@ function getRuntimeSummary(runtime, isConnected = true) {
     return t('runtime_status_cancelled');
   }
   if (runtime.suspended && runtime.stage === 'completed') {
-    return currentLanguage === 'zh' ? '等待后台任务，任务完成后将继续' : 'Waiting for background tasks to continue';
+    return getCurrentLanguage() === 'zh' ? '等待后台任务，任务完成后将继续' : 'Waiting for background tasks to continue';
   }
   if (runtime.stage === 'completed') {
     return t('runtime_status_completed');
@@ -1120,7 +1127,7 @@ function getRuntimeSummary(runtime, isConnected = true) {
   return '';
 }
 
-function getRuntimeTimerLabel(runtime) {
+export function getRuntimeTimerLabel(runtime) {
   const now = Date.now();
   if (runtime.stageStartedAt > 0) {
     return formatRuntimeDuration(now - runtime.stageStartedAt);
@@ -1138,26 +1145,26 @@ function refreshNotificationTimerDisplay() {
   const metricsEl = document.getElementById('notification-metrics');
   if (!statusEl || !metricsEl) return;
   if (statusEl.style.display === 'none') return;
-  if (!_lastRenderedNotificationRuntime) return;
-  metricsEl.innerHTML = renderRuntimeTimer(_lastRenderedNotificationRuntime, currentRuntimeConnected);
+  if (!lastRenderedNotificationRuntime) return;
+  metricsEl.innerHTML = renderRuntimeTimer(lastRenderedNotificationRuntime, currentRuntimeConnected);
 }
 
-function ensureNotificationClockTimer() {
+export function ensureNotificationClockTimer() {
   if (_notificationClockTimer) return;
   _notificationClockTimer = window.setInterval(() => {
     refreshNotificationTimerDisplay();
     // 同步对话区域临时状态块（处理 early-return 路径和耗时刷新）
     if (typeof ensureChatRuntimeIndicator === 'function') ensureChatRuntimeIndicator();
     // 工具进度卡片走秒刷新（ticket 025）：startedAt 本地插值，两次 poll 之间平滑增长
-    if (typeof syncToolProgressDom === 'function') syncToolProgressDom();
+    if (typeof window.syncToolProgressDom === 'function') window.syncToolProgressDom();
   }, 200);
 }
 
-function getRuntimeStageClass(runtime) {
+export function getRuntimeStageClass(runtime) {
   return `stage-${String(runtime?.stage || 'idle').replace(/[^a-z0-9_-]/gi, '-')}`;
 }
 
-function shouldShowRuntimeStatus(runtime, stateType = '') {
+export function shouldShowRuntimeStatus(runtime, stateType = '') {
   if (runtime.suspended) return true;
   if (runtime.callActive && runtime.stage !== 'idle' && runtime.stage !== 'completed' && runtime.stage !== 'failed' && runtime.stage !== 'cancelled') {
     return true;
@@ -1168,7 +1175,7 @@ function shouldShowRuntimeStatus(runtime, stateType = '') {
     || stateType === 'llm.char_count';
 }
 
-function shouldStatusUseQueueSync(runtime) {
+export function shouldStatusUseQueueSync(runtime) {
   return runtime.stage === 'llm_thinking'
     || runtime.stage === 'llm_content'
     || runtime.stage === 'llm_tool_call_building';
@@ -1179,24 +1186,23 @@ function shouldStatusUseQueueSync(runtime) {
 /**
  * 会话 / 运行时切换时立即清空运行状态显示。
  *
- * 旧会话的快照（_lastRenderedNotificationRuntime）与顶栏 DOM 在新会话的
- * notification 数据到达前仍然存活（loadAgentData 需要等多个 fetch 完成），
- * 期间 chat-renderer 每次渲染都会用旧快照重建对话区指示块，导致新会话里
- * 残留上一会话的"模型正在思考…"文案，随后才被新数据替换/移除，并伴随
- * 指示块出现/消失带来的高度抖动。切换瞬间直接清空，等新数据到达后再渲染。
+ * 旧会话的快照（lastRenderedNotificationRuntime，p2-w2-2-runtime-status-owner
+ * 的活绑定）与顶栏 DOM 在新会话的 notification 数据到达前仍然存活
+ * （loadAgentData 需要等多个 fetch 完成），期间 chat-renderer 每次渲染都会用
+ * 旧快照重建对话区指示块，导致新会话里残留上一会话的"模型正在思考…"文案，
+ * 随后才被新数据替换/移除，并伴随指示块出现/消失带来的高度抖动。切换瞬间
+ * 直接清空，等新数据到达后再渲染。
  *
- * 本批保守留在经典相（P2 W2-2）：调用点全在运行期——thread-store 的接续
- * rebind（`_rebindConversationToThreadHead`）与 runtime-switch 的切换宿主面
- * （经 `app-main` 的 `resetStatus`），两者都以**裸标识符**调用它，触发前提是
- * 已有运行期会话或线程数据，不属于首屏同步触线。迁出不是做不到，而是本批
- * 迁移边界由主助手后续集中收口，此处不改动其相位。函数内的
- * `clearToolProgressState` 由 tool-progress 的桥键（`tool-progress` 域）在同一
- * window 上提供，`typeof` 守卫语义不变。
+ * 调用点全在运行期（thread-store 的接续 rebind、runtime-switch 的切换宿主面
+ * 经 app-main 的 `resetStatus`），不一致于首屏同步链；经 `runtime-status-api`
+ * 桥键供这些消费方取用。函数内的 `resetCallElapsedForSwitch` /
+ * `clearToolProgressState` 由 `persistent-input-api` / `tool-progress` 域的桥键
+ * 在同一 window 上提供，`typeof` 守卫语义不变。
  */
 function resetRuntimeStatusForSwitch() {
-  if (typeof resetCallElapsedForSwitch === 'function') resetCallElapsedForSwitch();
-  _lastRenderedNotificationRuntime = null;
-  lastNotificationStatusPayload = null;
+  if (typeof window.resetCallElapsedForSwitch === 'function') window.resetCallElapsedForSwitch();
+  setLastRenderedNotificationRuntime(null);
+  setLastNotificationStatusPayload(null);
   const statusEl = document.getElementById('notification-status');
   if (statusEl) {
     statusEl.style.display = 'none';
@@ -1211,41 +1217,43 @@ function resetRuntimeStatusForSwitch() {
   const chatContainer = document.getElementById('chat-container');
   const existing = chatContainer ? chatContainer.querySelector('#runtime-indicator-row') : null;
   if (existing) {
-    runWithSuppressedChatViewportObservers(function() {
+    window.runWithSuppressedChatViewportObservers(function() {
       existing.remove();
     });
   }
   // 工具进度卡片随会话/运行时切换整体复位（ticket 025）
-  if (typeof clearToolProgressState === 'function') clearToolProgressState();
+  if (typeof window.clearToolProgressState === 'function') window.clearToolProgressState();
 }
 
 // 通知状态更新必须归属于触发它的 SessionView；同步 SSE / 重绘调用也经同一提交边界。
 function updateNotificationStatus(notifData, runtimeId = currentRuntimeAgentId, viewToken = null) {
-  const token = viewToken || (typeof captureSessionViewToken === 'function'
-    ? captureSessionViewToken(runtimeId)
+  const token = viewToken || (typeof window.captureSessionViewToken === 'function'
+    ? window.captureSessionViewToken(runtimeId)
     : null);
-  if (!token || typeof commitSessionViewState !== 'function' || typeof isSessionViewTokenCurrent !== 'function') {
-    if (typeof captureSessionViewToken !== 'function') return applyNotificationStatus(notifData, runtimeId);
+  // session-view-commit 域桥键（注册行在 session-view-commit-host.js，kernel-entry 图）：
+  // 本模块不静态 import 它，保持求值面窄（见头注），收敛在 T5 清零批次。
+  if (!token || typeof window.commitSessionViewState !== 'function' || typeof window.isSessionViewTokenCurrent !== 'function') {
+    if (typeof window.captureSessionViewToken !== 'function') return applyNotificationStatus(notifData, runtimeId);
     return false;
   }
-  if (!isSessionViewTokenCurrent(token)) return false;
-  return commitSessionViewState(token, () => applyNotificationStatus(notifData, runtimeId));
+  if (!window.isSessionViewTokenCurrent(token)) return false;
+  return window.commitSessionViewState(token, () => applyNotificationStatus(notifData, runtimeId));
 }
 
-function applyNotificationStatus(notifData, runtimeId) {
-  if (normalizeAgentIdentity(runtimeId) !== normalizeAgentIdentity(currentRuntimeAgentId)) return;
+export function applyNotificationStatus(notifData, runtimeId) {
+  if (window.normalizeAgentIdentity(runtimeId) !== window.normalizeAgentIdentity(currentRuntimeAgentId)) return;
   const payload = (notifData && typeof notifData === 'object') ? notifData : {};
-  if (!notifData && typeof resetCallElapsedForSwitch === 'function') resetCallElapsedForSwitch();
+  if (!notifData && typeof window.resetCallElapsedForSwitch === 'function') window.resetCallElapsedForSwitch();
   // 工具执行中进度（ticket 025）：tool.progress 入表 / 终态信号清除
-  if (typeof applyToolProgressNotification === 'function') {
-    applyToolProgressNotification(payload);
+  if (typeof window.applyToolProgressNotification === 'function') {
+    window.applyToolProgressNotification(payload);
   }
   const statusEl = document.getElementById('notification-status');
   const phaseEl = document.getElementById('notification-phase');
   const summaryEl = document.getElementById('notification-summary');
   const metricsEl = document.getElementById('notification-metrics');
-  lastNotificationStatusPayload = payload;
-  const runtimeIdForSuppression = normalizeAgentIdentity(currentRuntimeAgentId);
+  setLastNotificationStatusPayload(payload);
+  const runtimeIdForSuppression = window.normalizeAgentIdentity(currentRuntimeAgentId);
   const actionSource = getNotificationActionSource(payload);
   // call.finish is authoritative even if a coalesced runtime snapshot still
   // carries the previous callActive:true value.
@@ -1266,20 +1274,20 @@ function applyNotificationStatus(notifData, runtimeId) {
   if (payload.callActive !== undefined) {
     const runtimeId = currentRuntimeAgentId;
     if (runtimeId) {
-      const prev = _agentCallActive.get(runtimeId);
+      const prev = callActivity._agentCallActive.get(runtimeId);
       let nextCalling = resolveNotificationCallingState(payload);
       if (nextCalling) {
         // interrupting 期间同一 call 的 true 只是排空状态；只有更新的
         // callStartedAt 才代表真正的新 call，可以离开 interrupting。
         if (!isInterruptSuppressed(runtimeId, observedCallStartedAt)) {
-          _markAgentCallStartedForNotify(runtimeId);
-          _agentCallActive.set(runtimeId, true);
+          window._markAgentCallStartedForNotify(runtimeId);
+          callActivity._agentCallActive.set(runtimeId, true);
           _agentSuspended.delete(runtimeId);
         } else {
           nextCalling = false;
         }
       } else {
-        _agentCallActive.delete(runtimeId);
+        callActivity._agentCallActive.delete(runtimeId);
         // ADR-0019：call 结束时按 payload 落定挂起态（lastOutcome 持久事实）
         if (isSuspendedNotificationPayload(payload)) {
           _agentSuspended.set(runtimeId, true);
@@ -1290,34 +1298,34 @@ function applyNotificationStatus(notifData, runtimeId) {
       }
       callingStateChanged = (prev === true) !== nextCalling;
       if (callingStateChanged) {
-        renderAgentList();
+        window.renderAgentList();
       }
     }
   }
 
   // Capture last call finish time for elapsed display
   if (payload.state && typeof payload.state === 'object' && payload.state.type === 'call.finish') {
-    _lastCallFinishTime = typeof payload.state.timestamp === 'number'
+    setLastCallFinishTime(typeof payload.state.timestamp === 'number'
       ? payload.state.timestamp
-      : (runtime.updatedAt || Date.now());
-    _renderLastCallElapsed();
+      : (runtime.updatedAt || Date.now()));
+    window._renderLastCallElapsed();
     // Trigger deferred recap if user was away while AI was generating
-    if (_recapPendingTrigger) {
-      _recapPendingTrigger = false;
-      _maybeFetchRecap();
+    if (recapPendingTrigger) {
+      setRecapPendingTrigger(false);
+      window._maybeFetchRecap();
     }
   }
 
   if (suppressingInterrupt) {
     statusEl.style.display = 'flex';
     statusEl.className = 'notification-status active is-interrupting';
-    phaseEl.textContent = currentLanguage === 'zh' ? '正在停止…' : 'Stopping…';
-    summaryEl.textContent = currentLanguage === 'zh'
+    phaseEl.textContent = getCurrentLanguage() === 'zh' ? '正在停止…' : 'Stopping…';
+    summaryEl.textContent = getCurrentLanguage() === 'zh'
       ? '等待当前步骤安全退出'
       : 'Waiting for the current step to exit safely';
     metricsEl.innerHTML = '';
-    _lastRenderedNotificationRuntime = null;
-    _syncPersistentActionButton();
+    setLastRenderedNotificationRuntime(null);
+    window._syncPersistentActionButton();
     // 快照已清空，对话区指示块需同 tick 移除，不等 200ms 时钟
     ensureChatRuntimeIndicator();
     return;
@@ -1330,15 +1338,15 @@ function applyNotificationStatus(notifData, runtimeId) {
     if (stateType === 'call.start') {
       if (!isRuntimeCalling(currentRuntimeAgentId)
         && !isInterruptSuppressed(currentRuntimeAgentId, observedCallStartedAt)) {
-        _markAgentCallStartedForNotify(currentRuntimeAgentId);
-        _agentCallActive.set(currentRuntimeAgentId, true);
+        window._markAgentCallStartedForNotify(currentRuntimeAgentId);
+        callActivity._agentCallActive.set(currentRuntimeAgentId, true);
         _agentSuspended.delete(currentRuntimeAgentId);
         callingStateChanged = true;
-        renderAgentList();
+        window.renderAgentList();
       }
     } else if (stateType === 'call.finish') {
       if (isRuntimeCalling(currentRuntimeAgentId)) {
-        _agentCallActive.delete(currentRuntimeAgentId);
+        callActivity._agentCallActive.delete(currentRuntimeAgentId);
         // ADR-0019：聚焦 call.finish（state 形态）按 payload 落定挂起态
         if (isSuspendedNotificationPayload(payload)) {
           _agentSuspended.set(currentRuntimeAgentId, true);
@@ -1346,7 +1354,7 @@ function applyNotificationStatus(notifData, runtimeId) {
           _agentSuspended.delete(currentRuntimeAgentId);
         }
         callingStateChanged = true;
-        renderAgentList();
+        window.renderAgentList();
       }
       clearInterruptSuppression(currentRuntimeAgentId);
     }
@@ -1356,11 +1364,11 @@ function applyNotificationStatus(notifData, runtimeId) {
     statusEl.style.display = 'flex';
     statusEl.className = `notification-status active ${getRuntimeStageClass(runtime)}${currentRuntimeConnected ? '' : ' is-disconnected'}`;
     phaseEl.textContent = getCompactRuntimeLabel(runtime, currentRuntimeConnected);
-    _lastRenderedNotificationRuntime = { ...runtime };
+    setLastRenderedNotificationRuntime({ ...runtime });
     metricsEl.innerHTML = renderRuntimeTimer(runtime, currentRuntimeConnected);
-    _syncPersistentActionButton();
+    window._syncPersistentActionButton();
     if (shouldStatusUseQueueSync(runtime)) {
-      _syncQueueFromBackend();
+      window._syncQueueFromBackend();
     }
     if (!payload.state) {
       ensureChatRuntimeIndicator();
@@ -1372,8 +1380,8 @@ function applyNotificationStatus(notifData, runtimeId) {
     phaseEl.textContent = '';
     summaryEl.textContent = '';
     metricsEl.innerHTML = '';
-    _lastRenderedNotificationRuntime = null;
-    _syncPersistentActionButton();
+    setLastRenderedNotificationRuntime(null);
+    window._syncPersistentActionButton();
     ensureChatRuntimeIndicator();
     return;
   }
@@ -1386,13 +1394,13 @@ function applyNotificationStatus(notifData, runtimeId) {
   }
 
   if (type === 'call.start') {
-    _syncPersistentActionButton();
+    window._syncPersistentActionButton();
     // 唤醒轮开始：挂起等待指示块的残留数据源到此为止，等待文案不跨入运行轮。
     // 只清挂起残留——正常运行轮首轮的 awaiting_runtime 快照已在上方
     // shouldShowStatus 分支写入，无条件清空会让指示块在 call.start 到首个
     // 表达性帧之间消失，用户输入后的"等待响应…"不再立即显示。
-    if (_lastRenderedNotificationRuntime?.suspended) {
-      _lastRenderedNotificationRuntime = null;
+    if (lastRenderedNotificationRuntime?.suspended) {
+      setLastRenderedNotificationRuntime(null);
     }
     ensureChatRuntimeIndicator();
     return;
@@ -1400,7 +1408,7 @@ function applyNotificationStatus(notifData, runtimeId) {
 
   if (type === 'call.finish') {
     if (currentRuntimeAgentId) {
-      _agentCallActive.delete(currentRuntimeAgentId);
+      callActivity._agentCallActive.delete(currentRuntimeAgentId);
       // ADR-0019：聚焦 call.finish（UI 收尾段）按 payload 落定挂起态
       if (isSuspendedNotificationPayload(payload)) {
         _agentSuspended.set(currentRuntimeAgentId, true);
@@ -1408,10 +1416,10 @@ function applyNotificationStatus(notifData, runtimeId) {
         _agentSuspended.delete(currentRuntimeAgentId);
       }
       clearInterruptSuppression(currentRuntimeAgentId);
-      renderAgentList();
+      window.renderAgentList();
     }
-    _syncPersistentActionButton();
-    _syncPersistentInputUi();
+    window._syncPersistentActionButton();
+    window._syncPersistentInputUi();
     if (!shouldShowRuntimeStatus(runtime, type)) {
       statusEl.style.display = 'none';
       statusEl.className = 'notification-status';
@@ -1420,7 +1428,7 @@ function applyNotificationStatus(notifData, runtimeId) {
       metricsEl.innerHTML = '';
       // 挂起等待保留对话区指示块的数据源：等待中与已等待时长持续显示
       if (!runtime.suspended) {
-        _lastRenderedNotificationRuntime = null;
+        setLastRenderedNotificationRuntime(null);
       }
     }
     ensureChatRuntimeIndicator();
@@ -1438,32 +1446,32 @@ function applyNotificationStatus(notifData, runtimeId) {
     };
     phaseEl.textContent = phaseNames[data.phase] || data.phase;
     summaryEl.textContent = '';
-    _lastRenderedNotificationRuntime = { ...runtime };
+    setLastRenderedNotificationRuntime({ ...runtime });
     metricsEl.innerHTML = renderRuntimeTimer(runtime, currentRuntimeConnected);
 
     // 新语义下改为根据 runtime 调用状态同步按钮
-    _syncPersistentActionButton();
+    window._syncPersistentActionButton();
     // 新 step 开始，agent 已在上一步结束时 dequeue 了消息，同步气泡
-    _syncQueueFromBackend();
+    window._syncQueueFromBackend();
   } else if (!runtime.callActive && type === 'llm.complete') {
     statusEl.style.display = 'none';
     statusEl.className = 'notification-status';
     phaseEl.textContent = '';
     summaryEl.textContent = '';
     metricsEl.innerHTML = '';
-    _lastRenderedNotificationRuntime = null;
-    _syncPersistentActionButton();
+    setLastRenderedNotificationRuntime(null);
+    window._syncPersistentActionButton();
     // 不在这里清空 _queuedTexts — 后端队列可能仍有消息待消费
     // 队列显示由 _syncQueueFromBackend() 在每轮 step_start 时统一管理
-    _pendingQueuedCount = 0;
-    _syncPersistentInputUi();
+    setPendingQueuedCount(0);
+    window._syncPersistentInputUi();
   } else if (!runtime.callActive && !runtime.suspended) {
     statusEl.style.display = 'none';
     statusEl.className = 'notification-status';
     phaseEl.textContent = '';
     summaryEl.textContent = '';
     metricsEl.innerHTML = '';
-    _lastRenderedNotificationRuntime = null;
+    setLastRenderedNotificationRuntime(null);
   } else if (!shouldShowStatus) {
     // callActive 为 true 但 shouldShowStatus 为 false（如 llm.complete + 无 pending tools 的收尾窗口）
     statusEl.style.display = 'none';
@@ -1471,8 +1479,8 @@ function applyNotificationStatus(notifData, runtimeId) {
     phaseEl.textContent = '';
     summaryEl.textContent = '';
     metricsEl.innerHTML = '';
-    _lastRenderedNotificationRuntime = null;
-    _syncPersistentActionButton();
+    setLastRenderedNotificationRuntime(null);
+    window._syncPersistentActionButton();
   }
 
   // calling 翻转不触发输入面渲染（工单 037）：calling 不进入显示模式矩阵
@@ -1544,8 +1552,8 @@ function summarizeToolCall(call) {
  * 构建临时状态块的结构化内容。
  * 返回 { main: string, details: string[] } 或 null。
  */
-function buildRuntimeIndicatorContent(runtime) {
-  const isZh = currentLanguage === 'zh';
+export function buildRuntimeIndicatorContent(runtime) {
+  const isZh = getCurrentLanguage() === 'zh';
   const stage = runtime.stage;
   let mainText = '';
   const details = [];
@@ -1574,7 +1582,7 @@ function buildRuntimeIndicatorContent(runtime) {
       mainText = isZh ? `正在执行 ${pending.length} 个工具` : `Running ${pending.length} tool${pending.length > 1 ? 's' : ''}`;
       pending.forEach(function(call) {
         const summary = summarizeToolCall(call);
-        const display = getToolDisplayName(call.name) || call.name;
+        const display = window.getToolDisplayName(call.name) || call.name;
         details.push(summary ? `${display}: ${summary}` : display);
       });
     } else {
@@ -1605,7 +1613,7 @@ function buildRuntimeIndicatorContent(runtime) {
       mainText = isZh ? `等待 ${pending.length} 个后台任务` : `Waiting for ${pending.length} background task${pending.length > 1 ? 's' : ''}`;
       pending.forEach(function(call) {
         const summary = summarizeToolCall(call);
-        const display = getToolDisplayName(call.name) || call.name;
+        const display = window.getToolDisplayName(call.name) || call.name;
         details.push(summary ? `${display}: ${summary}` : display);
       });
     } else {
@@ -1646,7 +1654,7 @@ function ensureChatRuntimeIndicator() {
   // 断连时上栏显示"已断开连接"，此处同步隐藏，避免继续展示过时的阶段文案
   // ADR-0019 挂起等待：call 已结束但工具 step 等待后台任务唤醒，指示块
   // 持续显示等待态，直到唤醒轮开始（callActive 分支接管）。
-  const rt = _lastRenderedNotificationRuntime;
+  const rt = lastRenderedNotificationRuntime;
   const shouldShow = currentRuntimeConnected
     && rt
     && (rt.suspended === true
@@ -1657,7 +1665,7 @@ function ensureChatRuntimeIndicator() {
 
   if (!shouldShow) {
     if (existing) {
-      runWithSuppressedChatViewportObservers(function() {
+      window.runWithSuppressedChatViewportObservers(function() {
         existing.remove();
       });
     }
@@ -1665,10 +1673,10 @@ function ensureChatRuntimeIndicator() {
   }
 
   // 构建内容
-  const content = buildRuntimeIndicatorContent(_lastRenderedNotificationRuntime);
+  const content = buildRuntimeIndicatorContent(lastRenderedNotificationRuntime);
   if (!content) {
     if (existing) {
-      runWithSuppressedChatViewportObservers(function() {
+      window.runWithSuppressedChatViewportObservers(function() {
         existing.remove();
       });
     }
@@ -1678,7 +1686,7 @@ function ensureChatRuntimeIndicator() {
   if (!existing) {
     existing = document.createElement('div');
     existing.id = INDICATOR_ID;
-    runWithSuppressedChatViewportObservers(function() {
+    window.runWithSuppressedChatViewportObservers(function() {
       chatContainer.appendChild(existing);
     });
   }
@@ -1689,7 +1697,7 @@ function ensureChatRuntimeIndicator() {
   // 所有子元素的创建和文本更新都包裹在 runWithSuppressedChatViewportObservers 中，
   // 避免触发 MutationObserver → notifyChatViewportMutation → lockChatViewportToBottomNow，
   // 后者会在 followLatestEnabled 时强制将视口锁定到最底部。
-  runWithSuppressedChatViewportObservers(function() {
+  window.runWithSuppressedChatViewportObservers(function() {
     let mainEl = existing.querySelector('.runtime-indicator-main');
     if (!mainEl) {
       mainEl = document.createElement('div');
@@ -1749,6 +1757,44 @@ function ensureChatRuntimeIndicator() {
   });
 }
 
-// ─── 启动通知计时器 ───
+// ─── 桥接期兼容面（domain `runtime-status-api`）───
+// 函数键另立 api 域（先例 voice-input-api / input-composer-api）：状态域
+// `runtime-status` 已被 p2-w2-2-runtime-status-owner claim，其 impl 对未声明键
+// 直接抛错，函数键不能混进同一域。
+//
+// 逐键消费面（仍有经典相或经 window 晚绑定的消费方，注销条件同列）：
+//   updateNotificationStatus        ← app-main / app-ui / agent-data-loader /
+//                                     persistent-input / sse-client（window）
+//   applyContextGuardStatus         ← agent-data-loader（window）
+//   resetRuntimeStatusForSwitch     ← app-main 宿主 resetStatus / thread-store /
+//                                     session-readonly-view / agent-data-loader
+//   isRuntimeCalling                ← app-main / persistent-input / recap-hint /
+//                                     rollback-dialog-runtime / auto-title /
+//                                     p2-w2-3a-queue-projection（classic + window）
+//   ensureChatRuntimeIndicator      ← chat-renderer / chat-process-visibility（window）
+//   resolveNotificationCallingState ← app-main 的 classic 宿主工厂（isCalling）
+// 注销条件：上列消费方全部改为具名 import 后删除对应 defineKey（注册行在本文件，
+// 届时可直接删）并下调桥债基线。仅测试消费的 helper 只作命名导出、不上桥。
+const bridgeApi = {
+  updateNotificationStatus,
+  applyContextGuardStatus,
+  resetRuntimeStatusForSwitch,
+  isRuntimeCalling,
+  ensureChatRuntimeIndicator,
+  resolveNotificationCallingState,
+};
+window.KernelState.defineKey('runtime-status-api', 'updateNotificationStatus', bridgeApi.updateNotificationStatus);
+window.KernelState.defineKey('runtime-status-api', 'applyContextGuardStatus', bridgeApi.applyContextGuardStatus);
+window.KernelState.defineKey('runtime-status-api', 'resetRuntimeStatusForSwitch', bridgeApi.resetRuntimeStatusForSwitch);
+window.KernelState.defineKey('runtime-status-api', 'isRuntimeCalling', bridgeApi.isRuntimeCalling);
+window.KernelState.defineKey('runtime-status-api', 'ensureChatRuntimeIndicator', bridgeApi.ensureChatRuntimeIndicator);
+window.KernelState.defineKey('runtime-status-api', 'resolveNotificationCallingState', bridgeApi.resolveNotificationCallingState);
+window.KernelState.claim('runtime-status-api', {
+  get: (key) => bridgeApi[key],
+  set: (key, value) => { bridgeApi[key] = value; },
+});
 
+// ─── 启动通知计时器 ───
+// 模块相启动：与 classic 加载期启动同义（首屏由 boot.js 触发，晚于本模块求值；
+// 计时器只刷新顶栏计时与对话区指示块，不参与首屏同步链）。
 ensureNotificationClockTimer();

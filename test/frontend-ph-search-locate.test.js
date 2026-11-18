@@ -28,6 +28,7 @@ import { dirname, join } from 'node:path';
 
 import { sourceBetween } from './helpers/frontend-vm.js';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
+import { prepareSidebarDomain } from './p2-classic-hosts.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CHAT_RENDERER = 'public/src/modules/chat-renderer.js';
@@ -257,6 +258,9 @@ async function withLocate(probe) {
     // ESM 图求值会把 workspace-surface / chat-viewport 的宿主回调注册成
     // KernelState 访问器桥，覆盖 classic 相的同名赋值；宿主契约替身必须在整图
     // 装载后落到桥键上（模块按 window.<key> 晚绑定取用，每次读访问器）。
+    // 侧栏整表重绘在本文件是副作用，不是断言面（classic 相的同名空实现会被
+    // 模块求值的桥键覆盖，因此在整图装载后经桥键写回）。
+    c.window.renderAgentList = () => {};
     c.window.readCurrentSessionViewState = () => viewState;
     c.window.registerManualScrollIntent = (options) => { calls.manualScroll.push(options); };
     c.window.requestFollowLatest = (options) => { calls.followLatest.push(options); };
@@ -621,7 +625,7 @@ async function withRemoteActionsCase({ bumpEpochDuringWait = false } = {}, probe
       sandbox.loadSource('public/src/modules/session-view-state.js');
       // runtime-status 是 classic 唯一实现：真实切换收尾的 loadAgentData 经
       // resetRuntimeStatusForSwitch 复位运行期状态。
-      sandbox.loadSource('public/src/modules/runtime-status.js');
+      prepareSidebarDomain(sandbox);
       // ESM 图求值期需要的 classic 宿主工厂（owner: app-main / app-ui /
       // sidebar-render；本链不加载其首屏实现）：按宿主缝给最小面。
       sandbox.window.createCompactResumeHost = () => ({});
@@ -693,12 +697,11 @@ async function withRemoteActionsCase({ bumpEpochDuringWait = false } = {}, probe
         querySelectorAll() { return []; },
         focus() {}, blur() {},
       });
-      sandbox.document = {
-        ...sandbox.document,
-        createElement: () => makeToastNode(),
-        createElementNS: () => makeToastNode(),
-        createTextNode: (text) => ({ textContent: String(text) }),
-      };
+      // 就地补面（不整体替换 document）：ESM 侧读到的是 case 开始时注入的同一个
+      // document 对象（浏览器里 window.document 恒在、模块不会拿到旧对象）。
+      sandbox.document.createElement = () => makeToastNode();
+      sandbox.document.createElementNS = () => makeToastNode();
+      sandbox.document.createTextNode = (text) => ({ textContent: String(text) });
       // prepare 的 DOM 读取边界（进入前捕获）与串行顺序观测。
       const realQuerySelector = sandbox.document.querySelector;
       sandbox.document.querySelector = (selector) => {

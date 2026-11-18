@@ -74,6 +74,17 @@ const MEMO_AGENT = {
  * window 取 bootstrap 状态宿主。按各宿主契约给最小可读写面；真实实现留在
  * app-core / app-main / sidebar-render（classic，首屏同步边界）。
  */
+/** 首屏元素桩（生产 DOM 里的节点面：本文件不驱动渲染，只让模块求值期能装委托）。 */
+function makeElementStub() {
+  return {
+    style: {}, dataset: {}, className: '', innerHTML: '', textContent: '', value: '', disabled: false,
+    classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
+    addEventListener() {}, removeEventListener() {}, appendChild() {}, remove() {},
+    querySelector() { return null; }, querySelectorAll() { return []; },
+    closest() { return null; }, contains() { return false; }, focus() {},
+  };
+}
+
 function createBootstrapHosts() {
   // ph-session 宿主用成对 get/set 复刻 app-core 的 Object.freeze 槽位语义。
   const phSessionState = { phSessionSortMode: 'updatedAt', phSearchQuery: '', _phSearchTimer: null };
@@ -120,17 +131,58 @@ function createBootstrapHosts() {
     }),
     createP2BootstrapSidebarHost: () => ({
       restartingRuntimeIds: new Set(),
+      pendingPrebuiltAgentIds: new Set(),
       suppressSidebarRerender: false,
     }),
     createP2BootstrapSidebarRenderHost: () => ({ lastAgentListRenderSignature: '' }),
     // 跨批静态边（P2 输入面）：agent-data-loader → input-actions → p2-bootstrap-dom /
     // poll-coordinator-host。两个 classic 工厂的真实实现在 app-core / app-main；
     // 本文件只驱动面板刷新回执，按契约给最小面。
-    createP2BootstrapDomHost: () => ({ container: {}, ctxMenu: {}, compactContextMenu: {}, agentContextMenu: {}, projectContextMenu: {}, featureRepoContextMenu: {} }),
+    // 首屏 DOM 引用宿主（生产 app-core 的 createP2BootstrapDomHost 全键面）：
+    // sidebar-render（P4 T2 起 ESM）在模块求值期对 agentList 装事件委托，
+    // 缺键会直接 TypeError。
+    createP2BootstrapDomHost: () => {
+      const refs = {};
+      for (const key of ['container', 'agentList', 'externalAgentList', 'externalGroup', 'externalCount',
+        'currentAgentTitle', 'featurePanel', 'featurePanelTitle', 'featurePanelBody',
+        'agentContextMenu', 'restartAgentAction', 'stopAgentAction', 'deleteAgentAction',
+        'compactContextMenu', 'compactSummaryAction', 'compactTrimAction', 'compactBranchAction',
+        'projectContextMenu', 'deleteProjectAction', 'featureRepoContextMenu', 'deleteFeatureAction',
+        'ctxMenu', 'followLatestButton', 'projectDocsetToggle', 'projectDocsetOverlay',
+        'projectDocsetSheet', 'chatProcessToggle', 'languageToggle', 'themeToggle']) {
+        refs[key] = makeElementStub();
+      }
+      return refs;
+    },
     createPollCoordinatorHost: () => ({
       run: async () => {}, fastInterval: () => 1000, setTimeout: () => 0, clearTimeout: () => {},
     }),
     AgentLoaderHost: { loadedAgentDetailIds: new Set() },
+    // app-core 的身份归一（侧栏渲染与运行时状态经 window 晚绑定取用）
+    normalizeAgentIdentity: (value) => String(value || '').trim(),
+    isAgentActive: () => false,
+    isRuntimeItemActive: () => false,
+    groupConnectedAgents: (agents) => ({ external: Array.isArray(agents) ? agents : [], groups: [] }),
+    updateCurrentAgentChrome: () => {},
+    ClawSidebarLayout: { load: async () => {}, signature: () => '', isInteracting: () => false, render() {} },
+    collectActiveCallRuntimeIds: () => [],
+    refreshAgentCallStates: async () => {},
+    getVisibleRemoteEntries: () => [],
+    getAgentRuntimeId: (agent) => agent?.id || '',
+    getRuntimeId: (agent) => agent?.id || null,
+    getLogicalAgentId: (agent) => agent?.id || null,
+    getParentAgentId: (agent) => agent?.parent_id || agent?.parentId || null,
+    getActiveSessionId: (agent) => agent?.active_workspace_session_id || agent?.workspace_sessions?.activeSessionId || null,
+    getWorkspaceSessions: (agent) => agent?.workspace_sessions?.sessions || [],
+    getPathLeaf: (value) => String(value || '').split('/').pop(),
+    resolveSidebarChildProjectGroup: () => null,
+    findSidebarOperation: () => null,
+    listSidebarOperations: () => [],
+    isSidebarRuntimeDisconnected: () => false,
+    resolveNotificationCallingState: () => false,
+    isSuspendedNotificationPayload: () => false,
+    isRuntimeCalling: () => false,
+    isRuntimeSuspended: () => false,
     createCallInterruptHost: () => ({ pending: new Map(), now: () => 0 }),
     createSessionViewCommitHost: () => ({
       identity: () => null, read: () => ({}), apply() {}, normalizeModel: (value) => value || {},
@@ -199,6 +251,10 @@ async function surfaceCase({
       // 状态（导航编排读写）。currentWorkspaceTab 走真实桥：classic 侧写入经
       // 访问器转发进 render-entry 状态 owner，ESM 侧读到同一个值。
       sandbox.KernelState.defineKey('render-entry', 'currentWorkspaceTab', 'chat');
+      // agent-store 的两个状态键（生产由 app-core 注册初值、ESM owner 认领）：
+      // 侧栏渲染域在模块相读 allAgents 做签名与投影。
+      sandbox.KernelState.defineKey('agent-store', 'allAgents', allAgents);
+      sandbox.KernelState.defineKey('agent-store', 'focusedAgentId', agent.id);
       sandbox.focusedAgentId = agent.id;
       sandbox.currentRuntimeAgentId = currentRuntimeAgentId;
       sandbox.readOnlyMode = false;

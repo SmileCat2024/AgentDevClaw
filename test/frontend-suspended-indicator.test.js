@@ -12,40 +12,58 @@
  *   - 唤醒轮：runtime.lastOutcome 残留上一轮挂起值（跨 call 持久）
  */
 
-import { describe, it, beforeEach, afterEach } from 'node:test';
+import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { createFrontendSandbox } from './helpers/frontend-vm.js';
+import { withP2EsmCase } from './helpers/p2-esm-case.js';
 
-function loadRuntimeStatus() {
-  const ctx = createFrontendSandbox({
-    currentRuntimeAgentId: 'rt-focus',
-    _switchEpoch: 1,
-    currentMessages: [],
-    _agentCallActive: new Map(),
-    normalizeAgentIdentity: (v) => String(v || '').trim(),
-    isInterruptSuppressed: () => false,
-    clearInterruptSuppression: () => {},
-    getNotificationCallStartedAt: (p) => p?.runtime?.callStartedAt || 0,
-    captureSessionViewToken: () => ({ switchEpoch: 1 }),
-    isSessionViewTokenCurrent: () => true,
-    commitSessionViewState: (_token, apply) => { apply(); return true; },
-    _markAgentCallStartedForNotify: () => {},
-    _tryNotifyAgentFinished: () => {},
-    renderAgentList: () => {},
-    _syncPersistentActionButton: () => {},
-    _syncPersistentInputUi: () => {},
-    _syncQueueFromBackend: () => {},
-    applyToolProgressNotification: () => {},
-    _recapPendingTrigger: false,
-    _maybeFetchRecap: () => {},
-    _renderLastCallElapsed: () => {},
-    runWithSuppressedChatViewportObservers: (fn) => fn(),
-    getComputedStyle: () => ({}),
-    getToolDisplayName: (name) => name,
-    t: (key) => key,
+/**
+ * 每个用例：一份 window + runtime-status 的真实 ESM 图（P4 T2 收尾批次后该域已
+ * 迁模块相；用例按模块命名空间调用被测函数，宿主观测面按生产契约给药）。
+ */
+function withRuntimeStatus(fn) {
+  return withP2EsmCase({
+    globals: {
+      normalizeAgentIdentity: (v) => String(v || '').trim(),
+      getNotificationCallStartedAt: (p) => p?.runtime?.callStartedAt || 0,
+      isInterruptSuppressed: () => false,
+      clearInterruptSuppression: () => {},
+      captureSessionViewToken: () => ({ switchEpoch: 1 }),
+      isSessionViewTokenCurrent: () => true,
+      commitSessionViewState: (_token, apply) => { apply(); return true; },
+      _markAgentCallStartedForNotify: () => {},
+      renderAgentList: () => {},
+      _syncPersistentActionButton: () => {},
+      _syncPersistentInputUi: () => {},
+      _syncQueueFromBackend: () => {},
+      applyToolProgressNotification: () => {},
+      _maybeFetchRecap: () => {},
+      _renderLastCallElapsed: () => {},
+      runWithSuppressedChatViewportObservers: (work) => work(),
+      getComputedStyle: () => ({}),
+      getToolDisplayName: (name) => name,
+      createP2BootstrapCallActivityHost: () => ({
+        _agentCallActive: new Map(), _recentlyFinishedRuntimes: new Set(),
+        _seenChoiceAlertIds: new Set(), _autoTitleTriggered: new Set(),
+        _interruptSuppression: new Map(), _lastInterruptUserActionAt: 0,
+      }),
+      setInterval: () => 0,
+      clearInterval: () => {},
+      // markdown-utils（runtime-status 的 escapeHtml 依赖）在求值期注册动作。
+      ClawFW: { actions: { registerMany() {} } },
+      marked: { parse: () => '', setOptions() {}, use() {}, Renderer: class {} },
+    },
+    classic: () => {},
+  }, async (c) => {
+    // 语言域（P4 T1 并入 i18n-environment-state）：用例世界说中文。
+    const i18n = await c.load('public/src/modules/i18n-environment-state.js');
+    i18n.setCurrentLanguage('zh');
+    const mod = await c.load('public/src/modules/runtime-status.js');
+    // 被测导出投影（迁移前是 classic 顶层函数，用例按裸名调用）：真实模块命名导出。
+    Object.assign(c.window, mod);
+    // 场景值：焦点 runtime 与语言由用例世界设定（生产由切换链 / 设置写入）。
+    c.window.currentRuntimeAgentId = 'rt-focus';
+    return fn(c.window, mod, c);
   });
-  ctx.loadSource('public/src/modules/runtime-status.js');
-  return ctx;
 }
 
 // ── 真实快照形态（时间戳用真实时钟，settledRecently 窗口才有意义）────────────
@@ -148,11 +166,8 @@ function completedFinishPayload() {
 }
 
 describe('挂起等待：对话区指示块（ADR-0019）', () => {
-  let ctx;
-  beforeEach(() => { ctx = loadRuntimeStatus(); });
-  afterEach(() => { ctx.run('clearInterval(_notificationClockTimer); _notificationClockTimer = null;'); });
 
-  it('挂起落定：指示块数据源保留，显示等待后台任务与已等待时长', () => {
+  it('挂起落定：指示块数据源保留，显示等待后台任务与已等待时长', () => withRuntimeStatus(async (ctx) => {
     ctx.run(`updateNotificationStatus(${JSON.stringify(suspendedFinishPayload())})`);
     const rt = ctx.run('_lastRenderedNotificationRuntime');
     assert.ok(rt, '挂起落定后指示块数据源保留（不随 call 结束清空）');
@@ -163,9 +178,9 @@ describe('挂起等待：对话区指示块（ADR-0019）', () => {
     assert.ok(content, '指示块内容非空');
     assert.ok(content.main.includes('等待后台任务'), `主行含等待文案: ${content.main}`);
     assert.ok(/秒|s\b/.test(content.main), `主行含已等待时长: ${content.main}`);
-  });
+  }));
 
-  it('静默超过终态展示窗口后：旧 call.finish 仍保持等待态', () => {
+  it('静默超过终态展示窗口后：旧 call.finish 仍保持等待态', () => withRuntimeStatus(async (ctx) => {
     const payload = suspendedFinishPayload();
     payload.runtime.updatedAt = Date.now() - 30000;
     payload.runtime.stageStartedAt = payload.runtime.updatedAt;
@@ -174,9 +189,9 @@ describe('挂起等待：对话区指示块（ADR-0019）', () => {
     assert.equal(rt?.suspended, true);
     assert.equal(ctx.run('shouldShowRuntimeStatus(_lastRenderedNotificationRuntime)'), true);
     assert.ok(ctx.run('buildRuntimeIndicatorContent(_lastRenderedNotificationRuntime)')?.main.includes('等待后台任务'));
-  });
+  }));
 
-  it('静默轮询无事件：仅有 lastOutcome 的 cancelled 快照仍显示等待中及用时', () => {
+  it('静默轮询无事件：仅有 lastOutcome 的 cancelled 快照仍显示等待中及用时', () => withRuntimeStatus(async (ctx) => {
     const finishAt = Date.now() - 30000;
     ctx.run(`updateNotificationStatus(${JSON.stringify({
       state: null, event: null, callActive: false,
@@ -189,9 +204,9 @@ describe('挂起等待：对话区指示块（ADR-0019）', () => {
     assert.equal(rt?.suspended, true);
     assert.equal(rt?.stage, 'completed');
     assert.ok(ctx.run('buildRuntimeIndicatorContent(_lastRenderedNotificationRuntime)')?.main.includes('30 秒'));
-  });
+  }));
 
-  it('挂起后有更新的非 call 事件：仍以 lastOutcome 展示等待态', () => {
+  it('挂起后有更新的非 call 事件：仍以 lastOutcome 展示等待态', () => withRuntimeStatus(async (ctx) => {
     const payload = suspendedFinishPayload();
     payload.runtime.updatedAt = Date.now() - 30000;
     payload.runtime.stageStartedAt = payload.runtime.updatedAt;
@@ -199,21 +214,24 @@ describe('挂起等待：对话区指示块（ADR-0019）', () => {
     ctx.run(`updateNotificationStatus(${JSON.stringify(payload)})`);
     assert.equal(ctx.run('_lastRenderedNotificationRuntime?.suspended'), true);
     assert.ok(ctx.run('buildRuntimeIndicatorContent(_lastRenderedNotificationRuntime)')?.main.includes('等待后台任务'));
-  });
+  }));
 
-  it('挂起落定且消息带未完成工具 step：显示等待的工具明细', () => {
-    ctx.currentMessages = [
+  it('挂起落定且消息带未完成工具 step：显示等待的工具明细', () => withRuntimeStatus(async (ctx, _mod, c) => {
+    // 消息存储是 session-view-storage owner（runtime-status 具名 import）：
+    // 经真实 setter 写入，供 getPendingToolCallsFromMessages 读同一份状态。
+    const sessionViewStorage = await c.load('public/src/modules/session-view-storage.js');
+    sessionViewStorage.setCurrentMessages([
       { role: 'user', content: '跑一下测试' },
       { role: 'assistant', toolCalls: [{ id: 'tc-1', name: 'bash', arguments: { command: 'npm test' } }] },
-    ];
+    ]);
     ctx.run(`updateNotificationStatus(${JSON.stringify(suspendedFinishPayload())})`);
     const content = ctx.run('buildRuntimeIndicatorContent(_lastRenderedNotificationRuntime)');
     assert.ok(content.main.includes('等待 1 个后台任务'), `主行含等待数量: ${content.main}`);
     assert.ok(content.details.some((d) => d.includes('bash') && d.includes('npm test')),
       `明细含工具名与参数摘要: ${JSON.stringify(content.details)}`);
-  });
+  }));
 
-  it('真完成落定：指示块不显示等待态（无回归）', () => {
+  it('真完成落定：指示块不显示等待态（无回归）', () => withRuntimeStatus(async (ctx) => {
     ctx.run(`updateNotificationStatus(${JSON.stringify(completedFinishPayload())})`);
     const rt = ctx.run('_lastRenderedNotificationRuntime');
     // 完成摘要窗口（800ms 内）数据源可能短暂存活（上栏"已完成"），但指示块
@@ -228,9 +246,9 @@ describe('挂起等待：对话区指示块（ADR-0019）', () => {
     stale.runtime.updatedAt = Date.now() - 2000;
     ctx.run(`updateNotificationStatus(${JSON.stringify(stale)})`);
     assert.equal(ctx.run('_lastRenderedNotificationRuntime'), null, '摘要窗口外清空');
-  });
+  }));
 
-  it('唤醒轮 call.start：挂起等待立即终止，指示块切换为运行态', () => {
+  it('唤醒轮 call.start：挂起等待立即终止，指示块切换为运行态', () => withRuntimeStatus(async (ctx) => {
     ctx.run(`updateNotificationStatus(${JSON.stringify(suspendedFinishPayload())})`);
     assert.ok(ctx.run('_lastRenderedNotificationRuntime'), '先处于挂起等待态');
     ctx.run(`updateNotificationStatus(${JSON.stringify(wakeStartPayload())})`);
@@ -241,17 +259,17 @@ describe('挂起等待：对话区指示块（ADR-0019）', () => {
     const content = ctx.run('buildRuntimeIndicatorContent(_lastRenderedNotificationRuntime)');
     assert.ok(content.main.includes('等待响应'), `显示运行等待态: ${content.main}`);
     assert.ok(!content.main.includes('等待后台任务'), '等待后台任务文案不跨入运行轮');
-  });
+  }));
 
-  it('唤醒轮聚合边沿（call.start + 快照 callActive=false + 挂起残留）：数据源清空', () => {
+  it('唤醒轮聚合边沿（call.start + 快照 callActive=false + 挂起残留）：数据源清空', () => withRuntimeStatus(async (ctx) => {
     ctx.run(`updateNotificationStatus(${JSON.stringify(suspendedFinishPayload())})`);
     assert.ok(ctx.run('_lastRenderedNotificationRuntime'), '先处于挂起等待态');
     ctx.run(`updateNotificationStatus(${JSON.stringify(wakeStartCoalescedPayload())})`);
     assert.equal(ctx.run('_lastRenderedNotificationRuntime'), null,
       '挂起残留数据源终止，等待后台任务文案不跨入运行轮');
-  });
+  }));
 
-  it('正常运行轮首轮：call.start 后等待指示立即可见（回归）', () => {
+  it('正常运行轮首轮：call.start 后等待指示立即可见（回归）', () => withRuntimeStatus(async (ctx) => {
     // 用户输入触发的第一个事件就是 call.start：此前实现无条件清空数据源，
     // 指示块要等首个 llm.char_count 才恢复，首轮"等待响应…"消失
     ctx.run(`updateNotificationStatus(${JSON.stringify(normalStartPayload())})`);
@@ -261,9 +279,9 @@ describe('挂起等待：对话区指示块（ADR-0019）', () => {
     assert.equal(rt.suspended, false);
     const content = ctx.run('buildRuntimeIndicatorContent(_lastRenderedNotificationRuntime)');
     assert.ok(content.main.includes('等待响应'), `首轮显示等待响应: ${content.main}`);
-  });
+  }));
 
-  it('上一 call 真完成后新 call.start：等待指示随新一轮立即显示', () => {
+  it('上一 call 真完成后新 call.start：等待指示随新一轮立即显示', () => withRuntimeStatus(async (ctx) => {
     const staleFinish = completedFinishPayload();
     staleFinish.runtime.updatedAt = Date.now() - 2000;
     ctx.run(`updateNotificationStatus(${JSON.stringify(staleFinish)})`);
@@ -273,22 +291,22 @@ describe('挂起等待：对话区指示块（ADR-0019）', () => {
     assert.ok(rt, '新 call 首轮数据源立即建立');
     assert.equal(rt.stage, 'awaiting_runtime');
     assert.ok(ctx.run('buildRuntimeIndicatorContent(_lastRenderedNotificationRuntime)').main.includes('等待响应'));
-  });
+  }));
 
-  it('唤醒轮表达性帧（lastOutcome 残留旧挂起值）：suspended 不误置位', () => {
+  it('唤醒轮表达性帧（lastOutcome 残留旧挂起值）：suspended 不误置位', () => withRuntimeStatus(async (ctx) => {
     ctx.run(`updateNotificationStatus(${JSON.stringify(wakeCharCountPayload())})`);
     const rt = ctx.run('_lastRenderedNotificationRuntime');
     assert.ok(rt, '运行中数据源存在');
     assert.equal(rt.suspended, false, 'calling 豁免：运行轮不显示挂起态');
     const content = ctx.run('buildRuntimeIndicatorContent(_lastRenderedNotificationRuntime)');
     assert.ok(content.main.includes('思考'), `显示运行态而非等待态: ${content.main}`);
-  });
+  }));
 
-  it('唤醒轮收尾窗口（stage=completed + callActive）：suspended 不误置位', () => {
+  it('唤醒轮收尾窗口（stage=completed + callActive）：suspended 不误置位', () => withRuntimeStatus(async (ctx) => {
     ctx.run(`updateNotificationStatus(${JSON.stringify(wakeLlmCompletePayload())})`);
     const rt = ctx.run('_lastRenderedNotificationRuntime');
     assert.ok(rt, '收尾窗口数据源存在');
     assert.equal(rt.stage, 'completed', 'llm.complete 无 pending → stage 收尾为 completed');
     assert.equal(rt.suspended, false, 'calling 豁免覆盖收尾窗口（worker 不清 lastOutcome）');
-  });
+  }));
 });

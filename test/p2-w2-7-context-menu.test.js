@@ -169,6 +169,23 @@ function fillMissingGlobals(sandbox, stubs) {
  */
 function installClassicHosts(sandbox, calls) {
   sandbox.AgentLoaderHost = { loadedAgentDetailIds: new Set() };
+  // call 状态引擎的两个桥键（生产由 modules/agent-call-states-engine.js 注册）与
+  // 侧栏渲染的协作面：本夹具的裁剪链不装引擎。
+  sandbox.collectActiveCallRuntimeIds = () => [];
+  sandbox.refreshAgentCallStates = async () => {};
+  sandbox.normalizeAgentIdentity = (value) => String(value || '').trim();
+  sandbox.getVisibleRemoteEntries = () => [];
+  sandbox.getParentAgentId = (agent) => agent?.parent_id || null;
+  sandbox.getActiveSessionId = (agent) => agent?.active_workspace_session_id || null;
+  sandbox.getLogicalAgentId = (agent) => agent?.parent_id || agent?.id || null;
+  sandbox.getWorkspaceSessions = (agent) => agent?.workspace_sessions?.sessions || [];
+  sandbox.getPathLeaf = (value) => String(value || '').split('/').pop();
+  sandbox.groupConnectedAgents = (agents) => ({ external: Array.isArray(agents) ? agents : [], groups: [] });
+  sandbox.updateCurrentAgentChrome = () => {};
+  sandbox.isAgentActive = () => false;
+  sandbox.isRuntimeItemActive = () => false;
+  sandbox.ClawSidebarLayout = { load: async () => {}, signature: () => '', isInteracting: () => false, render() {} };
+  sandbox.renderFeaturePanel = () => {};
   sandbox.createAgentCallStatesHost = () => ({
     calling: new Map(), suspended: new Set(), interrupting: new Set(),
   });
@@ -291,6 +308,8 @@ function installClassicHosts(sandbox, calls) {
   const realInvoke = sandbox.invoke;
   sandbox.invoke = async (command, payload) => {
     calls.push({ fn: 'invoke', command, payload });
+    // 连线快照查询：真实 loadAgents（P4 T2 起由 ESM 装载器宿主驱动）要求数组形态。
+    if (command === 'get_connected_agents') return [];
     return { runtime_session_id: 'rt-next', realInvokeUsed: typeof realInvoke === 'function' };
   };
   // window.* 记录器（ESM 侧以 window.X 晚绑定取用）
@@ -541,6 +560,16 @@ test('classic 桥调用打开 agent 菜单：三态可见性与几何落在真�
 
 /* ── 3. 真实动作：restart / stop ─────────────────────────────────── */
 
+/** 轮询等待条件成立（CPU 竞争下的确定性收敛；超时仍按失败处理）。 */
+async function waitFor(predicate, { timeout = 1000, interval = 2 } = {}) {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    if (predicate()) return true;
+    await new Promise((resolve) => setTimeout(resolve, interval));
+  }
+  return predicate();
+}
+
 test('restart / stop 动作：invoke 载荷、菜单收尾、侧栏抑制复位与切换请求', async () => {
   await withMenuCase(async (c, { dom, calls }) => {
     const { store, contextUi, sidebarUi, orch } = await loadMenu(c);
@@ -555,7 +584,7 @@ test('restart / stop 动作：invoke 载荷、菜单收尾、侧栏抑制复位�
     const epochBefore = orch._navigationGuardEpoch;
 
     fire(menuEl(dom, 'restart-agent-action'), 'click', {});
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    await waitFor(() => calls.some((call) => call.fn === 'switchAgent'));
 
     const invokeCall = calls.find((call) => call.fn === 'invoke');
     assert.deepEqual(invokeCall.payload, { agentId: 'rt-child', sessionId: 'sess-9' }, 'child-runtime 重启必须带宿主寻址与会话');
@@ -577,7 +606,7 @@ test('restart / stop 动作：invoke 载荷、菜单收尾、侧栏抑制复位�
     contextUi.contextMenuAgentId = 'rt-child';
     contextUi.contextMenuAgentMode = 'prebuilt-runtime';
     fire(menuEl(dom, 'stop-agent-action'), 'click', {});
-    await new Promise((resolve) => setTimeout(resolve, 5));
+    await waitFor(() => calls.some((call) => call.fn === 'invoke'));
     const stopCall = calls.find((call) => call.fn === 'invoke');
     assert.equal(stopCall.command, 'stop_agent');
     assert.deepEqual(stopCall.payload, { agentId: 'rt-child' });
@@ -708,9 +737,14 @@ test('删除动作：agent 只删断连条目、feature 走仓库端点、projec
     contextUi.contextMenuAgentMode = 'delete-only';
     fire(menuEl(dom, 'delete-agent-action'), 'click', {});
     await new Promise((resolve) => setTimeout(resolve, 5));
+    // 删除后走真实 loadAgents 重投影侧栏（P4 T2 起由 ESM 装载器宿主驱动）：
+    // DELETE 之外只允许 viewer 快照刷新，别的请求一律不该出现。
     assert.deepEqual(
       fetchCalls.map((call) => ({ method: call.method, url: call.url })),
-      [{ method: 'DELETE', url: '/api/agents/orphan' }],
+      [
+        { method: 'DELETE', url: '/api/agents/orphan' },
+        { method: 'GET', url: '/api/agents' },
+      ],
     );
 
     // feature：确认 → POST feature_repository/delete，收尾关菜单并重渲主视图
@@ -868,6 +902,9 @@ test('文档级事件：outside click 关闭四类菜单，#ctx-menu 条目 clic
 test('窗口级事件：resize 钳制右栏宽度并重定位 rail、scroll(capture) 关闭菜单', async () => {
   await withMenuCase(async (c, { dom, calls, windowListeners }) => {
     const { layout } = await loadMenu(c);
+    // 模块相的环境计时器（runtime-status 的 200ms 通知时钟在求值时启动，与 classic
+    // 加载期同义）不属于本用例的异步尾巴：只断言本用例动作没有新增残留。
+    const ambientTimers = c.timerCount();
     layout.setFeaturePanelWidth(900);
     menuEl(dom, 'feature-panel').classList.add('open');
 
@@ -897,7 +934,7 @@ test('窗口级事件：resize 钳制右栏宽度并重定位 rail、scroll(capt
       assert.equal(isOpen(dom, id), false, `${id} 应在滚动时关闭`);
     }
     await new Promise((resolve) => setTimeout(resolve, 2));
-    assert.equal(c.timerCount(), 0, 'RAF 由用例记账，收尾不得残留计时器');
+    assert.equal(c.timerCount(), ambientTimers, 'RAF 由用例记账，收尾不得残留计时器');
   });
 });
 

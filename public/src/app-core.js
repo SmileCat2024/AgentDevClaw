@@ -1192,9 +1192,9 @@ function createP2BootstrapChatSurfaceHost() {
  * 消费方：runtime-status / persistent-input / sidebar-render / app-main /
  * input-helpers / voice-input / generative-ui-panel / remote-connections /
  * sse-client / auto-title / desktop-notify / todo-plan / app-ui。
- * 注：_agentCallActive / _recentlyFinishedRuntimes 另经
- * createAgentCallStatesHost（sidebar-render）供 app-main 的 classic 同步引擎使用
- * （agent-call-states ESM host 只做 late-bound 转发），同一容器，不构成双存储。
+ * 注：_agentCallActive / _recentlyFinishedRuntimes / _interruptSuppression 另经
+ * createAgentCallStatesHost（sidebar-render）交给 agent-call-states-engine（模块相
+ * 唯一实例），同一容器，不构成双存储。
  */
 function createP2BootstrapCallActivityHost() {
   return Object.freeze({
@@ -1202,6 +1202,11 @@ function createP2BootstrapCallActivityHost() {
     _recentlyFinishedRuntimes,   // 只读引用：Set 变异走既有方法
     _seenChoiceAlertIds,         // 只读引用
     _autoTitleTriggered,         // 只读引用
+    // B5（P4 T2 收尾批次）：sidebar-render 的 `createAgentCallStatesHost()` 按引用
+    // 交出给 call 状态引擎（`interrupting.delete(key)` 清理孤儿键）；与
+    // call-interrupt 引擎手里的 `createCallInterruptHost().pending` 是同一容器，
+    // 不构成第二份状态。
+    _interruptSuppression,       // 只读引用：Map 变异走既有方法
     get _lastInterruptUserActionAt() { return _lastInterruptUserActionAt; },
     set _lastInterruptUserActionAt(value) { _lastInterruptUserActionAt = value; },
   });
@@ -1291,14 +1296,19 @@ function createP2BootstrapAssemblyHost() {
 }
 
 /**
- * 侧栏交互态：重启中的 runtime 集合（const Set，按引用交出）与菜单期间抑制
- * 全量重建标志。消费方：ctx-menu-handlers / ctx-menu-items / app-main /
- * sidebar-render。渲染签名（lastAgentListRenderSignature）在 sidebar-render.js
+ * 侧栏交互态：重启中的 runtime 集合、待启动 prebuilt 集合（均 const Set，按引用
+ * 交出）与菜单期间抑制全量重建标志。消费方：ctx-menu-handlers / ctx-menu-items /
+ * app-main；sidebar-render（ESM）经 modules/p2-bootstrap-sidebar.js 的 sidebarUi
+ * 取用（渲染签名仍在 sidebar-render 自己的 host 里）。渲染签名（lastAgentListRenderSignature）在 sidebar-render.js
  * 自己的 host 里，见 createP2BootstrapSidebarRenderHost。
  */
 function createP2BootstrapSidebarHost() {
   return Object.freeze({
     restartingRuntimeIds,        // 只读引用：Set 变异走既有方法
+    // B6（P4 T2 收尾批次）：待启动的 prebuilt 条目集合。sidebar-render 的
+    // `renderAgentItems`（`has()`）与渲染签名（`Array.from()`）需要它的 read-only
+    // 引用；写方仍是 app-main 的 workspace 宿主面（markPending / clearPending）。
+    pendingPrebuiltAgentIds,     // 只读引用：Set 变异走既有方法
     get suppressSidebarRerender() { return suppressSidebarRerender; },
     set suppressSidebarRerender(value) { suppressSidebarRerender = value; },
   });

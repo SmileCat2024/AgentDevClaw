@@ -75,13 +75,13 @@ function withCallStateSandbox({ catalogResponses, notifications = {}, agents = [
 
   return withP2EsmCase({
     classic: (sandbox) => {
-      // 真实 classic owner：prepareClassicSandbox 装载 app-core/runtime-status/
-      // sidebar-render/app-main，app-main IIFE 创建唯一引擎；本文件只补 remote
-      // 目录实现与下游渲染 sink。
+      // 真实 classic owner：prepareClassicSandbox 装载 app-core/app-main 的宿主面，
+      // 侧栏域（runtime-status / sidebar-render / call 状态引擎）由它登记、在
+      // classic 之后进模块相；`_agentSuspended` 是 runtime-status 的模块私有容器，
+      // 经 `__esmDomain` 取同一 Map 引用。
       prepareClassicSandbox(sandbox);
       agentCallActive = sandbox.run('_agentCallActive');
-      sandbox.run('_agentCallActive.clear(); _agentSuspended.clear(); _interruptSuppression.clear(); _recentlyFinishedRuntimes.clear();');
-      sandbox.renderAgentList = () => { renderCalls.push(agentCallActive.size); };
+      sandbox.run('_agentCallActive.clear(); _interruptSuppression.clear(); _recentlyFinishedRuntimes.clear();');
       sandbox.allAgents = agents;
       sandbox.currentRuntimeAgentId = null;
       sandbox._syncPersistentActionButton = () => {};
@@ -103,6 +103,8 @@ function withCallStateSandbox({ catalogResponses, notifications = {}, agents = [
       },
     },
   }, async (c) => {
+    // 侧栏域就位后清一次挂起容器（runtime-status 的模块私有 Map，同一引用）。
+    c.window.__esmDomain.runtimeStatus._agentSuspended.clear();
     const rc = await c.load(REMOTE_CONNECTIONS);
     return fn({
       ctx: c,

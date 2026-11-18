@@ -17,6 +17,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
+import { prepareSidebarDomain } from './p2-classic-hosts.js';
 
 const TOOL_PROGRESS = 'public/src/modules/tool-progress.js';
 const CALL_INTERRUPT_HOST = 'public/src/modules/call-interrupt-host.js';
@@ -158,7 +159,7 @@ async function withRuntimeState(fn) {
       sandbox.loadSource('public/src/modules/action-dispatcher.js');
       sandbox.loadSource('public/src/app-core.js');
       sandbox.loadSource('public/src/modules/session-view-state.js');
-      sandbox.loadSource('public/src/modules/runtime-status.js');
+      prepareSidebarDomain(sandbox);
       // persistent-input 已迁 ESM（P4 输入面批次）：用例体里 c.load，胶囊计时器与
       // resetCallElapsedForSwitch 桥键随其模块相注册。
     },

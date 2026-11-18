@@ -52,6 +52,8 @@ const LOAD_TIME_DOM_ELEMENT_IDS = [
   'trim-page-summary-toggle', 'trim-page-keep-skill-control', 'trim-page-keep-skill-toggle',
   'trim-page-keep-skill-value', 'trim-page-keep-skill-dec', 'trim-page-keep-skill-inc',
   'branch-dialog', 'branch-round-list', 'branch-submit', 'branch-footer-info',
+  // P4 T2 收尾批次：sidebar-render 迁 ESM 后在模块求值期给侧栏容器装委托。
+  'agent-list', 'external-agent-list', 'external-group', 'external-count', 'current-agent-name',
 ];
 const LOAD_TIME_DOM_ELEMENTS = new Map();
 
@@ -221,7 +223,18 @@ before(async () => {
       createP2BootstrapSidebarHost: () => ({}),
       createP2BootstrapSidebarRenderHost: () => ({}),
       createP2BootstrapSessionSwitchHost: () => ({}),
-      createP2BootstrapDomHost: () => ({}),
+      // 侧栏渲染的 classic 协作面（owner: app-main；本文件不装 app-main）：
+      // 渲染落地经 ClawSidebarLayout（下面按调用次数记账）。
+      groupConnectedAgents: (agents) => ({ external: Array.isArray(agents) ? agents : [], groups: [] }),
+      updateCurrentAgentChrome: () => {},
+      createP2BootstrapDomHost: () => ({
+        container: LOAD_TIME_DOM_ELEMENTS.get('chat-container') || createElementStub(),
+        agentList: LOAD_TIME_DOM_ELEMENTS.get('agent-list') || createElementStub(),
+        externalAgentList: LOAD_TIME_DOM_ELEMENTS.get('external-agent-list') || createElementStub(),
+        externalGroup: LOAD_TIME_DOM_ELEMENTS.get('external-group') || createElementStub(),
+        externalCount: LOAD_TIME_DOM_ELEMENTS.get('external-count') || createElementStub(),
+        currentAgentTitle: LOAD_TIME_DOM_ELEMENTS.get('current-agent-name') || createElementStub(),
+      }),
       createPollCoordinatorHost: () => ({}),
       createSessionDataLoaderHost: () => ({}),
       createRuntimeStatusLoaderHost: () => ({}),
@@ -383,26 +396,37 @@ before(async () => {
   if (!win.AgentLoaderHost) win.AgentLoaderHost = { loadedAgentDetailIds: new Set() };
 
 
-  // 真实 classic 同步 owner，装进**同一个 window**（沙箱即 window）：
-  //   app-core.js  → call-interrupt 四个桥键（真实 `_interruptSuppression`）
-  //   app-main.js  → agent-call-states 引擎（装载期组合上面的 callStatesHost seam）
-  // boot 体挂在临时的不 resolve 的 __clawAuthReady 上，装载后恢复本文件的
-  // authReady（sse-client 的建连闸仍是本测试控制的那一个）。
+  // 真实 classic 同步 owner + 引擎域，装进**同一个 window**（沙箱即 window）：
+  //   app-core.js → call-interrupt 四个桥键（真实 `_interruptSuppression`）
+  //   runtime-status / sidebar-render / agent-call-states-engine（P4 T2 尾批迁出
+  //   classic 的侧栏渲染域与 call 状态引擎；引擎实例原在 app-main 顶层 IIFE）
   const authReadyForSse = win.__clawAuthReady;
   win.__clawAuthReady = new Promise(() => {});
   if (typeof win.applyTheme !== 'function') win.applyTheme = () => {};
   if (typeof win.applyLanguage !== 'function') win.applyLanguage = () => {};
   loadClassicSource('public/src/app-core.js');
-  // app-core 的函数声明覆盖了本文件声明的宿主 seam：先恢复，再装 app-main，
-  // 保证引擎拿到的就是 callStatesHost（容器/观测点与本文件断言一致）。
+  // app-core 的函数声明覆盖了本文件声明的宿主 seam：先恢复（引擎域与 ESM 图都读
+  // 这些 seam），再装引擎域。
   Object.assign(win, windowSeams, HOST_SEAMS);
   win.AgentLoaderHost = win.AgentLoaderHost || { loadedAgentDetailIds: new Set() };
-  win.__clawAuthReady = new Promise(() => {});   // windowSeams 里是 authReady，重新门控
-  loadClassicSource('public/src/app-main.js');
+  // 侧栏渲染域的布局面（app-ui 的 ClawSidebarLayout）：渲染次数观测点。
+  win.ClawSidebarLayout = { load: async () => {}, signature: () => '', isInteracting: () => false,
+    render: () => { calls.renders.push(1); } };
+  // 引擎域（同一 window 的模块实例）。用**规范 URL** 装载：本文件后续对 sse-client
+  // 等模块的 import 会经静态边再次触达这几个文件，带 query 会得到第二份实例并撞
+  // 「桥键唯一注册制」。
+  await import('../public/src/modules/runtime-status.js');
+  await import('../public/src/modules/sidebar-render.js');
+  await import('../public/src/modules/agent-call-states-engine.js');
+  // 观测面（经桥键 setter 覆盖实现，等价于旧 windowSeams 里同名 stub 的意图）：
+  // 本文件断言的是「帧 → 调用面」的接线，通知渲染细节在 frontend-runtime-status
+  // 与 frontend-sse-client 各自的用例里验。
+  win.updateNotificationStatus = (payload, runtimeId, token) => {
+    calls.updateNotificationStatus.push({ payload, runtimeId, token });
+  };
+  win._markAgentCallStartedForNotify = (id) => { calls.markStarted.push(id); };
+  win._syncPersistentActionButton = () => { calls.syncActionButton += 1; };
   win.__clawAuthReady = authReadyForSse;
-  // app-main 又声明了一批同名工厂：ESM 图仍使用本文件声明的精确 seam。
-  Object.assign(win, windowSeams, HOST_SEAMS);
-  win.AgentLoaderHost = win.AgentLoaderHost || { loadedAgentDetailIds: new Set() };
   // 场景值写回（app-core 注册桥键时用的是默认初值）。
   win.currentRuntimeAgentId = 'rt-focus';
   win.currentLanguage = 'zh';

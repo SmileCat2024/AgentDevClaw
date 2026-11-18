@@ -16,6 +16,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
+import { prepareSidebarDomain } from './p2-classic-hosts.js';
 
 const READONLY_VIEW = 'public/src/modules/session-readonly-view.js';
 const TOAST_NOTIFY = 'public/src/modules/toast-notify.js';
@@ -72,8 +73,7 @@ async function withReadonlyView({ payload = recordPayload(), threads = [], loadM
       // app-main 的 classic 同步引擎在装载期组合 sidebar-render 的
       // createAgentCallStatesHost（读 runtime-status 的 _agentSuspended）：
       // 按生产先行脚本序装真链，随后再覆盖本用例关心的宿主 stub。
-      sandbox.loadSource('public/src/modules/runtime-status.js');
-      sandbox.loadSource('public/src/modules/sidebar-render.js');
+      prepareSidebarDomain(sandbox);
       // 宿主注入：只读模块读取的 classic 依赖面（渲染入口、加载占位、
       // 导航守卫、视口缓存、工具模板）。断言只关心只读逻辑本身。
       sandbox.getCurrentHostAgentRecord = () => ({ id: 'programming-helper', source: 'prebuilt' });

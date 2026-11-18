@@ -29,7 +29,7 @@ import { describe, it as nodeIt } from 'node:test';
 import assert from 'node:assert/strict';
 import { deepEqual as deepLoose } from 'node:assert';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
-import { installForegroundSyncOwner } from './p2-classic-hosts.js';
+import { installForegroundSyncOwner, prepareSidebarDomain } from './p2-classic-hosts.js';
 
 const OPS = 'public/src/modules/sidebar-operations.js';
 const MUTATION = 'public/src/modules/session-mutation.js';
@@ -258,8 +258,7 @@ function bootstrapClassic(sandbox, fixture) {
   // 引擎（app-main）在装载期组合 sidebar-render 的**真实**
   // createAgentCallStatesHost（读 runtime-status 的 _agentSuspended）：按生产
   // 先行脚本序装真链，不复制宿主实现。
-  sandbox.loadSource('public/src/modules/runtime-status.js');
-  sandbox.loadSource('public/src/modules/sidebar-render.js');
+  prepareSidebarDomain(sandbox);
   sandbox.loadSource('public/src/modules/session-view-state.js');
   // runtime-status 的切换重置会经该视口守卫（owner: chat-viewport）：本图不驱动
   // 视口，按宿主缝合上皮。

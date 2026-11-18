@@ -432,7 +432,11 @@
   <script src="./src/modules/session-view-state.js"></script>
   <!-- sidebar-layout 已迁 ESM（P4 T2）：classic 标签删除，由 p4-entry 装载；
        对外 API 仍是 window.ClawSidebarLayout 桥键。 -->
-  <script src="./src/modules/sidebar-render.js"></script>
+  <!-- sidebar-render 已迁 ESM（P4 T2 收尾批次）：classic 标签删除，由 p4-entry
+       装载（经 kernel-entry → agent-snapshot-loader-host 的宿主工厂 import）。
+       7 个桥键（renderAgentList / renderAgentGroup / renderAgentItems /
+       getAgentIconHtml / getAgentListRenderSignature / waitForPrebuiltRuntimeSession /
+       waitForTargetRuntimeSession）供 classic 与 window 晚绑定的消费方取用。 -->
    <script type="module" src="./src/modules/toast-notify.js"></script>
   <script src="./src/modules/dispatch-ui.js"></script>
   <script src="./src/modules/dispatch-actions.js"></script>
@@ -506,7 +510,10 @@
   <!-- ↓↓↓ Phase B: 中风险子系统 ↓↓↓ -->
   <!-- chat-scroll 已迁 ESM（P4 T2）：classic 标签删除，由 p4-entry 装载；
        container 引用按模块相等价重建查询（dom-refs 域落地后改 import）。 -->
-  <script src="./src/modules/runtime-status.js"></script>
+  <!-- runtime-status 已迁 ESM（P4 T2 收尾批次）：classic 标签删除，由 p4-entry
+       装载（B4 解除于 sidebar-render + agent-call-states-engine 同批迁移）。
+       函数键桥为 runtime-status-api 域，状态键仍由 p2-w2-2-runtime-status-owner
+       claim（runtime-status 域）。 -->
   <!-- input-helpers 已迁 ESM（P4 T2）：classic 标签删除，由 p4-entry 装载；
        桥键 updateChatProcessToggle ← app-ui 首屏分支。 -->
   <!-- input-render 已迁 ESM（P4 T2）：classic 标签删除，由 p4-entry 装载；

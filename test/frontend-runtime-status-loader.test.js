@@ -53,12 +53,14 @@ test('runtime status host gates unsupported guards and rejects responses parsed 
       sandbox.getLogicalAgentId = (record) => record.agentId;
       sandbox.getActiveSessionId = (record) => record.sessionId;
       sandbox.getRuntimeRecord = () => runtime;
-      // 两条副作用观察面（生产由 runtime-status / context-guard 的 classic 实现写回
-      // DOM 与状态）：本用例只记录调用实参，故在真实链之后覆盖。
-      sandbox.applyContextGuardStatus = (data, id) => effects.push(['guard', data, id]);
-      sandbox.updateNotificationStatus = (data, id) => effects.push(['notification', data, id]);
+      // 两条副作用观察面在 runtime-status（P4 T2 起 ESM）的桥键之后改写：见用例体
+      // 首段的 bridge setter 覆盖（classic 相的同名赋值会被访问器顶掉）。
     },
   }, async (c) => {
+    // 两条副作用观察面（生产由 runtime-status 写回 DOM 与状态）：本用例只记录调用
+    // 实参。经桥键 setter 覆盖，语义与 classic 顶层赋值一致。
+    c.window.applyContextGuardStatus = (data, id) => effects.push(['guard', data, id]);
+    c.window.updateNotificationStatus = (data, id) => effects.push(['notification', data, id]);
     c.read(`
       currentRuntimeAgentId = 'rt';
       focusedAgentId = 'host';

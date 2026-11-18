@@ -31,6 +31,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
+import { prepareSidebarDomain } from './p2-classic-hosts.js';
 
 const DATA_ROOT = mkdtempSync(join(tmpdir(), 'claw-ph-fe-projection-'));
 process.env.AGENTDEV_DATA_DIR = DATA_ROOT;
@@ -65,8 +66,6 @@ const CLASSIC_STACK = [
   'public/src/modules/right-panel-registry.js',
   'public/src/app-core.js',
   'public/src/modules/session-view-state.js',
-  'public/src/modules/runtime-status.js',
-  'public/src/modules/sidebar-render.js',
   'public/src/app-ui.js',
   'public/src/app-main.js',
 ];
@@ -216,6 +215,7 @@ async function withFrontend({ realSidebarRenderer = false, onSidebarClickListene
       const realGetElementById = sandbox.document.getElementById.bind(sandbox.document);
       sandbox.document.getElementById = (id) => (id === 'agent-list' ? agentListStub : realGetElementById(id));
       for (const file of CLASSIC_STACK) sandbox.loadSource(file);
+      prepareSidebarDomain(sandbox);
       // 轮询协调器宿主（classic app-main 工厂）：ESM 图经 agent-data-loader →
       // input-actions 触达 poll-coordinator-host，后者在模块求值期取该工厂。
       sandbox.createPollCoordinatorHost = () => ({

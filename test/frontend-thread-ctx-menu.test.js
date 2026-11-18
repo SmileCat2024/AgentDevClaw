@@ -13,6 +13,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { marked } from 'marked';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
+import { prepareSidebarDomain } from './p2-classic-hosts.js';
 
 /** 真实壳层 bootstrap（桥初值、宿主工厂与首屏同步面来源）。 */
 const CLASSIC_STACK = [
@@ -21,8 +22,6 @@ const CLASSIC_STACK = [
   'public/src/modules/right-panel-registry.js',
   'public/src/app-core.js',
   'public/src/modules/session-view-state.js',
-  'public/src/modules/runtime-status.js',
-  'public/src/modules/sidebar-render.js',
   'public/src/app-ui.js',
   'public/src/app-main.js',
 ];
@@ -43,6 +42,7 @@ async function withMenuCase({ threads = {}, language = 'zh' } = {}, fn) {
         applyTheme = () => {};
       `);
       for (const file of CLASSIC_STACK) sandbox.loadSource(file);
+      prepareSidebarDomain(sandbox);
       // 夹具镜像 metadata 声明（ADR-0049）：PH 声明 sessionOps（统一对话菜单）；
       // coder 不声明（线程语义菜单）。
       sandbox.allAgents = [{ id: 'programming-helper', sessionOps: true }];

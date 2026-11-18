@@ -17,7 +17,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
-import { installForegroundSyncOwner } from './p2-classic-hosts.js';
+import { installForegroundSyncOwner, prepareSidebarDomain } from './p2-classic-hosts.js';
 
 const CATALOG = {
   connections: [{
@@ -331,7 +331,9 @@ describe('remote session history merge (R2-01)', () => {
         `window.runWorkspaceAction(JSON.stringify({ type: 'open_session', sessionId: 'remote:server-a:session-hist-1' }))`,
       );
       // 切换收尾的侧栏刷新是 fire-and-forget（switchAgent 内部不 await），先让
-      // 这一跳落定，控制台契约才是在核对完整日志而不是半份。
+      // 这一跳落定，控制台契约才是在核对完整日志而不是半份。P4 T2 起侧栏渲染是
+      // sidebar-render 的模块实现，那一跳会跑真实 loadAgents，并报出「本世界没有
+      // 运行中 runtime」的登记降级诊断。
       await new Promise((resolve) => setTimeout(resolve, 0));
       // 成功路径：只允许登记过的一条降级诊断（本世界没有运行中 runtime，
       // 真实切换收尾的侧栏刷新会报空连接快照），其余任何告警/错误——含全部
@@ -547,9 +549,7 @@ function createBranchDialogDom() {
 const CLASSIC_BOOTSTRAP = [
   'public/src/modules/action-dispatcher.js',
   'public/src/app-core.js',
-  'public/src/modules/runtime-status.js',
   'public/src/modules/session-view-state.js',
-  'public/src/modules/sidebar-render.js',
 ];
 
 function installSeamFactories(sandbox, hooks = {}) {
@@ -632,13 +632,16 @@ function loadClassicBootstrap(sandbox, hooks) {
   // 会调它）。宿主环境缺失不是被测契约，按浏览器能力补齐。
   sandbox.performance = { now: () => Date.now() };
   for (const file of CLASSIC_BOOTSTRAP) sandbox.loadSource(file);
+  prepareSidebarDomain(sandbox);
   // app-main 的 classic 同步引擎（唯一 owner）：登记 sidebar-render 轮询/裁剪
   // 路径消费的两个桥键；boot 体挂在永不 resolve 的 __clawAuthReady 上。
   installForegroundSyncOwner(sandbox);
   installSeamFactories(sandbox, hooks);
-  // 渲染副作用不在本文件断言面内（旧 vm 沙箱同样以空实现覆盖 renderAgentList）：
-  // 远程目录刷新会触发侧栏整表重绘，这里只关心它不抛错、不干扰数据层。
-  sandbox.renderAgentList = () => {};
+  // 渲染副作用不在本文件断言面内：远程目录刷新会触发侧栏整表重绘。P4 T2 起
+  // renderAgentList 是 sidebar-render 的模块实现（桥键 setter 也能覆盖它，
+  // 但装载是异步的、这一步早于模块求值），因此按布局接口给最小面，让真实重绘
+  // 只做投影、不触碰 DOM。
+  sandbox.ClawSidebarLayout = { load: async () => {}, signature: () => '', isInteracting: () => false, render() {} };
   sandbox.renderCurrentMainView = () => {};
   // 右栏渲染入口（owner: classic app-ui，本链不加载）：真实 loadAgents 收尾会
   // 调 renderFeaturePanel，缺键会在刷新链上抛 ReferenceError。

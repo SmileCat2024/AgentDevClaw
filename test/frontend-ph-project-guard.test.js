@@ -26,6 +26,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
+import { ensureSidebarRenderHostSeam } from './p2-classic-hosts.js';
 
 const PROJECT_DATA = 'public/src/modules/project-data.js';
 const PH_PROJECT_ACTIONS = 'public/src/modules/ph-project-actions.js';
@@ -151,6 +152,14 @@ async function withGuard(probe) {
         createSessionViewCommitHost = () => ({ state: {} });
         createP2BootstrapSidebarRenderHost = () => ({ lastAgentListRenderSignature: '' });
       `);
+      // 侧栏渲染自 P4 T2 起在模块相：remote-connections 的目录刷新经真实
+      // `renderAgentList` 重建侧栏，classic 协作面按生产宿主面补齐（断言不落
+      // 在侧栏 DOM 上）。
+      ensureSidebarRenderHostSeam(sandbox);
+      // 高亮谓词（app-main 的 classic 函数，sidebar-render 经 window 晚绑定）。
+      // 本文件不验高亮，按「无 runtime 选中」的生产分支给最小实现。
+      sandbox.isAgentActive = () => false;
+      sandbox.isRuntimeItemActive = () => false;
     },
     globals: {
       document,

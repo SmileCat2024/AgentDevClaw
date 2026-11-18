@@ -16,7 +16,7 @@
 import assert from 'node:assert/strict';
 import { test as nodeTest } from 'node:test';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
-import { installForegroundSyncOwner } from './p2-classic-hosts.js';
+import { installForegroundSyncOwner, prepareSidebarDomain } from './p2-classic-hosts.js';
 
 const SESSION_UI = 'public/src/modules/session-ui.js';
 const OPS = 'public/src/modules/sidebar-operations.js';
@@ -34,9 +34,8 @@ function bootstrapClassic(sandbox) {
   sandbox.loadSource('public/src/modules/action-dispatcher.js');
   // i18n 已迁 ESM（P4）：t 桥键由 createFrontendSandbox 自动装载，见 test/helpers/install-i18n.js
   sandbox.loadSource('public/src/app-core.js');
-  sandbox.loadSource('public/src/modules/runtime-status.js');
+  prepareSidebarDomain(sandbox);
   sandbox.loadSource('public/src/modules/session-view-state.js');
-  sandbox.loadSource('public/src/modules/sidebar-render.js');
   // app-main 的 classic 同步引擎（唯一 owner）：在装载期组合真实 host 并注册
   // sidebar-render 轮询/裁剪路径消费的两个桥键。boot 体挂在永不 resolve 的
   // __clawAuthReady 上。

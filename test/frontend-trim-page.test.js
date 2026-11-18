@@ -123,7 +123,9 @@ function installHostFactories() {
   // classic P2 bootstrap 状态宿主（sidebar-operations / session-ui 装载期取用）：
   // 真实实现是 app-core/app-main/sidebar-render 的 Object.freeze 状态槽位，
   // 这里用可读写 bag 复刻其接口面。
-  window.createP2BootstrapSidebarHost = () => stateHost({ restartingRuntimeIds: new Set(), suppressSidebarRerender: false });
+  window.createP2BootstrapSidebarHost = () => stateHost({
+    restartingRuntimeIds: new Set(), pendingPrebuiltAgentIds: new Set(), suppressSidebarRerender: false,
+  });
   window.createP2BootstrapSidebarRenderHost = () => stateHost({ lastAgentListRenderSignature: '' });
   window.createP2BootstrapPhSessionHost = () => stateHost({ phSessionSortMode: 'default', phSearchQuery: '', _phSearchTimer: null, savedPhTabState: {} });
   // DOM 引用面：trim-page 现在 import context-menu 的 closeCompactMenu（真实实现读
@@ -136,12 +138,18 @@ function installHostFactories() {
     ctxMenu: makeElement(),
     container: makeElement(),
     agentList: makeElement(),
+    // P4 T2 收尾批次：sidebar-render 迁 ESM 后 renderAgentList 会写外部列表三件
+    // （生产 app-core 的加载期 DOM 引用）。本文件不渲染侧栏，只要求装载/失效链
+    // 可解析，按同一元素替身补齐。
+    externalAgentList: makeElement(), externalGroup: makeElement(), externalCount: makeElement(),
+    currentAgentTitle: makeElement(),
     featurePanel: makeElement(),
   });
   window.createP2BootstrapAssemblyHost = () => stateHost({});
   window.createP2BootstrapCallActivityHost = () => stateHost({
     _agentCallActive: new Map(), _recentlyFinishedRuntimes: new Set(),
-    _seenChoiceAlertIds: new Set(), _autoTitleTriggered: new Set(), _lastInterruptUserActionAt: 0,
+    _seenChoiceAlertIds: new Set(), _autoTitleTriggered: new Set(),
+    _interruptSuppression: new Map(), _lastInterruptUserActionAt: 0,
   });
   window.createP2BootstrapChatSurfaceHost = () => stateHost({});
   window.createP2BootstrapChoiceInputHost = () => stateHost({ state: {} });
@@ -372,6 +380,9 @@ const okFetch = (payload) => async () => ({ ok: true, json: async () => payload 
 function createHostStubs(calls) {
   return {
     closeCompactMenu() {},
+    // 身份/侧栏渲染面（app-core / app-ui 的全局，本裁剪链不含）：操作失效会真实
+    // 走进 sidebar-render 的渲染签名，身份归一与渲染落地不在本文件断言面。
+    normalizeAgentIdentity: (value) => String(value || '').trim(),
     fmtPct: (frac) => (frac * 100).toFixed(1) + '%', // app-core 全局的桩替身
     alert(message) { calls.alerts.push(String(message)); },
     isThreadHostAgentId: () => false,
@@ -447,9 +458,12 @@ async function createTrimPage({ fetchImpl, host = {} } = {}) {
         if (!elements.has(id)) elements.set(id, makeElement());
         return elements.get(id);
       },
-      // 真实 document 形状：action-dispatcher / markdown-utils 在加载期绑监听。
+      // 真实 document 形状：action-dispatcher / markdown-utils 在加载期绑监听；
+      // 侧栏渲染入口在失效时读 querySelector('.agent-runtime-item.editing')。
       addEventListener() {},
       removeEventListener() {},
+      querySelector: () => null,
+      querySelectorAll: () => [],
       createElement: () => makeElement(),
       body: { appendChild() {}, removeChild() {} },
       activeElement: null,
@@ -464,6 +478,15 @@ async function createTrimPage({ fetchImpl, host = {} } = {}) {
   resetHostCalls();
   chatLoading.clearChatLoadingSession();
   Object.assign(window, createHostStubs(calls), host);
+  // 侧栏布局域（app-ui）与渲染落地不在本文件断言面：操作失效会真实调用
+  // sidebar-render 的 renderAgentList，按布局接口给最小面。
+  if (typeof window.ClawSidebarLayout !== 'object' || !window.ClawSidebarLayout) {
+    window.ClawSidebarLayout = { load: async () => {}, signature: () => '', isInteracting: () => false, render() {} };
+  }
+  if (typeof window.groupConnectedAgents !== 'function') {
+    window.groupConnectedAgents = (agents) => ({ external: Array.isArray(agents) ? agents : [] });
+  }
+  if (typeof window.updateCurrentAgentChrome !== 'function') window.updateCurrentAgentChrome = () => {};
   globalThis.fetch = fetchImpl || okFetch(payloadOf(messageFixture(20)));
   agentStore.setAllAgents([]);
   orchestration.setCurrentRuntimeAgentId('');

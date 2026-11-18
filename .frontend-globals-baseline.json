@@ -327,6 +327,12 @@
       "ClawFW"
     ]
   },
+  "public/src/modules/agent-call-states-engine.js": {
+    "state": [],
+    "behavior": [
+      "ClawFW"
+    ]
+  },
   "public/src/modules/annotations.js": {
     "state": [],
     "behavior": [
@@ -684,57 +690,6 @@
       "ClawPanels"
     ]
   },
-  "public/src/modules/runtime-status.js": {
-    "state": [
-      "_agentSuspended",
-      "_contextGuardPageLoadedAt",
-      "_contextGuardToastKey",
-      "_notificationClockTimer",
-      "_runtimeStatusMemory",
-      "_threadSidebarEntries"
-    ],
-    "behavior": [
-      "applyContextGuardStatus",
-      "applyNotificationStatus",
-      "buildChildRuntimeEntry",
-      "buildRuntimeIndicatorContent",
-      "buildSyntheticRuntimeEntry",
-      "collectRuntimeEntriesForPrebuilt",
-      "ensureChatRuntimeIndicator",
-      "ensureNotificationClockTimer",
-      "formatRetryStatusLabel",
-      "formatRuntimeCompactNumber",
-      "formatRuntimeDuration",
-      "formatRuntimeDurationZh",
-      "getCompactRuntimeLabel",
-      "getDerivedStageFromState",
-      "getEffectiveRuntimeSnapshot",
-      "getNotificationActionSource",
-      "getPendingToolCallsFromMessages",
-      "getRuntimeStageClass",
-      "getRuntimeStageLabel",
-      "getRuntimeStepElapsedLabel",
-      "getRuntimeSummary",
-      "getRuntimeTimerLabel",
-      "getSidebarOperationFailureName",
-      "getSidebarOperationPendingName",
-      "isRuntimeCalling",
-      "isRuntimeSuspended",
-      "isSidebarRuntimeDisconnected",
-      "isSuspendedCallOutcome",
-      "isSuspendedNotificationPayload",
-      "normalizeNotificationRuntimeSnapshot",
-      "refreshNotificationTimerDisplay",
-      "renderRuntimeTimer",
-      "resetRuntimeStatusForSwitch",
-      "resolveNotificationCallingState",
-      "shouldShowRuntimeStatus",
-      "shouldStatusUseQueueSync",
-      "summarizeRuntimeToolNames",
-      "summarizeToolCall",
-      "updateNotificationStatus"
-    ]
-  },
   "public/src/modules/session-reference-picker.js": {
     "state": [],
     "behavior": [
@@ -761,35 +716,13 @@
     ]
   },
   "public/src/modules/sidebar-render.js": {
-    "state": [
-      "AGENT_ICONS",
-      "CONTEXT_MENU_ELEMENT_IDS",
-      "SIDEBAR_HANGING_PUNCT_RE",
-      "SIDEBAR_PIN_SVG",
-      "_collapsedProjectGroups",
-      "_sidebarRenderSuppressedByMenu",
-      "lastAgentListRenderSignature"
-    ],
+    "state": [],
     "behavior": [
-      "anyContextMenuOpen",
-      "createAgentCallStatesHost",
-      "createAgentSnapshotLoaderHost",
-      "createP2BootstrapSidebarRenderHost",
-      "getAgentIconHtml",
-      "getAgentListRenderSignature",
       "onSidebarItemPointerLeave",
       "onSidebarItemPointerMove",
       "onSidebarSessionCtxMenu",
       "onSidebarSessionDragStart",
-      "onSidebarSessionPinClick",
-      "renderAgentGroup",
-      "renderAgentItems",
-      "renderAgentList",
-      "renderSidebarChildItems",
-      "resolveFocusedAgentAfterRefresh",
-      "sidebarProximityFade",
-      "waitForPrebuiltRuntimeSession",
-      "waitForTargetRuntimeSession"
+      "onSidebarSessionPinClick"
     ]
   },
   "public/src/modules/slash-menu.js": {

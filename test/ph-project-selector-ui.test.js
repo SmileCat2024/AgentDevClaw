@@ -33,6 +33,7 @@ import fs from 'node:fs';
 import { marked } from 'marked';
 import { createPollMaintenance } from '../public/src/modules/poll-maintenance.js';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
+import { prepareSidebarDomain } from './p2-classic-hosts.js';
 
 const flush = async (n = 6) => { for (let i = 0; i < n; i++) await new Promise(setImmediate); };
 
@@ -48,8 +49,6 @@ const CLASSIC_STACK = [
   'public/src/modules/right-panel-registry.js',
   'public/src/app-core.js',
   'public/src/modules/session-view-state.js',
-  'public/src/modules/runtime-status.js',
-  'public/src/modules/sidebar-render.js',
   'public/src/app-ui.js',
   'public/src/app-main.js',
 ];
@@ -197,6 +196,7 @@ async function withSetup({ entities = [], target = null, openDirectory = '', phP
         applyTheme = () => {};
       `);
       for (const file of CLASSIC_STACK) sandbox.loadSource(file);
+      prepareSidebarDomain(sandbox);
       // 轮询协调器宿主（classic app-main 工厂）：ESM 图经 agent-data-loader →
       // input-actions 触达 poll-coordinator-host，后者在模块求值期取该工厂。
       sandbox.createPollCoordinatorHost = () => ({

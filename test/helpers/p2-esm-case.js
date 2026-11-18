@@ -46,6 +46,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { pathToFileURL } from 'node:url';
 import { createFrontendSandbox } from './frontend-vm.js';
 import { beginCaseGraph, endCaseGraph } from './p2-esm-graph.js';
+import { consumePendingClassicPrep } from '../p2-classic-hosts.js';
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '..', '..');
 const caseStorage = new AsyncLocalStorage();
@@ -187,6 +188,22 @@ export async function withP2EsmCase(options, fn) {
   const moduleCache = new Map();
   let activeStore = null;
 
+  /**
+   * 真实 import 仓库内一个 ESM 模块（相对仓库根），本 case 内同路径返回同一实例。
+   * 不带 assertActive：classic 回调（`sandbox.loadEsm`）在 case 体之前就要用它。
+   */
+  async function loadModuleInCase(relativePath) {
+    const file = resolveRepoFile(relativePath);
+    const cached = moduleCache.get(file);
+    if (cached) return cached;
+    const pending = import(pathToFileURL(file).href).catch((error) => {
+      moduleCache.delete(file);
+      throw error;
+    });
+    moduleCache.set(file, pending);
+    return pending;
+  }
+
   const p2case = {
     id,
     get window() { return sandbox; },
@@ -209,15 +226,7 @@ export async function withP2EsmCase(options, fn) {
      */
     async load(relativePath) {
       assertActive();
-      const file = resolveRepoFile(relativePath);
-      const cached = moduleCache.get(file);
-      if (cached) return cached;
-      const pending = import(pathToFileURL(file).href).catch((error) => {
-        moduleCache.delete(file);
-        throw error;
-      });
-      moduleCache.set(file, pending);
-      return pending;
+      return loadModuleInCase(relativePath);
     },
 
     /**
@@ -257,9 +266,15 @@ export async function withP2EsmCase(options, fn) {
       cancelAnimationFrame: (timerId) => trackedClearTimeout(timerId),
     });
 
+    beginCaseGraph(id);
+    // classic 回调里的 ESM 装载入口（classic 相之后的模块相）。
+    sandbox.loadEsm = loadModuleInCase;
+
     if (typeof classic === 'function') await classic(sandbox);
 
     // 主 realm 注入：window 是沙箱本身；平台键取沙箱现值；调用方 globals 覆盖。
+    // 相位在 classic 回调之**后**：classic 相是这些全局的第一个消费者（也可能
+    // 整体替换 fetch / document），注入面必须取替换后的实现。
     const installMap = { window: sandbox };
     for (const key of PLATFORM_GLOBALS) {
       if (key in sandbox) installMap[key] = sandbox[key];
@@ -269,11 +284,19 @@ export async function withP2EsmCase(options, fn) {
       savedGlobals.push([key, setGlobalDescriptor(key, value)]);
     }
 
-    beginCaseGraph(id);
+    // classic 链夹具（p2-classic-hosts 的 prepareClassicSandbox /
+    // installForegroundSyncOwner）会在 classic 相之后发起本域的 ESM 装载；
+    // 历史调用形态不 await 返回值，这里统一收口（契约见 p2-classic-hosts）。
+    const pendingPrep = consumePendingClassicPrep();
+    if (pendingPrep) await pendingPrep;
     activeStore = { caseId: id };
     return await caseStorage.run(activeStore, () => fn(p2case));
   } finally {
     disposed = true;
+    // classic 链夹具发起、但用例在消费点之前就抛错的 ESM 装载：等它收尾，
+    // 避免注入面已拆除后模块求值抛 "window is not defined" 变成未处理拒绝。
+    const leftoverPrep = consumePendingClassicPrep();
+    if (leftoverPrep) await leftoverPrep.catch(() => {});
     endCaseGraph(id);
     cancelPendingTimers();
     for (const [key, descriptor] of savedGlobals.reverse()) {

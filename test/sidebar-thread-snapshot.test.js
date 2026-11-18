@@ -8,7 +8,8 @@ process.env.AGENTDEV_DATA_DIR = root;
 const { createConnectedAgentsQuery } = await import('../server/routes/agent-connected.js');
 const { managedAgents } = await import('../server/shared/agent-access.js');
 after(() => rm(root, { recursive: true, force: true }));
-import { createFrontendSandbox } from './helpers/frontend-vm.js';
+import { withP2EsmCase } from './helpers/p2-esm-case.js';
+import { ensureSidebarRenderHostSeam, prepareSidebarDomain } from './p2-classic-hosts.js';
 
 const { readSidebarSnapshot } = await import('../server/routes/sidebar-snapshot.js');
 test('unstable sidebar reads fail explicitly rather than publish a partial frame', async () => {
@@ -41,13 +42,38 @@ for (const agentId of ['programming-helper', 'coder', 'memo', 'custom-thread-hos
       getPendingInputCount: async () => 0, resolveAgentModelPresets: async () => [],
       readVisibilityOverrides: async () => ({}), resolveThreadControl: () => control,
     });
-    const ctx = createFrontendSandbox({ t: x => x, currentLanguage: 'zh', normalizeAgentIdentity: x => x || '',
-      toEpochMs: x => Date.parse(x) || 0, getWorkspaceSessions: a => a.workspace_sessions?.sessions || [],
-      getParentAgentId: a => a.parent_id, getRuntimeId: a => a.runtime_session_id,
-      getActiveSessionId: a => a.active_workspace_session_id, getPathLeaf: x => x.split('/').pop() });
-    ctx.window.setInterval = () => 0;
-    ctx.window.ClawThreads = { threads: [{ ...thread, headSessionId: 'wrong', lifeState: 'executing', headRuntimeRunning: true }] };
-    ctx.loadSource('public/src/modules/runtime-status.js');
+    // 侧栏渲染 / 运行时状态自 P4 T2 起是模块相（真实 import 路线）：classic 侧
+    // 只给 app-core 与侧栏协作面，域模块由 withP2EsmCase 在 classic 之后装入同一
+    // window（`collectRuntimeEntriesForPrebuilt` / `_threadSidebarEntries` 由
+    // p2-classic-hosts 投影到沙箱，与模块实例同一份状态）。
+    const ctx0 = {};
+    await withP2EsmCase({
+      classic: (sandbox) => {
+        sandbox.setInterval = () => 0;
+        // action-dispatcher 是 index.html 的先行脚本（模块图的动作注册面）。
+        sandbox.loadSource('public/src/modules/action-dispatcher.js');
+        sandbox.loadSource('public/src/app-core.js');
+        // 会话快照提交宿主的 classic 实现（侧栏域装载期取用，生产同源）
+        sandbox.loadSource('public/src/modules/session-view-state.js');
+        sandbox.ClawThreads = { threads: [{ ...thread, headSessionId: 'wrong', lifeState: 'executing', headRuntimeRunning: true }] };
+        ensureSidebarRenderHostSeam(sandbox);
+        // classic 宿主工厂（生产由 app-main / app-ui 提供）：侧栏域装载期取用。
+        sandbox.createPollCoordinatorHost = () => ({
+          run: async () => {}, fastInterval: () => 1000, setTimeout: () => 0, clearTimeout: () => {},
+        });
+        sandbox.createWorkspaceSurfaceHost = () => ({ state: {} });
+        sandbox.createRuntimeSwitchHost = () => ({ state: {} });
+        sandbox.createCompactResumeHost = () => ({ state: {}, now: () => Date.now() });
+        sandbox.createAgentCallStatesHost = () => ({ state: {} });
+        prepareSidebarDomain(sandbox);
+      },
+      globals: {
+        t: x => x, currentLanguage: 'zh', normalizeAgentIdentity: x => x || '',
+        toEpochMs: x => Date.parse(x) || 0, getWorkspaceSessions: a => a.workspace_sessions?.sessions || [],
+        getParentAgentId: a => a.parent_id, getRuntimeId: a => a.runtime_session_id,
+        getActiveSessionId: a => a.active_workspace_session_id, getPathLeaf: x => x.split('/').pop(),
+      },
+    }, async ({ window: ctx }) => {
     const runtime = sid => ({ key: `${agentId}::${sid}`, agentId, selectedSessionId: sid,
       viewerAgentId: `r-${sid}`, ready: true, process: { exitCode: null, pid: 1 } });
     const old = runtime('old');
@@ -73,7 +99,7 @@ for (const agentId of ['programming-helper', 'coder', 'memo', 'custom-thread-hos
       await frame('new'); // query straddles commit; Viewer still only has the old runtime
       next.stopped = true;
       await frame(null); // stale thread board + stale Viewer cannot recreate a leaf
-      ctx.run('_threadSidebarEntries.clear()');
+      ctx.__esmDomain.runtimeStatus._threadSidebarEntries.clear();
       await frame(null); // cold cache / reload
       thread = { ...thread, status: 'rotating', handoffStartedAt: 1 };
       await frame('new');
@@ -84,5 +110,6 @@ for (const agentId of ['programming-helper', 'coder', 'memo', 'custom-thread-hos
       duringMeta = () => { archived = { t1: { archivedAt: 10 } }; };
       await frame(null); // archive committed during projection rejects the old frame
     } finally { managedAgents.clear(); }
+    });
   });
 }

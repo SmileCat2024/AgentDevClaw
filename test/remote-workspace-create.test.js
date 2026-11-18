@@ -23,6 +23,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
+import { ensureSidebarRenderHostSeam } from './p2-classic-hosts.js';
 
 const CATALOG = {
   connections: [{
@@ -186,6 +187,10 @@ function createBootstrapHosts(sandbox) {
     }),
     createP2BootstrapDomHost: () => ({
       projectDocsetToggle: null, projectDocsetOverlay: null, projectDocsetSheet: null,
+      // P4 T2 尾批：sidebar-render 迁 ESM 后在模块求值期给侧栏容器装委托。
+      container: createDomElement(), agentList: createDomElement(),
+      externalAgentList: createDomElement(), externalGroup: createDomElement(),
+      externalCount: createDomElement(), currentAgentTitle: createDomElement(),
     }),
     // 上下文菜单待执行目标（生产由 app-core 的冻结宿主提供同样的读写转发面）
     createP2BootstrapContextMenuHost: () => {
@@ -363,6 +368,10 @@ async function createSandbox({
       sandbox.isRemoteNamespaceAgentId = (value) => String(value || '').startsWith('remote:');
       sandbox.renderAgentList = () => {};
       Object.assign(sandbox, createBootstrapHosts(sandbox));
+      // 侧栏渲染自 P4 T2 起在模块相：sidebar-operations / remote-connections 经
+      // 真实 `renderAgentList` 重建侧栏，它的 classic 协作面按生产宿主面补齐
+      // （本文件断言不落在侧栏 DOM）。
+      ensureSidebarRenderHostSeam(sandbox);
       sandbox.loadSource(ACTION_DISPATCHER);
 
       // project-data 已迁 ESM（真实 import 见用例体）：它自己的桥键

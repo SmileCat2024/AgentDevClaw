@@ -82,17 +82,24 @@ async function withSidebarCase(options, fn) {
       ...globals,
     },
     classic: (sandbox) => {
+      // 桥面记录必须在 classic 相就装上：侧栏域（runtime-status / sidebar-render）
+      // 自 P4 T2 起在模块相求值，且 sidebar-render 静态依赖 project-data → session-ui
+      // → sidebar-operations，这些域的桥键会在 pending prep 阶段先注册（早于用例体）。
+      if (record) sandbox.__kernelRecorder = recordKernelRegistrations(sandbox.KernelState);
       // 真实装载链（顺序同 index.html）：宿主工厂 createRuntimeSwitchHost /
       // createCompactResumeHost / createAgentCallStatesHost ← app-main，
       // createWorkspaceSurfaceHost ← app-ui，全部是生产实现（boot 体不驱动）。
       prepareClassicSandbox(sandbox);
       sandbox.renderListCalls = 0;
       sandbox.renderMainCalls = 0;
-      sandbox.renderAgentList = () => { sandbox.renderListCalls += 1; };
+      // 侧栏重绘的观测点：sidebar-render 迁 ESM 后 `renderAgentList` 不再是可替换的
+      // classic 全局，改用真实渲染入口每次都会调用的顶栏 chrome（不改变断言强度：
+      // 仍以「重绘被触发」为事实）。
+      sandbox.updateCurrentAgentChrome = () => { sandbox.renderListCalls += 1; };
       sandbox.renderCurrentMainView = () => { sandbox.renderMainCalls += 1; };
     },
   }, async (c) => {
-    const kernelRecorder = record ? recordKernelRegistrations(c.window.KernelState) : null;
+    const kernelRecorder = record ? c.window.__kernelRecorder : null;
     try {
       await c.load(ENTRY);
     } finally {

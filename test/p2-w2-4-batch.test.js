@@ -27,7 +27,7 @@ import { readFileSync } from 'node:fs';
 import { createFrontendSandbox } from './helpers/frontend-vm.js';
 import { loadModuleOnce } from './helpers/esm-module-loader.js';
 import { loadThreadEngine } from './helpers/thread-engine.js';
-import { prepareClassicSandbox } from './p2-classic-hosts.js';
+import { loadEsmDomain, prepareClassicSandbox } from './p2-classic-hosts.js';
 
 const MODULES = {
   templateEngine: 'public/src/modules/template-engine.js',
@@ -50,7 +50,7 @@ async function setupBatch() {
   };
   // 真实先行脚本序（test/p2-classic-hosts.js）：宿主工厂都是生产实现，首屏 boot 与
   // 周期排程由基座关掉。
-  prepareClassicSandbox(ctx);
+  prepareClassicSandbox(ctx, { deferEsmDomain: false });
 
   const renders = [];
   ctx.renderCurrentMainView = () => { renders.push('render'); };
@@ -84,6 +84,10 @@ async function setupBatch() {
   };
 
   try {
+    // 侧栏渲染 / 运行时状态 / call 状态引擎（P4 T2 收尾批次起的模块相）。classic
+    // 链里的 host 工厂已就位，这里按真实加载序求值（classic 先、module 后）。
+    const loadModule = async (rel) => import(new URL(`../${rel}`, import.meta.url).href);
+    await loadEsmDomain(ctx, loadModule);
     // 刷新引擎（P4 T3 起是真实 ESM）：交互域在**装载期**取它的窄宿主
     // createThreadStoreHost，必须先于本批图求值（装载期计时器由 helper 记账丢弃）。
     await loadThreadEngine();

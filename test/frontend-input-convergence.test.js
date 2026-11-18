@@ -241,6 +241,10 @@ const NEWLY_REACHABLE_ELEMENT_IDS = [
   'trim-page-keep-skill-value', 'trim-page-keep-skill-dec', 'trim-page-keep-skill-inc',
   // session-dialogs（分支对话框）
   'branch-dialog', 'branch-round-list', 'branch-footer-info',
+  // P4 T2 收尾批次：sidebar-render 迁 ESM 后在**模块求值期**给侧栏容器装
+  // click / contextmenu 委托（app-core 的 domRefs 是加载期 getElementById 的
+  // const 引用）；index.html 静态提供这些节点，夹具按 id 建最小节点。
+  'agent-list', 'external-agent-list', 'external-group', 'external-count', 'current-agent-name',
 ];
 
 
@@ -526,6 +530,14 @@ function convergenceCaseOptions() {
         toggleInputModelDropdown: () => {},
         toggleThinkingEffortDropdown: () => {},
         escapeHtml: (text) => String(text == null ? '' : text),
+        // 侧栏渲染域（runtime-status 的 calling 边沿会真实触发 renderAgentList）：
+        // 本裁剪链不装 app-ui / app-main，按生产宿主面给出最小实现——分组函数
+        // 与布局渲染都只做投影，不落地 DOM 断言。
+        groupConnectedAgents: (agents) => ({ external: Array.isArray(agents) ? agents : [], groups: [] }),
+        ClawSidebarLayout: { load: async () => {}, signature: () => '', isInteracting: () => false, render() {} },
+        updateCurrentAgentChrome: () => {},
+        // 对话区指示块的高度补偿读真实布局；桩环境按 0 间距给出（不参与断言）。
+        getComputedStyle: () => ({ gap: '0px' }),
         // 回退对话框运行时的 classic 汇点（生产分别定义于 runtime-status /
         // persistent-input；本文件不驱动打断链路，按既有注入面提供）。
         isRuntimeCalling: () => false,
@@ -1120,12 +1132,13 @@ describe('contract §8 event->display mapping after convergence (ticket 037)', (
 //
 // 提交/打断入口已随 persistent-input 迁 ESM（P4 输入面批次）：本 helper 只负责
 // classic 通知链（runtime-status）与时钟夹具，输入面实现由用例基座真实 import。
-function loadWakeupButtonPaths(ctx) {
+async function loadWakeupButtonPaths(ctx) {
   ctx.state.now = 1000;
   ctx.Date = class extends Date { static now() { return ctx.state.now; } };
   ctx.window.setInterval = () => 0;
-  // classic runtime-status（通知链）：按桥键裸引用 call-interrupt 的四个访问器。
-  ctx.loadSource('public/src/modules/runtime-status.js');
+  // runtime-status 已迁 ESM（P4 T2 收尾批次）：在本用例图内真实 import（通知链
+  // 与桥键由模块自身注册），不再走 classic loadSource。
+  await ctx.loadModule('public/src/modules/runtime-status.js');
   ctx.run('function ensureChatRuntimeIndicator() {}');
   for (const id of ['notification-status', 'notification-phase', 'notification-summary', 'notification-metrics']) {
     const el = ctx.document.createElement('div');
@@ -1134,9 +1147,9 @@ function loadWakeupButtonPaths(ctx) {
   }
 }
 
-it('background wakeup restores the interrupt button while the persistent composer remains mounted', () => {
+it('background wakeup restores the interrupt button while the persistent composer remains mounted', async () => {
   const ctx = createConvergenceSandbox();
-  loadWakeupButtonPaths(ctx);
+  await loadWakeupButtonPaths(ctx);
   ctx.run(`applySessionViewPatch({ inputRequests: [{ requestId: 'idle-lease' }] });
     updateNotificationStatus({ callActive: false, runtime: { callActive: false,
       lastOutcome: { status: 'continued', reason: 'suspended' } } });`);
@@ -1166,7 +1179,7 @@ it('background wakeup restores the interrupt button while the persistent compose
 
 it('running composer uses user-turn, keeps rejected choice-conflict text, and explains the required action', async () => {
   const ctx = createConvergenceSandbox();
-  loadWakeupButtonPaths(ctx);
+  await loadWakeupButtonPaths(ctx);
   const toasts = [];
   const echoes = [];
   ctx.window.ClawToast = { show: (value) => toasts.push(value) };
@@ -1206,7 +1219,7 @@ it('running composer uses user-turn, keeps rejected choice-conflict text, and ex
 
 it('request composer keeps interrupting sticky through a stale running frame until call finish', async () => {
   const ctx = createConvergenceSandbox();
-  loadWakeupButtonPaths(ctx);
+  await loadWakeupButtonPaths(ctx);
   // interruptAgent 是真实 ESM 实现（P4 输入面批次后不再切片重放）：按钮点击经
   // composer 端点属性调用同一实现，端点与粘性状态都按生产语义断言。
   ctx.run(`applySessionViewPatch({ inputRequests: [{ requestId: 'idle-lease' }] });
@@ -1231,9 +1244,9 @@ it('request composer keeps interrupting sticky through a stale running frame unt
   assert.equal(button.classList.contains('is-stop'), false);
 });
 
-it('a text lease arriving during a running call cannot reset the interrupt button', () => {
+it('a text lease arriving during a running call cannot reset the interrupt button', async () => {
   const ctx = createConvergenceSandbox();
-  loadWakeupButtonPaths(ctx);
+  await loadWakeupButtonPaths(ctx);
   ctx.run(`renderInputRequests([]);
     updateNotificationStatus({ callActive: true, runtime: { callActive: true, callStartedAt: 100 } });
     applySessionViewPatch({ inputRequests: [{ requestId: 'late-lease' }] });`);

@@ -64,9 +64,15 @@ import './chat-viewport.js'; // 视口/跟随/锚点域；29 桥键 ← app-ui /
 // syncCollapseStates / getMessageRollbackEditActionHtml）的消费方与本源互相 import，
 // 注销要先把共享面下沉到无环投影模块（见文件末尾注释）。
 import './chat-renderer.js';
-// runtime-status 仍保持 classic 唯一实现：_agentSuspended 被 sidebar-render 的
-// createAgentCallStatesHost() 在 classic 加载期读取（app-main 顶层 IIFE 调用），
-// 属 R1 顺序依赖，需等 sidebar-render / app-main 残余迁出后才能转。
+// runtime-status / sidebar-render / agent-call-states-engine（P4 T2 收尾批次）：
+// B1–B4 互锁，必须同批进模块相——sidebar-render 的 createAgentCallStatesHost()
+// 按引用交出 runtime-status 的 _agentSuspended（B4）；原 app-main 顶层 IIFE 的调用
+// （B1）已搬出为 agent-call-states-engine；两个宿主工厂的求值期抓取（B2/B3）改
+// 具名 import。三者都进模块相后，app-core 补的两处最小 seam 让引擎仍拿到
+// _interruptSuppression（B5）与 pendingPrebuiltAgentIds（B6）。
+import './runtime-status.js'; // 运行时状态 / 通知 / 指示块；状态 owner p2-w2-2，函数键桥 runtime-status-api
+import './sidebar-render.js'; // 侧栏渲染与数据装载宿主；7 桥键（sidebar-render 域）
+import './agent-call-states-engine.js'; // call 状态对账引擎唯一实例；桥 agent-call-states + ClawFW.CallStates
 
 // ── T2 渲染层：输入面剩余两件（input-composer / persistent-input）──
 import './input-composer.js'; // 会话草稿缓存 + 模式判定 + composer 本体；桥 domain input-composer / input-composer-api

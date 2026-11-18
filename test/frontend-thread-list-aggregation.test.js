@@ -13,6 +13,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { marked } from 'marked';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
+import { prepareSidebarDomain } from './p2-classic-hosts.js';
 
 /** 真实壳层 bootstrap（桥初值、宿主工厂与首屏同步面来源）。 */
 const CLASSIC_STACK = [
@@ -21,8 +22,6 @@ const CLASSIC_STACK = [
   'public/src/modules/right-panel-registry.js',
   'public/src/app-core.js',
   'public/src/modules/session-view-state.js',
-  'public/src/modules/runtime-status.js',
-  'public/src/modules/sidebar-render.js',
   'public/src/app-ui.js',
   'public/src/app-main.js',
 ];
@@ -54,6 +53,7 @@ async function withThreadCase({ sessionThread = null, language = 'zh', threadLoo
         applyTheme = () => {};
       `);
       for (const file of CLASSIC_STACK) sandbox.loadSource(file);
+      prepareSidebarDomain(sandbox);
       sandbox.allAgents = [agent];
       sandbox.getCurrentAgentRecord = () => agent;
       sandbox.renderCurrentMainView = () => {};

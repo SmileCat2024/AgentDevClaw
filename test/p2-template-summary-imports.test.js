@@ -251,7 +251,10 @@ function createHarness() {
         //（remote-connections 已迁 ESM：见 withHarness，模块相真实 import。）
         // 渲染效果出口：数据流保持真实，只记录生产渲染入口的调用（与
         // test/frontend-agent-snapshot-loader.test.js 同口径，不复制宿主契约）。
-        sandbox.renderAgentList = () => renders.agentList.push('renderAgentList');
+        // sidebar-render 迁 ESM（P4 T2）后 `renderAgentList` 不再是可替换的 classic
+        // 全局：用真实渲染入口每次都会调用的顶栏 chrome 作为「重渲发生」的观测点
+        // （与 p2-w2-6 / p2-w2-8 同一口径）。
+        sandbox.updateCurrentAgentChrome = () => renders.agentList.push('renderAgentList');
         sandbox.renderFeaturePanel = () => renders.featurePanel.push('renderFeaturePanel');
         sandbox.renderCurrentMainView = () => renders.mainView.push('renderCurrentMainView');
       },

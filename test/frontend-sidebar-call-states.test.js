@@ -34,12 +34,17 @@ function withCallStates(fn) {
   return withP2EsmCase({
     classic: (sandbox) => {
       prepareClassicSandbox(sandbox);
-      sandbox.renderAgentList = () => renders.push(1);
+      // P4 T2：renderAgentList 是 sidebar-render 的模块实现（引擎/侧栏内部直调，
+      // 不经桥键，classic 相的 window 覆盖已不再拦截它）。渲染落地经布局域：
+      // 按真实布局接口给替身，并把一次渲染记进 renders（本文件不断言渲染次数）。
+      sandbox.ClawSidebarLayout = {
+        load: async () => {}, signature: () => '', isInteracting: () => false,
+        render: () => renders.push(1),
+      };
       sandbox._syncPersistentActionButton = () => {};
       sandbox._syncPersistentInputUi = () => {};
       sandbox.isSseActive = () => sseActive;
       sandbox.currentRuntimeAgentId = 'rt-focus';
-      sandbox.run('_agentCallActive.clear(); _agentSuspended.clear(); _interruptSuppression.clear(); _recentlyFinishedRuntimes.clear();');
     },
     globals: {
       fetch: async (url) => {
@@ -52,6 +57,10 @@ function withCallStates(fn) {
       _presentAppNotification: (frame) => finishedNotified.push(frame),
     },
   }, async (c) => {
+    // 状态容器复位（P4 T2：`_agentSuspended` 是 runtime-status 的模块私有 Map，
+    // 经 __esmDomain 取同一引用；其余三个是 app-core 的 classic const 容器）。
+    c.read('_agentCallActive.clear(); _interruptSuppression.clear(); _recentlyFinishedRuntimes.clear();'
+      + ' __esmDomain.runtimeStatus._agentSuspended.clear();');
     // remote 命名空间 / getVisibleRemoteEntries 的生产实现（不在先行脚本序内）。
     await c.load('public/src/modules/remote-connections.js');
     return fn({
@@ -344,59 +353,45 @@ describe('applyCallStateToAgentRecords: 记录写入', () => {
  * threads 快照也因签名不变提前返回，占位该出现不出现、该退场不退场。
  */
 describe('getAgentListRenderSignature: 接续窗口事实进签名', () => {
-  function loadSignature() {
-    const ctx = createFrontendSandbox({
-      normalizeAgentIdentity: (v) => String(v || '').trim(),
-      focusedAgentId: 'coder',
-      currentRuntimeAgentId: '',
-      getAgentRuntimeId: (agent) => agent?.runtime_session_id || agent?.runtimeSessionId || null,
-      getParentAgentId: (agent) => agent?.parent_id || null,
-      getActiveSessionId: (agent) => agent?.active_workspace_session_id || null,
-      getSidebarOperationVersion: () => 0,
-      getRemoteSidebarProjectionVersion: () => 0,
-      listSidebarOperations: () => [],
-      getVisibleRemoteEntries: () => [],
-      isRuntimeSuspended: () => false,
-      isSseActive: () => false,
+  /**
+   * P4 T2：sidebar-render 已迁 ESM，签名函数是模块实现（桥键 `sidebar-render`
+   * 域，classic 侧仍按裸名调用）。用例跑真实 classic 先行链 + 真实 ESM 域，
+   * 只把**身份/快照类输入**按契约替换成本用例的确定性事实。
+   */
+  function withSignatureCase(fn) {
+    return withP2EsmCase({
+      classic: (sandbox) => {
+        prepareClassicSandbox(sandbox);
+        sandbox.getAgentRuntimeId = (agent) => agent?.runtime_session_id || agent?.runtimeSessionId || null;
+        sandbox.getParentAgentId = (agent) => agent?.parent_id || null;
+        sandbox.getActiveSessionId = (agent) => agent?.active_workspace_session_id || null;
+        sandbox.getSidebarOperationVersion = () => 0;
+        sandbox.getRemoteSidebarProjectionVersion = () => 0;
+        sandbox.listSidebarOperations = () => [];
+        sandbox.getVisibleRemoteEntries = () => [];
+        sandbox.ClawSidebarLayout = { load: async () => {}, signature: () => '', isInteracting: () => false, render() {} };
+      },
+    }, async (c) => {
+      c.window.focusedAgentId = 'coder';
+      c.window.currentRuntimeAgentId = '';
+      c.window.allAgents = [{ id: 'coder', sidebar_threads: [{ threadId: 'wt-1', headSessionId: 'from', title: '工作对话', handoffStartedAt: 0 }] }];
+      c.window.ClawThreads = {
+        threads: [{
+          threadId: 'wt-1', headSessionId: 'from', title: '工作对话',
+          lifeState: 'idle', handoffStartedAt: 0, headRuntimeRunning: false,
+        }],
+      };
+      return fn(c.window);
     });
-    ctx.allAgents = [{ id: 'coder', sidebar_threads: [{ threadId: 'wt-1', headSessionId: 'from', title: '工作对话', handoffStartedAt: 0 }] }];
-    ctx.window.ClawThreads = {
-      threads: [{
-        threadId: 'wt-1', headSessionId: 'from', title: '工作对话',
-        lifeState: 'idle', handoffStartedAt: 0, headRuntimeRunning: false,
-      }],
-    };
-    ctx.run(`
-      const pendingPrebuiltAgentIds = new Set();
-      const restartingRuntimeIds = new Set();
-      const _recentlyFinishedRuntimes = new Set();
-      const _agentCallActive = new Map();
-      const _agentSuspended = new Map();
-      const _interruptSuppression = new Map();
-      let lastCallStateRefreshAt = 0;
-      const agentList = { innerHTML: '', style: {}, classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } }, addEventListener() {}, appendChild() {}, querySelector() { return null; }, querySelectorAll() { return []; } };
-      `);
-    // 真实 sidebar-render（签名函数与渲染同文件）；本用例只调用签名函数，
-    // 不触发渲染链。顶层容器委托需要 agent-list 元素存在。
-    const agentListStub = {
-      innerHTML: '', style: {},
-      classList: { add() {}, remove() {}, toggle() {}, contains() { return false; } },
-      addEventListener() {}, appendChild() {}, querySelector() { return null; }, querySelectorAll() { return []; },
-    };
-    ctx.document.getElementById = (id) => (id === 'agent-list' ? agentListStub : null);
-    ctx.loadSource('public/src/modules/sidebar-render.js');
-    return ctx;
   }
 
-  it('threads 事实不变时签名幂等', () => {
-    const ctx = loadSignature();
+  it('threads 事实不变时签名幂等', () => withSignatureCase(async (ctx) => {
     const first = ctx.run('getAgentListRenderSignature()');
     const second = ctx.run('getAgentListRenderSignature()');
     assert.equal(second, first);
-  });
+  }));
 
-  it('挡板立起 / head 存活翻转改变签名（占位出现与退场都能触发重渲）', () => {
-    const ctx = loadSignature();
+  it('挡板立起 / head 存活翻转改变签名（占位出现与退场都能触发重渲）', () => withSignatureCase(async (ctx) => {
     const base = ctx.run('getAgentListRenderSignature()');
     ctx.allAgents[0].sidebar_threads[0].handoffStartedAt = Date.now();
     const barrierUp = ctx.run('getAgentListRenderSignature()');
@@ -408,14 +403,13 @@ describe('getAgentListRenderSignature: 接续窗口事实进签名', () => {
     ctx.window.ClawThreads.threads[0].headRuntimeRunning = false;
     const backToBase = ctx.run('getAgentListRenderSignature()');
     assert.equal(backToBase, base, '事实复原后签名复原（退场同样被感知）');
-  });
+  }));
 
-  it('等待表面目标（高亮事实）进签名：出现 / 切换会话 / 消失都改变签名', () => {
+  it('等待表面目标（高亮事实）进签名：出现 / 切换会话 / 消失都改变签名', () => withSignatureCase(async (ctx) => {
     // 无 runtime 态的条目高亮与宿主让位按等待会话身份判定
     // （isRuntimeItemActive / isAgentActive 的等待分支，依赖
     // getActiveThreadInputTarget）。等待目标不进签名时，进入等待表面后的
     // renderAgentList 被签名守卫挡掉，选中态停在宿主节点。
-    const ctx = loadSignature();
     const base = ctx.run('getAgentListRenderSignature()');
     ctx.window.getActiveThreadInputTarget = () => ({ threadId: 'wt-1', agentId: 'coder', sessionId: 'sess-a' });
     const awaitA = ctx.run('getAgentListRenderSignature()');
@@ -426,5 +420,5 @@ describe('getAgentListRenderSignature: 接续窗口事实进签名', () => {
     ctx.window.getActiveThreadInputTarget = () => null;
     const cleared = ctx.run('getAgentListRenderSignature()');
     assert.equal(cleared, base, '等待目标消失后签名复原');
-  });
+  }));
 });

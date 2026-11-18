@@ -1,32 +1,48 @@
+/**
+ * agent-call-states 引擎的并发/复用/失败解锁契约。
+ *
+ * 装载路线（P4 T2 收尾批次后）：引擎实例是 ESM 模块
+ * `modules/agent-call-states-engine.js`（原 app-main 顶层 IIFE 逐字搬出），
+ * 由真实 classic 先行链 + 侧栏域模块相装载（withP2EsmCase 一份 window + 一张图）。
+ * classic 侧经 `agent-call-states` 桥键取用同一实现，ESM 适配器
+ * （agent-call-states-host）只做 late-bound 转发。
+ */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createFrontendSandbox } from './helpers/frontend-vm.js';
-import { loadModuleOnce } from './helpers/esm-module-loader.js';
+import { withP2EsmCase } from './helpers/p2-esm-case.js';
 import { prepareClassicSandbox } from './p2-classic-hosts.js';
 
 test('call-state host coalesces overlapping refreshes, reuses focus payload and unlocks after failure', async () => {
   let release;
   let fail = false;
   const requests = [];
-  const ctx = createFrontendSandbox({
-    _markAgentCallStartedForNotify() {},
-    fetch: async (url) => {
-      requests.push(url);
-      if (fail) throw new Error('offline');
-      await new Promise((resolve) => { release = resolve; });
-      return { ok: true, json: async () => ({ callActive: true }) };
+
+  await withP2EsmCase({
+    globals: {
+      _markAgentCallStartedForNotify() {},
+      fetch: async (url) => {
+        requests.push(url);
+        if (fail) throw new Error('offline');
+        await new Promise((resolve) => { release = resolve; });
+        return { ok: true, json: async () => ({ callActive: true }) };
+      },
     },
-  });
-  // 真实 classic owner：app-main 的 bootstrap IIFE 创建唯一引擎实例。
-  prepareClassicSandbox(ctx);
-  ctx.renderAgentList = () => {};
-  ctx.run(`allAgents = [{ id: 'rt', source: 'child', parent_id: 'host', connected: true }];`);
-  const previous = globalThis.window;
-  globalThis.window = ctx;
-  try {
-    const { module } = await loadModuleOnce('public/src/modules/agent-call-states-host.js', { installGlobals: false });
-    assert.equal(typeof ctx.refreshAgentCallStates, 'function', 'classic accessor is the owner');
+    classic: (sandbox) => {
+      // 真实 classic 先行链（app-core 的容器 + app-main 的宿主面）；
+      // 引擎实例由侧栏域在模块相装载。
+      prepareClassicSandbox(sandbox);
+    },
+  }, async (c) => {
+    const ctx = c.window;
+    const renderStub = () => {};
+    // 侧栏渲染不在本用例断言面（引擎只要求 render 是可调用 sink）。
+    ctx.renderAgentList = renderStub;
+    ctx.run(`allAgents = [{ id: 'rt', source: 'child', parent_id: 'host', connected: true }];`);
+
+    const module = await c.load('public/src/modules/agent-call-states-host.js');
+    assert.equal(typeof ctx.refreshAgentCallStates, 'function', 'classic 桥键是引擎实现');
     assert.equal(typeof module.refreshAgentCallStates, 'function', 'ESM adapter is late-bound');
+
     const first = ctx.refreshAgentCallStates(ctx.allAgents, { force: true });
     await module.refreshAgentCallStates(ctx.allAgents, { force: true });
     assert.equal(requests.length, 1, 'classic + adapter overlapping refresh must share the in-flight lock');
@@ -46,9 +62,5 @@ test('call-state host coalesces overlapping refreshes, reuses focus payload and 
     release();
     await next;
     assert.equal(ctx.allAgents[0].callActive, true);
-  } finally {
-    release?.();
-    if (previous === undefined) delete globalThis.window;
-    else globalThis.window = previous;
-  }
+  });
 });

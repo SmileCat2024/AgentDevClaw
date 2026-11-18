@@ -65,6 +65,10 @@ async function withThreadCase({ threads = [], fetchImpl = async () => ({ ok: fal
       sandbox.__threadId = thread;
     },
   }, async ({ c }) => {
+    // 侧栏渲染自 P4 T2 起是 ESM（sidebar-render）：classic 相的裸名覆盖会被桥
+    // 访问器顶掉，观察面改在模块相之后经同一 setter 写回（语义与 classic 顶层
+    // 赋值一致，仍是「侧栏重渲被触发」这一个事实）。
+    c.window.renderAgentList = () => { calls.renderAgentList += 1; };
     const domain = await c.load(DOMAIN);
     const view = await c.load(VIEW_STORAGE);
     // ESM 图求值期 toast-notify 会装自己的 window.ClawToast；观察记录必须在其后

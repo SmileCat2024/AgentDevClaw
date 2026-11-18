@@ -69,6 +69,12 @@ before(async () => {
       marked: new Marked(),
       escapeHtml: (text) => String(text).replace(/[&<>"']/g, (m) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[m])),
       ClawFW: { actions: { registerMany() {} } },
+      // runtime-status（P4 T2 迁 ESM）在模块求值期启动 200ms 通知时钟与
+      // 指示块刷新；本用例只验证工作空间 Agent 声明解析，不需要真实计时。
+      setInterval: () => 0,
+      clearInterval: () => {},
+      setTimeout: (cb) => { setTimeout(cb, 0); return 0; },
+      queueMicrotask: (cb) => queueMicrotask(cb),
     },
   });
   await loadModuleOnce('public/src/modules/kernel-state.js', { installGlobals: false });
@@ -81,18 +87,16 @@ before(async () => {
   classicBoot.setInterval = () => 0;
   classicBoot.loadSource('public/src/modules/action-dispatcher.js');
   classicBoot.loadSource('public/src/app-core.js');
-  // agent-loader-host 的静态依赖含 sidebar-operations（B2b）：其 classic 宿主工厂
-  // 由 sidebar-render 提供，sidebar-render 的调用状态宿主又读 runtime-status 的
-  // 容器。按 index.html 的真实顺序补这两个文件（不复制宿主契约）。
-  classicBoot.loadSource('public/src/modules/runtime-status.js');
   classicBoot.loadSource('public/src/modules/session-view-state.js');
-  classicBoot.loadSource('public/src/modules/sidebar-render.js');
   // project-data 具名边带进来的宿主工厂全部按真源接出（createCallInterruptHost /
   // createRuntimeViewCacheHost / 各 P2 引导宿主）；app-ui / app-main 的最小 seam
   // 由下面的 assign 补齐。
   for (const name of Object.keys(classicBoot)) {
     if (/^create[A-Za-z0-9]*Host$/.test(name)) window[name] = classicBoot[name];
   }
+  // sidebar-render / runtime-status 的宿主工厂面已全部接到 window（上一段循环），
+  // 它们的 ESM 静态链随下面的 agentLoader / workspace-agents 求值装载（B2b：
+  // sidebar-operations → p2-bootstrap-sidebar → sidebar-render → runtime-status）。
   for (const [name, factory] of Object.entries({
     createWorkspaceSurfaceHost: () => ({}),
     createPollCoordinatorHost: () => ({}),

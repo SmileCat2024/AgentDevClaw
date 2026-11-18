@@ -14,7 +14,7 @@ import fs from 'node:fs';
 import test from 'node:test';
 import { Renderer } from 'marked';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
-import { prepareClassicSandbox } from './p2-classic-hosts.js';
+import { prepareClassicSandbox, prepareSidebarDomain } from './p2-classic-hosts.js';
 
 const OVERVIEW_DATA = 'public/src/modules/overview-data.js';
 const POLL_COORDINATOR = 'public/src/modules/poll-coordinator.js';
@@ -334,8 +334,7 @@ async function withPollHarness({ blockStatus = true } = {}, fn) {
       // app-main 的 classic 同步引擎在装载期组合 sidebar-render 的
       // createAgentCallStatesHost（读 runtime-status 的 _agentSuspended）：按生产
       // 先行脚本序装真链，不给它造宿主桩。
-      sandbox.loadSource('public/src/modules/runtime-status.js');
-      sandbox.loadSource('public/src/modules/sidebar-render.js');
+      prepareSidebarDomain(sandbox);
       sandbox.run(`
         window.__clawAuthReady = new Promise(() => {});
         applyTheme = () => {};

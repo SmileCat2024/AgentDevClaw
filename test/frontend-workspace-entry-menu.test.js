@@ -19,6 +19,7 @@
 import assert from 'node:assert/strict';
 import { test as nodeTest } from 'node:test';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
+import { prepareSidebarDomain } from './p2-classic-hosts.js';
 
 const SESSION_UI = 'public/src/modules/session-ui.js';
 const OPS = 'public/src/modules/sidebar-operations.js';
@@ -40,9 +41,8 @@ function bootstrapClassic(sandbox) {
   sandbox.loadSource('public/src/modules/action-dispatcher.js');
   // i18n 已迁 ESM（P4）：t 桥键由 createFrontendSandbox 自动装载，见 test/helpers/install-i18n.js
   sandbox.loadSource('public/src/app-core.js');
-  sandbox.loadSource('public/src/modules/runtime-status.js');
+  prepareSidebarDomain(sandbox);
   sandbox.loadSource('public/src/modules/session-view-state.js');
-  sandbox.loadSource('public/src/modules/sidebar-render.js');
   sandbox.AgentLoaderHost = { loadedAgentDetailIds: new Set() };
   // 数据加载图静态依赖（agent-data-loader → input-actions）在装载期取 app-main
   // 的轮询宿主工厂；本文件不驱动轮询。

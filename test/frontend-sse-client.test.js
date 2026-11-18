@@ -157,8 +157,6 @@ const APP_MAIN_PRELUDE = `
  *   - renderAgentList：侧栏渲染，用例观察边沿变化触发的渲染次数。
  */
 const SINK_OVERRIDES = `
-  updateNotificationStatus = (p, runtimeId, token) => window.__sinkUpdateNotificationStatus(p, runtimeId, token);
-  renderAgentList = () => window.__sinkRenderAgentList();
   window.ClawFW = window.ClawFW || {};
   window.ClawFW.forceFullPollOnce = () => window.__sinkForceFullPoll();
   window._syncForegroundState = () => window.__sinkForegroundSync();
@@ -304,6 +302,11 @@ async function withSseCase(opts, fn) {
       ...extraGlobals,
     },
   }, async (c) => withNoiseClean('sse-client 用例', async () => {
+    // 通知主逻辑与侧栏渲染自 P4 T2 起在模块相（runtime-status / sidebar-render）：
+    // 桥键访问器在模块求值时注册，classic 相的裸名覆盖会被顶掉。这里在模块相之后
+    // 经同一访问器的 setter 换实现（写回 owner 的桥面，语义与 classic 顶层赋值一致）。
+    c.window.updateNotificationStatus = (p, runtimeId, token) => c.window.__sinkUpdateNotificationStatus(p, runtimeId, token);
+    c.window.renderAgentList = () => c.window.__sinkRenderAgentList();
     // 刷新引擎（P4 T3 起是真实 ESM）：交互域在装载期取它的窄宿主，必须先入图。
     await c.load(THREAD_STORE);
     // 回退 / 压缩域状态键注册壳（已迁 ESM，P4 T2）：真实 import，桥键由模块自身注册。

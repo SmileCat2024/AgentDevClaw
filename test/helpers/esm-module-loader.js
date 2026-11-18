@@ -90,6 +90,20 @@ export function installBrowserStubs({ window: windowOverrides, document: documen
     removeEventListener() {},
     ClawToast: { show() {} },
     requestAnimationFrame(cb) { return setTimeout(cb, 0); },
+    // 浏览器 window 的计时面（真实具备）。周期任务在桩环境**不真正启动**：
+    // 通知时钟一类 200ms 轮询会让用例留下未清理句柄，且这些用例断言的不是计时。
+    setTimeout: (callback, delay, ...args) => setTimeout(callback, delay, ...args),
+    clearTimeout: (timerId) => clearTimeout(timerId),
+    setInterval: () => 0,
+    clearInterval: () => {},
+    queueMicrotask: (callback) => queueMicrotask(callback),
+    // 浏览器能力面：CSS.escape（选择器构造）、Blob / URL（导出与图片预览）、
+    // matchMedia / getComputedStyle（布局读取）在真实页面里恒在。
+    CSS: { escape: (value) => String(value).replace(/[^a-zA-Z0-9_-]/g, (c) => '\\' + c) },
+    Blob: globalThis.Blob,
+    URL: globalThis.URL,
+    getComputedStyle: () => ({ gap: '0px', getPropertyValue: () => '' }),
+    matchMedia: () => ({ matches: false, addEventListener() {}, removeEventListener() {} }),
   }, windowOverrides);
   globalThis.document = applyOverrides({
     // 每次返回独立元素对象：模块对「当前 DOM 是否挂载」的判断靠 getElementById 命中
@@ -99,6 +113,8 @@ export function installBrowserStubs({ window: windowOverrides, document: documen
     querySelectorAll() { return []; },
     createElement() { return { ...element }; },
     createTextNode(text) { return { textContent: text }; },
+    createElementNS(_ns, tag) { return { ...element, tagName: String(tag).toUpperCase() }; },
+    createDocumentFragment() { return { ...element }; },
     addEventListener() {},
     body: { ...element },
     documentElement: { ...element },

@@ -361,7 +361,7 @@ function buildInputGlobals(doc, state, getRuntimeAgentId) {
     ...Object.fromEntries([
       'createAgentCallStatesHost', 'createAgentSnapshotLoaderHost', 'createCallInterruptHost',
       'createMessageProbeHost', 'createMetadataCommitHost', 'createP2BootstrapCallActivityHost',
-      'createP2BootstrapDomHost', 'createP2BootstrapSessionSwitchHost',
+      'createP2BootstrapSessionSwitchHost',
       'createP2BootstrapSidebarHost', 'createP2BootstrapSidebarRenderHost',
       'createPollCoordinatorHost', 'createRuntimeNotFoundHost',
     ].map((name) => [name, () => ({})])),
@@ -373,8 +373,27 @@ function buildInputGlobals(doc, state, getRuntimeAgentId) {
       apply: () => {},
       normalizeModel: () => ({}),
     }),
-    // 调用状态容器按引用共享（sse-client 的 choice 提醒经它去重）
-    createP2BootstrapCallActivityHost: () => ({ _seenChoiceAlertIds: new Set() }),
+    // runtime-status（P4 T2 起 ESM）经桥调用点的身份归一化（生产 app-core 的
+    // classic 函数）：语义与生产一致（String(...).trim()）。
+    normalizeAgentIdentity: (value) => String(value || '').trim(),
+    // 调用状态容器按引用共享（sse-client 的 choice 提醒经它去重；
+    // runtime-status 的 isRuntimeCalling 读 _agentCallActive）
+    createP2BootstrapCallActivityHost: () => ({
+      _seenChoiceAlertIds: new Set(), _agentCallActive: new Map(),
+      _recentlyFinishedRuntimes: new Set(), _autoTitleTriggered: new Set(),
+      _interruptSuppression: new Map(), _lastInterruptUserActionAt: 0,
+    }),
+    // 侧栏 DOM 容器（P4 T2：sidebar-render 迁 ESM 后在模块求值期装委托/写外部列表）
+    createP2BootstrapDomHost: () => ({
+      container: doc.createElement('div'),
+      agentList: doc.createElement('div'), externalAgentList: doc.createElement('div'),
+      externalGroup: doc.createElement('div'), externalCount: doc.createElement('div'),
+      currentAgentTitle: doc.createElement('div'),
+    }),
+    // 侧栏渲染的 classic 协作面（app-main / app-ui）：本夹具不验侧栏渲染。
+    groupConnectedAgents: (agents) => ({ external: Array.isArray(agents) ? agents : [], groups: [] }),
+    updateCurrentAgentChrome: () => {},
+    ClawSidebarLayout: { load: async () => {}, signature: () => '', isInteracting: () => false, render() {} },
     // agent-loader-host 装载期读 classic 相交出的详情缓存容器（app-core 持有）
     AgentLoaderHost: { loadedAgentDetailIds: new Set() },
     // 提交成功后置的 UI / 记账汇点（生产来自 runtime-status / desktop-notify /
@@ -1050,7 +1069,14 @@ function inputModuleCaseOptions(label) {
         normalizeModel: () => ({}),
       }),
       createP2BootstrapCallActivityHost: () => ({ _agentCallActive: new Map() }),
-      createP2BootstrapDomHost: () => ({}),
+      // P4 T2 尾批：sidebar-render 迁 ESM 后其模块求值期读 domRefs 的侧栏容器。
+      createP2BootstrapDomHost: () => {
+        const el = () => createMiniDocument().createElement('div');
+        return {
+          agentList: el(), externalAgentList: el(), externalGroup: el(),
+          externalCount: el(), currentAgentTitle: el(), container: el(),
+        };
+      },
       createPollCoordinatorHost: () => ({}),
     },
   };

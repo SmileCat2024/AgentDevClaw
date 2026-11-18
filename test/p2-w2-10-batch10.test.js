@@ -180,6 +180,12 @@ function createElementStub(id = '') {
  */
 function createDocumentStub(featureList = null) {
   const byId = new Map();
+  // P4 T2 收尾批次：sidebar-render 迁 ESM 后在模块求值期给侧栏容器装委托
+  // （生产由 index.html 的静态标记提供），夹具按 id 预置同一批容器。
+  for (const id of ['agent-list', 'external-agent-list', 'external-group', 'external-count',
+    'current-agent-name', 'chat-container']) {
+    byId.set(id, createElementStub(id));
+  }
   return {
     byId,
     ensure(id) {
@@ -348,6 +354,10 @@ async function withBatch10Case(options, fn) {
       marked: { Renderer: class { constructor() {} }, setOptions() {} },
       hljs: { getLanguage: () => null },
       document: documentStub || createDocumentStub(),
+      // runtime-status（模块相）会启动 200ms 通知时钟；本文件不验计时，按 scratch
+      // 桩关掉（用例结束断言「无残留计时器」）。
+      setInterval: () => 0,
+      clearInterval: () => {},
       fetch: fetchImpl || defaultFetch,
       console: {
         log: () => {},
@@ -358,7 +368,14 @@ async function withBatch10Case(options, fn) {
       },
       ...globals,
     },
-    classic: classic || loadClassicOwners,
+    classic: (sandbox) => {
+      // 通知时钟（runtime-status 模块相启动）在 scratch 沙箱里不真跑：本文件不验
+      // 计时，用例结束断言「无残留计时器」。（case 的计时记账包装会覆盖 globals
+      // 注入的 setInterval，因此在沙箱上直接置位。）
+      sandbox.setInterval = () => 0;
+      sandbox.clearInterval = () => {};
+      return (classic || loadClassicOwners)(sandbox);
+    },
   }, async (c) => {
     const result = await fn(c);
     assert.equal(c.timerCount(), 0, '用例结束不应残留计时器');

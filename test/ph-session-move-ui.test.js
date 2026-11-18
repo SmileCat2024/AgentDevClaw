@@ -29,7 +29,6 @@ import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
-import { installForegroundSyncOwner } from './p2-classic-hosts.js';
 import { sourceBetween } from './helpers/frontend-vm.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -258,17 +257,12 @@ async function withMoveCase({ entities = [], target = null, openDirectory = 'D:/
       `;
       sandbox.run(hostSeamSource);
       sandbox.__agentProvider = () => agentProvider();
-      // 真实 app-main 的 classic 同步引擎装进**同一个 window**：装载期组合上面
-      // 声明的 createAgentCallStatesHost 宿主 seam，并注册两个生产桥键（ESM 的
-      // agent-call-states-host 只做 late-bound 转发）。boot 体门控在 helper 里。
-      installForegroundSyncOwner(sandbox);
-      // app-main 的函数声明会覆盖夹具 seam：引擎建好后原样恢复，保证本文件对
-      // 列表渲染 / 宿主面的断言与装载引擎前一致（不扩其它重构）。
+      // call 状态对账引擎自 P4 T2 起是 ESM（modules/agent-call-states-engine.js），
+      // 不再由 app-main 顶层建立，真实装载链见 test/frontend-agent-call-states.test.js。
+      // 本文件不验引擎（只验移动链路对侧栏重投影的调用），桥键按调用契约给替身
+      // ——它们在同一条 seam 的 refreshAgentCallStates / collectActiveCallRuntimeIds
+      // 声明处，与真引擎的公开签名一致。
       sandbox.run(hostSeamSource);
-      assert.equal(sandbox.run('typeof window.ClawFW?.CallStates?.refreshAgentCallStates'), 'function',
-        '真实 app-main 的 classic 同步引擎已在同一 window 建好');
-      assert.equal(sandbox.run('window.refreshAgentCallStates === window.ClawFW.CallStates.refreshAgentCallStates'), true,
-        'classic 桥键与 ESM 适配器指向同一引擎函数');
       // 真实侧栏快照宿主工厂（sidebar-render 源码片段）：其 classic 依赖按调用
       // 契约注入；`invoke('get_connected_agents')` 与 `/api/agents` 由夹具响应，
       // 后者即「侧栏重投影真实发生」的观测点。

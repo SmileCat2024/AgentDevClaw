@@ -344,10 +344,14 @@ test('状态窗面（AST × 全 public）：phSurfaceViewProjectId / phSessionMo
 
 // ── 4. phProjectEntities：classic 窗面保留、ESM 只走命名同源面 ──────
 
-test('phProjectEntities：classic sidebar-render 仍读 window 键，ESM 侧只走命名面', () => {
+test('phProjectEntities：ESM 侧只走命名面（含已迁 ESM 的 sidebar-render）', () => {
   const sidebar = source('sidebar-render.js');
-  assert.equal(/phProjectNames:\s*\(window\.ClawFW\?\.phProjectEntities\?\.projects/.test(sidebar), true,
-    'classic sidebar-render 的 window 读面必须保留');
+  // P4 T2 起 sidebar-render 已是 ESM，但它仍只经**桥键**读实体缓存
+  // （`window.phProjectEntities`，project-data 注册的访问器）；具名 import 会把
+  // project-data → session-ui 的整条图拉进侧栏域模块相，故保留桥读。
+  assert.equal(/\(window\.ClawFW\?\.phProjectEntities\?\.projects/.test(sidebar), false,
+    'ESM 侧不得直接读 window.ClawFW 的实体缓存面');
+  assert.match(sidebar, /\(window\.phProjectEntities\?\.projects/, '侧栏签名经桥键读同一对象');
 
   const data = source('project-data.js');
   assert.match(data, /window\.ClawFW\.phProjectEntities = window\.ClawFW\.phProjectEntities \|\| \{/,

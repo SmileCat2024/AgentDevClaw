@@ -183,14 +183,24 @@ function createCaseOptions({ language = 'zh' } = {}) {
       // 真实实现的 DOM 效果断言；input-actions 的静态依赖里 poll-coordinator-host
       // 需要 app-main 的轮询宿主工厂，本用例不驱动轮询，只要求装载期可解析。
       sandbox.runWorkspaceAction = (action) => { state.navigateCalls.push(action); };
-      // 列表刷新的**绘制**面属 sidebar 域 classic 代码（app-main / app-ui 的
-      // groupConnectedAgents / renderFeaturePanel 不在快记条依赖链上），本用例
-      // 只把它们换成记账桩：刷新调度的数据面（权威快照 + Viewer + 状态映射）
-      // 仍走真实实现，绘制桩只证明“刷新跑到了收尾”。
-      sandbox.renderAgentList = () => { state.refreshRenders.push('list'); };
+      // 列表刷新的**绘制**面：renderAgentList 自 P4 T2 起是 sidebar-render（ESM）的
+      // 桥键，classic 相的同名桩会被模块求值时的访问器顶掉 —— 记账桩因此装在
+      // runInputCase 的模块相之后（见该函数）。renderFeaturePanel 仍是 classic
+      // app-ui 的实现，可以在这里替换。
       sandbox.renderFeaturePanel = () => { state.refreshRenders.push('panel'); };
+      // 列表刷新后不再「首次聚焦恢复」：焦点已在会话上（生产首屏由 boot 建立），
+      // 于是刷新只重投影侧栏，不追加载会话正文（本用例不验正文加载）。
+      sandbox.focusedAgentId = AGENT.id;
       sandbox.resolveFocusedAgentAfterRefresh = () => null;
       sandbox.isSseActive = () => false;
+      // 侧栏刷新链路的 classic 协作面（生产 app-core / app-main 提供）
+      sandbox.isRemoteNamespaceAgentId = (value) => String(value || '').startsWith('remote:');
+      sandbox.normalizeAgentIdentity = (value) => String(value || '').trim();
+      sandbox.getVisibleRemoteEntries = () => [];
+      sandbox.collectActiveCallRuntimeIds = () => [];
+      sandbox.refreshAgentCallStates = async () => {};
+      sandbox.groupConnectedAgents = (agents) => ({ external: Array.isArray(agents) ? agents : [], groups: [] });
+      sandbox.updateCurrentAgentChrome = () => {};
       // 真实 loadAgents 的权威快照入口（sidebar-render 的 host.connected 调它）
       sandbox.invoke = async (name, params) => {
         state.invokeCalls.push({ name, params });
@@ -225,6 +235,8 @@ function createCaseOptions({ language = 'zh' } = {}) {
       }),
     },
   };
+  // 用例入口需要在模块相之后覆盖桥键，用例夹具随之带走（测试支撑面）。
+  options.fixtureState = state;
   return { state, options };
 }
 
@@ -235,6 +247,11 @@ function createCaseOptions({ language = 'zh' } = {}) {
  */
 function runInputCase(options, fn) {
   return withP2EsmCase(options, async (c) => {
+    // 侧栏重绘的记账桩：模块相之后经桥键 setter 覆盖（此时访问器已在位）。
+    // 侧栏重绘的观测点：真实 renderAgentList 每次调用都会过的顶栏 chrome
+    // （renderAgentList 本身是 sidebar-render 的模块内实现，桥键覆盖不改它）。
+    const fixture = options.fixtureState;
+    if (fixture) c.window.updateCurrentAgentChrome = () => { fixture.refreshRenders.push('list'); };
     await c.load(INPUT_COMPOSER);
     return fn(c);
   });

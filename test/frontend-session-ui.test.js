@@ -24,6 +24,7 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { deepEqual as deepLoose } from 'node:assert';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
+import { prepareSidebarDomain } from './p2-classic-hosts.js';
 
 const SESSION_UI = 'public/src/modules/session-ui.js';
 
@@ -32,8 +33,6 @@ const CLASSIC_STACK = [
   'public/src/modules/action-dispatcher.js',
   'public/src/app-core.js',
   'public/src/modules/session-view-state.js',
-  'public/src/modules/runtime-status.js',
-  'public/src/modules/sidebar-render.js',
 ];
 
 /**
@@ -46,6 +45,7 @@ async function withSessionUi({ language = 'zh', sortMode = '' } = {}, probe) {
     classic: (sandbox) => {
       sandbox.setInterval = () => 0;
       for (const file of CLASSIC_STACK) sandbox.loadSource(file);
+      prepareSidebarDomain(sandbox);
       // session-ui 经 sidebar-operations → project-data 拉入的静态图在装载期取
       // classic 宿主工厂（生产由 app-ui / app-main 提供）；本文件只驱动会话列表
       // 数据面，这些能力不被触达。
