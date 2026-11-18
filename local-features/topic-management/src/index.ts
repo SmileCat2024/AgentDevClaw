@@ -38,7 +38,7 @@ export class TopicManagementFeature {
     return [
       createTool({
         name: 'topic_list',
-        description: '列出当前已存在的主题簇（会话引用关系形成的对话分组），按最近活动倒序。返回每个主题的 topicId、标题、简介与对话数。主题是客观存在的分组，不要自行创建或合并主题。',
+        description: '列出当前已存在的主题簇（会话引用关系形成的对话分组），按最近活动倒序。返回每个主题的 topicId、标题、简介与对话数。主题是客观存在的分组，不要自行创建或合并主题；标题与简介的写法遵循 topic-management 技能的风格约定。',
         parameters: { type: 'object', properties: {} },
         execute: async () => {
           const payload = await this.request('GET', `/protoclaw/topic_groups?agentId=${encodeURIComponent(this.agentId)}`);
@@ -61,7 +61,7 @@ export class TopicManagementFeature {
       createTool({
         name: 'topic_update',
         description: [
-          '更新一个已存在主题簇的标题或简介（简介是对主题的一句话概括，面向用户浏览）。先用 topic_list 获取 topicId，一次只处理一个主题。',
+          '更新一个已存在主题簇的标题或简介。标题是话题域（名词性），简介是事件还原式概括（现象/动机 → 做法 → 结果锚点），写法规范见 topic-management 技能。先用 topic_list 获取 topicId，一次只处理一个主题。',
           '允许且仅允许更新 title 与 summary；不允许创建、删除、合并、拆分主题。title 传空字符串表示恢复自动标题，summary 传空字符串表示清除简介。',
         ].join('\n'),
         parameters: {
