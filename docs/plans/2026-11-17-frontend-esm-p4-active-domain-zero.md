@@ -121,6 +121,8 @@ runtime-status、remote-connections、bg-panel、rail-customize、voice-input、
 | `1108b73f` | 第九批：app-core 拆解——dom-refs / identity / transport / format-utils 四族抽出 ESM（app-core 1439 → 838 行）。桥债反向 383/110 → 398/114（抽出后 classic 消费方仍需桥，注销条件逐键写在模块尾注） | src 标签 40（不变，新模块由 p4-entry 装载）；台账 50 / 238 / 490 → 51 / 189 / 464 |
 | `746d9155` | 第十批：app-main 迁 ESM（活跃域最后一件大文件）。新增独立 module 入口并排在 kernel-entry 之前（12 个宿主工厂的求值期取用）；启动编排保持未 await 的 async IIFE（TLA 变异实测不死锁但会推迟 load）；visibilitychange 移到模块相并补 typeof 守卫；newIdempotencyKey 保持模块私有（wg 侧已建 non-configurable 全局） | src 标签 40（classic → module 平移）；桥债 398/114 → 399/115；台账 51 / 189 / 464 → 51 / 187 / 430 |
 | `47358368` | 第十一批：auth-client 迁 ESM（独立 module 入口，排在 app-main 之前）；claw-host 判定阻断 B1 保留 classic（resources-viewer 在解析期经 ClawPanels 调 `window.ClawHost.panels.register`，实测 pageerror 且不可解） | 桥债 399/115 → 402/116；台账不变（51 / 187 / 430） |
+| `09b74fe6` | T5：app-core 转 ESM（活跃域最后一个 classic 文件）。46 条跨域注册原样搬移 + 105 个键经 domain `app-core` 桥承接 + 8 个零消费面符号私有化；消费方本批未改具名 import | 桥债 402/116 → 510/117；台账 51 / 187 / 430 → 51 / 110 / 387 |
+| `e95147dd` | T5：kernel-entry / p2-entry / p4-entry 合并为单一装载入口，三段顺序写进头注 | — |
 
 转换中确立的几条约定（后续批次沿用）：
 
@@ -215,6 +217,16 @@ app-main 907 → 1196 行。它的特殊之处是「宿主工厂提供方」：1
 **claw-host 判定阻断（B1），保留 classic**。触达点是 `resources-viewer.js`（classic 顶层 IIFE）经 `right-panel-registry.js:8` 无条件调用 `window.ClawHost.panels.register`。实测把 claw-host 改成模块语法、标签改 `type="module"` 后，生产浏览器回归直接报 `Cannot read properties of undefined (reading 'panels')`，resources-viewer 整条脚本中断、work-group 两个面板消失。
 
 这条无法用装载序解开：deferred module 的求值必然晚于一切 classic 解析，**即使 module 入口排在最早也修不掉**。解除条件只有一个方向——把 resources-viewer 的面板注册移出解析相，而该文件属悬置域（配方第四节：即使看到问题也不转），或等 T4 把它退役。转换成本已经探明：19 个对外裸标识符里 17 个已是桥键，需改写约 20 处引用，无 classic 顶层触达，条件解除后是低风险批次。
+
+### T5 进行中：app-core 转 ESM 与入口合一
+
+**app-core 已转**（`09b74fe6`）：862 → 1190 行，装载位置不变（只把 classic 标签改成 module），因为位置本身是语义——46 条跨域 `defineKey` 是别的域的注册行，kernel-state 契约里「域已认领时 defineKey 把初值经 impl.set 写进域状态」，所以它必须最早求值。
+
+逐键审计用 `eslint-scope` 扫 module/global 作用域，结论是 46 条跨域注册与 105 个对外符号**零 classic 相触达**，所有 classic 消费都在函数体内。承接分三类：跨域注册原样搬移、105 个键经桥键（函数键是值槽、状态键是绑定/引用槽）、8 个零消费面符号收敛私有。
+
+**一处刻意保留的偏差**：105 处生产侧 `window.<fn>()` 没有改成具名 import。原因是这些符号同时是约 60 个测试夹具的窗口桩面，改成 import 会让夹具替身静默失效（第十批 `replayAppMainOverrides` 记录过同型坑），需要配套的夹具收敛批次。逐键注销条件写在文件头注。这意味着桥债这批是**上升**的（402 → 510），与「单调下降」的预期相反——但性质是把 classic 词法搬到 ESM owner 的必经代价，不是新增抽象。
+
+**入口已合一**（`e95147dd`）：`kernel-entry` / `p2-entry` / `p4-entry` 三层合并为一层，三段顺序（内核宿主图 → P4 段 → P2 段，且 P4 段内的 thread-store 还得早于 P2 段）写进新文件头注。三处测试断言从「某文件被 p2-entry/p4-entry import」改为「被 kernel-entry 直接 import」，判据等价。
 
 ### 剩余核心批次的阻断清单（2026-11-17 实测）
 
