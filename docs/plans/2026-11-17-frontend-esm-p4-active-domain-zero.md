@@ -116,6 +116,7 @@ runtime-status、remote-connections、bg-panel、rail-customize、voice-input、
 | `7c3720e5` | 第四批两组：输入面两件（input-composer / persistent-input，函数键另立 `*-api` 域）、线程引擎与插件清单（thread-store / plugin-manifest）。**装载序修正**：kernel-entry 里 p4-entry 改到 p2-entry 之前——P2 图消费方在求值期经桥键取 P4 能力，顺序颠倒会让整图求值中断（Chromium 回归的 pageerror 面抓到，单元测试各自的夹具没覆盖） | src 标签 49 → 45；桥债 340/102 → 369/106；台账 54 / 286 / 678 → 50 / 261 / 606 |
 | `7f4c2e63` | 第五批：markdown-bootstrap 并入 markdown-utils（escapeHtml 与 renderer 配置逐字搬入，`markdown-utils:renderer` 桥键注销）；frontend-vm 补 marked 面（每沙箱一份实例） | src 标签 45 → 44；桥债 369/106 → 368/106 |
 | `12b04b0a` | 第六批（T2 收尾）：sidebar-render + runtime-status 迁 ESM，app-main 顶层 call-state IIFE 搬出为 `modules/agent-call-states-engine.js`，B2/B3 两处求值期抓取改具名 import，app-core 补两处最小 seam（B5/B6） | src 标签 44 → 42；桥债 368/106 → 382/108；台账 50 / 261 / 606 → 50 / 248 / 554 |
+| `2608fe1d` | 第七批：session-view-state 迁 ESM（T2 渲染层最后一件）。8 命名导出 + 6 桥键；identity 族 6 条 defineKey 注销；`session-view-commit-host` 的 window 抓取改具名 import（与 B2/B3 同型）；57 test 文件 + 3 helper 改造，`test/helpers/session-view-commit.js` 删除 | src 标签 42 → 41；桥债 382/108 → 382/109；台账 50 / 248 / 554 → 50 / 247 / 544 |
 
 转换中确立的几条约定（后续批次沿用）：
 
@@ -129,7 +130,7 @@ runtime-status、remote-connections、bg-panel、rail-customize、voice-input、
 剩余工作按依赖分组（每批仍按配方验收、独立提交）：
 
 - **T1 未做**：`markdown-bootstrap` 并入 markdown-utils（代价在测试面：46 个用例装载该 classic 文件、15 个用例预注册 `escapeHtml` 桥键；收入低、改动面大，排在 T2/T3 之后）；app-core 拆解（dom-refs / identity / 传输域）。dom-refs 的真正落地要等 `app-ui` / `chat-scroll` / `chat-viewport` 里 9 处 classic 顶层 `container` / `agentList` 监听随文件迁移，否则 classic 相拿不到引用。
-- **T2**：sidebar-render 已完成（第六批）。剩 `session-view-state`（53 个沙箱装载点，与 dom-refs 同批排序）与 `app-ui` 本体（`renderCurrentMainView` 及支撑）。
+- **T2**：sidebar-render（第六批）与 session-view-state（第七批）已完成。剩 `app-ui` 本体（`renderCurrentMainView` 及支撑，约 2,400 行，最大单件）。
 - **T3**：remote-connections / runtime-status（第六批解除 R1）已迁。`auth-client` **R1/R2/R4 触线保留 classic**：它创建 `__clawAuthReady` 并被 app-main 顶层 IIFE 等待，创建时点不能后移到模块相。`desktop-open` / `desktop-notify` 按 R4 保留；head 四件中 `action-dispatcher` 在配方禁区，需单独立项。app-main 残余（`visibilitychange` 注册与 `startApplication` 编排）是下一步。
 - **T5 收尾**：`kernel-entry` 与 `p2-entry` / `p4-entry` 合并为单一入口；台账 / script-tags / 桥债基线收敛；`AGENT.md` 与 `frontend-rendering-patterns.md` 中"classic 相 / 首屏同步链"表述同步。
 
@@ -147,6 +148,18 @@ runtime-status、remote-connections、bg-panel、rail-customize、voice-input、
 **测试面**：64 个测试文件改造（+1739 行），四类形态——classic 装载点改 ESM 域装载（`p2-classic-hosts.js` 增 `loadEsmDomain` / `applyEsmDomain`）、侧栏重绘观测点改用真实渲染入口（`updateCurrentAgentChrome`）或模块相后经桥 setter 覆盖、ADR-0019 那批用例改 `withRuntimeStatusCase` 真图 + `runtime-status-api` 桥键调用、桥面穷举补齐。`sidebar-empty-snapshot` 的三条降级诊断断言改为对 console 文案断言（`queueSidebarDiagnosticEvent` 是桥键访问器，测试内覆盖不生效），事件协议形状仍由同文件的 `captureDiagnosticQueueRequest` 用例覆盖。
 
 **验收（实跑）**：`test:core` 6646 项 / 6638 通过 / 4 失败（3 个已知平台项 + `oauth-codex` 的 `isTokenRefreshDue` 在满量并行下超时，单文件复跑 81/81 全过）/ 4 跳过；`node test/p2-production-boot-browser-check.mjs` 主链 + 延迟相 7 面板全 PASS、零 pageerror；`check-import-cycles` 零新增环（另报 1 个 `scripts/e2e-container-phase.mjs` 的既有失效导入，2026-11-02 起就存在，不在本批范围）；`check:frontend-globals` state 层无新增。变异抽查两项（删 `_agentSuspended` 的 export → import 侧 SyntaxError；`sidebar-render` 的 claim set 改空函数 → `p2-w2-6` 用例红）。
+
+### 第七批：session-view-state（T2 渲染层收尾）
+
+时序审计结论：6 个对外函数在 classic 侧的调用点全部位于函数体 / 默认参数 / 宿主闭包内，首屏链自第六批已移到 `boot.js` 模块相，因此不存在「classic 加载期读它的状态」的顺序依赖，未触发 B 系列阻断流程。
+
+三处值得记录的判断：
+
+1. **identity 族 6 条 `defineKey` 随批注销**：唯一生产消费方 `session-view-commit-host` 改具名 import，其余只剩测试表达式。初值改为本文件求值时经 setter 写进 owner，测试改读模块导出——桥债注册维度净 0（注销 6、新增 6 个对外 API 键）。
+2. **`session-view-commit-host` 的 window 抓取是隐性装载序依赖**：它是 `kernel-entry` 的首条 import，而会话视图域正是经这条边被拉进图的，`window.createSessionViewCommitHost()` 在该时点必然读到 undefined。与第六批 B2/B3 完全同型，只是此前没暴露（迁移前由 classic 相先行注册兜住）。
+3. **测试桩的替换而非削弱**：`frontend-session-view-identity-state` 的「classic 经 window 写 → claim 吸收 + 代次守卫」拆成两条真实出口（claim 吸收 `defineKey` 初值为同一引用；setter ↔ 活绑定 ↔ 访问器同一份状态），patch 与代次守卫由 `frontend-session-view-commit` / `frontend-session-view-matrix` 承担。`test/helpers/session-view-commit.js` 删除，两个消费者改真实图。
+
+验收（实跑）：`test:core` 6647 项 / 6640 通过 / 3 失败（全部为已知平台项）/ 4 跳过；浏览器首屏回归主链 + 7 面板 PASS、零 pageerror；`check-import-cycles` 零新增环；三个门禁通过；`check:frontend-globals --update-baseline` 只做收敛（state 248 → 247、behavior 554 → 544，均为主助手复核后的纯删减）。
 
 ### 剩余核心批次的阻断清单（2026-11-17 实测）
 
