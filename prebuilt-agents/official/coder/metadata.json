@@ -22,7 +22,7 @@
   "permissionDefaults": {
     "contextRotationStrategy": "adaptive",
     "runtimeExecutionMode": "standard",
-    "notifications.finish": false
+    "notifications.finish": "off"
   },
   "features": [
     "todo",

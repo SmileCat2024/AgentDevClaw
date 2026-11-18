@@ -30,6 +30,7 @@
 - 三层结构：作者声明（metadata.json 声明使用的项 + 建议默认值）→ 用户覆盖（workspace-settings resourcePolicy，按 agentId 键控）→ 内核强制（投递闸）。
 - 首个作者默认差异：编程小助手 `finish=true`（现状保持）；coder `finish=false`（无人值守任务不应默认每轮骚扰）。coder 默认值相对现状（无差别全弹）是显式收紧，须在发布说明告知，用户可改回。
 - 运行结束通报的触发事实 = call.finish（每轮结束），与线程归档等看板域事实无关；通报结果按 CallOutcome 区分成功、失败、取消与移交，不把“有结束事件”一概表述为成功完成。
+- （修订二：通知项已从布尔升级为三态呈现模式，见文末修订记录。）
 
 ### 3. editingSurface：应用承接编辑面（ADR-0027 挂账概念的落地）
 
@@ -68,6 +69,16 @@
 **代价**：desktop-notify 判定逻辑上移是本 ADR 最大改造件（触发判定、事件级去重进 server；前台判定、呈现去重留前端）；SSE 新帧及重放语义进入测试面；前端新增三处面（智能编码空间设置"通知"选项、后续各 APP 设置承接、全局审计视图）。
 
 **风险**：coder 默认关是升级期行为变化，发布说明必须显式告知；`app-notification` 帧与既有 `notification` 快照帧名相近，前端消费代码与文档须明确区分，避免误接。
+
+## 修订二（2026-11-18）：通知项三态呈现模式与焦点细分信息层级
+
+通知项族从布尔升级为三态呈现模式：`off`（不通知）/ `auto`（弹出并自动收回）/ `persistent`（常驻挂起，停留至用户处理）；编程小助手「完成时通知」进一步按焦点子场景细分信息层级。
+
+- **动机**：开关粒度不足以表达用户对呈现强度的需求；桌面通知 API 能力调研确认——平台不保证任意秒数的显示时长，但"常驻 vs 自动收回"是 Windows Reminder Toast（`Scenario::Reminder`）与 Web Notification（`requireInteraction`）都能兑现的语义，故取三档而非开放时长。完成通报的打扰程度取决于用户当下的注意力位置（正盯着结果 / 在 Claw 看别的 / 在别的应用），故完成时通知按焦点细分为三个可独立配置的子场景。
+- **权限项形态**：`notifications.finish` 细分为 `notifications.finish.focused / .elsewhere / .background` 三子键（编程小助手；coder 保持 `notifications.finish` 单键），`notifications.input` / `notifications.reminder` 单键。值域统一三态。
+- **帧契约**：`app-notification` 帧携带 `modes` 组（`{ focused, elsewhere, background }`；单键场景 server 复制同值三键）。焦点态是设备端事实（`document.hidden` / `hasFocus` / 正选中会话），server 天然不可知——分层为：server 判定链解析三键配置并整体下发，前端呈现器按当下焦点态选键呈现（`off` 不弹；`persistent` 走 Tauri 壳 Reminder / Web `requireInteraction`；`auto` 轻提示）。历史实现由前端按页面焦点推断持久性（失焦常驻）与免打扰硬闸随之退役：免打扰从硬闸变为 `focused` 子场景的配置（默认 `off`，可显式配置为弹）；input（choice 卡片已可见）保留免打扰硬闸。前端 Worker 心跳（前台时钟同步）退役。
+- **兼容**：布尔值域退役。存量 workspace-settings 用户覆盖不做迁移改写，读路径就地归一（`true`→`auto`、`false`→`off`）；写路径与 metadata `permissionDefaults` 校验拒布尔。帧缺失 `modes`（旧帧）兜底 `auto`。编程小助手完成时通知的存量单键用户覆盖，在三子键均无逐项覆盖时回落复制三键（作者声明子键默认时，用户单键覆盖仍压过作者默认——用户确认过的行为优先）。作者默认：编程小助手完成时三子场景 `off` / `auto` / `persistent`、用户决策 `persistent`；coder 完成 `off`；memo 不变。
+- **设置面**：智能编码空间设置页的通知区改为「APP 分区（编程小助手 / Coder）→ 场景卡（显式启用开关）→ 子场景三元模式」三级层级。场景开关是纯派生态（组内任一子项生效值非 `off` 即启用，不新增存储字段）：关闭 = 子项全写 `off`（子配置区随之不渲染），开启 = 写场景建议档。文案分工：场景层说"什么时候提醒"，子项层只说"怎么提醒"——单子项场景不重复场景语义。全局工作空间页保持只读审计（展示解析后模式的文案）。
 
 ## 关联
 

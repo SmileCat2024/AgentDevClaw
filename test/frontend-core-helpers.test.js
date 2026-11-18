@@ -473,72 +473,95 @@ function createDesktopNotifySandbox() {
 }
 
 describe('desktop-notify: finish visibility', () => {
-  it('焦点会话完成不弹（正盯着）；非焦点会话完成照常弹（含页面在前台）', async () => {
+  // PH 默认 modes 组（信息层级默认：当前对话关 / 其他内容短通知 / 后台持久）
+  const PH_MODES = 'modes: { focused: "off", elsewhere: "auto", background: "persistent" }';
+
+  it('呈现按焦点选键：当前对话（focused=off 默认）不弹；在 Claw 看其他内容（elsewhere）照常弹', async () => {
     const { ctx, notifications } = createDesktopNotifySandbox();
-    // 页面在前台（旧语义会全静默；新语义只看会话焦点）
-    ctx.run('_syncForegroundState()');
     ctx.run('allAgents = [{ id: "ph", name: "PH", runtime_session_id: "runtime-1" }, { id: "other", name: "Other", runtime_session_id: "runtime-2" }]');
     ctx.run('currentRuntimeAgentId = "runtime-1"');
 
-    await ctx.run('_presentAppNotification({ type: "finish", agentId: "runtime-1", finishTs: ' + (Date.now() - 1000) + ' })');
+    await ctx.run('_presentAppNotification({ type: "finish", agentId: "runtime-1", ' + PH_MODES + ', finishTs: ' + (Date.now() - 1000) + ' })');
     await new Promise((resolve) => setTimeout(resolve, 0));
-    assert.equal(notifications.length, 0); // 焦点会话：正盯着，不弹
+    assert.equal(notifications.length, 0); // focused 键 off：正盯着，不弹
 
-    await ctx.run('_presentAppNotification({ type: "finish", agentId: "runtime-2", finishTs: ' + Date.now() + ' })');
+    await ctx.run('_presentAppNotification({ type: "finish", agentId: "runtime-2", ' + PH_MODES + ', finishTs: ' + Date.now() + ' })');
     await new Promise((resolve) => setTimeout(resolve, 0));
-    assert.equal(notifications.length, 1); // 非焦点会话：前台也照常弹
+    assert.equal(notifications.length, 1); // elsewhere 键 auto：前台看别处，照常弹
   });
 
-  it('allows a later unseen finish notification while Claw is hidden', async () => {
-    const { ctx, notifications } = createDesktopNotifySandbox();
-    const foregroundTs = Date.now();
-    ctx.run(`_syncForegroundState()`);
-    ctx.run(`_lastForegroundTs = ${foregroundTs - 10000}`);
-    ctx.document.hidden = true;
-    ctx.document.hasFocus = () => false;
-    ctx.run(`_markAgentCallStartedForNotify("runtime-1")`);
-
-    await ctx.run(`_presentAppNotification({
-      type: "finish",
-      agentId: "runtime-1",
-      finishTs: ${foregroundTs}
-    })`);
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
-    assert.equal(notifications.length, 1);
-  });
-
-  it('页面失焦（最小化/后台/被遮挡）时当前选中会话完成也照常弹', async () => {
+  it('focused 键可配置为弹（用户显式选择）：正盯着也按配置呈现', async () => {
     const { ctx, notifications } = createDesktopNotifySandbox();
     ctx.run('currentRuntimeAgentId = "runtime-1"');
     ctx.run('_markAgentCallStartedForNotify("runtime-1")');
-    // 页面失焦：微信盖在上面 / 最小化 / 后台标签
-    ctx.document.hidden = true;
-    ctx.document.hasFocus = () => false;
 
-    await ctx.run('_presentAppNotification({ type: "finish", agentId: "runtime-1", runtimeAgentId: "runtime-1", finishTs: ' + Date.now() + ' })');
+    await ctx.run('_presentAppNotification({ type: "finish", agentId: "runtime-1", modes: { focused: "auto", elsewhere: "auto", background: "auto" }, finishTs: ' + Date.now() + ' })');
     await new Promise((resolve) => setTimeout(resolve, 0));
-    assert.equal(notifications.length, 1);
+    assert.equal(notifications.length, 1); // focused=auto：免打扰从硬闸变为配置
+    assert.equal(notifications[0].options.requireInteraction, false);
   });
 
-  it('Tauri 壳：通知走原生 command，不再触发 Web Notification（避免双弹）；前台（看别的会话）非持久', async () => {
+  it('页面失焦选 background 键：默认持久挂起；显式配置 off 则不弹', async () => {
+    // 默认：后台 = persistent（常驻）
+    const pinned = createDesktopNotifySandbox();
+    pinned.ctx.run('currentRuntimeAgentId = "runtime-1"');
+    pinned.ctx.run('_markAgentCallStartedForNotify("runtime-1")');
+    pinned.ctx.document.hidden = true;
+    pinned.ctx.document.hasFocus = () => false;
+    await pinned.ctx.run('_presentAppNotification({ type: "finish", agentId: "runtime-1", ' + PH_MODES + ', finishTs: ' + Date.now() + ' })');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(pinned.notifications.length, 1);
+    assert.equal(pinned.notifications[0].options.requireInteraction, true);
+
+    // 用户显式关闭后台提醒：失焦也不弹
+    const muted = createDesktopNotifySandbox();
+    muted.ctx.run('currentRuntimeAgentId = "runtime-1"');
+    muted.ctx.run('_markAgentCallStartedForNotify("runtime-1")');
+    muted.ctx.document.hidden = true;
+    muted.ctx.document.hasFocus = () => false;
+    await muted.ctx.run('_presentAppNotification({ type: "finish", agentId: "runtime-1", modes: { focused: "off", elsewhere: "auto", background: "off" }, finishTs: ' + Date.now() + ' })');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(muted.notifications.length, 0);
+  });
+
+  it('旧帧兼容：无 modes 字段兜底轻提示（mode 单值仍被识别）', async () => {
+    // 无任何 mode 字段：兜底 auto（finish 同会话有 30s 去重，两个分支用独立 sandbox）
+    const bare = createDesktopNotifySandbox();
+    bare.ctx.run('currentRuntimeAgentId = "runtime-2"');
+    bare.ctx.run('_markAgentCallStartedForNotify("runtime-1")');
+    await bare.ctx.run('_presentAppNotification({ type: "finish", agentId: "runtime-1", finishTs: ' + Date.now() + ' })');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(bare.notifications.length, 1);
+    assert.equal(bare.notifications[0].options.requireInteraction, false); // 兜底 auto
+
+    // 旧 mode 单值（上一轮契约）：persistent 仍被识别
+    const legacy = createDesktopNotifySandbox();
+    legacy.ctx.run('currentRuntimeAgentId = "runtime-2"');
+    legacy.ctx.run('_markAgentCallStartedForNotify("runtime-1")');
+    await legacy.ctx.run('_presentAppNotification({ type: "finish", agentId: "runtime-1", mode: "persistent", finishTs: ' + Date.now() + ' })');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(legacy.notifications.length, 1);
+    assert.equal(legacy.notifications[0].options.requireInteraction, true);
+  });
+
+  it('Tauri 壳：通知走原生 command，不再触发 Web Notification（避免双弹）；elsewhere 键 auto 非持久', async () => {
     const { ctx, notifications } = createDesktopNotifySandbox();
     const invokes = [];
     ctx.window.__TAURI_INTERNALS__ = {
       invoke: async (cmd, args) => { invokes.push({ cmd, args }); },
     };
-    ctx.run('currentRuntimeAgentId = "runtime-2"'); // 完成的是非焦点会话
+    ctx.run('currentRuntimeAgentId = "runtime-2"'); // 完成的是非焦点会话，页面聚焦
 
-    await ctx.run('_presentAppNotification({ type: "finish", agentId: "runtime-1", finishTs: ' + Date.now() + ' })');
+    await ctx.run('_presentAppNotification({ type: "finish", agentId: "runtime-1", ' + PH_MODES + ', finishTs: ' + Date.now() + ' })');
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     assert.equal(invokes.length, 1);
     assert.equal(invokes[0].cmd, 'persistent_notification');
-    assert.equal(invokes[0].args.persistent, false); // 页面聚焦：普通 toast，自动收进通知中心
+    assert.equal(invokes[0].args.persistent, false); // elsewhere 键 auto：普通 toast
     assert.equal(notifications.length, 0); // 原生已发，Web API 不再发
   });
 
-  it('Tauri 壳：页面失焦时 persistent=true（Reminder 常驻挂起）', async () => {
+  it('Tauri 壳：background 键 persistent → Reminder 常驻挂起（页面失焦时选键）', async () => {
     const { ctx } = createDesktopNotifySandbox();
     const invokes = [];
     ctx.window.__TAURI_INTERNALS__ = {
@@ -549,25 +572,25 @@ describe('desktop-notify: finish visibility', () => {
     ctx.document.hidden = true;
     ctx.document.hasFocus = () => false;
 
-    await ctx.run('_presentAppNotification({ type: "finish", agentId: "runtime-1", finishTs: ' + Date.now() + ' })');
+    await ctx.run('_presentAppNotification({ type: "finish", agentId: "runtime-1", ' + PH_MODES + ', finishTs: ' + Date.now() + ' })');
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     assert.equal(invokes.length, 1);
     assert.equal(invokes[0].args.persistent, true);
   });
 
-  it('Tauri 壳 invoke 失败：回退 Web Notification（requireInteraction 随页面焦点）', async () => {
+  it('Tauri 壳 invoke 失败：回退 Web Notification（requireInteraction 随选键结果）', async () => {
     const { ctx, notifications } = createDesktopNotifySandbox();
     ctx.window.__TAURI_INTERNALS__ = {
       invoke: async () => { throw new Error('denied'); },
     };
     ctx.run('currentRuntimeAgentId = "runtime-2"');
 
-    await ctx.run('_presentAppNotification({ type: "finish", agentId: "runtime-1", finishTs: ' + Date.now() + ' })');
+    await ctx.run('_presentAppNotification({ type: "finish", agentId: "runtime-1", modes: { focused: "off", elsewhere: "persistent", background: "persistent" }, finishTs: ' + Date.now() + ' })');
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     assert.equal(notifications.length, 1);
-    assert.equal(notifications[0].options.requireInteraction, false); // 前台：非持久
+    assert.equal(notifications[0].options.requireInteraction, true); // elsewhere=persistent：常驻
   });
 
   it('Tauri 壳：invoke 携带 navPayload（原生 toast 点击后定位会话的数据）', async () => {
@@ -608,53 +631,63 @@ describe('desktop-notify: finish visibility', () => {
     assert.equal(opened.length, 1);
   });
 
-  it('finish 持久性按页面焦点判定（Web 路径）：前台轻提示，失焦常驻挂起', async () => {
-    // 前台 + 非焦点会话完成 → 非持久（普通 toast，自动收进通知中心）
-    const fg = createDesktopNotifySandbox();
-    fg.ctx.run('currentRuntimeAgentId = "runtime-2"');
-    fg.ctx.run('_markAgentCallStartedForNotify("runtime-1")');
-    await fg.ctx.run('_presentAppNotification({ type: "finish", agentId: "runtime-1", finishTs: ' + Date.now() + ' })');
+  it('Web 路径持久性按选键结果：elsewhere 键 auto 轻提示，persistent 常驻', async () => {
+    // 页面聚焦 + 非焦点会话 + elsewhere=auto → 轻提示
+    const light = createDesktopNotifySandbox();
+    light.ctx.run('currentRuntimeAgentId = "runtime-2"');
+    light.ctx.run('_markAgentCallStartedForNotify("runtime-1")');
+    await light.ctx.run('_presentAppNotification({ type: "finish", agentId: "runtime-1", modes: { focused: "off", elsewhere: "auto", background: "persistent" }, finishTs: ' + Date.now() + ' })');
     await new Promise((resolve) => setTimeout(resolve, 0));
-    assert.equal(fg.notifications.length, 1);
-    assert.equal(fg.notifications[0].options.requireInteraction, false);
+    assert.equal(light.notifications.length, 1);
+    assert.equal(light.notifications[0].options.requireInteraction, false);
 
-    // 页面失焦（最小化/后台/被遮挡）→ 持久挂起
-    const bg = createDesktopNotifySandbox();
-    bg.ctx.run('currentRuntimeAgentId = "runtime-2"');
-    bg.ctx.run('_markAgentCallStartedForNotify("runtime-1")');
-    bg.ctx.document.hidden = true;
-    bg.ctx.document.hasFocus = () => false;
-    await bg.ctx.run('_presentAppNotification({ type: "finish", agentId: "runtime-1", finishTs: ' + Date.now() + ' })');
+    // 同焦点态 + elsewhere=persistent → 常驻（键值压过焦点态直觉）
+    const pinned = createDesktopNotifySandbox();
+    pinned.ctx.run('currentRuntimeAgentId = "runtime-2"');
+    pinned.ctx.run('_markAgentCallStartedForNotify("runtime-1")');
+    await pinned.ctx.run('_presentAppNotification({ type: "finish", agentId: "runtime-1", modes: { focused: "off", elsewhere: "persistent", background: "auto" }, finishTs: ' + Date.now() + ' })');
     await new Promise((resolve) => setTimeout(resolve, 0));
-    assert.equal(bg.notifications.length, 1);
-    assert.equal(bg.notifications[0].options.requireInteraction, true);
+    assert.equal(pinned.notifications.length, 1);
+    assert.equal(pinned.notifications[0].options.requireInteraction, true);
   });
 
-  it('主动投递类（reminder）：持久性同样按页面焦点判定', async () => {
-    const fg = createDesktopNotifySandbox();
-    await fg.ctx.run('_presentAppNotification({ type: "reminder", agentId: "memo", title: "提醒", body: "喝水" })');
+  it('主动投递类（reminder）：三键同值（server 单值复制），按焦点选键结果一致', async () => {
+    const light = createDesktopNotifySandbox();
+    await light.ctx.run('_presentAppNotification({ type: "reminder", agentId: "memo", modes: { focused: "auto", elsewhere: "auto", background: "auto" }, title: "提醒", body: "喝水" })');
     await new Promise((resolve) => setTimeout(resolve, 0));
-    assert.equal(fg.notifications[0].options.requireInteraction, false); // 前台：轻提示
+    assert.equal(light.notifications[0].options.requireInteraction, false); // auto：轻提示
 
-    const bg = createDesktopNotifySandbox();
-    bg.ctx.document.hidden = true;
-    bg.ctx.document.hasFocus = () => false;
-    await bg.ctx.run('_presentAppNotification({ type: "reminder", agentId: "memo", title: "提醒", body: "喝水" })');
+    const pinned = createDesktopNotifySandbox();
+    pinned.ctx.document.hidden = true;
+    pinned.ctx.document.hasFocus = () => false;
+    await pinned.ctx.run('_presentAppNotification({ type: "reminder", agentId: "memo", modes: { focused: "persistent", elsewhere: "persistent", background: "persistent" }, title: "提醒", body: "喝水" })');
     await new Promise((resolve) => setTimeout(resolve, 0));
-    assert.equal(bg.notifications[0].options.requireInteraction, true); // 失焦：常驻
+    assert.equal(pinned.notifications[0].options.requireInteraction, true); // persistent：常驻
   });
 
-  it('input（choice）类恒非持久（普通 toast，前台后台一致——现状语义）', async () => {
+  it('input（choice）类：免打扰硬闸（正盯着卡片不弹）；持久性按选键；无 modes 帧兜底 auto', async () => {
     const { ctx, notifications } = createDesktopNotifySandbox();
-    ctx.run('currentRuntimeAgentId = "runtime-2"');
-    ctx.document.hidden = true; // 后台也非持久：既有行为，不在本次持久性治理范围
-    ctx.document.hasFocus = () => false;
+    ctx.run('allAgents = [{ id: "ph", name: "PH", runtime_session_id: "runtime-1" }]');
+    ctx.run('currentRuntimeAgentId = "runtime-1"');
 
-    await ctx.run('_presentAppNotification({ type: "input", agentId: "runtime-1", requestId: "req-1" })');
+    // 焦点会话 choice：卡片已可见，免打扰硬闸（不可配置——与 finish 的
+    // focused 键区分：choice 是模态请求，正盯着时弹通知纯打扰）
+    ctx.run('_presentAppNotification({ type: "input", agentId: "runtime-1", modes: { focused: "persistent", elsewhere: "persistent", background: "persistent" }, requestId: "req-focus" })');
     await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(notifications.length, 0);
 
+    // 非焦点会话 + persistent 三键 → 常驻
+    ctx.run('currentRuntimeAgentId = "runtime-2"');
+    await ctx.run('_presentAppNotification({ type: "input", agentId: "runtime-1", modes: { focused: "persistent", elsewhere: "persistent", background: "persistent" }, requestId: "req-1p" })');
+    await new Promise((resolve) => setTimeout(resolve, 0));
     assert.equal(notifications.length, 1);
-    assert.equal(notifications[0].options.requireInteraction, undefined);
+    assert.equal(notifications[0].options.requireInteraction, true);
+
+    // 无 modes 帧（旧帧兼容）：兜底 auto
+    await ctx.run('_presentAppNotification({ type: "input", agentId: "runtime-1", requestId: "req-1b" })');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(notifications.length, 2);
+    assert.equal(notifications[1].options.requireInteraction, false);
   });
 
   it('新一轮 call 开始：清除「刚刚完成」蓝灯（_recentlyFinishedRuntimes）', () => {
@@ -665,63 +698,13 @@ describe('desktop-notify: finish visibility', () => {
   });
 });
 
-// ── desktop-notify: Worker 心跳（ADR-0030：仅前台时钟同步）─────────────
-// 心跳 IIFE 闭包不可直接触达：Worker stub 捕获 onmessage，测试手动发 tick。
-// 通知本体由 app-notification 帧实时驱动，心跳不再承担任何轮询/重扫职责。
-
-function createHeartbeatSandbox() {
-  const fetches = [];
-  class CapturingWorker {
-    constructor() { CapturingWorker.last = this; }
-    set onmessage(fn) { this._onmessage = fn; }
-    get onmessage() { return this._onmessage; }
-  }
-  const ctx = createFrontendSandbox({
-    allAgents: [{ id: 'runtime-1', name: 'Runtime One' }],
-    currentLanguage: 'en',
-    normalizeAgentIdentity(value) { return String(value || '').trim(); },
-    isSseActive() { return false; },
-    fetch: async (url) => {
-      fetches.push(String(url));
-      return { ok: true, json: async () => ({ alerts: [] }) };
-    },
-    Notification: function TestNotification() { return { close() {} }; },
-    Blob: function TestBlob() {},
-    URL: { createObjectURL: () => 'blob:test' },
-    Worker: CapturingWorker,
-  });
-  ctx.Notification.permission = 'granted';
-  ctx.window.focus = () => {};
-  ctx.document.hasFocus = () => true;
-  ctx.document.hidden = false;
-  ctx.loadSource('public/src/modules/desktop-notify.js');
-  const tick = () => CapturingWorker.last._onmessage({ data: 'tick' });
-  return { ctx, tick, fetches };
-}
-
-describe('desktop-notify: Worker 心跳（ADR-0030：仅前台时钟同步）', () => {
-  it('后台 tick：只刷新前台时钟，不触发任何轮询或 fetch', () => {
-    const { ctx, tick, fetches } = createHeartbeatSandbox();
-    ctx.document.hidden = true;
-    ctx.document.hasFocus = () => false;
-    const before = ctx.run('_lastForegroundTs');
-    tick();
-    assert.equal(fetches.length, 0); // 通知职责已由 app-notification 帧驱动
-    assert.equal(ctx.run('_lastForegroundTs'), before); // 后台不推进时钟
-  });
-
-  it('前台 tick：刷新前台时钟（宽限期判定的时间源）', () => {
-    const { ctx, tick } = createHeartbeatSandbox();
-    ctx.run('_lastForegroundTs = 0');
-    tick();
-    assert.ok(ctx.run('_lastForegroundTs') > 0);
-  });
-});
+// ── desktop-notify: input 帧呈现（choice 通知，ADR-0030）───────────────
+// Worker 心跳已随三态模式配置退役：前台时钟同步（_lastForegroundTs）不再
+// 存在，通知呈现完全由 app-notification 帧实时驱动。
 
 describe('desktop-notify: input 帧呈现（choice 通知，ADR-0030）', () => {
   it('焦点会话的 choice 不弹（正盯着卡片）；非焦点会话照常弹', async () => {
     const { ctx, notifications } = createDesktopNotifySandbox();
-    ctx.run('_syncForegroundState()');
     ctx.run('allAgents = [{ id: "ph", name: "PH", runtime_session_id: "runtime-1" }, { id: "other", name: "Other", runtime_session_id: "runtime-2" }]');
     ctx.run('currentRuntimeAgentId = "runtime-1"');
 
@@ -740,7 +723,6 @@ describe('desktop-notify: input 帧呈现（choice 通知，ADR-0030）', () => 
     const { ctx, notifications } = createDesktopNotifySandbox();
     ctx.document.hidden = true;
     ctx.document.hasFocus = () => false;
-    ctx.run(`_lastForegroundTs = ${Date.now() - 60000}`);
     ctx.run('_presentAppNotification({ type: "input", agentId: "runtime-1", requestId: "req-b" })');
     await new Promise((resolve) => setTimeout(resolve, 0));
     ctx.run('_presentAppNotification({ type: "input", agentId: "runtime-1", requestId: "req-b" })');

@@ -20,12 +20,16 @@
   "processMode": "shared-by-project",
   "enabled": true,
   "permissions": [
-    "notifications.finish",
+    "notifications.finish.focused",
+    "notifications.finish.elsewhere",
+    "notifications.finish.background",
     "notifications.input"
   ],
   "permissionDefaults": {
-    "notifications.finish": true,
-    "notifications.input": true
+    "notifications.finish.focused": "off",
+    "notifications.finish.elsewhere": "auto",
+    "notifications.finish.background": "persistent",
+    "notifications.input": "persistent"
   },
   "features": [
     "todo",

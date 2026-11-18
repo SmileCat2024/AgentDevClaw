@@ -15,8 +15,8 @@
   "sidebarSessions": "visible",
   "permissions": ["notifications.reminder", "notifications.input"],
   "permissionDefaults": {
-    "notifications.reminder": true,
-    "notifications.input": true
+    "notifications.reminder": "auto",
+    "notifications.input": "auto"
   },
   "features": [],
   "ui": {

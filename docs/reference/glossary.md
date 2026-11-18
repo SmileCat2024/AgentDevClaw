@@ -44,7 +44,7 @@
   _Avoid_: 在 feature 层做强制（CLI / ACP 绕过）；只在 session create 路由拦（恢复 / 接续 / activate 击穿）。
 - **OS 词汇对照** — 程序 = agent 装配（agent.js + features + metadata.json）；进程 = runtime 子进程；syscall 边界 = server HTTP/IPC API；内核 = Claw server。
   _Avoid_: 引入"子代理"新分类做治理单位——治理单位是 workspace（agentId），与 ADR-0025 身份收敛方向一致。
-- **用户通知（app-notification）** — 面向用户的桌面 toast，经 server 统一出口（权限闸 → SSE `app-notification` 帧 → 前端呈现器）；权限项族 `notifications.finish / reminder / input`，三层判定链：用户覆盖 > metadata `permissionDefaults` > false（ADR-0030）。
+- **用户通知（app-notification）** — 面向用户的桌面 toast，经 server 统一出口（权限闸 → SSE `app-notification` 帧 → 前端呈现器）；权限项族 `notifications.finish(.focused/.elsewhere/.background) / reminder / input` 为三态呈现模式（`off` / `auto` / `persistent`，布尔值域已退役，读路径就地归一 true→auto、false→off）。三层判定链：用户覆盖 > metadata `permissionDefaults` > `off`，解析出的 `modes` 组（`{ focused, elsewhere, background }`，单键场景同值复制）随帧下发；焦点态属设备端事实，由前端呈现器按当下焦点选键决定弹与持久（persistent 常驻挂起、auto 轻提示、off 不弹），finish 免打扰即 `focused` 子场景配置，input 保留硬闸（ADR-0030 及其修订）。
   _Avoid_: 与框架 `core/notification.ts`（DebugHub 的 call 状态 UI 信号，SSE `notification` 快照帧）混淆——两者语义不同；前端在 runtime 状态感知路径上直接弹通知（触发判定已上移 server）。
 - **editingSurface（设置承接）** — APP 设置面按 metadata 权限声明渲染编辑控件的通用机制；宿主可集中承接所管理子工作空间的项；全局工作空间面板只读审计。
   _Avoid_: 在全局 Claw 设置里编辑 APP 通知项——"编辑位置迁就业务语义，知情权不迁就"（ADR-0027/0030）。

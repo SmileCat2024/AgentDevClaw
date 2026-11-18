@@ -14857,3 +14857,15 @@ body[data-theme="light"] .session-ref-chip {
 .ph-delete-dir-option input[type="checkbox"] {
   margin-top: 3px;
 }
+
+/* ── PH 设置·通知页签：沿用模型配置的行与分隔方式，控制列统一右对齐；
+   标题和子项共用文字起点，以字重/字号区分层级，避免阶梯式缩进。 ── */
+.ph-notify-root { display: flex; flex-direction: column; gap: 16px; padding: 16px 24px 8px; }
+.ph-notify-scene-row { border-bottom: none; }
+.ph-notify-subrows .ph-mc-row { padding: 10px 24px; border-bottom: none; }
+.ph-notify-subrows .ph-mc-row:last-child { padding-bottom: 14px; border-bottom: 1px solid var(--border-color); }
+.ph-notify-subrows .ph-mc-role { padding-left: 0; }
+.ph-notify-subrows .ph-mc-role-name { font-size: 13px; font-weight: 500; }
+.ph-notify-subrows .ph-mc-role-desc { font-size: 11px; }
+.ph-notify-subrows .ph-mc-single,
+.ph-notify-scene-toggle { width: 220px; }

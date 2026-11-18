@@ -614,13 +614,108 @@ const phSaveCoderThreadLimit = async function(rawValue) {
   }
 };
 
-// ── 通知：本工作空间与 Coder 完成通知的集中承接（ADR-0030 editingSurface）───
+// ── 通知：编程小助手系统通知的集中配置（ADR-0030 editingSurface）───
 
-// 声明制渲染：只显示 metadata 声明了 notifications.finish 的工作空间开关
-// （宿主配置自己 + coder）。生效值判定链：resourcePolicy 用户覆盖 >
-// permissionDefaults 作者默认 > false；写入 PUT
+// 场景组（信息层级：APP 分区 → 场景（显式启用开关）→ 子场景三元模式）。
+// 文案分工：场景层说「什么时候提醒」，子项层只说「怎么提醒」——单子项
+// 场景不重复场景语义。开关是派生态（组内任一子项生效值非 off 即启用），
+// 不新增存储字段：关闭 = 子项全写 'off'，开启 = 写 enabledDefaults 建议
+// 档（与作者默认同值；coder 作者默认整体 off，开启动作即越过它写
+// persistent）。声明制渲染：场景仅在目标 agent 在册（source prebuilt）
+// 且声明对应权限项时出现。生效值判定链与 server 同源：用户覆盖
+// （resourcePolicy）> 作者默认（permissionDefaults）> 'off'；历史布尔
+// 就地归一（true→auto、false→off）；PH 任务完成存在存量单键覆盖时，三
+// 子键未逐项覆盖则回落单键值（与 server 判定链回落同语义）。写入 PUT
 // /protoclaw/workspace_settings/resource_policy（与全局「工作空间设置」
 // 的只读审计是同一份数据）。
+const PH_NOTIFY_MODES = ['off', 'auto', 'persistent'];
+const PH_NOTIFY_APP_SECTIONS = [
+  {
+    agentId: 'programming-helper',
+    nameZh: '编程小助手', nameEn: 'Programming Helper',
+    scenes: [
+      {
+        nameZh: '任务完成时', nameEn: 'Task finished',
+        descZh: '运行结束后提醒你',
+        descEn: 'Notify me when a run ends',
+        legacyFallbackPermissionId: 'notifications.finish',
+        enabledDefaults: {
+          'notifications.finish.focused': 'off',
+          'notifications.finish.elsewhere': 'auto',
+          'notifications.finish.background': 'persistent',
+        },
+        items: [
+          {
+            permissionId: 'notifications.finish.focused',
+            nameZh: '在当前对话', nameEn: 'In this chat',
+            descZh: '结果已经可见', descEn: 'Result already on screen',
+          },
+          {
+            permissionId: 'notifications.finish.elsewhere',
+            nameZh: '在别的对话或页面', nameEn: 'In other chats or pages',
+            descZh: 'Claw 在前台', descEn: 'Claw in foreground',
+          },
+          {
+            permissionId: 'notifications.finish.background',
+            nameZh: 'Claw 在后台', nameEn: 'Claw in background',
+            descZh: '最小化或切到其他应用', descEn: 'Minimized or switched away',
+          },
+        ],
+      },
+      {
+        nameZh: '需要你决策时', nameEn: 'Decision needed',
+        descZh: '出现选择题、等待你选择时',
+        descEn: 'When a choice is waiting for you',
+        enabledDefaults: { 'notifications.input': 'persistent' },
+        items: [
+          {
+            permissionId: 'notifications.input',
+            nameZh: '提醒方式', nameEn: 'How to notify',
+          },
+        ],
+      },
+    ],
+  },
+  {
+    agentId: 'coder',
+    nameZh: 'Coder', nameEn: 'Coder',
+    scenes: [
+      {
+        nameZh: '任务完成时', nameEn: 'Task finished',
+        descZh: '线程轮次完成或失败时',
+        descEn: 'When a thread turn completes or fails',
+        enabledDefaults: { 'notifications.finish': 'persistent' },
+        items: [
+          {
+            permissionId: 'notifications.finish',
+            nameZh: '提醒方式', nameEn: 'How to notify',
+          },
+        ],
+      },
+    ],
+  },
+];
+
+// 下拉选项文案：三档名词短语，语义靠场景语境，不带解释后缀
+const _phNotifyModeOptionLabel = (mode, isZh) => ({
+  off: isZh ? '不通知' : 'Off',
+  auto: isZh ? '短通知' : 'Brief',
+  persistent: isZh ? '常驻通知' : 'Persistent',
+}[mode] || mode);
+
+/** 历史布尔 → 模式归一（与 server 判定链同语义）；非法值视为未配置。 */
+function _phNormalizeNotifyMode(value) {
+  if (value === true) return 'auto';
+  if (value === false) return 'off';
+  return PH_NOTIFY_MODES.includes(value) ? value : null;
+}
+
+function _phNotifySceneOptions(effective, isZh) {
+  return PH_NOTIFY_MODES.map((mode) => '<option value="' + mode + '"'
+    + (mode === effective ? ' selected' : '') + '>'
+    + escapeHtml(_phNotifyModeOptionLabel(mode, isZh)) + '</option>').join('');
+}
+
 async function _phLoadNotificationSettings() {
   const host = document.getElementById('ph-notification-host');
   if (!host) return;
@@ -638,59 +733,154 @@ async function _phLoadNotificationSettings() {
   }
   if (!document.getElementById('ph-notification-host') || _phSettingsTab !== 'notification') return;
   const agents = Array.isArray(allAgents) ? allAgents : [];
-  const targets = ['programming-helper', 'coder']
-    .map((agentId) => agents.find((a) => a.id === agentId && a.source === 'prebuilt'))
-    .filter((a) => a && Array.isArray(a.permissions) && a.permissions.includes('notifications.finish'));
-  if (targets.length === 0) {
+  const agentOf = (agentId) => agents.find((a) => a.id === agentId && a.source === 'prebuilt');
+  // 生效值与 server 判定链同源：子键用户覆盖 > 子键作者默认 > 'off'；
+  // 焦点细分组三子键均无用户覆盖时，回落存量单键覆盖（旧值复制三键）
+  const effectiveModeOf = (scene, agent, userPolicy, item) => {
+    const defaults = agent?.permissionDefaults && typeof agent.permissionDefaults === 'object' ? agent.permissionDefaults : {};
+    let effective = _phNormalizeNotifyMode(userPolicy[item.permissionId])
+      || _phNormalizeNotifyMode(defaults[item.permissionId]) || 'off';
+    if (scene.legacyFallbackPermissionId) {
+      const legacyUser = _phNormalizeNotifyMode(userPolicy[scene.legacyFallbackPermissionId]);
+      const hasOverride = scene.items.some((it) => _phNormalizeNotifyMode(userPolicy[it.permissionId]) !== null);
+      if (legacyUser && !hasOverride) effective = legacyUser;
+    }
+    return effective;
+  };
+  const sections = PH_NOTIFY_APP_SECTIONS
+    .map((section) => {
+      const agent = agentOf(section.agentId);
+      if (!agent || !Array.isArray(agent.permissions)) return null;
+      const userPolicy = resourcePolicy[section.agentId] || {};
+      const scenes = section.scenes
+        .map((scene) => {
+          const items = scene.items.filter((item) => agent.permissions.includes(item.permissionId));
+          return items.length > 0 ? { scene, items } : null;
+        })
+        .filter(Boolean);
+      return scenes.length > 0 ? { section, agent, userPolicy, scenes } : null;
+    })
+    .filter(Boolean);
+  if (sections.length === 0) {
     host.innerHTML = '<div class="ph-settings-empty">' + escapeHtml(isZh ? '暂无可配置的通知项。' : 'No notifications to configure.') + '</div>';
     return;
   }
-  const rows = targets.map((a) => {
-    const userValue = resourcePolicy[a.id]?.['notifications.finish'];
-    const defaults = a.permissionDefaults && typeof a.permissionDefaults === 'object' ? a.permissionDefaults : {};
-    const authorDefault = typeof defaults['notifications.finish'] === 'boolean' ? defaults['notifications.finish'] : false;
-    const effective = typeof userValue === 'boolean' ? userValue : authorDefault;
-    // 行式布局照模型配置页（ph-mc-row）：左标题列 + 右开关
+  const html = sections.map(({ section, agent, userPolicy, scenes }) => {
+    const sceneRows = scenes.map(({ scene, items }) => {
+      // 开关派生态：组内任一子项生效值非 off。场景关闭时子配置不渲染
+      const enabled = items.some((item) => effectiveModeOf(scene, agent, userPolicy, item) !== 'off');
+      const sceneIdx = section.scenes.indexOf(scene);
+      const head = [
+        '<div class="ph-mc-row' + (enabled ? ' ph-notify-scene-row' : '') + '">',
+        '<div class="ph-mc-role">',
+        '<div class="ph-mc-role-name">' + escapeHtml(isZh ? scene.nameZh : scene.nameEn) + '</div>',
+        '<div class="ph-mc-role-desc">' + escapeHtml(isZh ? scene.descZh : scene.descEn) + '</div>',
+        '</div>',
+        '<div class="ph-mc-single ph-notify-scene-toggle">',
+        '<label class="proxy-switch" title="' + escapeHtml(isZh ? '启用/关闭这一场景' : 'Enable/disable this scene') + '">',
+        '<input type="checkbox"' + (enabled ? ' checked' : '')
+        + ' data-action="phSettings.setNotifySceneEnabled" data-event="change"'
+        + ' data-args=\'[' + JSON.stringify(section.agentId) + ', ' + sceneIdx + ']\' />',
+        '<span class="proxy-switch-slider"></span>',
+        '</label>',
+        '</div>',
+        '</div>',
+      ].join('');
+      const subrows = enabled ? [
+        '<div class="ph-notify-subrows">',
+        ...items.map((item) => {
+          const effective = effectiveModeOf(scene, agent, userPolicy, item);
+          const desc = isZh ? item.descZh : item.descEn;
+          return [
+            '<div class="ph-mc-row">',
+            '<div class="ph-mc-role">',
+            '<div class="ph-mc-role-name">' + escapeHtml(isZh ? item.nameZh : item.nameEn) + '</div>',
+            ...(desc ? ['<div class="ph-mc-role-desc">' + escapeHtml(desc) + '</div>'] : []),
+            '</div>',
+            '<div class="ph-mc-single">',
+            '<div class="ph-mc-pickers">',
+            '<select class="ph-mc-select" data-claw-select'
+            + ' data-action="phSettings.setNotifySceneMode" data-event="change"'
+            + ' data-agent="' + escapeHtml(section.agentId) + '" data-permission="' + escapeHtml(item.permissionId) + '">'
+            + _phNotifySceneOptions(effective, isZh),
+            '</select>',
+            '</div>',
+            '</div>',
+            '</div>',
+          ].join('');
+        }),
+        '</div>',
+      ].join('') : '';
+      return head + subrows;
+    }).join('');
     return [
-      '<div class="ph-mc-row">',
-      '<div class="ph-mc-role">',
-      '<div class="ph-mc-role-name">' + escapeHtml(a.name || a.id) + '</div>',
-      '<div class="ph-mc-role-desc">' + (isZh ? '焦点不在本页面时，完成即弹通知' : 'Toast on finish while you are away') + '</div>',
-      '</div>',
-      '<div style="display:flex;justify-content:flex-end;align-items:center;padding-top:7px;">',
-      '<label class="proxy-switch">',
-      '<input type="checkbox" ' + (effective ? 'checked' : '') + ' data-action="phSettings.toggleNotifyFinish" data-agent="' + escapeHtml(a.id) + '" />',
-      '<span class="proxy-switch-slider"></span>',
-      '</label>',
+      '<div class="settings-section">',
+      '<div class="settings-section-title">' + escapeHtml(isZh ? section.nameZh : section.nameEn) + '</div>',
+      '<div class="ph-mc-list" style="border-top:1px solid var(--border-color);">',
+      sceneRows,
       '</div>',
       '</div>',
     ].join('');
   }).join('');
   host.innerHTML = [
-    rows,
+    '<div class="ph-notify-root">',
+    html,
+    '</div>',
     '<div id="ph-notification-status" style="margin:0 24px;"></div>',
   ].join('');
+  // 下拉在 innerHTML 后插入，这里手动做增强（renderPhSettingsOverlay 的
+  // enhanceAll 走 rAF，可能先于本次异步渲染执行）
+  enhanceAll(host);
 }
 
-const _phToggleNotificationFinish = async function(agentId, checked) {
+/** 写单个场景的呈现模式；失败抛错由调用方呈现状态。 */
+async function _phWriteNotifySceneMode(agentId, permissionId, value) {
+  const response = await fetch('/protoclaw/workspace_settings/resource_policy', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ agentId, permissionId, value }),
+  });
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    throw new Error(data?.error || 'HTTP ' + response.status);
+  }
+}
+
+const _phSetNotifySceneMode = async function(agentId, permissionId, mode) {
+  if (!PH_NOTIFY_MODES.includes(mode)) return;
   const isZh = getCurrentLanguage() === 'zh';
   const status = document.getElementById('ph-notification-status');
   const setStatus = (message) => { if (status) status.textContent = message; };
   try {
-    const response = await fetch('/protoclaw/workspace_settings/resource_policy', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ agentId, permissionId: 'notifications.finish', value: checked === true }),
-    });
-    if (!response.ok) {
-      const data = await response.json().catch(() => ({}));
-      throw new Error(data?.error || 'HTTP ' + response.status);
+    await _phWriteNotifySceneMode(agentId, permissionId, mode);
+    setStatus(isZh ? '已保存' : 'Saved');
+  } catch (error) {
+    setStatus((isZh ? '保存失败：' : 'Save failed: ') + (error?.message || error));
+  }
+  // 重取渲染：成功时与服务器态收敛一致，失败时选择回滚到服务器真值
+  await _phLoadNotificationSettings();
+};
+
+/** 场景级启用/关闭（派生开关写穿到子项）：关 = 子项全写 'off'；开 = 写
+ *  场景建议档（enabledDefaults，PH 任务完成 = 关/短/持久的作者默认组合）。
+ *  串行 PUT，任一失败中断并整体回读服务器真值（部分写入会被回读覆盖提示，
+ *  用户可重试）。 */
+const _phSetNotifySceneEnabled = async function(agentId, sceneIdx, checked) {
+  const isZh = getCurrentLanguage() === 'zh';
+  const status = document.getElementById('ph-notification-status');
+  const setStatus = (message) => { if (status) status.textContent = message; };
+  const section = PH_NOTIFY_APP_SECTIONS.find((s) => s.agentId === agentId);
+  const scene = section?.scenes[Number(sceneIdx)];
+  if (!scene) return;
+  try {
+    for (const item of scene.items) {
+      const value = checked ? (scene.enabledDefaults?.[item.permissionId] || 'auto') : 'off';
+      await _phWriteNotifySceneMode(agentId, item.permissionId, value);
     }
     setStatus(isZh ? '已保存' : 'Saved');
   } catch (error) {
     setStatus((isZh ? '保存失败：' : 'Save failed: ') + (error?.message || error));
   }
-  // 重取渲染：成功时与服务器态收敛一致，失败时开关回滚到服务器真值
   await _phLoadNotificationSettings();
 };
 
@@ -813,7 +1003,7 @@ export function renderPhSettingsOverlay(agent, presets, { initialTab } = {}) {
     : featurePage
       ? (isZh ? featurePage.subtitleZh : featurePage.subtitleEn)
       : _phSettingsTab === 'notification'
-          ? (isZh ? '编程小助手与 Coder 运行完成时是否弹出系统通知' : 'Run-finished toasts for Programming Helper and Coder')
+          ? (isZh ? '编程小助手的系统通知：任务完成、等待选择与 Coder 交付，可按场景选择提醒方式' : 'Programming Helper toasts — finished tasks, choices, and Coder deliveries; pick a style per scenario')
           : (isZh ? '设置会话在本地或容器中的运行方式' : 'Configure how sessions run locally or in containers');
 
   host.innerHTML = [
@@ -929,7 +1119,8 @@ window.ClawFW.actions.registerMany({
   'phSettings.setCoderRotationStrategy': (el) => phSetCoderRotationStrategy(el.dataset.mode),
   'phSettings.setCoderRuntimeMode': (el) => phSetCoderRuntimeMode(el.dataset.mode),
   'phSettings.saveCoderThreadLimit': (el) => phSaveCoderThreadLimit(el.value),
-  'phSettings.toggleNotifyFinish': (el) => _phToggleNotificationFinish(el.dataset.agent, el.checked),
+  'phSettings.setNotifySceneMode': (el) => _phSetNotifySceneMode(el.dataset.agent, el.dataset.permission, el.value),
+  'phSettings.setNotifySceneEnabled': (el, _event, agentId, sceneIdx) => _phSetNotifySceneEnabled(agentId, sceneIdx, el.checked),
   'phSettings.switchFeatureSubTab': (el) => _phSwitchFeatureSubTab(el.dataset.sub),
   'phSettings.switchRuntimeSubTab': (el) => _phSwitchRuntimeSubTab(el.dataset.sub),
   'phSettings.openFeatureConfig': (el) => _phOpenFeatureConfig(el),

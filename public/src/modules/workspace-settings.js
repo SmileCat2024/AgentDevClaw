@@ -163,13 +163,32 @@ async function loadWorkspaceSettingsPanel() {
 // ── 通知权限只读审计（ADR-0030）──────────────────────────────────────
 // 编辑位置在各 APP 的设置页（editingSurface，ADR-0027「编辑位置迁就业务
 // 语义，知情权不迁就」），全局面板只保留知情权：逐 workspace 展示声明的
-// 通知权限项与当前生效值（判定链 = 用户覆盖 > 作者默认 > false）。
+// 通知权限项与当前生效模式（判定链 = 用户覆盖 > 作者默认 > off；历史
+// 布尔值就地归一 true→auto / false→off；完成通知焦点子键未逐项覆盖时
+// 回落存量单键值——语义与 server 判定链 / 设置页回落一致）。
 // 无编辑控件；maxLiveThreads 现有编辑能力不动。
 const NOTIFICATION_AUDIT_ITEMS = [
+  { permissionId: 'notifications.finish.focused', labelZh: '完成·当前对话', labelEn: 'Finish · viewing chat', focusFallback: 'notifications.finish' },
+  { permissionId: 'notifications.finish.elsewhere', labelZh: '完成·其他内容', labelEn: 'Finish · elsewhere', focusFallback: 'notifications.finish' },
+  { permissionId: 'notifications.finish.background', labelZh: '完成·后台', labelEn: 'Finish · background', focusFallback: 'notifications.finish' },
   { permissionId: 'notifications.finish', labelZh: '完成通知', labelEn: 'Finished runs' },
   { permissionId: 'notifications.input', labelZh: '输入请求', labelEn: 'Input requests' },
   { permissionId: 'notifications.reminder', labelZh: '提醒', labelEn: 'Reminders' },
 ];
+
+// 审计区模式文案（与设置页选项同词汇；en 用短标签）
+const _wsNotifyModeText = (mode, isZh) => ({
+  off: isZh ? '关' : 'off',
+  auto: isZh ? '自动收起' : 'auto-dismiss',
+  persistent: isZh ? '持久提醒' : 'persistent',
+}[mode] || (isZh ? '关' : 'off'));
+
+/** 历史布尔 → 模式归一（判定链与 server 同语义）。 */
+function _wsNormalizeNotifyMode(value) {
+  if (value === true) return 'auto';
+  if (value === false) return 'off';
+  return ['off', 'auto', 'persistent'].includes(value) ? value : null;
+}
 
 function renderNotificationAuditSection(isZh, resourcePolicies) {
   const agents = (Array.isArray(allAgents) ? allAgents : [])
@@ -183,12 +202,24 @@ function renderNotificationAuditSection(isZh, resourcePolicies) {
     const cells = NOTIFICATION_AUDIT_ITEMS
       .filter((item) => agent.permissions.includes(item.permissionId))
       .map((item) => {
-        const userValue = resourcePolicies[agent.id]?.[item.permissionId];
-        const authorDefault = typeof defaults[item.permissionId] === 'boolean'
-          ? defaults[item.permissionId] : false;
-        const effective = typeof userValue === 'boolean' ? userValue : authorDefault;
-        const valueText = effective ? (isZh ? '开' : 'on') : (isZh ? '关' : 'off');
-        const sourceText = typeof userValue === 'boolean'
+        const userPolicy = resourcePolicies[agent.id] || {};
+        let userValue = _wsNormalizeNotifyMode(userPolicy[item.permissionId]);
+        // 焦点子键未逐项覆盖且不存在任何同组子键覆盖时，回落存量单键值
+        // （旧值复制三键；回落条件与 server 判定链一致——组内任一子键有
+        // 覆盖即整组按子键独立判定。声明了子键的 agent 不会再声明单键）
+        if (item.focusFallback && !userValue) {
+          const siblingOverridden = NOTIFICATION_AUDIT_ITEMS.some((other) => other.focusFallback === item.focusFallback
+            && other.permissionId !== item.permissionId
+            && _wsNormalizeNotifyMode(userPolicy[other.permissionId]) !== null);
+          if (!siblingOverridden) {
+            const legacy = _wsNormalizeNotifyMode(userPolicy[item.focusFallback]);
+            if (legacy) userValue = legacy;
+          }
+        }
+        const authorDefault = _wsNormalizeNotifyMode(defaults[item.permissionId]);
+        const effective = userValue || authorDefault || 'off';
+        const valueText = _wsNotifyModeText(effective, isZh);
+        const sourceText = userValue
           ? (isZh ? '自定义' : 'custom')
           : (isZh ? '默认' : 'default');
         return '<span style="font-size:12px;color:var(--text-secondary);">'

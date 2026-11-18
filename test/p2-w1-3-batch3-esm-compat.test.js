@@ -360,7 +360,7 @@ test('workspace-settings：面板开合状态归模块私有，渲染与关停�
     agentStore.setAllAgents([
       { id: 'coder', name: 'Coder', description: 'unattended', source: 'prebuilt',
         visibility: 'on-demand', permissions: ['maxLiveThreads', 'notifications.finish'],
-        permissionDefaults: { 'notifications.finish': true } },
+        permissionDefaults: { 'notifications.finish': 'auto' } },
       { id: 'programming-helper', name: 'PH', source: 'prebuilt', visibility: 'persistent' },
     ]);
 

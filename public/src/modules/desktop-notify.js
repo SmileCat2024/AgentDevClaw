@@ -3,15 +3,18 @@
  *
  * 触发判定已上移 server（统一投递出口：权限闸 + 事件级去重 + SSE
  * app-notification 帧）；本模块只承担设备端呈现策略：
- *   1. 免打扰判定（_isObservedConversation：页面聚焦且正选中该会话
- *      才静默；页面失焦一律通知，判定用会话粒度 runtimeAgentId）；
- *   1b. 持久性判定（_shouldPersistNotification：页面失焦才常驻挂起；
- *      前台（含看别的会话）普通 toast 自动收进通知中心）；
+ *   1. 呈现模式解析（_resolveFramePresentation：帧携带 modes 组——server
+ *      判定链按焦点子场景解析的三键（focused / elsewhere / background），
+ *      server 不感知页面焦点故全量下发——按设备端当下焦点态选键。
+ *      focused 子场景 off（默认）即免打扰：页面聚焦且正选中该会话不弹
+ *      （_isObservedConversation 提供选键输入，判定用会话粒度
+ *      runtimeAgentId）。persistent 常驻挂起（requireInteraction / 壳内
+ *      Reminder toast）；auto 轻提示自动收进通知中心。旧帧缺失 modes 时
+ *      兜底 auto）；
  *   2. 呈现级去重（finish/input 事件幂等 + 30s 并发窗口；reminder 等
  *      主动投递帧同帧只弹一次——server 逐条投无事件级键，重放防护在前端）；
  *   3. 通知文案组装（fetch 最后回复做正文预览、markdown 剥离截断）；
  *   4. Tauri/Web 通知权限处理与 toast 点击导航。
- * 内置 Web Worker 心跳保留前台时钟刷新（事件路径刷新钩子）。
  *
  * 帧语义（server 侧已保证）：type=finish 的完成事实已排除挂起（ADR-0019）
  * 与接续移交（cancelled + interruptedBy=context_rotation，轮次由 successor
@@ -71,22 +74,6 @@ function _genericFrameKey(payload) {
   return `cnt:${payload?.title ?? ''}\u0000${payload?.body ?? ''}\u0000${payload?.threadId ?? ''}`;
 }
 
-/* ── Foreground clock: 事件帧到达刷新（sse-client 调用）──
- * 历史上用于页面级前台宽限判定；呈现判定已改为会话级焦点
- * （_isObservedConversation），时钟保留供事件路径刷新。
- */
-let _lastForegroundTs = 0; // 0 = 页面从未获得过前台焦点
-
-function _syncForegroundState() {
-  if (!document.hidden && document.hasFocus()) {
-    _lastForegroundTs = Date.now();
-  }
-}
-document.addEventListener('visibilitychange', _syncForegroundState);
-window.addEventListener('focus', _syncForegroundState);
-window.addEventListener('blur', _syncForegroundState);
-_syncForegroundState(); // 页面加载时初始化
-
 /* ── 免打扰判定：页面聚焦 && 完成会话正被选中 ──
  * 语义（与产品裁决对齐）：页面焦点不在 Claw（最小化 / 后台标签 /
  * 被其他窗口遮挡 / 桌面形态失焦）→ 一律通知；页面聚焦时只有正选中
@@ -102,14 +89,24 @@ function _isObservedConversation(runtimeAgentId) {
   return !!focused && normalizeAgentIdentity(runtimeAgentId) === focused;
 }
 
-/* ── 持久性判定：页面失焦（用户不在 Claw）才常驻挂起 ──
- * 与免打扰判定（_isObservedConversation）同源的页面焦点语义：前台时
- * 通知只是轻提示（普通 toast，约 5 秒收进通知中心，侧栏「刚刚完成」
- * 蓝灯仍在）；页面失焦（最小化 / 后台标签 / 被遮挡）时持久挂起
- * （requireInteraction / 壳内原生 Reminder toast），停留至用户处理。
+/* ── 呈现模式解析：帧 modes 组按焦点态选键 ──
+ * server 判定链按焦点子场景解析三键（focused / elsewhere / background）
+ * 随帧下发（server 不感知页面焦点）；此处按设备端当下焦点态选键：
+ * focused = 页面聚焦且正选中该会话；elsewhere = 聚焦但在看其他对话/
+ * 页面；background = 页面失焦（最小化 / 后台标签 / 被遮挡）。off = 该
+ * 子场景关闭（不弹）；persistent = 常驻挂起（requireInteraction / 壳内
+ * Reminder toast）；auto = 轻提示自动收进通知中心。帧缺失 modes（旧帧 /
+ * 直投）兜底 auto 轻提示（兼容上一轮 mode 单值）。
  */
-function _shouldPersistNotification() {
-  return document.hidden || !document.hasFocus();
+function _resolveFramePresentation(payload, observed) {
+  const modes = payload?.modes;
+  if (!modes || typeof modes !== 'object') {
+    return { fire: true, persistent: payload?.mode === 'persistent' };
+  }
+  const focusKey = (document.hidden || !document.hasFocus()) ? 'background' : (observed ? 'focused' : 'elsewhere');
+  const mode = modes[focusKey];
+  if (mode === 'off') return { fire: false };
+  return { fire: true, persistent: mode === 'persistent' };
 }
 
 /** 帧的会话定位 id：runtimeAgentId 优先（会话粒度），缺失回退 agentId。 */
@@ -187,8 +184,12 @@ async function _presentAgentFinishedNotification(payload) {
   if (!normId) return;
   const finishTs = Number(payload?.finishTs) || 0;
 
-  // 免打扰 = 页面聚焦 && 正选中该会话（完成已可见）；其余一律通知。
-  if (_isObservedConversation(normId)) return;
+  // 呈现模式按焦点子场景选键（focused=正选中该会话）。免打扰从硬闸
+  // 变为配置项：focused 子场景 off（默认）即不弹，auto / persistent 时
+  // 正盯着也按配置呈现。fire=false 不写 dedup 标记——事件尚未通知过，
+  // 焦点态变化后同帧到达仍可按新键呈现。
+  const presentation = _resolveFramePresentation(payload, _isObservedConversation(normId));
+  if (!presentation.fire) return;
 
   // dedup（双层）：finishTs 事件幂等 + 30s 时间窗口。标记必须在任何 await
   // 之前同步写入：重放与并发进入都靠它挡住（Tauri 通知插件忽略 tag，
@@ -245,11 +246,10 @@ async function _presentAgentFinishedNotification(payload) {
       ? (isZh ? 'Agent 已完成运行，点击查看' : 'Agent has finished running. Click to view.')
       : (isZh ? 'Agent 运行已结束，点击查看' : 'Agent run ended. Click to view.'));
 
-  // 持久性按页面焦点判定：失焦（用户不在）常驻挂起；前台（看着别的
-  // 会话）轻提示，自动收进通知中心。navPayload 供原生 toast 点击后定位
-  // 会话：threadId 优先（轮次事实帧携带，精确到会话；__clawConsume-
-  // NotificationActivation 与 generic 路径同语义），否则按 runtimeId 切
-  // 会话（快照路径帧）。
+  // 持久性按呈现解析结果（帧 modes 按焦点选键）——persistent 常驻挂起，
+  // auto 轻提示自动收进通知中心。navPayload 供原生 toast 点击后定位会话：
+  // threadId 优先（轮次事实帧携带，精确到会话；__clawConsumeNotificationActivation
+  // 与 generic 路径同语义），否则按 runtimeId 切会话（快照路径帧）。
   const threadId = String(payload?.threadId || '').trim();
   const navigateFromNotification = () => {
     window.focus();
@@ -261,7 +261,7 @@ async function _presentAgentFinishedNotification(payload) {
   };
   _showPersistentNotification(
     isZh ? `${agentName} ${titleSuffix}` : `${agentName} ${titleSuffix}`,
-    { body, tag: 'claw-agent-finished-' + normId, requireInteraction: _shouldPersistNotification() },
+    { body, tag: 'claw-agent-finished-' + normId, requireInteraction: presentation.persistent },
     navigateFromNotification,
     { runtimeId: normId, agentId: agent?.id, ...(threadId ? { threadId } : {}) }
   );
@@ -270,6 +270,9 @@ async function _presentAgentFinishedNotification(payload) {
 /* ── Input request（choice）通知呈现（type=input）─────────────────────────
  * server 已判定 notifications.input 权限并按 requestId 事件级去重；此处
  * 只做设备端呈现判定。新 requestId（新一轮 choice）替换旧条目照常弹。
+ * 呈现统一走 _showPersistentNotification（壳内原生 toast / 浏览器 Web
+ * API），持久性按帧 modes 选键——免打扰硬闸（choice 卡片已可见）之外，
+ * auto / persistent 由用户配置（ADR-0030 修订）。
  */
 function _presentInputRequestNotification(payload) {
   if (typeof Notification === 'undefined') return;
@@ -302,17 +305,20 @@ function _presentInputRequestNotification(payload) {
   // 标记已通知（在实际发送通知之前，防止重复触发）
   _notifiedInputRequestMap.set(normId, { requestId, ts: now });
 
-  try {
-    const notification = new Notification(
-      isZh ? `${agentName} 需要你的选择` : `${agentName} needs your decision`,
-      { body, tag: 'claw-agent-input-' + normId }
-    );
-    notification.onclick = () => {
+  // 标记须在呈现之前同步写入（重放与并发防护，同 finish 路径教训）；
+  // navPayload 供原生 toast 点击后定位会话（无 threadId，按 runtime 切）。
+  // 持久性按帧 modes 选键：免打扰硬闸（choice 卡片已可见）return 之上，
+  // 此处 observed 恒 false，页面聚焦时选 elsewhere 键、失焦选 background 键。
+  const presentation = _resolveFramePresentation(payload, false);
+  _showPersistentNotification(
+    isZh ? `${agentName} 需要你的选择` : `${agentName} needs your decision`,
+    { body, tag: 'claw-agent-input-' + normId, requireInteraction: presentation.persistent },
+    () => {
       window.focus();
-      notification.close();
       _navigateToAgent(agent);
-    };
-  } catch (e) { /* ignore */ }
+    },
+    { runtimeId: normId, ...(agent?.id ? { agentId: agent.id } : {}) }
+  );
 }
 
 /* ── Tauri 壳原生 toast ──────────────────────────────────────────────────
@@ -392,15 +398,16 @@ function _presentGenericAppNotification(payload) {
   const body = String(payload?.body || '').trim();
   const threadId = String(payload?.threadId || '').trim();
 
-  // 持久性按页面焦点判定（同 finish：失焦常驻，前台轻提示）。
-  // navPayload 供原生 toast 点击后定位：threadId 优先精确到会话，
-  // 否则按 agentId。
+  // 持久性按帧呈现模式（同 finish：persistent 常驻，auto 轻提示）。主动
+  // 投递类无会话焦点语义（observed=false，server 三键同值，选键结果一致）。
+  // navPayload 供原生 toast 点击后定位：threadId 优先精确到会话，否则按 agentId。
+  const presentation = _resolveFramePresentation(payload, false);
   _showPersistentNotification(
     title,
     {
       body,
       tag: 'claw-app-notification-' + normId,
-      requireInteraction: _shouldPersistNotification(),
+      requireInteraction: presentation.persistent,
     },
     () => {
       window.focus();
@@ -428,21 +435,3 @@ function _requestNotifyPermission() {
     Notification.requestPermission().catch(e => console.warn(e));
   }
 }
-
-/* ── Background heartbeat via Web Worker ──────────────────────────────────
- * 浏览器会将后台 tab 的 setTimeout 节流至 1s 甚至 1min。Web Worker 的
- * setInterval 不受此限制：持续刷新前台时钟（宽限期判定的时间源）。通知
- * 本体由 app-notification 帧实时驱动，心跳不再轮询触发。
- */
-(function () {
-  try {
-    const code = `setInterval(()=>postMessage('tick'),1000);`;
-    const blob = new Blob([code], { type: 'application/javascript' });
-    const worker = new Worker(URL.createObjectURL(blob));
-    worker.onmessage = () => {
-      _syncForegroundState();
-    };
-  } catch (e) {
-    console.warn('[Notify] Web Worker heartbeat unavailable:', e);
-  }
-})();
