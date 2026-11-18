@@ -324,6 +324,10 @@ class SessionLifecycle {
     this.agentName = opts.agentName || agentId;
     this.workspaceCwd = opts.workspaceCwd ?? null;
     this.runtimeHandoff = opts.runtimeHandoff ?? null;
+    const { threadId, headGeneration } = opts.threadHead ?? {};
+    this.threadHead = typeof threadId === 'string' && threadId && Number.isInteger(headGeneration) && headGeneration > 0
+      ? { threadId, headGeneration }
+      : null;
     this.announceOnStdout = opts.announceOnStdout === true;
     this.managedRuntimeIdentity = opts.managedRuntimeIdentity?.enabled === true
       ? { agentId: opts.managedRuntimeIdentity.agentId, sessionId: opts.managedRuntimeIdentity.sessionId }
@@ -849,10 +853,8 @@ SessionLifecycle.prototype.start = async function () {
     runtimeInputIdentity: {
       runtimeInstanceId,
       ...(this.sessionId ? { sessionId: this.sessionId } : {}),
-      ...(process.env.PROTOCLAW_THREAD_ID ? { threadId: process.env.PROTOCLAW_THREAD_ID } : {}),
-      ...(Number.isInteger(Number(process.env.PROTOCLAW_HEAD_GENERATION)) && Number(process.env.PROTOCLAW_HEAD_GENERATION) > 0
-        ? { headGeneration: Number(process.env.PROTOCLAW_HEAD_GENERATION) }
-        : {}),
+      // 每条会话独立注册；进程环境只属于初始会话，兄弟会话用各自的 IPC 身份。
+      ...(this.threadHead || {}),
     },
     serverOrigin: SERVER_ORIGIN,
     // PH 项目归属（ticket 043）：目录会话不传（undefined），保持旧构造面不变
@@ -1545,6 +1547,7 @@ process.on('message', async (msg) => {
       agentName: msg.agentName || agentName,
       workspaceCwd: msg.workspaceCwd || null,
       runtimeHandoff: msg.handoffPath ? loadRuntimeHandoffFromPath(msg.handoffPath) : null,
+      threadHead: msg.threadHead,
       runtime: msg.runtime,
     });
     sessions.set(newSessionId, newSession);
@@ -1730,6 +1733,10 @@ async function main() {
     workspaceCwd,
     runtimeHandoff,
     announceOnStdout: true,
+    threadHead: {
+      threadId: process.env.PROTOCLAW_THREAD_ID,
+      headGeneration: Number(process.env.PROTOCLAW_HEAD_GENERATION),
+    },
     runtime: {
       sessionType: process.env.PROTOCLAW_SESSION_TYPE || null,
       gcChatId: process.env.PROTOCLAW_GC_CHAT_ID || null,

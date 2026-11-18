@@ -163,6 +163,37 @@ async function main() {
     assert.ok(s1, `s1 响应缺会话 id: ${s1Res.text?.slice(0, 400)}`);
     console.log(`[2] 会话 s1=${s1}（runtime READY）`);
 
+    // 同目录的 s1 保持运行：关闭再激活旧会话必走共享进程 add-session，
+    // 不经宿主重启、换头或事后身份对账。用真实 Viewer 的投递回执锁定身份。
+    const siblingRes = await api(appPort, 'POST', '/protoclaw/prebuilt_sessions', {
+      agentId: AGENT, openDirectory: workDir, title: 'roundtrip-reopen',
+    });
+    assert.ok(siblingRes.ok, `同目录会话创建失败: ${siblingRes.status} ${siblingRes.text}`);
+    const siblingId = siblingRes.json?.session?.id;
+    assert.ok(siblingId);
+    const beforeReopen = await api(appPort, 'GET', `/protoclaw/threads?agentId=${AGENT}`);
+    const siblingThread = beforeReopen.json?.threads?.find((t) => t.headSessionId === siblingId);
+    assert.ok(siblingThread);
+    const closeSibling = await api(appPort, 'POST', '/protoclaw/stop_agent', { agentId: AGENT, sessionId: siblingId });
+    assert.ok(closeSibling.ok, `关闭旧会话失败: ${closeSibling.status} ${closeSibling.text}`);
+    const reopened = await api(appPort, 'POST', '/protoclaw/prebuilt_sessions/activate', { agentId: AGENT, sessionId: siblingId });
+    assert.ok(reopened.ok, `重开旧会话失败: ${reopened.status} ${reopened.text}`);
+    // 确认测试没有悄悄退化成单独启动新进程。
+    const pidOf = (result) => result.json?.status?.pid;
+    const getRuntimeStatus = (sessionId) => api(appPort, 'GET', `/protoclaw/runtime_status?agentId=${AGENT}&sessionId=${sessionId}`);
+    const s1Pid = pidOf(await getRuntimeStatus(s1));
+    assert.ok(s1Pid, '同目录兄弟会话应仍在运行');
+    assert.equal(pidOf(await getRuntimeStatus(siblingId)), s1Pid, '旧会话必须重进同一个共享进程');
+    const sendReopened = await api(appPort, 'POST', `/protoclaw/threads/${siblingThread.threadId}/commands`, {
+      text: 'first message after reopen', kind: 'user_message',
+    });
+    assert.ok(sendReopened.ok, `重开后提交失败: ${sendReopened.status} ${sendReopened.text}`);
+    assert.equal(sendReopened.json?.delivery?.delivered, 1,
+      `重开就绪后首条消息必须即时投递: ${JSON.stringify(sendReopened.json?.delivery)}`);
+    console.log('[2a] 无接续的旧会话重进共享进程：首条消息即时投递');
+    const stopSibling = await api(appPort, 'POST', '/protoclaw/stop_agent', { agentId: AGENT, sessionId: siblingId });
+    assert.ok(stopSibling.ok, `清理同目录会话失败: ${stopSibling.status} ${stopSibling.text}`);
+
     // ── 生产形状的身份对齐：先停 runtime，再经唤醒闸拉起 ──
     // ADR-0032：PH 会话创建即自动锚线程（目录对话集合），手动再建线程会让
     // 同一会话挂在两个线程上——spawn 身份注入取 findThreadBySession 的首个

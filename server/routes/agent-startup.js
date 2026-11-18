@@ -82,7 +82,7 @@ export function buildSessionWorkspaceEnv(agentId, sessionId, projectDir) {
   return workspaceCwd ? { PROTOCLAW_SESSION_WORKSPACE_CWD: workspaceCwd } : {};
 }
 
-export function buildSharedSessionStartMessage({ sessionId, agentName, projectDir, handoffPath, runtime }) {
+export function buildSharedSessionStartMessage({ sessionId, agentName, projectDir, handoffPath, runtime, threadHead }) {
   const workspaceCwd = typeof projectDir === 'string' ? projectDir.trim() : '';
   if (!workspaceCwd) {
     throw new Error('Shared sessions require an explicit session project directory');
@@ -95,6 +95,7 @@ export function buildSharedSessionStartMessage({ sessionId, agentName, projectDi
     // receive the exact directory owned by this logical session.
     workspaceCwd,
     handoffPath: handoffPath || null,
+    ...(threadHead ? { threadHead } : {}),
     runtime: {
       sessionType: runtime?.sessionType || null,
       gcChatId: runtime?.gcChatId || null,
@@ -406,6 +407,11 @@ export function createAgentStartupFns(deps) {
         },
       };
     }
+    // 两种启动载具共用同一身份来源。历史成员和尚未换入的 successor 均不冒领 head。
+    // 代际沿用框架推导（包括 legacy 记录），避免和投递侧的身份口径分叉。
+    const threadHead = thread && thread.headSessionId === resolvedSessionId
+      ? { threadId: thread.threadId, headGeneration: getThreadIntegration().resolveHeadGeneration(thread) }
+      : null;
     if (processGroupKey && resolvedSessionId) {
       const existingShared = findSharedProcessRuntime(processGroupKey);
         if (existingShared) {
@@ -576,6 +582,7 @@ export function createAgentStartupFns(deps) {
               agentName: runtimeDisplayName,
               projectDir,
               handoffPath: runtimeOptions?.extraEnv?.PROTOCLAW_HANDOFF_PATH,
+              threadHead,
               runtime: {
                 sessionType: runtimeOptions?.extraEnv?.PROTOCLAW_SESSION_TYPE,
                 gcChatId: runtimeOptions?.extraEnv?.PROTOCLAW_GC_CHAT_ID,
@@ -634,14 +641,9 @@ export function createAgentStartupFns(deps) {
         PROTOCLAW_INTERNAL_TOKEN: getInternalAuthToken(),
         PROTOCLAW_PREBUILT_AGENT_ID: String(agent.id || ''),
         PROTOCLAW_PREBUILT_SESSION_ID: resolvedSessionId || '',
-        ...(thread && thread.headSessionId === resolvedSessionId ? {
-          PROTOCLAW_THREAD_ID: thread.threadId,
-          // 派生必须与投递侧同一口径（框架 core.headGeneration，legacy 记录
-          // 按 sessionChain.length 派生）；此处自写 fallback 会造成 legacy
-          // 多棒线程 spawn 身份与 wire 身份错位、指令被 fencing 永久拒收。
-          PROTOCLAW_HEAD_GENERATION: String(getThreadIntegration().resolveHeadGeneration(thread)),
-        } : {}),
         ...(runtimeOptions?.extraEnv && typeof runtimeOptions.extraEnv === 'object' ? runtimeOptions.extraEnv : {}),
+        PROTOCLAW_THREAD_ID: threadHead?.threadId,
+        PROTOCLAW_HEAD_GENERATION: threadHead?.headGeneration,
         ...buildSessionWorkspaceEnv(agent.id, resolvedSessionId, projectDir),
       }),
       });
