@@ -22,7 +22,6 @@ import { withP2EsmCase } from './helpers/p2-esm-case.js';
 import { prepareSidebarDomain } from './p2-classic-hosts.js';
 
 const FACTORY_NAMES = [
-  'createP2BootstrapDomHost',
   'createP2BootstrapChatSurfaceHost',
   'createP2BootstrapCallActivityHost',
   'createP2BootstrapPhSessionHost',
@@ -74,16 +73,16 @@ async function importAdapters(c, names = Object.keys(ADAPTER_FILES)) {
 
 test('classic 时点可用：工厂在 classic 解析后即可调用，初值与引用与声明一致', async () => withHostsCase(async (c, ctx) => {
 
-  assert.equal(typeof ctx.createP2BootstrapDomHost, 'function');
   assert.equal(typeof ctx.createP2BootstrapChatSurfaceHost, 'function');
 
-  const dom = ctx.run('createP2BootstrapDomHost()');
+  // DOM 引用已迁 dom-refs.js（P4 T1）：owner 在模块相，classic 侧只剩两个桥键。
+  const { domRefs: dom } = await importAdapters(c, ['dom']);
   assert.equal(Object.isFrozen(dom), true);
-  assert.equal(dom.container, ctx.run('container'));
-  assert.equal(dom.featurePanelBody, ctx.run('featurePanelBody'));
-  assert.equal(dom.followLatestButton, ctx.run('followLatestButton'));
-  assert.equal(dom.projectDocsetSheet, ctx.run('projectDocsetSheet'));
-  assert.equal(dom.ctxMenu, ctx.run('ctxMenu'));
+  assert.equal(dom.container, ctx.run('window.container'));
+  assert.equal(dom.currentAgentTitle, ctx.run('window.currentAgentTitle'));
+  for (const key of ['featurePanelBody', 'followLatestButton', 'projectDocsetSheet', 'ctxMenu']) {
+    assert.equal(typeof dom[key].querySelector, 'function', `domRefs.${key} 缺失`);
+  }
 
   const chat = ctx.run('createP2BootstrapChatSurfaceHost()');
   assert.equal(chat.showChatProcess, false);
@@ -163,7 +162,7 @@ test('适配模块导出面就是后续工单的导入契约', async () => withH
 test('const 只读语义：无可写入口的键在 ESM strict 下写入抛 TypeError', async () => withHostsCase(async (c, ctx) => {
   const adapters = await importAdapters(c);
   {
-    // DOM 引用（classic 顶层 const）
+    // DOM 引用（dom-refs 模块的冻结常量）
     assert.throws(() => { adapters.domRefs.container = null; }, TypeError);
     // const Map / Set 容器：只交出引用，不允许整体替换
     assert.throws(() => { adapters.callActivity._agentCallActive = new Map(); }, TypeError);
@@ -174,7 +173,7 @@ test('const 只读语义：无可写入口的键在 ESM strict 下写入抛 Type
     // 常量字符串
     assert.throws(() => { adapters.chatSurface.CHAT_PROCESS_VISIBILITY_KEY = 'x'; }, TypeError);
     // 引用未被破坏
-    assert.equal(adapters.domRefs.container, ctx.run('container'));
+    assert.equal(adapters.domRefs.container, ctx.run('window.container'));
     assert.equal(adapters.callActivity._agentCallActive, ctx.run('_agentCallActive'));
   }
 }));

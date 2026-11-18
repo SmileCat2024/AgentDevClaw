@@ -14,7 +14,7 @@ import fs from 'node:fs';
 import test from 'node:test';
 import { Renderer } from 'marked';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
-import { prepareClassicSandbox, prepareEsmModules, prepareSidebarDomain, SESSION_VIEW_DOMAIN } from './p2-classic-hosts.js';
+import { IDENTITY_DOMAIN, prepareClassicSandbox, prepareEsmModules, prepareSidebarDomain, SESSION_VIEW_DOMAIN } from './p2-classic-hosts.js';
 
 const OVERVIEW_DATA = 'public/src/modules/overview-data.js';
 const POLL_COORDINATOR = 'public/src/modules/poll-coordinator.js';
@@ -344,7 +344,7 @@ async function withPollHarness({ blockStatus = true } = {}, fn) {
       sandbox.loadSource('public/src/modules/action-dispatcher.js');
       // i18n 已迁 ESM（P4）：t 桥键由 createFrontendSandbox 自动装载，见 test/helpers/install-i18n.js
       sandbox.loadSource('public/src/app-core.js');
-      prepareEsmModules(sandbox, SESSION_VIEW_DOMAIN);
+      prepareEsmModules(sandbox, [...IDENTITY_DOMAIN, ...SESSION_VIEW_DOMAIN]);
       // app-main 的 classic 同步引擎在装载期组合 sidebar-render 的
       // createAgentCallStatesHost（读 runtime-status 的 _agentSuspended）：按生产
       // 先行脚本序装真链，不给它造宿主桩。
@@ -853,7 +853,7 @@ test('runtime-aware session projection uses the selected runtime session over st
       sandbox.loadSource('public/src/modules/action-dispatcher.js');
       // i18n 已迁 ESM（P4）：t 桥键由 createFrontendSandbox 自动装载，见 test/helpers/install-i18n.js
       sandbox.loadSource('public/src/app-core.js');
-      prepareEsmModules(sandbox, SESSION_VIEW_DOMAIN);
+      prepareEsmModules(sandbox, [...IDENTITY_DOMAIN, ...SESSION_VIEW_DOMAIN]);
       sandbox.loadSource('public/src/modules/right-panel-registry.js');
       // app-ui 已迁 ESM（P4 T2 末件）：整图装载需要 index.html 整套 classic 先行
       // 脚本序（app-main 的 runtime-switch / poll 等宿主工厂），本夹具只关心

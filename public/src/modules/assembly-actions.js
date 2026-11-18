@@ -78,6 +78,7 @@ import {
   updateAgentRecord,
   updateAgentWorkspaceState,
 } from './project-data.js';
+import { invoke } from './transport.js';
 
 // ── 幂等键（ADR-0011）：写类提交统一携带（本地忽略、远程强制）───────────
 function newIdempotencyKey() {
@@ -1002,7 +1003,7 @@ async function chooseWorkspaceDirectory(formId, fieldName) {
   if (!agent?.id) return;
   try {
     const useExistingDirectory = agent.id === 'programming-helper';
-    const selected = await window.invoke(useExistingDirectory ? 'select_directory' : 'select_empty_directory');
+    const selected = await invoke(useExistingDirectory ? 'select_directory' : 'select_empty_directory');
     if (selected?.cancelled || !selected?.path) {
       return;
     }

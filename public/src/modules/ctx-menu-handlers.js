@@ -69,6 +69,8 @@ import { fwBackToList, fwRerender, fwOpenConfirmDialog } from './fw-config-panel
 import { getWorkspaceSessions } from './session-ui.js';
 import { openBranchDialog } from './session-dialogs.js';
 import { getRepoLocaleText } from './workspace-blocks.js';
+import { getRuntimeId } from './identity.js';
+import { invoke } from './transport.js';
 
 const {
   restartAgentAction,
@@ -142,11 +144,11 @@ restartAgentAction.addEventListener('click', async () => {
       const hostId = resolveHostAgentId(agent, contextMenuUi.contextMenuAgentId);
       const sessionId = agent?.active_workspace_session_id || null;
       closeAgentContextMenu();
-      result = await window.invoke('restart_agent', { agentId: hostId, sessionId });
+      result = await invoke('restart_agent', { agentId: hostId, sessionId });
     } else {
       const sessionId = agent?.active_workspace_session_id || agent?.workspace_sessions?.activeSessionId || null;
       closeAgentContextMenu();
-      result = await window.invoke('restart_agent', { agentId: contextMenuUi.contextMenuAgentId, sessionId });
+      result = await invoke('restart_agent', { agentId: contextMenuUi.contextMenuAgentId, sessionId });
     }
     // Server already waits for runtime readiness (up to 10s) before responding,
     // same contract as the generic ctx-menu restart (ctxRestartAgent). No extra
@@ -170,7 +172,7 @@ stopAgentAction.addEventListener('click', async () => {
 
   try {
     const agent = getExternalRuntimeAgent(contextMenuUi.contextMenuAgentId);
-    const affectedRuntimeId = window.getRuntimeId(agent) || null;
+    const affectedRuntimeId = getRuntimeId(agent) || null;
     // Clear cached data — runtime is being stopped
     if (affectedRuntimeId) clearAgentRuntimeCache(affectedRuntimeId);
     if (contextMenuUi.contextMenuAgentMode === 'external-runtime') {
@@ -178,9 +180,9 @@ stopAgentAction.addEventListener('click', async () => {
     } else if (contextMenuUi.contextMenuAgentMode === 'child-runtime') {
       const hostId = resolveHostAgentId(agent, contextMenuUi.contextMenuAgentId);
       const sessionId = agent?.active_workspace_session_id || null;
-      await window.invoke('stop_agent', { agentId: hostId, sessionId });
+      await invoke('stop_agent', { agentId: hostId, sessionId });
     } else {
-      await window.invoke('stop_agent', { agentId: contextMenuUi.contextMenuAgentId });
+      await invoke('stop_agent', { agentId: contextMenuUi.contextMenuAgentId });
     }
     closeAgentContextMenu();
     await refreshSidebarRuntimeAfterMutation();

@@ -53,6 +53,8 @@ import {
 } from './sidebar-operations.js';
 import { refreshSidebarRuntimeAfterMutation } from './external-runtime.js';
 import { getPathLeaf, updateAgentRecord } from './project-data.js';
+import { getActiveSessionId, getParentAgentId, getRuntimeId } from './identity.js';
+import { invoke } from './transport.js';
 
 function getSessionReplacementMutation(agentId, sessionId) {
   return findSidebarOperation((operation) => (
@@ -74,8 +76,8 @@ function beginSessionReplacementMutation(agentId, sessionId, kind = 'summary', o
   // （身份解析域收敛时改 import）
   const sourceRuntime = Array.isArray(allAgents) ? allAgents.find((item) => (
     item?.source !== 'prebuilt'
-    && String(window.getParentAgentId(item) || '').trim() === String(agentId).trim()
-    && String(window.getActiveSessionId(item) || '').trim() === String(sessionId).trim()
+    && String(getParentAgentId(item) || '').trim() === String(agentId).trim()
+    && String(getActiveSessionId(item) || '').trim() === String(sessionId).trim()
   )) : null;
   const projectDir = String(options.projectDir || session?.openDirectory || '').trim();
   return beginSidebarOperation({
@@ -85,7 +87,7 @@ function beginSessionReplacementMutation(agentId, sessionId, kind = 'summary', o
     phase: 'generating',
     agentId,
     sourceSessionId: sessionId,
-    sourceRuntimeId: options.sourceRuntimeId || window.getRuntimeId(sourceRuntime) || '',
+    sourceRuntimeId: options.sourceRuntimeId || getRuntimeId(sourceRuntime) || '',
     projectId: String(options.projectId || session?.projectId || '').trim(),
     projectDir,
     projectName: options.projectName || (projectDir ? getPathLeaf(projectDir) : ''),
@@ -137,7 +139,7 @@ async function navigateToSessionMutationTarget(agentId, result, sourceRuntimeId)
   // 桥接期：upsertConnectedAgent / setPreferredUnitMode / renderCurrentMainView 定义于
   // classic app-ui（渲染入口域收敛时改 import）
   const connectedTarget = window.upsertConnectedAgent(targetAgent) || targetAgent;
-  const targetRuntimeId = window.getRuntimeId(connectedTarget);
+  const targetRuntimeId = getRuntimeId(connectedTarget);
   if (!targetRuntimeId) {
     return false;
   }
@@ -168,7 +170,7 @@ function markSessionArchivedForMutation(agentId, sessionId, kind = 'summary') {
     workspace_sessions: {
       ...(agent?.workspace_sessions || {}),
       sessions: nextSessions,
-      activeSessionId: window.getActiveSessionId(agent),
+      activeSessionId: getActiveSessionId(agent),
     },
   });
   setLastRenderedWorkspaceHtml('');
@@ -186,7 +188,7 @@ function markSessionArchivedForMutation(agentId, sessionId, kind = 'summary') {
       workspace_sessions: {
         ...(latestAgent?.workspace_sessions || {}),
         sessions: revertedSessions,
-        activeSessionId: window.getActiveSessionId(latestAgent),
+        activeSessionId: getActiveSessionId(latestAgent),
       },
     });
     setLastRenderedWorkspaceHtml('');
@@ -218,7 +220,7 @@ async function archiveSessionAfterMutation(agentId, sessionId, oldRuntimeId, opt
       workspace_sessions: {
         ...(agent?.workspace_sessions || {}),
         sessions: updatedSessions,
-        activeSessionId: window.getActiveSessionId(agent),
+        activeSessionId: getActiveSessionId(agent),
       },
     });
     // Render immediately so the user sees the archive without waiting for the
@@ -261,7 +263,7 @@ async function archiveSessionAfterMutation(agentId, sessionId, oldRuntimeId, opt
         s.id === sessionId ? { ...s, archived: false } : s,
       );
       updateAgentRecord(agentId, {
-        workspace_sessions: { ...(agent?.workspace_sessions || {}), sessions: revertedSessions, activeSessionId: window.getActiveSessionId(agent) },
+        workspace_sessions: { ...(agent?.workspace_sessions || {}), sessions: revertedSessions, activeSessionId: getActiveSessionId(agent) },
       });
       setLastRenderedWorkspaceHtml('');
       window.renderCurrentMainView();
@@ -278,7 +280,7 @@ async function archiveSessionAfterMutation(agentId, sessionId, oldRuntimeId, opt
   try {
     if (oldRuntimeId) clearAgentRuntimeCache(oldRuntimeId);
     // 桥接期：invoke 定义于 classic app-core（会话切换/控制域收敛时改 import）
-    await window.invoke('stop_agent', { agentId, sessionId });
+    await invoke('stop_agent', { agentId, sessionId });
     refreshSidebarRuntimeAfterMutation();
   } catch (e) {
     console.error('Failed to stop runtime after archive:', e);

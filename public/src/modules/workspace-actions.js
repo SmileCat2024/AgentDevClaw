@@ -153,6 +153,8 @@ import {
   openConversationTarget,
   registerSessionActivateTarget,
 } from './thread-store-domain.js';
+import { getRuntimeContextKey, getRuntimeId, normalizeAgentIdentity, setViewerSessionBinding } from './identity.js';
+import { invoke } from './transport.js';
 
 // ── APP 对话事务入口防重入（ADR-0024）────────────────────────────────────
 // start_app_conversation 的服务端事务含 runtime ready 等待（20s 级），前端
@@ -165,8 +167,8 @@ async function resolveStudioSessionDirectory(agent, action) {
   if (agent?.id !== 'agent-studio' || action.type !== 'create_session'
     || String(action.openDirectory || '').trim()) return action;
   try {
-    // 桥接期：invoke 定义于 app-core（导航编排域收敛时改 import）。
-    const selected = await window.invoke('select_directory');
+    // invoke 来自 transport 域（P4 T1 起具名 import）。
+    const selected = await invoke('select_directory');
     const directory = String(selected?.path || selected?.paths?.[0] || '').trim();
     return directory ? { ...action, openDirectory: directory } : null;
   } catch (error) {
@@ -489,7 +491,7 @@ export async function runWorkspaceAction(rawAction, triggerButton = undefined) {
       const readyAgent = (_isRemoteSession ? null : result?.agent) || null;
       const targetStopped = false;
       const managedReadyAgent = readyAgent ? (window.upsertConnectedAgent(readyAgent) || readyAgent) : null;
-      const nextRuntimeId = managedReadyAgent ? (window.getRuntimeId(managedReadyAgent) || null) : null;
+      const nextRuntimeId = managedReadyAgent ? (getRuntimeId(managedReadyAgent) || null) : null;
       if (nextRuntimeId) {
         updateSidebarOperation(compactOperation.operationId, { phase: 'target-ready', targetRuntimeId: nextRuntimeId });
         if (_navGuard === _navigationGuardEpoch) {
@@ -685,7 +687,7 @@ export async function runWorkspaceAction(rawAction, triggerButton = undefined) {
       const _csReadyAgent = (_csIsRemote ? null : result?.agent) || null;
       const _csTargetStopped = false;
       const _csConnectedTarget = _csReadyAgent ? (window.upsertConnectedAgent(_csReadyAgent) || _csReadyAgent) : null;
-      const nextRuntimeId = _csConnectedTarget ? (window.getRuntimeId(_csConnectedTarget) || null) : null;
+      const nextRuntimeId = _csConnectedTarget ? (getRuntimeId(_csConnectedTarget) || null) : null;
       if (action.archiveOriginal && archiveSucceeded) {
         // The successor and archive were committed by the server. Completing
         // source-runtime disposal later must not turn this summary into a
@@ -1066,7 +1068,7 @@ export async function runWorkspaceAction(rawAction, triggerButton = undefined) {
       };
       const runSessionOpen = async () => {
         const _navGuard = _navigationGuardEpoch;
-        const previousRuntimeId = window.normalizeAgentIdentity(activeAgent.runtime_session_id || activeAgent.runtimeSessionId || currentRuntimeAgentId);
+        const previousRuntimeId = normalizeAgentIdentity(activeAgent.runtime_session_id || activeAgent.runtimeSessionId || currentRuntimeAgentId);
         const sourceSessionId = String(activeAgent?.active_workspace_session_id || activeAgent?.workspace_sessions?.activeSessionId || '').trim();
         const knownTargetSession = sessionAction.type === 'open_session'
           ? getWorkspaceSessionById(activeAgent, sessionAction.sessionId)
@@ -1094,9 +1096,9 @@ export async function runWorkspaceAction(rawAction, triggerButton = undefined) {
         // session's live runtime while the user sits on the workspace home;
         // saving the (already-cleared) view state there would clobber that
         // runtime's valid cache with an empty snapshot.
-        const departingRuntimeId = window.normalizeAgentIdentity(currentRuntimeAgentId);
+        const departingRuntimeId = normalizeAgentIdentity(currentRuntimeAgentId);
         if (departingRuntimeId) {
-          saveCurrentRuntimeToCache(departingRuntimeId, window.getRuntimeContextKey(departingRuntimeId, activeAgent));
+          saveCurrentRuntimeToCache(departingRuntimeId, getRuntimeContextKey(departingRuntimeId, activeAgent));
         }
         const result = await openPrebuiltWorkspaceSession(activeAgent.id, sessionAction);
         // T006 / T003：activate 响应按 Thread 成员关系解析目标（target shape）。
@@ -1149,7 +1151,7 @@ export async function runWorkspaceAction(rawAction, triggerButton = undefined) {
             nextAgent?.runtime_session_id || nextAgent?.runtimeSessionId || previousRuntimeId || '',
           ).trim();
           if (bindRuntimeId) {
-            window.setViewerSessionBinding(bindRuntimeId, targetSessionId);
+            setViewerSessionBinding(bindRuntimeId, targetSessionId);
             const ownerAgentId = String(nextAgent?.parent_id || activeAgent?.id || '').trim();
             if (ownerAgentId) {
               window.applySessionViewPatch({ identity: { agentId: ownerAgentId, sessionId: targetSessionId } });
@@ -1222,7 +1224,7 @@ export async function runWorkspaceAction(rawAction, triggerButton = undefined) {
           // Pass the runtime the user is actually viewing — empty from the
           // home surface skips the guard; the nav-guard epoch still protects
           // the "user navigated away meanwhile" case.
-          const navigationSourceRuntimeId = window.normalizeAgentIdentity(currentRuntimeAgentId);
+          const navigationSourceRuntimeId = normalizeAgentIdentity(currentRuntimeAgentId);
           void navigateToSessionMutationTarget(activeAgent.id, {
             targetSessionId,
             operationId: sidebarOperation.operationId,

@@ -37,6 +37,7 @@ import {
   setCurrentProjectDocsetOpen,
   setCurrentProjectRequirementEdit,
 } from './render-entry-state.js';
+import { localizeWorkspaceValue } from './format-utils.js';
 
 // 加载期 DOM 引用（app-core 的 const 引用，元素从不替换）：解构语义与
 // classic 裸读同一个元素对象。
@@ -81,7 +82,7 @@ export function updateProjectDocsetChrome(agent = window.getCurrentAgentRecord()
   projectDocsetSheet.innerHTML = [
     '<div class="project-docset-sheet-head">',
     '<div>',
-    '<div class="project-docset-sheet-title">' + escapeHtml(window.localizeWorkspaceValue(block.title, 'Project Docset')) + '</div>',
+    '<div class="project-docset-sheet-title">' + escapeHtml(localizeWorkspaceValue(block.title, 'Project Docset')) + '</div>',
     '<div class="project-docset-sheet-subtitle">' + escapeHtml(String(docset?.projectDir || '')) + '</div>',
     '</div>',
     '<div class="workspace-actions"><button class="workspace-action secondary" type="button" data-action="wsDocset.overlayClose">关闭</button></div>',

@@ -20,10 +20,13 @@
  *      `_syncPersistentActionButton` / `getEmptyTodoPlan` …）。它们在生产由
  *      index.html 后段脚本提供，本基座按「缺失才补」装最小面。
  *   2. **用例夹具覆盖**（prepareThreadClassicSandbox 的 `overrides`）：用例要
- *      观测或替换的宿主能力（`getCurrentHostAgentRecord` /
- *      `getRuntimeWorkspaceSessionId` / `setViewerSessionBinding` /
- *      `renderAgentList` …）与状态初值。真实实现存在时**故意覆盖**——断言必须
- *      打在用例给定的夹具上，否则会变成对生产实现的间接断言。
+ *      观测或替换的宿主能力（`getCurrentHostAgentRecord` / `renderAgentList` …）
+ *      与状态初值。真实实现存在时**故意覆盖**——断言必须打在用例给定的夹具上，
+ *      否则会变成对生产实现的间接断言。
+ *      会话身份（`getRuntimeWorkspaceSessionId` 等）自 P4 T1 起归 identity 域、
+ *      模块内是具名 import：window 覆盖不再生效，用例改用
+ *      `identity.setViewerSessionBinding(runtimeId, sessionId)`（生产 switchAgent
+ *      的同一入口）播种。
  *
  * 与 `prepareClassicSandbox` 的差别只有两点：先行脚本序之后补宿主依赖桩，再
  * 覆盖夹具，最后装 classic 引擎。首屏 boot 与周期排程同样被关掉（用例不驱动

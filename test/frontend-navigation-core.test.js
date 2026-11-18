@@ -16,6 +16,8 @@ const originalFetch = globalThis.fetch;
 
 before(async () => {
   cleanupGlobals = installBrowserStubs();
+  // 桥基础设施先行：navigation-core 的静态依赖 identity 域在求值期 defineKey。
+  await loadModuleOnce('public/src/modules/kernel-state.js', { installGlobals: false });
   const loaded = await loadModuleOnce('public/src/modules/navigation-core.js', { installGlobals: false });
   navigationCore = loaded.module;
 });
@@ -28,7 +30,6 @@ after(() => {
 afterEach(() => {
   globalThis.fetch = originalFetch;
   delete window.RemoteConnections;
-  delete window.getRuntimeId;
 });
 
 /** 构造 runtime_status 响应序列的 fetch mock；每项为一个响应或 Error。 */
@@ -285,17 +286,17 @@ describe('navigation-core: identity helpers (ADR-0014 Phase 2)', () => {
       extractRuntimeId({ agent: { runtimeSessionId: 'rt-b', id: 'rt-b' } }),
       'rt-b',
     );
-    // 裸条目（无 window.getRuntimeId 时的 fallback 链）：id 兜底。
-    assert.equal(extractRuntimeId({ runtime_session_id: '', id: 'rt-bare' }), 'rt-bare');
+    // 裸条目（无 runtime 字段、无 source）：identity 域按 source 判定，不猜 id。
+    // 旧实现在「无 window.getRuntimeId」时回退裸 alias 链——那条分支在生产恒不可达
+    // （app-core 一直提供该函数），随抽取删除。
+    assert.equal(extractRuntimeId({ runtime_session_id: '', id: 'rt-bare' }), '');
     assert.equal(extractRuntimeId(null), '');
     assert.equal(extractRuntimeId({}), '');
   });
 
-  it('extractRuntimeId delegates to getRuntimeId when available (host records yield no runtime)', () => {
-    // 注入严格版 getRuntimeId（module 内每次调用时经 window 解析，晚注入生效）：
-    // 宿主条目（无 child 标记）不误取自身 id 当 runtime——这是委托权威实现
-    // 相比旧手写链的语义收紧。
-    window.getRuntimeId = (record) => (record?.source === 'child' ? String(record.id) : null);
+  it('extractRuntimeId delegates to identity getRuntimeId (host records yield no runtime)', () => {
+    // 委托 identity 域权威实现：宿主条目（无 child 标记）不误取自身 id 当 runtime
+    // ——这是委托权威实现相比旧手写链的语义收紧。
     assert.equal(
       navigationCore.extractRuntimeId({ agent: { source: 'prebuilt', id: 'host-1' } }),
       '',

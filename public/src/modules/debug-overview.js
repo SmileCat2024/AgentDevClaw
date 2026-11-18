@@ -48,6 +48,7 @@ import { currentHookInspector, currentOverviewSnapshot, currentMessages } from '
 import { getCurrentLanguage } from './i18n-environment-state.js';
 import { getEmptyOverviewSnapshot } from './overview-data.js';
 import { debugPanel } from './p2-bootstrap-debug-panel.js';
+import { getFeatureStatus } from './format-utils.js';
 
 // ── classic 侧实现的晚绑定封装 ─────────────────────────────────────
 // 定义域在 classic 文件（见各行注释），实现随其自身批次迁移；调用时经 window
@@ -55,7 +56,6 @@ import { debugPanel } from './p2-bootstrap-debug-panel.js';
 const t = (...args) => window.t(...args);                                     // i18n.js
 const getRuntimeAwareAgentRecord = () => window.getRuntimeAwareAgentRecord(); // app-ui.js
 const getRuntimeAwareAgentName = () => window.getRuntimeAwareAgentName();     // app-ui.js
-const getFeatureStatus = (feature) => window.getFeatureStatus(feature);       // app-core.js
 const renderFeaturePanel = (...args) => window.renderFeaturePanel(...args);   // debug-panel-host.js
 const renderCurrentMainView = () => window.renderCurrentMainView();           // app-ui.js
 

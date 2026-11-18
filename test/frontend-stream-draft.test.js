@@ -190,7 +190,12 @@ describe('_applyStreamTextToDraft wiring (voice-input.js)', () => {
     return withP2EsmCase({
       classic: (sandbox) => {
         prepareClassicSandbox(sandbox);
-        sandbox.document.getElementById = () => textarea;
+        // 输入宿主 textarea 只替换输入面 id；其余 id（含 dom-refs 在模块相解析的
+        // 那批元素引用）继续走沙箱的元素桩。
+        const baseGetElementById = sandbox.document.getElementById.bind(sandbox.document);
+        sandbox.document.getElementById = (id) => (String(id).startsWith('input-')
+          ? textarea
+          : baseGetElementById(id));
         sandbox._cacheSessionInput = () => {};
         sandbox._getSessionInputCacheKey = cacheKeyFor;
       },

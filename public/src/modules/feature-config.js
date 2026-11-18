@@ -37,6 +37,7 @@ import {
 import { parseWorkspaceListField } from './workspace-blocks.js';
 import { ensureFWFeatureCapabilities, requestFWFeatureCapabilities } from './fw-config-panel.js';
 import { getAgentWorkspaceState, updateAgentWorkspaceState } from './project-data.js';
+import { invoke } from './transport.js';
 
 // ---------------------------------------------------------------------------
 // Feature Config — data-path helpers (no UI)
@@ -620,7 +621,7 @@ async function _fwPickFeatureConfigFile(button) {
     const fileIndex = button.dataset.fileIndex == null ? null : Number(button.dataset.fileIndex);
     button.disabled = true;
     button.textContent = getCurrentLanguage() === 'zh' ? '打开中…' : 'Opening…';
-    const selected = await window.invoke('select_files');
+    const selected = await invoke('select_files');
     const chosenPath = Array.isArray(selected?.paths) ? String(selected.paths[0] || '').trim() : '';
     if (!chosenPath) {
       return;
@@ -719,7 +720,7 @@ async function _fwPickFeatureConfigDirectory(button) {
     const dirIndex = Number(button.dataset.dirIndex);
     button.disabled = true;
     button.textContent = getCurrentLanguage() === 'zh' ? '打开中…' : 'Opening…';
-    const selected = await window.invoke('select_directory');
+    const selected = await invoke('select_directory');
     const chosenPath = Array.isArray(selected?.paths) ? String(selected.paths[0] || '').trim() : (typeof selected?.path === 'string' ? selected.path.trim() : '');
     if (!chosenPath) {
       return;

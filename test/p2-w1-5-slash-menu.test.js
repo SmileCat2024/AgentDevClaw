@@ -188,7 +188,7 @@ function findMenu(dom) {
 }
 
 /** 装载一份全新模块实例（含本用例的 window 桩与 DOM）。 */
-async function loadSlashMenu({ window: windowOverrides = {}, fetch: fetchOverride } = {}) {
+async function loadSlashMenu({ window: windowOverrides = {}, fetch: fetchOverride, sessionId = '' } = {}) {
   const dom = createRecordingDom();
   const dispatched = [];
   const cleanupStubs = installBrowserStubs({
@@ -199,9 +199,6 @@ async function loadSlashMenu({ window: windowOverrides = {}, fetch: fetchOverrid
       ClawFW: { actions: { registerMany() {} } },
       t: (key) => key,
       _cacheSessionInput() {},
-      getRuntimeId: () => '',
-      getLogicalAgentId: (record) => (record ? record.id : ''),
-      getRuntimeWorkspaceSessionId: () => null,
       getCurrentRuntimeRecord: () => null,
       getCurrentAgentRecord: () => null,
       innerWidth: 1280,
@@ -233,6 +230,10 @@ async function loadSlashMenu({ window: windowOverrides = {}, fetch: fetchOverrid
   orchestration.setCurrentRuntimeAgentId('');
   agentStore.setFocusedAgentId('programming-helper');
   i18n.setCurrentLanguage('zh');
+
+  // 会话身份（P4 T1：owner 是 identity 域）：生产里 switchAgent 建立 viewer 绑定
+  const identity = await import(new URL('../public/src/modules/identity.js', import.meta.url).href);
+  if (sessionId) identity.setViewerSessionBinding('rt-1', sessionId);
 
   const { module } = await loadModuleOnce(MODULE_PATH, { installGlobals: false });
   // 输入框：两类输入框共有的 .user-input-textarea 特征
@@ -323,10 +324,9 @@ describe('slash-menu：会话命令与 prompt pill 激活交接', () => {
     };
     const { module, dom, textarea, dispatched } = await loadSlashMenu({
       window: {
-        getRuntimeId: (record) => (record ? 'rt-1' : ''),
         getCurrentRuntimeRecord: () => ({ id: 'programming-helper' }),
-        getRuntimeWorkspaceSessionId: () => 'sess-1',
       },
+      sessionId: 'sess-1',
       fetch: fetchStub,
     });
     orchestration.setCurrentRuntimeAgentId('rt-1');
@@ -390,11 +390,10 @@ describe('slash-menu：会话命令与 prompt pill 激活交接', () => {
     };
     const { dom, textarea } = await loadSlashMenu({
       window: {
-        getRuntimeId: (record) => (record ? 'rt-1' : ''),
         getCurrentRuntimeRecord: () => ({ id: 'programming-helper' }),
-        getRuntimeWorkspaceSessionId: () => 'sess-1',
         dispatchEvent: (event) => { dispatched.push(event); return true; },
       },
+      sessionId: 'sess-1',
       fetch: fetchStub,
     });
     orchestration.setCurrentRuntimeAgentId('rt-1');

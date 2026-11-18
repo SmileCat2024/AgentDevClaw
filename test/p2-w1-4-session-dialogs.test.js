@@ -491,7 +491,8 @@ test('submitting a branch posts one idempotent delta request and switches to the
       ok: true,
       json: async () => ({
         newSessionId: 'session-9',
-        agent: { id: 'rt-9' },
+        // 真实 ViewerWorker agent 记录形态（child runtime 带 source / runtime 别名）
+        agent: { id: 'rt-9', source: 'child', runtime_session_id: 'rt-9' },
         revision: 7,
         archive: { succeeded: true },
       }),

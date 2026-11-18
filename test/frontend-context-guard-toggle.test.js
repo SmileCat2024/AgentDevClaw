@@ -29,6 +29,7 @@ let agentStore;
 let sessionViewStorage;
 let i18n;
 let toast;
+let identity;
 let baseCleanup;
 const pendingCleanups = [];
 
@@ -42,6 +43,9 @@ before(async () => {
   sessionViewStorage = await import('../public/src/modules/session-view-storage.js');
   i18n = await import('../public/src/modules/i18n-environment-state.js');
   toast = await import('../public/src/modules/toast-notify.js');
+  // 身份域（P4 T1 从 app-core 抽出）：模块经具名 import 取会话身份，用例改走
+  // 生产同一条 viewer 会话绑定，而不是给 window 装同名桩。
+  identity = await import('../public/src/modules/identity.js');
 });
 
 after(() => {
@@ -67,12 +71,12 @@ async function guardSandbox(overrides = {}) {
   const { fetch: fetchOverride, ...windowOverrides } = overrides;
   const cleanupStubs = installBrowserStubs({
     window: {
-      getRuntimeWorkspaceSessionId: () => 'session-a',
-      getActiveWorkspaceSessionId: () => 'session-a',
       newIdempotencyKey: () => 'test-idem-key',
       ...windowOverrides,
     },
   });
+  // 会话身份：viewer 侧绑定（生产由 switchAgent 建立）
+  identity.setViewerSessionBinding('runtime-a', 'session-a');
   // 真实 toast 模块对象：只把 show 换成记录器（本用例不断言 DOM 呈现面）
   const realToastShow = toast.ClawToast.show;
   toast.ClawToast.show = (spec) => { toasts.push(spec); };

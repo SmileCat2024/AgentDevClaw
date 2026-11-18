@@ -89,10 +89,17 @@ function installClassicSeams(sandbox, sink) {
   // lastNotificationStatusPayload）。
   // 回滚按钮刷新已迁 ESM（input-actions 的具名导出）：不再注入同名桩，
   // 改用真实实现扫过的 DOM 面记账（生产中它遍历 .message-row）。
-  sandbox.run(`
-    window.__rollbackScans = 0;
-    container.querySelectorAll = () => { window.__rollbackScans += 1; return []; };
-  `);
+  // DOM 引用 owner 已迁 dom-refs（P4 T1）：容器在模块相经 document 桩解析，
+  // 因此记账面挂在 document.getElementById('chat-container') 返回的元素上。
+  sandbox.__rollbackScans = 0;
+  const baseGetElementById = sandbox.document.getElementById.bind(sandbox.document);
+  const scanContainer = {
+    ...(baseGetElementById('chat-container') || {}),
+    querySelectorAll() { sandbox.__rollbackScans += 1; return []; },
+  };
+  sandbox.document.getElementById = (id) => (id === 'chat-container'
+    ? scanContainer
+    : baseGetElementById(id));
   // runtime-status（ESM）的通知落地面：输入面同步与队列同步入口由 persistent-input /
   // 排队投影的桥键提供；本图不装载这两个域，按调用契约给替身（不改变语义：
   // 本文件断言的是请求集合与提交时点，不看输入面 DOM）。

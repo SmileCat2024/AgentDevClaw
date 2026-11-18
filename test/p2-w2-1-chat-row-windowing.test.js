@@ -12,8 +12,8 @@
  *     无关数组不留残留。
  * `node --test --test-name-pattern='<单个用例名>'` 亦必须通过。
  *
- * 依赖注入面：window.createP2BootstrapDomHost / createP2BootstrapChatSurfaceHost
- * （bootstrap 适配对象）、window.runWithSuppressedChatViewportObservers /
+ * 依赖注入面：document 桩给出的 #chat-container（dom-refs 域）、
+ * window.createP2BootstrapChatSurfaceHost（bootstrap 适配对象）、window.runWithSuppressedChatViewportObservers /
  * syncRowCollapseState / settleAllRowCollapseStates / captureChatViewportAnchor /
  * applyChatViewportAnchor（classic 晚绑定函数）、globalThis 的 rAF / CSS。
  */
@@ -187,8 +187,12 @@ function installCaseGlobals() {
   capturedAnchor = null;
 
   cleanupGlobals = installBrowserStubs({
+    // DOM 引用已迁 dom-refs.js（P4 T1）：容器经 document 桩给出（本文件整份复用
+    // 同一个容器对象，逐 case 复位状态）。
+    document: {
+      getElementById: (id) => (id === 'chat-container' ? windowingContainer : null),
+    },
     window: {
-      createP2BootstrapDomHost: () => domHost,
       createP2BootstrapChatSurfaceHost: () => surfaceHost,
       // classic 晚绑定面（chat-viewport / chat-renderer 顶层函数）
       runWithSuppressedChatViewportObservers(work) { work(); },
@@ -569,7 +573,9 @@ test('桥：7 个键注册并被认领，classic 写入经 setter 转发、读�
     assert.equal(window.setProcessWindowingDisabled, lazyApi.setProcessWindowingDisabled);
     assert.equal(window.refreshMeasuredChatRows, rowApi.refreshMeasuredChatRows);
     assert.equal(window.revealMeasuredChatRow, rowApi.revealMeasuredChatRow);
-    assert.deepEqual(window.KernelState.stats(), { registeredKeys: 7, claimedKeys: 7 });
+    // 7 个窗口域桥键 + dom-refs 域的 3 个（container / currentAgentTitle /
+    // featurePanelBody，P4 T1）
+    assert.deepEqual(window.KernelState.stats(), { registeredKeys: 10, claimedKeys: 10 });
 
     try {
       // classic 写方经 setter 转发；桥的 getter 是 live 的——写一个函数后，

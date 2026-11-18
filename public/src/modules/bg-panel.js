@@ -63,6 +63,7 @@ import { getCurrentLanguage } from './i18n-environment-state.js';
 import { currentRuntimeAgentId } from './orchestration-state.js';
 import { focusedAgentId } from './agent-store-state.js';
 import { activeFeaturePanel } from './render-entry-state.js';
+import { getActiveWorkspaceSessionId, getRuntimeWorkspaceSessionId } from './identity.js';
 
 const PROCESS_PROTOCOL = 'claw.background.process';
 const AGENT_PROTOCOL = 'claw.background.agent';
@@ -135,9 +136,9 @@ function escapeHtml(value) {
 function currentAddressing() {
   const runtimeRef = typeof currentRuntimeAgentId === 'string' ? currentRuntimeAgentId : '';
   // 会话寻址两个取用函数仍是 app-core 的 classic 实现（工作空间会话域收敛时改 import）。
-  const sessionId = (typeof window.getRuntimeWorkspaceSessionId === 'function' && runtimeRef
-    ? window.getRuntimeWorkspaceSessionId(runtimeRef)
-    : '') || (typeof window.getActiveWorkspaceSessionId === 'function' ? window.getActiveWorkspaceSessionId() : '');
+  const sessionId = (typeof getRuntimeWorkspaceSessionId === 'function' && runtimeRef
+    ? getRuntimeWorkspaceSessionId(runtimeRef)
+    : '') || (typeof getActiveWorkspaceSessionId === 'function' ? getActiveWorkspaceSessionId() : '');
   if (!sessionId) return null;
   // 远程会话没有本机 feature-comms 通道，降级为不可用（不猜目标）。
   const focused = typeof focusedAgentId === 'string' ? focusedAgentId : '';

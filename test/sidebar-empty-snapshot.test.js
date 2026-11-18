@@ -24,6 +24,7 @@ import assert from 'node:assert/strict';
 import { createAgentSnapshotLoader } from '../public/src/modules/agent-snapshot-loader.js';
 import { sanitizeSidebarDiagnosticEvent } from '../server/shared/sidebar-diagnostics.js';
 import { createFrontendSandbox } from './helpers/frontend-vm.js';
+import { installBrowserStubs, loadModuleOnce } from './helpers/esm-module-loader.js';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
 import { prepareEsmModules, prepareSidebarDomain, SESSION_VIEW_DOMAIN } from './p2-classic-hosts.js';
 
@@ -333,23 +334,29 @@ describe('loadAgents 空连接快照行为契约', () => {
     const diagnostics = [];
     const guard = createConsoleGuard();
     pendingGuards.push(guard);
-    const ctx = createFrontendSandbox({
-      console: guard.recorder,
-      fetch: async () => ({ ok: false, status: 503, json: async () => ({}) }),
-      queueSidebarDiagnosticEvent: (event) => diagnostics.push(event),
+    // invoke 已迁 modules/transport.js（P4 T1）：直接真实 import（同源 http 判定读
+    // window.location.protocol，桩默认 'http:' → 走同源 HTTP 回退）。
+    const cleanup = installBrowserStubs({
+      window: {
+        fetch: async () => ({ ok: false, status: 503, json: async () => ({}) }),
+        queueSidebarDiagnosticEvent: (event) => diagnostics.push(event),
+      },
     });
-    ctx.window.location.protocol = 'http:';
-    ctx.window.location.port = '1420';
-    ctx.loadSource('public/src/app-core.js');
+    try {
+      await loadModuleOnce('public/src/modules/kernel-state.js', { installGlobals: false });
+      const { module: transport } = await loadModuleOnce('public/src/modules/transport.js', { installGlobals: false });
 
-    const result = await ctx.run('invoke("get_connected_agents")');
-    assert.deepEqual(Array.from(result), []);
-    assert.deepEqual(Object.keys(result), [], '诊断元数据不得改变数组快照形状');
-    assert.deepEqual(diagnostics, [], '源错误由 loadAgents 统一归并上报');
-    assert.deepEqual(JSON.parse(JSON.stringify(result.__sidebarDiagnostic)), {
-      errorCode: 'connected-agents-http-503',
-      phase: 'connected-http-error',
-    });
+      const result = await transport.invoke('get_connected_agents');
+      assert.deepEqual(Array.from(result), []);
+      assert.deepEqual(Object.keys(result), [], '诊断元数据不得改变数组快照形状');
+      assert.deepEqual(diagnostics, [], '源错误由 loadAgents 统一归并上报');
+      assert.deepEqual(JSON.parse(JSON.stringify(result.__sidebarDiagnostic)), {
+        errorCode: 'connected-agents-http-503',
+        phase: 'connected-http-error',
+      });
+    } finally {
+      cleanup();
+    }
   });
 
   it('S1: 稳态空快照保留预制身份，不降级为 external', async () => {

@@ -48,6 +48,8 @@ import { closeCompactMenu } from './context-menu.js';
 import { loadAgents } from './agent-snapshot-loader-host.js';
 import { requestSwitch } from './runtime-switch-host.js';
 import { beginChatLoadingSession, clearChatLoadingSession } from './chat-loading-host.js';
+import { getRuntimeId } from './identity.js';
+import { fmtPct } from './format-utils.js';
 
 /* ── Branch dialog state ── */
 let branchDialogState = { agentId: '', sessionId: '', rounds: [], preamblePercent: 0, selectedIdx: -1, archiveAfter: false };
@@ -57,7 +59,7 @@ const branchFooterInfo = document.getElementById('branch-footer-info');
 
 function renderPreambleItem(preamblePercent) {
   if (preamblePercent <= 0) return '';
-  const pct = window.fmtPct(preamblePercent);
+  const pct = fmtPct(preamblePercent);
   return `<div class="trim-preamble-item"><span class="trim-preamble-label">系统上下文</span><span class="trim-preamble-pct">${pct}</span></div>`;
 }
 
@@ -129,8 +131,8 @@ function renderBranchRoundList() {
   const preambleHtml = renderPreambleItem(branchDialogState.preamblePercent);
 
   const roundsHtml = rounds.map((r, idx) => {
-    const pctText = window.fmtPct(r.charPercent || 0);
-    const cumText = window.fmtPct(r.cumulativePercent || 0);
+    const pctText = fmtPct(r.charPercent || 0);
+    const cumText = fmtPct(r.cumulativePercent || 0);
 
     return [
       `<div class="trim-round-item branch-selectable" data-branch-index="${idx}">`,
@@ -185,7 +187,7 @@ function updateBranchFooterInfo() {
   }
   const kept = idx + 1;
   const cut = rounds.length - kept;
-  const cumPct = window.fmtPct(rounds[idx].cumulativePercent || 0);
+  const cumPct = fmtPct(rounds[idx].cumulativePercent || 0);
   branchFooterInfo.innerHTML = getCurrentLanguage() === 'zh'
     ? `保留 ${kept} 轮 · 截断 ${cut} 轮 · 占用约 <span class="trim-footer-pct">${cumPct}</span> 上下文`
     : `Keep ${kept} · cut ${cut} · ~<span class="trim-footer-pct">${cumPct}</span> context`;
@@ -276,7 +278,7 @@ async function submitBranch() {
     // allAgents——切换走目录轮询（R2-01 activate 同链路）。
     const readyAgent = (isRemoteSession ? null : result?.agent) || null;
     const connectedTarget = readyAgent ? (window.upsertConnectedAgent(readyAgent) || readyAgent) : null;
-    const nextRuntimeId = connectedTarget ? (window.getRuntimeId(connectedTarget) || null) : null;
+    const nextRuntimeId = connectedTarget ? (getRuntimeId(connectedTarget) || null) : null;
     // 服务端早响应（runtimeStart: 'async'）：本地分支的 runtime 在服务端后台
     // 启动，响应不含 agent。侧栏 operation 占位持续呈现"启动中"，就绪后由
     // 本任务接管导航——与 replacement 流程同一条 waitForRuntimeReady 管道。
@@ -337,7 +339,7 @@ async function submitBranch() {
           return;
         }
         const runtimeTarget = window.upsertConnectedAgent(targetAgent) || targetAgent;
-        const runtimeId = window.getRuntimeId(runtimeTarget) || '';
+        const runtimeId = getRuntimeId(runtimeTarget) || '';
         if (!runtimeId) {
           updateSidebarOperation(branchOperation?.operationId, { phase: 'degraded', errorCode: 'target_runtime_stopped' });
           return;

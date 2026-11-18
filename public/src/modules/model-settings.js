@@ -61,6 +61,7 @@ import {
   startOAuthLogin,
   stopOAuthPolling,
 } from './oauth-flow.js';
+import { getLogicalAgentId } from './identity.js';
 
 function ensureSettingsHost() {
   let host = document.getElementById('settings-overlay-host');
@@ -1423,7 +1424,7 @@ async function applySettingsPreset(idx) {
     // Refresh session data to reflect updated model config
     // 桥接期：getCurrentAgentRecord / getLogicalAgentId 定义于 app-main / app-core（编排域收敛时改 import）
     let _agent = typeof window.getCurrentAgentRecord === 'function' ? window.getCurrentAgentRecord() : null;
-    const logicalAgentId = typeof window.getLogicalAgentId === 'function' ? window.getLogicalAgentId(_agent) : _agent?.id;
+    const logicalAgentId = typeof getLogicalAgentId === 'function' ? getLogicalAgentId(_agent) : _agent?.id;
     if (logicalAgentId) {
       try {
         // 元数据刷新不改变列表归属：按当前浏览目标取切片并合并，避免用
@@ -1464,7 +1465,7 @@ async function saveSettingsConfig() {
     // Refresh session data to reflect updated model config
     // 桥接期：getCurrentAgentRecord / getLogicalAgentId 定义于 app-main / app-core（编排域收敛时改 import）
     let _agent = typeof window.getCurrentAgentRecord === 'function' ? window.getCurrentAgentRecord() : null;
-    const logicalAgentId = typeof window.getLogicalAgentId === 'function' ? window.getLogicalAgentId(_agent) : _agent?.id;
+    const logicalAgentId = typeof getLogicalAgentId === 'function' ? getLogicalAgentId(_agent) : _agent?.id;
     if (logicalAgentId) {
       try {
         // 元数据刷新不改变列表归属：按当前浏览目标取切片并合并，避免用

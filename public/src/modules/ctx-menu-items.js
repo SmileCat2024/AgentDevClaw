@@ -86,6 +86,8 @@ import { escapeHtml } from './markdown-utils.js';
 // project-data 已是 ESM：updateAgentRecord / getPathLeaf 为 export function
 // （函数声明，装载即初始化），直调不再经 window 桥晚绑定。
 import { updateAgentRecord, getPathLeaf } from './project-data.js';
+import { getRuntimeId } from './identity.js';
+import { invoke } from './transport.js';
 
 // 桥接期：t 仍定义于 classic public/src/i18n.js（i18n 域收敛时改 import）。
 // 经 window 晚绑定，不取加载期快照。
@@ -390,7 +392,7 @@ async function ctxRestartAgent(target) {
       sidebarUi.suppressSidebarRerender = true;
       window.renderAgentList();
       try {
-        await window.invoke('restart_agent', { agentId: ns, sessionId: sessionId || null });
+        await invoke('restart_agent', { agentId: ns, sessionId: sessionId || null });
         await window.RemoteConnections?.refresh?.();
       } finally {
         sidebarUi.restartingRuntimeIds.delete(domId);
@@ -410,11 +412,11 @@ async function ctxRestartAgent(target) {
     } else if (variant === 'child') {
       const hostId = resolveHostAgentId(agent, serverAgentId);
       const sId = sessionId || agent?.active_workspace_session_id || null;
-      result = await window.invoke('restart_agent', { agentId: hostId, sessionId: sId });
+      result = await invoke('restart_agent', { agentId: hostId, sessionId: sId });
     } else {
       // managed-runtime / prebuilt
       const sId = sessionId || agent?.active_workspace_session_id || agent?.workspace_sessions?.activeSessionId || null;
-      result = await window.invoke('restart_agent', { agentId: serverAgentId, sessionId: sId });
+      result = await invoke('restart_agent', { agentId: serverAgentId, sessionId: sId });
     }
 
     // Server already waits for runtime readiness (up to 10s), so the
@@ -447,7 +449,7 @@ async function ctxStopAgent(target) {
   try {
     const serverAgentId = (variant === 'managed-runtime') ? ns : id;
     const agent = getExternalRuntimeAgent(serverAgentId);
-    const affectedRuntimeId = id || window.getRuntimeId(agent) || null;
+    const affectedRuntimeId = id || getRuntimeId(agent) || null;
     // Clear cached data — runtime is being stopped
     if (affectedRuntimeId) clearAgentRuntimeCache(affectedRuntimeId);
     if (variant !== 'remote') {
@@ -482,18 +484,18 @@ async function ctxStopAgent(target) {
       await closeSidebarExternalRuntime(agent);
     } else if (variant === 'remote') {
       // 远程运行时：agentId 用宿主命名空间 id，服务端按 ADR-0011 转发。
-      await window.invoke('stop_agent', { agentId: ns, sessionId: sessionId || null });
+      await invoke('stop_agent', { agentId: ns, sessionId: sessionId || null });
     } else if (variant === 'child') {
       // 侧栏统一投影的 child 叶子：id 是 runtime id，服务端 stop_agent 按
       // (宿主 agentId, sessionId) 寻址——必须经 resolveHostAgentId 解析宿主，
       // 直接用 runtime id 会被服务端静默 no-op（找不到 runtime 也不报错）。
       const hostId = resolveHostAgentId(agent, serverAgentId);
       const sId = sessionId || agent?.active_workspace_session_id || null;
-      await window.invoke('stop_agent', { agentId: hostId, sessionId: sId });
+      await invoke('stop_agent', { agentId: hostId, sessionId: sId });
     } else {
       // managed-runtime / prebuilt: pass sessionId to stop only the targeted runtime
       const sId = sessionId || agent?.active_workspace_session_id || null;
-      await window.invoke('stop_agent', { agentId: serverAgentId, sessionId: sId });
+      await invoke('stop_agent', { agentId: serverAgentId, sessionId: sId });
     }
     stopConfirmed = true;
     await refreshSidebarRuntimeAfterMutation();
@@ -679,21 +681,21 @@ async function ctxArchiveAndStopRuntime(target) {
   // 2. Stop the agent runtime (same logic as ctxStopAgent)
   const serverAgentId = (variant === 'managed-runtime') ? agentId : runtimeId;
   const externalAgent = getExternalRuntimeAgent(serverAgentId);
-  const affectedRuntimeId = runtimeId || window.getRuntimeId(externalAgent) || null;
+  const affectedRuntimeId = runtimeId || getRuntimeId(externalAgent) || null;
   try {
     if (affectedRuntimeId) clearAgentRuntimeCache(affectedRuntimeId);
     if (variant === 'external') {
       await closeSidebarExternalRuntime(externalAgent);
     } else if (variant === 'remote') {
       // 远程运行时：关停经宿主命名空间 id 转发（与归档转发同套路）。
-      await window.invoke('stop_agent', { agentId, sessionId: sessionId || null });
+      await invoke('stop_agent', { agentId, sessionId: sessionId || null });
     } else if (variant === 'child') {
       const hostId = resolveHostAgentId(externalAgent, serverAgentId);
       const sId = sessionId || externalAgent?.active_workspace_session_id || null;
-      await window.invoke('stop_agent', { agentId: hostId, sessionId: sId });
+      await invoke('stop_agent', { agentId: hostId, sessionId: sId });
     } else {
       const sId = sessionId || externalAgent?.active_workspace_session_id || null;
-      await window.invoke('stop_agent', { agentId: serverAgentId, sessionId: sId });
+      await invoke('stop_agent', { agentId: serverAgentId, sessionId: sId });
     }
     // The archive response has already switched to the replacement session when
     // available. Only fall back to the workspace surface when no replacement

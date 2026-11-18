@@ -70,6 +70,7 @@ import { switchAgent } from './runtime-switch-host.js';
 import { clearChatLoadingSession } from './chat-loading-host.js';
 import { commitSessionViewPatch } from './session-view-commit-host.js';
 import { runWorkspaceAction } from './workspace-actions.js';
+import { setViewerSessionBinding } from './identity.js';
 
 /** 唯一窄宿主：实时状态引用 + 引擎内部操作（无副本、无 mirror）。 */
 const host = window.createThreadStoreHost();
@@ -197,8 +198,8 @@ export async function openConversationTarget(target) {
     && String(entry?.active_workspace_session_id || '') === sessionId
   ));
   const runtimeId = String(runtime?.runtime_session_id || runtime?.runtimeSessionId || runtime?.id || '').trim();
-  if (runtimeId && typeof window.setViewerSessionBinding === 'function') {
-    window.setViewerSessionBinding(runtimeId, sessionId);
+  if (runtimeId && typeof setViewerSessionBinding === 'function') {
+    setViewerSessionBinding(runtimeId, sessionId);
   }
   if (runtimeId) {
     await switchAgent(runtimeId);

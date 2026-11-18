@@ -90,6 +90,7 @@ import {
 import { focusedAgentId } from './agent-store-state.js';
 import { currentRuntimeAgentId } from './orchestration-state.js';
 import { commitSessionViewPatch, isSessionViewTokenCurrent } from './session-view-commit-host.js';
+import { formatPresetDisplayName } from './format-utils.js';
 
 // ── 输入框模型切换下拉 ──────────────────────────────────────────────
 
@@ -299,7 +300,7 @@ async function _performInputModelSwap(agentId, presetName, viewToken = window.ca
       // __default__ 合成名 → 显示实际切换到的模型名（回执 meta 携带）
       let swapDesc = presetName;
       if (presetName === '__default__' && result?.meta?.modelName) swapDesc = result.meta.modelName;
-      else if (typeof window.formatPresetDisplayName === 'function') swapDesc = window.formatPresetDisplayName(presetName);
+      else if (typeof formatPresetDisplayName === 'function') swapDesc = formatPresetDisplayName(presetName);
       ClawToast.update(toastId, {
         status: 'success',
         title: isZh ? '模型已切换' : 'Model switched',
@@ -368,8 +369,8 @@ export function toggleInputModelDropdown(event) {
         if (status?.ok && status.lastRestoreFailure && !_restoreFailureNotified) {
           _restoreFailureNotified = true;
           let presetLabel = status?.choice?.presetName || '';
-          if (typeof window.formatPresetDisplayName === 'function' && presetLabel) {
-            presetLabel = window.formatPresetDisplayName(presetLabel);
+          if (typeof formatPresetDisplayName === 'function' && presetLabel) {
+            presetLabel = formatPresetDisplayName(presetLabel);
           }
           ClawToast.show({
             id: 'model-restore-failure',
@@ -491,7 +492,7 @@ export function updateInputModelSwitcher() {
   if (displayName === '__default__') {
     displayName = window.readCurrentSessionViewState().overview.modelName;
   }
-  if (typeof window.formatPresetDisplayName === 'function') displayName = window.formatPresetDisplayName(displayName);
+  if (typeof formatPresetDisplayName === 'function') displayName = formatPresetDisplayName(displayName);
   nameEl.textContent = displayName || (getCurrentLanguage() === 'zh' ? '模型' : 'Model');
 }
 

@@ -51,6 +51,7 @@ import {
   setCurrentTodoPlan as setTodoPlanValue,
   setCurrentTodoPlanSignature,
 } from './session-view-storage.js';
+import { getCurrentControlAgentId, getRuntimeId, getRuntimeWorkspaceSessionId } from './identity.js';
 
 // 加载期 DOM 引用（app-core 的 const 引用，元素从不替换）。
 const { featurePanelBody } = domRefs;
@@ -310,16 +311,16 @@ export function renderPlanPanel() {
 // ── TODO"执行到此处"控制 ────────────────────────────────────────
 
 export async function sendTodoControl(taskId) {
-  const runtimeId = window.getRuntimeId(currentRuntimeAgentId);
+  const runtimeId = getRuntimeId(currentRuntimeAgentId);
   if (!runtimeId) return;
   // runtimeId 与轮询数据源 /api/agents/:id/todo 共用同一身份空间；sessionId
   // 仅表达当前绑定会话，不从页面焦点或 parentId 猜测。
-  const sessionId = window.getRuntimeWorkspaceSessionId(runtimeId) || undefined;
+  const sessionId = getRuntimeWorkspaceSessionId(runtimeId) || undefined;
   try {
     await fetch('/protoclaw/todo_control', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ agentId: window.getCurrentControlAgentId(), runtimeId, sessionId, taskId }),
+      body: JSON.stringify({ agentId: getCurrentControlAgentId(), runtimeId, sessionId, taskId }),
     });
   } catch (e) {
     console.error('[TodoControl] request failed:', e);

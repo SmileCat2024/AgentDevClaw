@@ -544,16 +544,21 @@ test('ph-session-list：搜索状态机、stale 拒绝与真实 context-menu 关
     await new Promise((resolve) => setTimeout(resolve, 0));
     assert.deepEqual(list._phSearch.results.map((r) => r.sessionId), ['newer'], '旧查询响应被拒绝');
 
-    // 真实 context-menu：⋯ 菜单关闭入口清空 app-core 待执行目标与 DOM open 态
+    // 真实 context-menu：⋯ 菜单关闭入口清空 app-core 待执行目标与 DOM open 态。
+    // DOM 引用已迁 dom-refs（P4 T1）：菜单元素取该域的同一批引用（context-menu
+    // 模块内的 import 与这里同一个模块实例）。
+    const dom = await c.load('public/src/modules/dom-refs.js');
     c.read("contextMenuAgentId = 'programming-helper'; contextMenuCompactAction = 'archive'; contextMenuProjectAgentId = 'programming-helper';");
-    c.read("agentContextMenu.classList.add('open'); compactContextMenu.classList.add('open'); projectContextMenu.classList.add('open');");
+    dom.domRefs.agentContextMenu.classList.add('open');
+    dom.domRefs.compactContextMenu.classList.add('open');
+    dom.domRefs.projectContextMenu.classList.add('open');
     list.phShowSessionCtxMenu({ stopPropagation() {} }, makeElement('more'), 'programming-helper', 's-dir-1', 'main');
     assert.equal(c.read('contextMenuAgentId'), null);
     assert.equal(c.read('contextMenuCompactAction'), null);
     assert.equal(c.read('contextMenuProjectAgentId'), null);
-    assert.equal(c.read("agentContextMenu.classList.contains('open')"), false);
-    assert.equal(c.read("compactContextMenu.classList.contains('open')"), false);
-    assert.equal(c.read("projectContextMenu.classList.contains('open')"), false);
+    assert.equal(dom.domRefs.agentContextMenu.classList.contains('open'), false);
+    assert.equal(dom.domRefs.compactContextMenu.classList.contains('open'), false);
+    assert.equal(dom.domRefs.projectContextMenu.classList.contains('open'), false);
     assert.ok(callsOf(c).some((call) => call.startsWith('showCtxMenu:')), '菜单经 app-ui 几何入口打开');
   });
 });

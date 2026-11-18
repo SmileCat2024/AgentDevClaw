@@ -416,8 +416,9 @@ test('桥键与命名导出同源、私有 helper 不上桥、6 个待执行目�
     // 幂等键**不建桥**：classic 全局赢家是 app-main 的顶层 function（浏览器里
     // non-configurable），对它 defineKey 会在真实 Chromium 抛
     // `Cannot redefine property`。本文件只保留私有副本自用，外部消费方继续用
-    // app-main 的 classic 实现（真实 Chromium 回归见
-    // test/p2-w2-7-context-menu-chromium-browser-check.mjs）。
+    // app-main 的 classic 实现。浏览器侧的证据是真实页面的求值本身：
+    // test/p2-production-boot-browser-check.mjs 在装载 app-main 与整张模块图的
+    // 同一页上断言零 pageerror，本文件则用不可配置属性模拟同一条约束。
     assert.equal(Object.prototype.hasOwnProperty.call(c.window, 'newIdempotencyKey'), false,
       '没有 classic 提供者时，本模块不得自行发布 newIdempotencyKey');
     assert.equal('newIdempotencyKey' in handlers, false, 'newIdempotencyKey 保持模块私有');

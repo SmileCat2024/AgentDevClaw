@@ -7,12 +7,32 @@
 
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import { createFrontendSandbox } from './helpers/frontend-vm.js';
 import { getRuntimeCacheTodoPlanSignature } from '../public/src/modules/runtime-view-cache.js';
 import { installCallInterruptState } from './helpers/call-interrupt.js';
 import { createTimeFormat } from '../public/src/modules/time-format.js';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
 import { prepareEsmModules, prepareSidebarDomain, SESSION_VIEW_DOMAIN } from './p2-classic-hosts.js';
+
+// 身份解析域（P4 T1 从 app-core 抽出）：夹具按真实源码装载该域（去 export 前缀）。
+const identitySource = fs.readFileSync(new URL('../public/src/modules/identity.js', import.meta.url), 'utf8');
+// 展示格式化函数族（P4 T1 从 app-core 抽出）：同样按真实源码装载。切片保留
+// 生产依赖名（getCurrentLanguage / escapeHtml / t），沙箱按 classic 等价提供。
+const formatSource = fs.readFileSync(new URL('../public/src/modules/format-utils.js', import.meta.url), 'utf8');
+const formatBlock = formatSource
+  .slice(
+    formatSource.indexOf('export function formatPresetDisplayName'),
+    formatSource.indexOf('// ── classic 兼容桥'),
+  )
+  .replace(/^export /gm, '')
+  + 'function getCurrentLanguage() { return currentLanguage; }\n';
+const identityBlock = identitySource
+  .slice(
+    identitySource.indexOf('/** app-core 的宿主记录读取器（classic，经 window 晚绑定）。 */'),
+    identitySource.indexOf('// ── classic 兼容桥'),
+  )
+  .replace(/^export /gm, '');
 
 /**
  * Helper: create a sandbox with app-core.js loaded.
@@ -23,6 +43,9 @@ function createCoreSandbox(overrides = {}) {
   const ctx = createFrontendSandbox();
   ctx.getCurrentAgentRecord = () => null;
   ctx.loadSource('public/src/app-core.js');
+  // 身份域与格式化族（真实实现，与生产模块同一份源码）
+  ctx.run(identityBlock);
+  ctx.run(formatBlock);
   installCallInterruptState(ctx);
   Object.assign(ctx, createTimeFormat(() => ctx.currentLanguage));
   // Apply overrides AFTER loading source.
@@ -35,9 +58,9 @@ function createCoreSandbox(overrides = {}) {
   return ctx;
 }
 
-// ── getCurrentControlAgentId ──
+// ── getCurrentControlAgentId（identity 域，P4 T1 起不再在 app-core）──
 
-describe('app-core: getCurrentControlAgentId', () => {
+describe('identity: getCurrentControlAgentId', () => {
   // createCoreSandbox 的 overrides 循环用 JSON.stringify 注入值，函数值会被
   // 置为 undefined；函数替身一律直接挂 context 属性（app-core 未用 let 声明
   // 这些名字，属性不会被遮蔽）。currentRuntimeAgentId 在沙箱内有 let 绑定，
@@ -77,7 +100,7 @@ describe('app-core: getCurrentControlAgentId', () => {
 
 // ── getFeatureStatus ──
 
-describe('app-core: getFeatureStatus', () => {
+describe('format-utils: getFeatureStatus', () => {
   it('returns explicit status when present', () => {
     const ctx = createCoreSandbox();
     assert.equal(ctx.run('getFeatureStatus({ status: "enabled" })'), 'enabled');
@@ -105,7 +128,7 @@ describe('app-core: getFeatureStatus', () => {
 
 // ── getStatusBadgeClass ──
 
-describe('app-core: getStatusBadgeClass', () => {
+describe('format-utils: getStatusBadgeClass', () => {
   it('builds badge class from status', () => {
     const ctx = createCoreSandbox();
     assert.equal(
@@ -144,7 +167,7 @@ describe('app-core: getStatusBadgeClass', () => {
 
 // ── localizeWorkspaceValue ──
 
-describe('app-core: localizeWorkspaceValue', () => {
+describe('format-utils: localizeWorkspaceValue', () => {
   it('returns string values as-is', () => {
     const ctx = createCoreSandbox();
     assert.equal(ctx.run('localizeWorkspaceValue("hello")'), 'hello');

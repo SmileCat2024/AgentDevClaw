@@ -64,12 +64,14 @@ import {
   getPhSettingsAgentId,
   setPhSettingsAgentId,
 } from './ph-settings.js';
+import { getLogicalAgentId } from './identity.js';
+import { invoke } from './transport.js';
 
 export const phOpenSettings = async ({ initialTab } = {}) => {
   const agent = window.getCurrentAgentRecord();
   if (!agent) return;
   let presets = getClawModelPresets();
-  setPhSettingsAgentId(typeof window.getLogicalAgentId === 'function' ? window.getLogicalAgentId(agent) : agent.id);
+  setPhSettingsAgentId(typeof getLogicalAgentId === 'function' ? getLogicalAgentId(agent) : agent.id);
   // 先渲染（已有缓存或空态），模型预置属补数据——点击到弹窗出现不等网络
   renderPhSettingsOverlay(agent, presets, { initialTab });
   const stillOpen = () => Boolean(document.getElementById('ph-settings-host')?.querySelector('.feature-detail-overlay'));
@@ -231,7 +233,7 @@ export const phOpenProject = async () => {
   }
 
   try {
-    const result = await window.invoke('select_directory');
+    const result = await invoke('select_directory');
     const chosenPath = Array.isArray(result?.paths) ? String(result.paths[0] || '').trim() : (typeof result?.path === 'string' ? result.path.trim() : '');
     if (!chosenPath) {
       return;
@@ -940,7 +942,7 @@ export const phOpenNewProjectDialog = () => {
   overlay.querySelectorAll('.ph-new-project-cancel').forEach((btn) => btn.addEventListener('click', close));
   overlay.querySelector('.ph-new-project-browse').addEventListener('click', async () => {
     try {
-      const result = await window.invoke('select_directory');
+      const result = await invoke('select_directory');
       const chosen = Array.isArray(result?.paths) ? String(result.paths[0] || '').trim() : (typeof result?.path === 'string' ? result.path.trim() : '');
       if (chosen) {
         browseDir = chosen;
@@ -1106,7 +1108,7 @@ export const phSetProcessMode = async (processMode) => {
     const response = await fetch('/protoclaw/agent_process_mode', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ agentId: window.getLogicalAgentId(agent), processMode }),
+      body: JSON.stringify({ agentId: getLogicalAgentId(agent), processMode }),
     });
     const result = await response.json();
     if (!response.ok || !result.ok) {
@@ -1390,7 +1392,7 @@ export const phRebindProject = (projectId, onCloseManage) => {
   overlay.querySelectorAll('.ph-rebind-cancel').forEach((btn) => btn.addEventListener('click', close));
   overlay.querySelector('.ph-rebind-browse').addEventListener('click', async () => {
     try {
-      const result = await window.invoke('select_directory');
+      const result = await invoke('select_directory');
       const chosen = Array.isArray(result?.paths) ? String(result.paths[0] || '').trim() : (typeof result?.path === 'string' ? result.path.trim() : '');
       if (chosen) dirInput.value = chosen;
     } catch { /* 用户取消选择器：无副作用 */ }

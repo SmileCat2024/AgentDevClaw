@@ -44,6 +44,7 @@ import { focusedAgentId } from './agent-store-state.js';
 import { currentHookInspector } from './session-view-storage.js';
 import { getCurrentLanguage } from './i18n-environment-state.js';
 import { ClawToast } from './toast-notify.js';
+import { getActiveWorkspaceSessionId, getRuntimeWorkspaceSessionId } from './identity.js';
 
 // runtimeId → { mode, strategy, allowRotation, trip, thresholdTokens, pending, initialized }
 const _statusByRuntime = new Map();
@@ -138,13 +139,10 @@ export function applyStatus(payload, runtimeId = currentRuntimeAgentId) {
 // ── 身份与写门控（对齐 session-controls-panel 同名逻辑，详见其注释）──
 
 function guardSessionId() {
-  // 桥接期晚绑定（首次使用处）：getRuntimeWorkspaceSessionId /
-  // getActiveWorkspaceSessionId 定义于 app-core（身份与会话解析域），
-  // isRemoteNamespaceAgentId 定义于 remote-connections（远程连接域）。
-  // 这些文件迁为 import 后删除各自的 window. 前缀。
-  const local = typeof window.getRuntimeWorkspaceSessionId === 'function' && currentRuntimeAgentId
-    ? window.getRuntimeWorkspaceSessionId(currentRuntimeAgentId)
-      || (typeof window.getActiveWorkspaceSessionId === 'function' ? window.getActiveWorkspaceSessionId() : '')
+  // 会话身份来自 identity 域（P4 T1 起具名 import）；isRemoteNamespaceAgentId
+  // 定义于 remote-connections（远程连接域，window 晚绑定）。
+  const local = currentRuntimeAgentId
+    ? getRuntimeWorkspaceSessionId(currentRuntimeAgentId) || getActiveWorkspaceSessionId()
     : '';
   if (local) return local;
   // 远程会话：会话身份从远程目录解析；未含条目（连接断开）返回空串

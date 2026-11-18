@@ -543,6 +543,16 @@ function withInputEsmCase(options, fn) {
     const render = await c.load(INPUT_RENDER);
     c.expose('renderInputRequests', render.renderInputRequests);
     c.expose('notifyInputSurfaceChanged', render.notifyInputSurfaceChanged);
+    // 会话身份（P4 T1：identity 域是 owner）：生产里的 viewer 绑定由 switchAgent
+    // 建立，用例的会话切换经同一入口同步（烧掉 getRuntimeWorkspaceSessionId 桩）。
+    const identity = await c.load('public/src/modules/identity.js');
+    const syncInputIdentity = () => {
+      const runtimeId = String(c.window.currentRuntimeAgentId || '').trim();
+      if (runtimeId) identity.setViewerSessionBinding(runtimeId, state.liveKey);
+    };
+    c.window.__syncInputIdentity = syncInputIdentity;
+    state.syncIdentity = syncInputIdentity;
+    syncInputIdentity();
     c.state = state;
     return fn({ c, doc, state, container, choiceContainer, render });
   });
@@ -763,6 +773,8 @@ describe('composer session draft isolation (ticket 036)', () => {
     // 切换会话 B：旧 key 保存、新 key 无草稿 → 输入框清空（不串）
     ctx.state.liveKey = 'session-b';
     ctx.currentRuntimeAgentId = 'agent-2';
+    ctx.__syncInputIdentity();
+    ctx.__syncInputIdentity();
     renderInputSurface(ctx);
     assert.equal(ta.dataset.sessionKey, 'session-b');
     assert.equal(ta.value, '', 'new session without a draft must start empty');
@@ -776,6 +788,7 @@ describe('composer session draft isolation (ticket 036)', () => {
     // 切回会话 A：恢复 A 的草稿，绝不串入 B 的文本
     ctx.state.liveKey = 'session-a';
     ctx.currentRuntimeAgentId = 'agent-1';
+    ctx.__syncInputIdentity();
     renderInputSurface(ctx);
     const taRestore = ctx.run("document.getElementById('input-persistent')");
     assert.equal(taRestore.value, 'hello session a');
@@ -810,9 +823,6 @@ describe('composer session draft isolation (ticket 036)', () => {
     await withInputEsmCase({
       globals: {
         fetch: slashFetchStub(invokeCalls),
-        getRuntimeId: (id) => id,
-        getRuntimeWorkspaceSessionId: () => 'session-a',
-        getLogicalAgentId: () => 'programming-helper',
         getCurrentRuntimeRecord: () => ({ id: 'agent-1' }),
         SessionReference: { activeKey: () => 'session-a' },
       },
@@ -901,6 +911,7 @@ describe('slash prompt pill session isolation (attachment buckets per session)',
   function switchSession(c, state, liveKey, runtimeId) {
     state.liveKey = liveKey;
     c.window.currentRuntimeAgentId = runtimeId;
+    c.window.__syncInputIdentity();
     c.read('currentInputRequests = []; renderInputRequests([])');
   }
 
@@ -922,7 +933,6 @@ describe('slash prompt pill session isolation (attachment buckets per session)',
       globals: (state) => ({
         fetch: slashFetchStub(invokeCalls),
         ...slashTargetGlobals(),
-        getRuntimeWorkspaceSessionId: () => state.liveKey,
         // pill 桶 key 与 composer 会话 key 同源（生产中 activeKey 是附件类
         // 会话态的权威判定，测试里对齐 liveKey 使两条链路同帧驱动）
         SessionReference: { activeKey: () => state.liveKey },
@@ -978,13 +988,12 @@ describe('slash prompt pill session isolation (attachment buckets per session)',
           if (String(url) === '/protoclaw/capability_invoke') {
             calls.count += 1;
             invokeCalls.push(JSON.parse(options.body || '{}').ref);
-            if (calls.count === 1) state.liveKey = 'session-b';
+            if (calls.count === 1) { state.liveKey = 'session-b'; state.syncIdentity(); }
             return { ok: true, status: 200, json: async () => ({ ok: true, result: 'ok' }) };
           }
           return { ok: true, status: 200, json: async () => ({ ok: true, commands: [] }) };
         },
         ...slashTargetGlobals(),
-        getRuntimeWorkspaceSessionId: () => state.liveKey,
         SessionReference: { activeKey: () => state.liveKey },
       }),
     }, async ({ c, state }) => {
@@ -1006,6 +1015,7 @@ describe('slash prompt pill session isolation (attachment buckets per session)',
       // 切回 A：两个 pill 都还在原会话桶（切回后仍可发送）
       state.liveKey = 'session-a';
       c.window.currentRuntimeAgentId = 'agent-1';
+      c.window.__syncInputIdentity();
       c.read('currentInputRequests = []; renderInputRequests([])');
       assert.equal(pillNames(c), 2, 'pill 留在原会话桶，切回后仍可发送');
       assert.deepEqual(pillLabels(c), ['grill-me', 'some-other'], '原会话桶里的 pill 身份未变');

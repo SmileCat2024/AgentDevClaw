@@ -14,7 +14,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
-import { prepareEsmModules, SESSION_VIEW_DOMAIN } from './p2-classic-hosts.js';
+import { IDENTITY_DOMAIN, prepareEsmModules, SESSION_VIEW_DOMAIN } from './p2-classic-hosts.js';
 
 const THREAD_ENGINE = 'public/src/modules/thread-store.js';
 
@@ -44,7 +44,6 @@ async function flushTimers(shared) {
  */
 async function withRebindRecoveryCase({ allAgents, fetchImpl }, probe) {
   const shared = {
-    bindings: [],
     loadedRuntime: '',
     loadAgentsCount: 0,
     timers: [],
@@ -55,7 +54,7 @@ async function withRebindRecoveryCase({ allAgents, fetchImpl }, probe) {
       for (const [key, domain] of Object.entries(STATE_DOMAINS)) {
         sandbox.KernelState.defineKey(domain, key, sandbox[key]);
       }
-      prepareEsmModules(sandbox, SESSION_VIEW_DOMAIN); // 会话视图提交原语
+      prepareEsmModules(sandbox, [...IDENTITY_DOMAIN, ...SESSION_VIEW_DOMAIN]); // 身份域 + 会话视图提交原语
     },
     globals: {
       currentLanguage: 'zh',
@@ -63,9 +62,6 @@ async function withRebindRecoveryCase({ allAgents, fetchImpl }, probe) {
       currentRuntimeAgentId: 'runtime-old',
       allAgents,
       getCurrentHostAgentRecord: () => ({ id: 'coder' }),
-      getRuntimeWorkspaceSessionId: (runtimeId) => (runtimeId === 'runtime-old' ? 'session-old' : 'session-new'),
-      getRuntimeContextKey: (runtimeId) => `host:coder|session:${runtimeId === 'runtime-old' ? 'session-old' : 'session-new'}`,
-      setViewerSessionBinding: (runtimeId, sessionId) => { shared.bindings.push([runtimeId, sessionId]); },
       loadAgents: async () => { shared.loadAgentsCount += 1; },
       loadAgentData: async (runtimeId) => { shared.loadedRuntime = runtimeId; },
       saveCurrentRuntimeToCache() {},
@@ -103,6 +99,10 @@ async function withRebindRecoveryCase({ allAgents, fetchImpl }, probe) {
       agentId: 'coder', threadId: 'wt-frozen', sessionId: 'session-old',
       runtimeId: 'runtime-old', wasHead: true,
     };
+    // 会话身份：生产里 switchAgent 建立 viewer 绑定（冻结在旧 head 上）
+    const identity = await c.load('public/src/modules/identity.js');
+    identity.setViewerSessionBinding('runtime-old', 'session-old');
+    shared.identity = identity;
     return probe({ c, ctx, engine, shared });
   });
 }
@@ -124,7 +124,7 @@ describe('thread-store: rebind freeze recovery (PH thread succession)', () => {
 
       // 冻结恢复：重绑必须发生，否则用户只能手点「前往当前会话」跳转。
       assert.equal(shared.loadedRuntime, 'runtime-new', 'rebind must load the successor runtime');
-      assert.deepEqual(shared.bindings.at(-1), ['runtime-new', 'session-new']);
+      assert.equal(shared.identity.getViewerSessionBinding('runtime-new'), 'session-new');
       assert.equal(ctx.currentRuntimeAgentId, 'runtime-new');
       assert.equal(ctx.window.ClawThreads.activeConversation.sessionId, 'session-new');
       assert.equal(ctx.window.ClawThreads.activeConversation.runtimeId, 'runtime-new');
@@ -152,7 +152,7 @@ describe('thread-store: rebind freeze recovery (PH thread succession)', () => {
       await flushTimers(shared);
       assert.equal(shared.loadedRuntime, 'runtime-new', 'retry must complete the rebind');
       assert.equal(ctx.currentRuntimeAgentId, 'runtime-new');
-      assert.equal(shared.bindings.at(-1)[0], 'runtime-new');
+      assert.equal(shared.identity.getViewerSessionBinding('runtime-new'), 'session-new');
     });
   });
 

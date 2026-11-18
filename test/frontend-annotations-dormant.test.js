@@ -125,8 +125,9 @@ async function setup({ annotations }) {
     null,
     { turn: 3, role: 'assistant' },
   ]);
-  window.getRuntimeWorkspaceSessionId = () => 'sess-A';
-  window.getActiveWorkspaceSessionId = () => 'sess-A';
+  // 会话身份（P4 T1：owner 是 identity 域）：viewer 侧绑定由生产 switchAgent 建立
+  const identity = await import('../public/src/modules/identity.js');
+  identity.setViewerSessionBinding('runtime-old', 'sess-A');
   window.isRemoteNamespaceAgentId = () => false;
 
   fetchImpl = async () => ({

@@ -18,6 +18,7 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { installBrowserStubs, loadModuleOnce } from './helpers/esm-module-loader.js';
+import { createForwardingElement } from './helpers/dom-forwarding.js';
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '..');
 const NAV = 'public/src/modules/chat-nav-timeline.js';
@@ -90,7 +91,6 @@ function createContainer() {
 // ── 注入面 ──────────────────────────────────────────────────────────
 
 let cleanupGlobals;
-let domHost;
 let documentListeners;
 let windowListeners;
 let documentState;
@@ -98,8 +98,11 @@ let currentElements;
 let scrollIntents;
 let rafQueue;
 
+/** 本 case 的聊天容器；dom-refs 只解析一次，因此经稳定句柄转发（见 dom-forwarding）。 */
+let activeContainer = null;
+const containerHandle = createForwardingElement(() => activeContainer);
+
 function installCaseGlobals() {
-  domHost = { container: null };
   documentListeners = [];
   windowListeners = [];
   documentState = { readyState: 'interactive' };
@@ -108,7 +111,6 @@ function installCaseGlobals() {
 
   cleanupGlobals = installBrowserStubs({
     window: {
-      createP2BootstrapDomHost: () => domHost,
       registerManualScrollIntent: (options) => { scrollIntents.push(options ?? null); },
       addEventListener(type, listener) { windowListeners.push({ type, listener }); },
       removeEventListener() {},
@@ -120,7 +122,7 @@ function installCaseGlobals() {
     document: {
       addEventListener(type, listener) { documentListeners.push({ type, listener }); },
       removeEventListener() {},
-      getElementById: (id) => currentElements.get(id) ?? null,
+      getElementById: (id) => (id === 'chat-container' ? containerHandle : (currentElements.get(id) ?? null)),
       createElement: (tagName) => createElementStub({ tagName: String(tagName).toUpperCase() }),
       querySelectorAll() { return []; },
     },
@@ -190,7 +192,7 @@ async function withNavCase(options, fn) {
   documentState.readyState = readyState;
   globalThis.document.readyState = readyState;
   currentElements = env.elements;
-  domHost.container = env.container;
+  activeContainer = env.container;
 
   const storage = await import(plainUrl(SESSION_VIEW_STORAGE));
   storage.setCurrentMessages(options.messages ?? []);
@@ -225,7 +227,7 @@ async function withNavCase(options, fn) {
     windowListeners.length = windowStart;
     rafQueue.length = 0;
     currentElements = new Map();
-    domHost.container = null;
+    activeContainer = null;
     documentState.readyState = 'interactive';
     globalThis.document.readyState = 'interactive';
   }

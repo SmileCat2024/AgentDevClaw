@@ -8,8 +8,8 @@ import { withP2EsmCase } from './helpers/p2-esm-case.js';
  * 一个用例 = 一份 classic 沙箱（内核桥 + 面板注册表宿主 claw-host + 本模块
  * 晚绑定的 classic 依赖）+ 一张真实 ESM 图。classic 相按生产顺序只装必要面：
  *   - claw-host：`window.ClawHost.panels` 注册表宿主（模块求值期自注册）；
- *   - getRuntimeWorkspaceSessionId / getActiveWorkspaceSessionId：app-core 的
- *     classic 实现，用例按会话切换改返回值（模块经 window 晚绑定取用）；
+ *   - identity 域：生产里 switchAgent 建立 viewer 侧会话绑定，用例按会话切换
+ *     重建同一条绑定（bg-panel 与身份域都是 ESM，走真实 import 而非 window 桩）；
  *   - getElementById / addEventListener / setInterval / CSS / fetch / EventSource：
  *     真实浏览器的必备面，按行为记账（徽标、委托、计时器、请求面）。
  * 寻址状态（currentRuntimeAgentId / focusedAgentId / activeFeaturePanel）由各自
@@ -34,6 +34,7 @@ const BG_PANEL = 'public/src/modules/bg-panel.js';
 const ORCHESTRATION = 'public/src/modules/orchestration-state.js';
 const AGENT_STORE = 'public/src/modules/agent-store-state.js';
 const RENDER_ENTRY = 'public/src/modules/render-entry-state.js';
+const IDENTITY = 'public/src/modules/identity.js';
 
 /**
  * 建一次面板用例：classic 桩面 + 真实模块图，断言在 `fn(h)` 内完成
@@ -71,9 +72,6 @@ async function withBgCase({ listChannels } = {}, fn) {
       sandbox.window.ClawFeatureCommunication = {
         listChannels: listChannels ?? (async () => [{ featureId: 'shell', channelId: 'shell-bg', presentation: { panel: 'background', protocol: 'claw.background.process', version: 1 } }]),
       };
-      // 会话寻址：app-core 的 classic 实现（模块经 window. 晚绑定调用）。
-      sandbox.getRuntimeWorkspaceSessionId = () => sessionId;
-      sandbox.getActiveWorkspaceSessionId = () => sessionId;
       sandbox.setInterval = (callback, delay) => { const id = { callback, delay }; timers.add(id); return id; };
       sandbox.clearInterval = id => timers.delete(id);
       sandbox.CSS = { escape: value => value };
@@ -87,6 +85,11 @@ async function withBgCase({ listChannels } = {}, fn) {
     agentStore.setFocusedAgentId('programming-helper');
     const renderEntry = await c.load(RENDER_ENTRY);
     renderEntry.setActiveFeaturePanel('bg');
+    // 会话寻址（P4 T1：identity 域是 owner）：生产里 switchAgent 建立
+    // viewer 侧 runtimeId → sessionId 绑定，用例按会话切换重建同一条绑定。
+    const identity = await c.load(IDENTITY);
+    const bindSession = () => identity.setViewerSessionBinding(orchestration.currentRuntimeAgentId, sessionId);
+    bindSession();
 
     await c.load(BG_PANEL);
     const panel = c.window.BgPanel;
@@ -103,8 +106,8 @@ async function withBgCase({ listChannels } = {}, fn) {
       ids: () => [...panel.__testTasks().values()].map(task => task.taskId),
       task: id => [...panel.__testTasks().values()].find(task => task.taskId === id),
       click: (action, id) => clicks.forEach(callback => callback({ target: new TestElement(action, id) })),
-      setSession: (value) => { sessionId = value; },
-      setRuntime: (value) => orchestration.setCurrentRuntimeAgentId(value),
+      setSession: (value) => { sessionId = value; bindSession(); },
+      setRuntime: (value) => { orchestration.setCurrentRuntimeAgentId(value); bindSession(); },
     });
   });
 }

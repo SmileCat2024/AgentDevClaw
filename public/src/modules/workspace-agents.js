@@ -12,6 +12,8 @@ import { currentRuntimeAgentId } from './orchestration-state.js';
 import { getCurrentLanguage } from './i18n-environment-state.js';
 import { escapeHtml } from './markdown-utils.js';
 import { getAgentDetailPayload } from './agent-loader-host.js';
+import { getLogicalAgentId, getRuntimeWorkspaceSessionId } from './identity.js';
+import { localizeWorkspaceValue } from './format-utils.js';
 
 export function getWelcomeName() {
   // 桥接期：定义于 session-view-state（会话视图域收敛时改 import）
@@ -22,8 +24,8 @@ export function getWelcomeName() {
     || getAgentDetailPayload(hostId);
   if (!host) return '';
   const runtime = allAgents.find((entry) => entry.id === currentRuntimeAgentId);
-  // 桥接期：定义于 app-core（身份与列表域收敛时改 import）
-  const sessionId = identity?.sessionId || (currentRuntimeAgentId ? window.getRuntimeWorkspaceSessionId(currentRuntimeAgentId) : '');
+  // 会话身份来自 identity 域（P4 T1 起具名 import）
+  const sessionId = identity?.sessionId || (currentRuntimeAgentId ? getRuntimeWorkspaceSessionId(currentRuntimeAgentId) : '');
   // 桥接期：定义于 remote-connections（远程域收敛时改 import）
   const remoteHost = typeof window.splitRemoteNamespaceId === 'function' ? window.splitRemoteNamespaceId(hostId) : null;
   const remoteSession = remoteHost && window.splitRemoteNamespaceId(sessionId);
@@ -31,7 +33,7 @@ export function getWelcomeName() {
   const session = host.workspace_sessions?.sessions?.find((entry) => entry.id === sessionId || entry.id === detailSessionId);
   // 桥接期：定义于 session-view-state（会话视图域收敛时改 import）
   const meta = typeof window.readCurrentSessionViewState === 'function' ? window.readCurrentSessionViewState().sessionMeta : null;
-  const runtimeMatches = runtime && window.getLogicalAgentId(runtime) === hostId
+  const runtimeMatches = runtime && getLogicalAgentId(runtime) === hostId
     && runtime.active_workspace_session_id === sessionId;
   const boundId = meta?.sessionId === sessionId && meta.workspaceAgentId ? meta.workspaceAgentId
     : session ? (session.workspaceAgentId || 'main')
@@ -39,7 +41,7 @@ export function getWelcomeName() {
   if (!boundId) return '';
   if (!Array.isArray(host.agents)) return boundId === 'main' ? String(host.name || '') : '';
   const agent = host.agents.find((entry) => entry.id === boundId);
-  return agent ? window.localizeWorkspaceValue(agent.displayName) : '';
+  return agent ? localizeWorkspaceValue(agent.displayName) : '';
 }
 
 export async function selectForNewSession(host, action) {
@@ -58,7 +60,7 @@ export async function selectForNewSession(host, action) {
       + '<select id="workspace-agent-picker-select" class="workspace-form-select">'
       + host.agents.map((agent) => '<option value="' + escapeHtml(agent.id) + '"'
         + (agent.id === host.defaultAgentId ? ' selected' : '') + '>'
-        + escapeHtml(window.localizeWorkspaceValue(agent.displayName)) + '</option>').join('')
+        + escapeHtml(localizeWorkspaceValue(agent.displayName)) + '</option>').join('')
       + '</select><div class="workspace-agent-picker-actions">'
       + '<button type="button" class="settings-btn settings-btn-secondary">' + (isZh ? '取消' : 'Cancel') + '</button>'
       + '<button type="submit" class="settings-btn settings-btn-primary">' + (isZh ? '创建对话' : 'Create conversation') + '</button></div></form>';

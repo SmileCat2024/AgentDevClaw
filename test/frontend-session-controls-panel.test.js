@@ -28,6 +28,8 @@ async function ensureGuardStateModules() {
     agentStore: await import('../public/src/modules/agent-store-state.js'),
     sessionViewStorage: await import('../public/src/modules/session-view-storage.js'),
     i18n: await import('../public/src/modules/i18n-environment-state.js'),
+    // 身份域（P4 T1 从 app-core 抽出）：会话身份走真实实现（viewer 侧绑定）
+    identity: await import('../public/src/modules/identity.js'),
   };
   baseCleanup();
   return guardStateModules;
@@ -475,12 +477,14 @@ describe('SessionControlsPanel: guard rotation strategy selector', () => {
     const guardFetch = ctx.fetch;
     const cleanupStubs = installBrowserStubs({
       window: {
-        getRuntimeWorkspaceSessionId: () => 'session-a',
-        getActiveWorkspaceSessionId: () => 'session-a',
         newIdempotencyKey: () => 'test-idem-key',
         ClawToast: { show() {} },
       },
     });
+    // 桥基础设施：本 case 的新 window 桩上重新装一份 kernel-state
+    await loadModuleOnce('public/src/modules/kernel-state.js', { installGlobals: false });
+    // 会话身份：生产语义是 switchAgent 建立 viewer 侧绑定
+    state.identity.setViewerSessionBinding('runtime-a', 'session-a');
     const hadFetch = Object.hasOwn(globalThis, 'fetch');
     const prevFetch = globalThis.fetch;
     globalThis.fetch = guardFetch;

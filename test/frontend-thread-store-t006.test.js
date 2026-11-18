@@ -13,6 +13,19 @@ import { withThreadEngineCase } from './helpers/thread-engine.js';
 /** 本地别名：只碰引擎的用例走「最小夹具 + case 级 ESM 图」（见 helpers/thread-engine）。 */
 const withEngineCase = withThreadEngineCase;
 
+const IDENTITY = 'public/src/modules/identity.js';
+
+/**
+ * 身份域（P4 T1 从 app-core 抽出）：会话身份与 viewer 侧 runtimeId → sessionId
+ * 绑定都是**真实实现**。用例按生产语义（switchAgent 建立绑定）播种，不再用
+ * 同名 window 桩替代——引擎已具名 import 该域。
+ */
+async function seedViewerBinding(c, runtimeId, sessionId) {
+  const identity = await c.load(IDENTITY);
+  identity.setViewerSessionBinding(runtimeId, sessionId);
+  return identity;
+}
+
 /** 线程事实（与引擎 `_rebuildIndexes` 同形）写入唯一状态对象（模块相版本）。 */
 function installThread(ctx, thread) {
   const state = ctx.window.ClawThreads;
@@ -29,7 +42,6 @@ describe('thread-store: successor view rebind', () => {
     let loadAgentsCount = 0;
     let loadedRuntime = '';
     let threadsFetchCount = 0;
-    const bindings = [];
     await withEngineCase({ fixtures: {
       currentLanguage: 'zh',
       focusedAgentId: 'coder',
@@ -40,9 +52,6 @@ describe('thread-store: successor view rebind', () => {
         runtime_session_id: 'runtime-new',
       }],
       getCurrentHostAgentRecord: () => ({ id: 'coder' }),
-      getRuntimeWorkspaceSessionId: (runtimeId) => (runtimeId === 'runtime-old' ? 'session-old' : 'session-new'),
-      getRuntimeContextKey: (runtimeId) => `host:coder|session:${runtimeId === 'runtime-old' ? 'session-old' : 'session-new'}`,
-      setViewerSessionBinding: (runtimeId, sessionId) => { bindings.push([runtimeId, sessionId]); },
       loadAgents: async () => { loadAgentsCount += 1; },
       loadAgentData: async (runtimeId) => { loadedRuntime = runtimeId; },
       saveCurrentRuntimeToCache() {},
@@ -69,7 +78,8 @@ describe('thread-store: successor view rebind', () => {
         // 不带 contentHash：条件刷新（?sinceContentHash=）由专门的用例覆盖，这里走全量拉取。
         return { ok: true, json: async () => ({ threads: [thread] }) };
       },
-    }, async ({ ctx, engine }) => {
+    }, async ({ c, ctx, engine }) => {
+      const identity = await seedViewerBinding(c, 'runtime-old', 'session-old');
       ctx.window.ClawFW = { SseClient: { subscribeThreadEvents: (id, handler) => {
         assert.equal(id, '*');
         eventHandler = handler;
@@ -85,7 +95,7 @@ describe('thread-store: successor view rebind', () => {
       await new Promise((resolve) => setImmediate(resolve));
 
       assert.equal(loadedRuntime, 'runtime-new');
-      assert.deepEqual(bindings.at(-1), ['runtime-new', 'session-new']);
+      assert.equal(identity.getViewerSessionBinding('runtime-new'), 'session-new');
       assert.equal(ctx.currentRuntimeAgentId, 'runtime-new');
       assert.equal(ctx.window.ClawThreads.activeConversation.threadId, 'wt-viewed');
       assert.equal(ctx.window.ClawThreads.activeConversation.sessionId, 'session-new');
@@ -108,7 +118,6 @@ describe('thread-store: handoff-started visibility', () => {
       currentRuntimeAgentId: 'runtime-old',
       allAgents: [],
       getCurrentHostAgentRecord: () => ({ id: 'coder' }),
-      getRuntimeWorkspaceSessionId: (runtimeId) => (runtimeId === 'runtime-old' ? 'session-old' : 'session-new'),
       renderAgentList() { renderCalls += 1; },
     },
       // 本用例只验证「事件到达即刷新 + 立即重渲」，不喂新事实：服务端不可达
@@ -117,7 +126,8 @@ describe('thread-store: handoff-started visibility', () => {
         if (String(url).startsWith('/protoclaw/threads')) threadsFetchCount += 1;
         return { ok: false, status: 0, json: async () => ({}) };
       },
-    }, async ({ ctx, engine }) => {
+    }, async ({ c, ctx, engine }) => {
+      await seedViewerBinding(c, 'runtime-old', 'session-old');
       ctx.window.ClawFW = { SseClient: { subscribeThreadEvents: (id, handler) => {
         assert.equal(id, '*');
         eventHandler = handler;
@@ -146,7 +156,6 @@ describe('thread-store: handoff-started visibility', () => {
 
 describe('thread-store: stable thread conversation input', () => {
   it('opens a thread by its stable identity and current head runtime', async () => {
-    const bindings = [];
     const thread = {
       threadId: 'wt-open', agentId: 'coder', headSessionId: 'session-new',
       sessionIds: ['session-old', 'session-new'],
@@ -164,16 +173,15 @@ describe('thread-store: stable thread conversation input', () => {
           },
         ],
         getCurrentHostAgentRecord: () => ({ id: 'coder', source: 'prebuilt', kind: 'workspace' }),
-        getRuntimeWorkspaceSessionId: (runtimeId) => (runtimeId === 'runtime-new' ? 'session-new' : 'session-old'),
-        setViewerSessionBinding: (runtimeId, sessionId) => { bindings.push([runtimeId, sessionId]); },
         renderAgentList: () => {},
         renderCurrentMainView: () => {},
         updateQueueIndicator: () => {},
       },
     }, async ({ c, domain }) => {
+      const identity = await seedViewerBinding(c, 'runtime-old', 'session-old');
       const result = await domain.openConversationTarget({ agentId: 'coder', threadId: 'wt-open' });
       assert.equal(result.ok, true);
-      assert.deepEqual(bindings.at(-1), ['runtime-new', 'session-new']);
+      assert.equal(identity.getViewerSessionBinding('runtime-new'), 'session-new');
       assert.equal(c.read('window.ClawThreads.activeConversation.threadId'), 'wt-open');
       assert.equal(c.read('window.ClawThreads.activeConversation.sessionId'), 'session-new');
     });
@@ -272,13 +280,13 @@ describe('T014b thread-store: wasHead 冻结事实写入', () => {
       focusedAgentId: 'coder',
       currentRuntimeAgentId: 'runtime-old',
       getCurrentHostAgentRecord: () => ({ id: 'coder' }),
-      getRuntimeWorkspaceSessionId: (runtimeId) => (runtimeId === 'runtime-old' ? 'session-old' : 'session-other'),
       ...overrides,
     };
   }
 
   it('视图冻结在 head 上（runtime 绑定 = headSessionId）→ wasHead=true', async () => {
-    await withEngineCase({ fixtures: baseOverrides() }, async ({ ctx, engine }) => {
+    await withEngineCase({ fixtures: baseOverrides() }, async ({ c, ctx, engine }) => {
+      await seedViewerBinding(c, 'runtime-old', 'session-old');
       installThread(ctx, {
         threadId: 'wt-was', agentId: 'coder',
         headSessionId: 'session-old', sessionIds: ['session-old'],
@@ -292,7 +300,8 @@ describe('T014b thread-store: wasHead 冻结事实写入', () => {
   });
 
   it('浏览历史成员（runtime 绑定 ≠ headSessionId）→ wasHead=false', async () => {
-    await withEngineCase({ fixtures: baseOverrides() }, async ({ ctx, engine }) => {
+    await withEngineCase({ fixtures: baseOverrides() }, async ({ c, ctx, engine }) => {
+      await seedViewerBinding(c, 'runtime-old', 'session-old');
       installThread(ctx, {
         threadId: 'wt-was', agentId: 'coder',
         headSessionId: 'session-new', sessionIds: ['session-old', 'session-new'],
@@ -318,7 +327,6 @@ describe('T014b thread-store: wasHead 冻结事实写入', () => {
         focusedAgentId: 'coder',
         allAgents: [{ id: 'coder', source: 'prebuilt', kind: 'workspace' }],
         getCurrentHostAgentRecord: () => ({ id: 'coder', source: 'prebuilt', kind: 'workspace' }),
-        getRuntimeWorkspaceSessionId: () => '',
         renderAgentList: () => {},
         renderCurrentMainView: () => {},
         updateQueueIndicator: () => {},
@@ -344,9 +352,6 @@ describe('T014b thread-store: wasHead 冻结事实写入', () => {
         active_workspace_session_id: 'session-new', runtime_session_id: 'runtime-new',
       }],
       getCurrentHostAgentRecord: () => ({ id: 'coder' }),
-      getRuntimeWorkspaceSessionId: (runtimeId) => (runtimeId === 'runtime-old' ? 'session-old' : 'session-new'),
-      getRuntimeContextKey: (runtimeId) => `host:coder|session:${runtimeId === 'runtime-old' ? 'session-old' : 'session-new'}`,
-      setViewerSessionBinding: () => {},
       loadAgents: async () => {},
       loadAgentData: async () => {},
       saveCurrentRuntimeToCache() {},
@@ -358,7 +363,8 @@ describe('T014b thread-store: wasHead 冻结事实写入', () => {
       readOnlyMode: false,
     },
       fetch: async () => ({ ok: false, status: 0, json: async () => ({}) }),
-    }, async ({ ctx, engine }) => {
+    }, async ({ c, ctx, engine }) => {
+      await seedViewerBinding(c, 'runtime-old', 'session-old');
       ctx.window.ClawFW = { SseClient: { subscribeThreadEvents: (id, handler) => {
         eventHandler = handler;
         return () => {};
@@ -388,7 +394,6 @@ describe('T014c thread-store: 事实对账重绑（SSE 丢帧自愈）', () => {
   it('不发事件，threads 轮询推进快照后原地重绑到新 head', async () => {
     let loadedRuntime = '';
     let threadsFetchCount = 0;
-    const bindings = [];
     const allAgents = [{
       id: 'runtime-new', source: 'child', parent_id: 'coder',
       active_workspace_session_id: 'session-new', runtime_session_id: 'runtime-new',
@@ -399,9 +404,6 @@ describe('T014c thread-store: 事实对账重绑（SSE 丢帧自愈）', () => {
       currentRuntimeAgentId: 'runtime-old',
       allAgents,
       getCurrentHostAgentRecord: () => ({ id: 'coder' }),
-      getRuntimeWorkspaceSessionId: (runtimeId) => (runtimeId === 'runtime-old' ? 'session-old' : 'session-new'),
-      getRuntimeContextKey: (runtimeId) => `host:coder|session:${runtimeId === 'runtime-old' ? 'session-old' : 'session-new'}`,
-      setViewerSessionBinding: (runtimeId, sessionId) => { bindings.push([runtimeId, sessionId]); },
       loadAgents: async () => {},
       loadAgentData: async (runtimeId) => { loadedRuntime = runtimeId; },
       saveCurrentRuntimeToCache() {},
@@ -426,7 +428,8 @@ describe('T014c thread-store: 事实对账重绑（SSE 丢帧自愈）', () => {
         // 不带 contentHash：条件刷新（?sinceContentHash=）由专门的用例覆盖，这里走全量拉取。
         return { ok: true, json: async () => ({ threads: [thread] }) };
       },
-    }, async ({ ctx, engine }) => {
+    }, async ({ c, ctx, engine }) => {
+      const identity = await seedViewerBinding(c, 'runtime-old', 'session-old');
       // 第一拍：稳态快照，视图冻结在旧 head（wasHead=true）
       await ctx.window.refreshThreads(true);
       engine._syncActiveThreadSubscription();
@@ -443,7 +446,7 @@ describe('T014c thread-store: 事实对账重绑（SSE 丢帧自愈）', () => {
       assert.equal(conversation.wasHead, true);
       assert.equal(ctx.currentRuntimeAgentId, 'runtime-new');
       assert.equal(loadedRuntime, 'runtime-new', '重绑后应加载新 runtime 数据');
-      assert.deepEqual(bindings.at(-1), ['runtime-new', 'session-new']);
+      assert.equal(identity.getViewerSessionBinding('runtime-new'), 'session-new');
     });
   });
 
@@ -455,8 +458,6 @@ describe('T014c thread-store: 事实对账重绑（SSE 丢帧自愈）', () => {
       focusedAgentId: 'coder',
       currentRuntimeAgentId: 'runtime-old',
       getCurrentHostAgentRecord: () => ({ id: 'coder' }),
-      getRuntimeWorkspaceSessionId: () => 'session-history',
-      setViewerSessionBinding: () => {},
       loadAgents: async () => {},
       loadAgentData: async (runtimeId) => { loadedRuntime = runtimeId; },
       resetRuntimeStatusForSwitch() {},
@@ -474,7 +475,9 @@ describe('T014c thread-store: 事实对账重绑（SSE 丢帧自愈）', () => {
         // 不带 contentHash：条件刷新（?sinceContentHash=）由专门的用例覆盖，这里走全量拉取。
         return { ok: true, json: async () => ({ threads: [thread] }) };
       },
-    }, async ({ ctx, engine }) => {
+    }, async ({ c, ctx, engine }) => {
+      // 视图绑在历史成员上（生产里是 openConversationTarget 的绑定）
+      await seedViewerBinding(c, 'runtime-old', 'session-history');
       // 注意：_syncActiveThreadSubscription 的既有行为会把挂在本线程的记账
       // sessionId 对齐 head（不动视图）。判断「是否被拉走」看 runtime 态与
       // 数据加载，不看记账字段漂移。

@@ -40,6 +40,7 @@ import {
   setRecapFetchInFlight,
   clearRecapForNewMessage as clearRecapStateForNewMessage,
 } from './p2-w2-3a-recap-state.js';
+import { getActiveWorkspaceSessionId } from './identity.js';
 
 // ── Recap (离开摘要) ──────────────────────────────────────────────
 // 当用户切走离开当前会话（切到别的 agent/session/workspace 视图）超过阈值后
@@ -54,7 +55,7 @@ export function _getRecapAgentAndSession() {
   // app-main / app-core（classic，身份解析域收敛时改 import）
   const agent = window.getCurrentAgentRecord();
   const agentId = String(agent?.parent_id || agent?.id || focusedAgentId || '').trim();
-  const sessionId = window.getActiveWorkspaceSessionId(agent);
+  const sessionId = getActiveWorkspaceSessionId(agent);
   return { agentId, sessionId };
 }
 

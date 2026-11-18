@@ -508,7 +508,6 @@ test('锚点捕获/应用与阅读位置恢复保持原语义', async () => {
     const rows = installRows(fixture, [200, 200, 200, 200]);
     fixture.container.clientHeight = 300;
     c.read('followLatestEnabled = false; currentRuntimeAgentId = "rt-a";');
-    c.window.getRuntimeContextKey = (id) => 'ctx:' + id;
     // 隐藏行不参与锚定
     rows[1].classList.add('process-hidden');
     fixture.container.scrollTop = 250;
@@ -553,11 +552,11 @@ test('锚点捕获/应用与阅读位置恢复保持原语义', async () => {
     assert.equal(viewport.consumePendingChatViewportAnchor(), null);
 
     // 按上下文记住 / 读取 / 遗忘（模块私有 Map，公开读面唯一）
-    viewport.rememberChatViewportAnchorForContext('ctx:rt-a');
-    const remembered = viewport.getRememberedChatViewportAnchorForContext('ctx:rt-a');
+    viewport.rememberChatViewportAnchorForContext('runtime:rt-a');
+    const remembered = viewport.getRememberedChatViewportAnchorForContext('runtime:rt-a');
     assert.equal(remembered.mode, 'anchor');
-    viewport.forgetChatViewportAnchorForContext('ctx:rt-a');
-    assert.equal(viewport.getRememberedChatViewportAnchorForContext('ctx:rt-a'), null);
+    viewport.forgetChatViewportAnchorForContext('runtime:rt-a');
+    assert.equal(viewport.getRememberedChatViewportAnchorForContext('runtime:rt-a'), null);
   });
 });
 
@@ -573,7 +572,6 @@ test('过期结算与过期锚点保存都不落盘', async () => {
     fixture.container.clientHeight = 200;
     c.read('followLatestEnabled = false;');
     c.read('currentRuntimeAgentId = "rt-a";');
-    c.window.getRuntimeContextKey = (id) => 'ctx:' + id;
 
     const notifyPreserve = (preserveTop) => viewport.notifyChatViewportMutation({
       reason: 'render-full', shouldFollow: false, preserveTop, forceSnap: false, allowChase: false, preferSmooth: false,
@@ -612,27 +610,27 @@ test('过期结算与过期锚点保存都不落盘', async () => {
 
     // 锚点保存定时器：上下文在 150ms 窗口内切换 → 旧上下文不得写入
     fixture.container.scrollTop = 250;
-    viewport.forgetChatViewportAnchorForContext('ctx:rt-a');
-    viewport.forgetChatViewportAnchorForContext('ctx:rt-b');
+    viewport.forgetChatViewportAnchorForContext('runtime:rt-a');
+    viewport.forgetChatViewportAnchorForContext('runtime:rt-b');
     fixture.container.dispatch('scroll');
     assert.ok(fixture.timers.pending() >= 1, '滚动后排队锚点保存定时器');
     c.read('currentRuntimeAgentId = "rt-b";');
     fixture.timers.flush(200);
-    assert.equal(viewport.getRememberedChatViewportAnchorForContext('ctx:rt-a'), null,
+    assert.equal(viewport.getRememberedChatViewportAnchorForContext('runtime:rt-a'), null,
       '上下文已切换，过期保存被拒绝');
-    assert.equal(viewport.getRememberedChatViewportAnchorForContext('ctx:rt-b'), null);
+    assert.equal(viewport.getRememberedChatViewportAnchorForContext('runtime:rt-b'), null);
 
     // 同上下文内正常保存
     fixture.container.dispatch('scroll');
     fixture.timers.flush(200);
-    assert.equal(viewport.getRememberedChatViewportAnchorForContext('ctx:rt-b')?.mode, 'anchor');
+    assert.equal(viewport.getRememberedChatViewportAnchorForContext('runtime:rt-b')?.mode, 'anchor');
 
     // 跟随开启时滚动不保存（与原行为一致）
     c.read('followLatestEnabled = true;');
-    viewport.forgetChatViewportAnchorForContext('ctx:rt-b');
+    viewport.forgetChatViewportAnchorForContext('runtime:rt-b');
     fixture.container.dispatch('scroll');
     fixture.timers.flush(200);
-    assert.equal(viewport.getRememberedChatViewportAnchorForContext('ctx:rt-b'), null);
+    assert.equal(viewport.getRememberedChatViewportAnchorForContext('runtime:rt-b'), null);
   });
 });
 

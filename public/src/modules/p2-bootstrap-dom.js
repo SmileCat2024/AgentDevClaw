@@ -1,19 +1,22 @@
 /**
- * P2 bootstrap 消费接口适配 —— DOM 引用。
+ * P2 bootstrap 消费接口适配 —— DOM 引用（P4 T1 起只是转发壳）。
  *
- * classic 唯一实现：public/src/app-core.js 的 createP2BootstrapDomHost()。
- * 值是加载期 document.getElementById 得到的 const 引用（元素从不替换），因此
- * 这里只读：没有 setter，向 domRefs 的属性赋值在 ESM strict 下抛 TypeError，
- * 与 classic 顶层 const 的只读语义一致。
+ * 状态 owner 已迁入 [dom-refs.js](dom-refs.js)：37 个 index.html 静态元素引用由
+ * 该模块在求值期查询并冻结导出，本文件只保留原 import 路径（20+ 消费方
+ * 与测试按此路径取用），不再经 `window.createP2BootstrapDomHost()` 转发——
+ * classic 工厂已随 app-core 的 DOM 引用区一并删除，避免同一批引用出现第二份
+ * 翻译层。
  *
- * 消费方（P2 转换后 import）：chat-viewport / chat-scroll / chat-renderer /
+ * 值的只读语义：domRefs 是 Object.freeze 的模块常量，向属性赋值在 ESM strict
+ * 下抛 TypeError，与 classic 顶层 const 只读一致。
+ *
+ * 消费方（P2/P4 转换后 import）：chat-viewport / chat-scroll / chat-renderer /
  * chat-row-visibility / lazy-tool-content / persistent-input / input-render /
  * input-helpers / chat-context-bar / chat-nav-timeline / debug-panel-host /
  * debug-logs / todo-plan / ctx-menu-handlers / context-menu /
  * session-list-render / workspace-docset / workspace-actions / theme-lang /
- * sidebar-render / agent-snapshot-loader 等。
+ * sidebar-render / app-ui 等。
  *
- * 撤除（P3）：以上消费方全部迁移、DOM 引用 owner 移入 ESM 后，删除本模块与
- * classic 工厂；迁移期禁止在 ESM 侧另存元素引用副本。
+ * 撤除：消费方全部改从 dom-refs.js 取用后即可删除本文件（纯路径别名，无逻辑）。
  */
-export const domRefs = window.createP2BootstrapDomHost();
+export { domRefs } from './dom-refs.js';

@@ -203,7 +203,7 @@ function handleConnectionEvent(frame) {
     // 会话视图域收敛时改 import）
     const token = window.captureSessionViewToken(frame.agentId);
     commitSessionViewPatch(token, { connected }, () => {
-      // 桥接期：getRuntimeRecord 定义于 app-core（classic，身份域收敛时改 import）
+      // 桥接期：getRuntimeRecord 定义于 app-core（工作空间单元域收敛时改 import）
       const record = typeof window.getRuntimeRecord === 'function' ? window.getRuntimeRecord(frame.agentId) : null;
       if (record) record.connected = connected;
     });

@@ -101,6 +101,7 @@ import {
   getAgentWorkspaceState,
   getPhBrowsingTarget,
 } from './project-data.js';
+import { localizeWorkspaceValue } from './format-utils.js';
 
 // 桥接期：t 仍定义于 classic public/src/i18n.js（i18n 域收敛时改 import）。
 // 经 window 晚绑定，不取加载期快照。
@@ -173,8 +174,8 @@ function renderWorkspaceSessionList(agent, block) {
   const isAgentCreator = agent?.id === 'agent-creator';
   const sessionListMode = String(sessionFilters.mode || '').trim();
   const activeSessionId = agent?.active_workspace_session_id || agent?.workspace_sessions?.activeSessionId || null;
-  const title = window.localizeWorkspaceValue(block.title, t('workspace_history_current'));
-  const desc = window.localizeWorkspaceValue(block.description, '');
+  const title = localizeWorkspaceValue(block.title, t('workspace_history_current'));
+  const desc = localizeWorkspaceValue(block.description, '');
   const headerAction = block?.headerAction ? renderActionButton(block.headerAction) : '';
 
   const ctx = { sessions, isFeatureCreator, isAgentCreator, sessionListMode, activeSessionId, title, desc, headerAction };

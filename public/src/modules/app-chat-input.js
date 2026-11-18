@@ -79,6 +79,7 @@ import {
   setVoicePendingSend,
   setVoiceTargetBtn,
 } from './p2-w2-3a-voice-state.js';
+import { localizeWorkspaceValue } from './format-utils.js';
 
 export let AppChatInput = (() => {
   // agentId -> { agentId, agentName, resolveEndpoint, ensureEndpoint }（render 时刷新）
@@ -121,8 +122,7 @@ export let AppChatInput = (() => {
     // 草稿经 render 内嵌还原（重渲染重建 textarea 时不丢输入；keystroke 不触发
     // 重渲染，签名式跳过保证常规输入期 DOM 稳定）
     const draft = sessionInputCache[draftKey(agentId)] || '';
-    // 桥接期：localizeWorkspaceValue 定义于 app-core（i18n 域收敛时改 import）
-    const placeholder = escapeHtml(window.localizeWorkspaceValue(block?.placeholder, ''));
+    const placeholder = escapeHtml(localizeWorkspaceValue(block?.placeholder, ''));
     queuePostMount(agentId);
 
     return [

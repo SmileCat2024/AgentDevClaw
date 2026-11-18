@@ -47,6 +47,27 @@ export const CLASSIC_BOOTSTRAP = [
 ];
 
 /**
+ * 首屏 DOM 引用域（P4 T1：从 app-core 抽出）。owner 是模块相，classic 相只有
+ * 两个桥键（container / currentAgentTitle）。凡静态依赖链触达 p2-bootstrap-dom
+ * 的域模块，装载期就要取到 domRefs——因此排在 P4_DOMAINS 的最前面；app-core
+ * 的 createRuntimeViewCacheHost 也按桥键读 container。
+ */
+export const DOM_REFS_DOMAIN = ['public/src/modules/dom-refs.js'];
+
+/**
+ * 身份解析域（P4 T1：从 app-core 抽出）。会话 / 运行身份函数与 viewer 会话绑定
+ * 的 owner 在模块相；桥键（domain identity）服务 app-core / app-main /
+ * desktop-notify 的 classic 调用。夹具里凡跑真实侧栏 / 会话链的都要它。
+ */
+export const IDENTITY_DOMAIN = ['public/src/modules/identity.js'];
+
+/**
+ * 传输域（P4 T1：从 app-core 抽出）：fetch 分流补丁 + invoke + Viewer 就绪宿主。
+ * invoke 的桥键吸收 classic 相已写入的实现（夹具替换 IPC 缝后仍生效）。
+ */
+export const TRANSPORT_DOMAIN = ['public/src/modules/transport.js'];
+
+/**
  * 会话视图提交边界（P4 T2 批次）。必须先于 SIDEBAR_DOMAIN：sidebar-render /
  * runtime-status 的桥接期调用点在函数体内晚绑定，但它们的用例常在同一 case 里
  * 同步读 `readCurrentSessionViewState()` 的结果，桥键注册要在此之前完成。
@@ -85,7 +106,7 @@ export const APP_UI_DOMAIN = ['public/src/app-ui.js'];
  * P2 用例的墙钟推高一个量级。需要它的用例显式
  * `prepareEsmModules(sandbox, [...P4_DOMAINS, ...APP_UI_DOMAIN])`。
  */
-export const P4_DOMAINS = [...SESSION_VIEW_DOMAIN, ...SIDEBAR_DOMAIN];
+export const P4_DOMAINS = [...DOM_REFS_DOMAIN, ...IDENTITY_DOMAIN, ...TRANSPORT_DOMAIN, ...SESSION_VIEW_DOMAIN, ...SIDEBAR_DOMAIN];
 
 /**
  * classic 链夹具「顺手」发起的 ESM 域装载（pending prep）。
@@ -139,6 +160,9 @@ function applyEsmDomain(sandbox, loaded) {
   // `__esmDomain.<域>` 取真实模块实例——与 `c.load(...)` 同一实例，不建第二份状态。
   const appUi = loaded.get('public/src/app-ui.js');
   sandbox.__esmDomain = Object.freeze({
+    domRefs: loaded.get('public/src/modules/dom-refs.js'),
+    identity: loaded.get('public/src/modules/identity.js'),
+    transport: loaded.get('public/src/modules/transport.js'),
     sessionViewState: loaded.get('public/src/modules/session-view-state.js'),
     runtimeStatus: loaded.get('public/src/modules/runtime-status.js'),
     sidebarRender,

@@ -127,7 +127,6 @@ function reset() {
     setCurrentHookInspector: (value) => sessionStorageState.setCurrentHookInspector(value || {}),
     setCurrentOverviewSnapshot: (value) => sessionStorageState.setCurrentOverviewSnapshot(value || {}),
     setCurrentTodoPlan: (value) => sessionStorageState.setCurrentTodoPlan(value || {}),
-    getRuntimeContextKey: (runtimeId) => `ctx:${runtimeId}`,
     saveCurrentWorkspaceSurfaceScroll: () => { calls.scrollSaves += 1; },
     _storeVisibleSessionInputDraft: () => { calls.draftStores += 1; },
     beginChatLoadingSession: () => { calls.beginLoading += 1; },
@@ -176,7 +175,8 @@ test('openReadOnlySession freezes the view on the archived Session record', asyn
   const result = await readonlyView.openReadOnlySession({ agentId: 'programming-helper', sessionId: 's1' });
 
   assert.deepEqual(result, { ok: true });
-  assert.equal(runtimeCache.has('ctx:rt-old'), true, '离开存活 runtime 前先把视图写入缓存');
+  // 上下文键来自 identity 域的真实实现（本夹具无 host/session 绑定 → runtime:<id>）
+  assert.equal(runtimeCache.has('runtime:rt-old'), true, '离开存活 runtime 前先把视图写入缓存');
   assert.equal(agentStore.focusedAgentId, 'programming-helper');
   assert.equal(orchestration.currentRuntimeAgentId, null, '只读视图不持有 runtime');
   assert.equal(agentStore.readOnlyMode, true);

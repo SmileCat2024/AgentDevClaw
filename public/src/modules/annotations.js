@@ -34,6 +34,7 @@ import { ClawToast } from './toast-notify.js';
 import { currentRuntimeAgentId } from './orchestration-state.js';
 import { focusedAgentId } from './agent-store-state.js';
 import { currentMessages } from './session-view-storage.js';
+import { getActiveWorkspaceSessionId, getRuntimeWorkspaceSessionId } from './identity.js';
 const FEATURE_ID = 'conversation-annotations';
 const CHANNEL_ID = 'annotations';
 const QUOTE_MAX_CHARS = 4000;
@@ -66,10 +67,10 @@ function toast(status, title, description) {
 function currentAddressing() {
   const runtimeRef = typeof currentRuntimeAgentId === 'string' ? currentRuntimeAgentId : '';
   // 桥接期：getRuntimeWorkspaceSessionId / getActiveWorkspaceSessionId 定义于
-  // app-core（身份域收敛后改 import）
-  const sessionId = (typeof window.getRuntimeWorkspaceSessionId === 'function' && runtimeRef
-    ? window.getRuntimeWorkspaceSessionId(runtimeRef)
-    : '') || (typeof window.getActiveWorkspaceSessionId === 'function' ? window.getActiveWorkspaceSessionId() : '');
+  // identity 域（P4 T1 起具名 import）
+  const sessionId = (typeof getRuntimeWorkspaceSessionId === 'function' && runtimeRef
+    ? getRuntimeWorkspaceSessionId(runtimeRef)
+    : '') || (typeof getActiveWorkspaceSessionId === 'function' ? getActiveWorkspaceSessionId() : '');
   if (!sessionId) return null;
   // 远程会话没有本机 feature-comms 通道，降级为不可用（不猜目标）。
   const focused = typeof focusedAgentId === 'string' ? focusedAgentId : '';

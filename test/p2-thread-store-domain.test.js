@@ -147,7 +147,9 @@ test('交互域导出与桥键是同一实现，状态写入只落唯一 ClawThr
     })();
     focusedAgentId = 'coder';
     currentRuntimeAgentId = 'rt-p';`);
-    c.sandbox.run('getRuntimeWorkspaceSessionId = () => "sess-p";');
+    // 会话身份（P4 T1：identity 域 owner）：按生产 switchAgent 的入口播种绑定
+    const identity = await c.load('public/src/modules/identity.js');
+    identity.setViewerSessionBinding('rt-p', 'sess-p');
 
     // 跨 realm 数组用 JSON 投影比较（原型不同，deepStrictEqual 会判不等）
     assert.equal(JSON.stringify(domain.getThreadPendingTexts()), '["暂存一"]');

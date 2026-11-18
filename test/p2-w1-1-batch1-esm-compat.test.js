@@ -31,6 +31,9 @@ const MODULES = {
 let documentListeners = [];
 let cleanupGlobals;
 let proxyOverlayModule; // defineKey 唯一注册制：桥键模块全文件只装载一次
+// 身份域（P4 T1 从 app-core 抽出）：会话身份走真实实现 + viewer 侧绑定，
+// 不再在 window 上装同名函数桩（模块已具名 import）。
+let identity;
 
 before(async () => {
   cleanupGlobals = installBrowserStubs({
@@ -54,6 +57,7 @@ before(async () => {
   window.KernelState.defineKey('i18n-environment', 'currentLanguage', 'zh');
   window.KernelState.defineKey('i18n-environment', 'currentTheme', 'dark');
   proxyOverlayModule = (await loadModuleOnce(MODULES.proxyOverlay, { installGlobals: false })).module;
+  identity = await import('../public/src/modules/identity.js');
 });
 
 after(() => {
@@ -189,7 +193,8 @@ test('session-reference-picker：命名导出与 window.SessionReference 成员�
 
 test('session-reference-picker：引用按 (runtimeId, sessionId) 分桶，consume / restore 语义不变', async () => {
   const { module } = await load(MODULES.sessionReferencePicker);
-  window.getRuntimeWorkspaceSessionId = (runtimeId) => `${runtimeId}-session`;
+  identity.setViewerSessionBinding('rt-alpha', 'rt-alpha-session');
+  identity.setViewerSessionBinding('rt-beta', 'rt-beta-session');
   try {
     window.currentRuntimeAgentId = 'rt-alpha'; // 经 orchestration 桥键 → 域模块状态
     assert.equal(module.addSessionReference({ agentId: 'programming-helper', sessionId: 's-1', title: '甲' }), true);
@@ -216,14 +221,13 @@ test('session-reference-picker：引用按 (runtimeId, sessionId) 分桶，consu
     module.clearSessionReferences();
     assert.deepEqual(module.peekSessionReferences(), []);
   } finally {
-    delete window.getRuntimeWorkspaceSessionId;
     window.currentRuntimeAgentId = null;
   }
 });
 
 test('session-reference-picker：当前会话不能引用自身（身份判定经 classic 解析函数）', async () => {
   const { module } = await load(MODULES.sessionReferencePicker);
-  window.getRuntimeWorkspaceSessionId = (runtimeId) => `${runtimeId}-session`;
+  identity.setViewerSessionBinding('rt-self', 'rt-self-session');
   window.getCurrentHostAgentRecord = () => ({ id: 'programming-helper' });
   // toast 是同一对象（toast-notify 的 window.ClawToast 就是模块导出），
   // 这里只拦渲染，保留「自身引用给 warning 提示」的调用契约。

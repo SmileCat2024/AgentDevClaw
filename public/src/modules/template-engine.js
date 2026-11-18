@@ -4,7 +4,7 @@
 //
 // ESM（P2 迁移）：跨文件依赖全部显式——已迁模块直接 import（markdown-utils 的
 // escapeHtml、agent-loader 的模板映射与重载入口、会话/渲染状态、会话切换引导
-// 标志）；仍 classic 的 window 可达函数（renderCurrentMainView / getRuntimeId /
+// 标志）；仍 classic 的 window 可达函数（renderCurrentMainView /
 // isWorkspaceSurfaceUnit）晚绑定调用，行内注明归属。仍有 classic 消费方的入口经
 // KernelState 桥键（template-engine 域）提供，文件尾部统一注册。
 
@@ -14,6 +14,7 @@ import { currentRuntimeAgentId } from './orchestration-state.js';
 import { currentMessages, toolRenderConfigs, TOOL_NAMES } from './session-view-storage.js';
 import { setLastRenderedChatSig } from './render-entry-state.js';
 import { sessionSwitch } from './p2-bootstrap-session-switch.js';
+import { getAgentRuntimeId } from './identity.js';
 
 // 默认 fallback 模板（当动态加载失败时使用）
 const RENDER_TEMPLATES = {
@@ -378,16 +379,8 @@ export function getToolDisplayName(toolName) {
   return TOOL_NAMES[toolName] || toolName;
 }
 
-// 本文件版本是 classic 装载序里的赢家（index.html 中晚于 app-core 的同名声明），
-// 迁移后作为具名导出供同批 auto-title 等直接 import；classic 消费方仍读
-// app-core 的同名全局实现（两者等价：getRuntimeId 恒为函数）。
-export function getAgentRuntimeId(agent) {
-  // 桥接期：定义于 app-core（身份域收敛时移除）
-  return typeof window.getRuntimeId === 'function' ? (window.getRuntimeId(agent) || '') : '';
-}
-
 function getAgentDisplayId(agent) {
-  // 桥接期：定义于 app-core（身份/工作空间域收敛时移除）
+  // 桥接期：isWorkspaceSurfaceUnit 定义于 app-core（工作空间单元域收敛时移除）
   if (window.isWorkspaceSurfaceUnit(agent)) {
     return '工作空间';
   }
@@ -418,8 +411,9 @@ window.ClawFW.actions.registerMany({
 // 这两个函数，安全性不依赖函数声明提升。真实整图由 frontend-agent-loader-host /
 // p2-esm-graph-isolation 用例执行，模板重试的真实行为由
 // test/p2-template-summary-imports.test.js 覆盖。
-// getAgentRuntimeId 不上桥：window 上仍是 app-core 的同名 classic 声明（全局
-// function 声明属性不可重定义），本文件版本改由具名导出给同批消费方。
+// getAgentRuntimeId 原为本文件与 app-core 的双定义（classic 装载序里本文件的
+// 声明是赢家）。P4 T1 后唯一实现在 identity.js：本文件按需具名 import，
+// classic 消费方读 identity 域桥键。
 const compatibility = {
   clearTruncatedHighlightData,
   renderJsonHighlight,

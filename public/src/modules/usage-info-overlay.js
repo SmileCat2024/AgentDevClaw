@@ -13,6 +13,7 @@
  */
 import { getCurrentLanguage } from './i18n-environment-state.js';
 import { escapeHtml } from './markdown-utils.js';
+import { formatPresetDisplayName } from './format-utils.js';
 
 function ensureUsageInfoHost() {
   let host = document.getElementById('usage-info-overlay-host');
@@ -587,8 +588,7 @@ function renderUsageInfoGroups(groups, totals) {
       const width = max > 0 ? Math.max(2, Math.round((total / max) * 100)) : 2;
       const metaParts = [];
       if (item.presetName && item.presetName !== item.label) {
-        // 桥接期：定义于 app-core（模型预设域收敛后改 import）
-        metaParts.push(typeof window.formatPresetDisplayName === 'function' ? window.formatPresetDisplayName(item.presetName) : item.presetName);
+        metaParts.push(formatPresetDisplayName(item.presetName));
       }
       if (item.provider) metaParts.push(item.provider);
       if (item.source && item.source !== item.label) metaParts.push(item.source);

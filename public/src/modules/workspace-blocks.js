@@ -73,6 +73,7 @@ import {
   openRepositoryPackageDetails,
   closeRepositoryPackageDetails,
 } from './debug-overview.js';
+import { localizeWorkspaceValue } from './format-utils.js';
 
 // ═══════════════════════════════════════════════════════════════
 // 通用 Workspace Blocks
@@ -97,15 +98,15 @@ function shouldRenderBlock(block) {
 }
 
 function renderActionButton(action, options = {}) {
-  const label = window.localizeWorkspaceValue(action?.label, '');
+  const label = localizeWorkspaceValue(action?.label, '');
   const encoded = escapeHtml(JSON.stringify(action?.action || {}));
   const btnClass = options.className || 'workspace-action';
   return '<button class="' + escapeHtml(btnClass) + '" type="button" data-workspace-action="' + encoded + '" data-action="wsBlocks.workspaceAction"' + (options.disabled ? ' disabled' : '') + '>' + escapeHtml(label) + '</button>';
 }
 
 function renderWorkspaceHero(agent, block) {
-  const title = window.localizeWorkspaceValue(block.title, agent.name || agent.id);
-  const body = window.localizeWorkspaceValue(block.body, agent.description || '');
+  const title = localizeWorkspaceValue(block.title, agent.name || agent.id);
+  const body = localizeWorkspaceValue(block.body, agent.description || '');
   // bar 变体：codex 登录卡片同款紧凑横排（左标题说明 / 右按钮组），
   // 由 CSS .workspace-hero.bar 定形；声明驱动，不按 agent id 分支
   const heroClass = agent?.id === 'home'
@@ -123,7 +124,7 @@ function renderWorkspaceHero(agent, block) {
   return [
     '<section class="' + heroClass + (actionsHtml ? ' has-actions' : '') + '">',
     '<div class="workspace-hero-main">',
-    '<div class="workspace-kicker">' + escapeHtml(window.localizeWorkspaceValue(block.kicker, window.t('workspace_kicker'))) + '</div>',
+    '<div class="workspace-kicker">' + escapeHtml(localizeWorkspaceValue(block.kicker, window.t('workspace_kicker'))) + '</div>',
     '<div class="workspace-title">' + escapeHtml(title) + '</div>',
     '<div class="workspace-body">' + escapeHtml(body) + '</div>',
     '</div>',
@@ -160,10 +161,10 @@ function renderWorkspaceLauncherGrid(agent, block) {
   return [
     '<section class="' + gridClass + '">',
     cards.map((card, index) => {
-      const title = window.localizeWorkspaceValue(card.title, '');
-      const body = window.localizeWorkspaceValue(card.body, '');
-      const note = window.localizeWorkspaceValue(card.note, '');
-      const actionLabel = window.localizeWorkspaceValue(card.actionLabel, '');
+      const title = localizeWorkspaceValue(card.title, '');
+      const body = localizeWorkspaceValue(card.body, '');
+      const note = localizeWorkspaceValue(card.note, '');
+      const actionLabel = localizeWorkspaceValue(card.actionLabel, '');
       const action = escapeHtml(JSON.stringify(card.action || {}));
       const actionType = card?.action?.type || '';
       const disabled = (
@@ -197,8 +198,8 @@ function renderWorkspaceField(agent, field, draft, formId) {
   const name = String(field.name || '').trim();
   if (!name) return '';
 
-  const label = window.localizeWorkspaceValue(field.label, name);
-  const placeholder = window.localizeWorkspaceValue(field.placeholder, '');
+  const label = localizeWorkspaceValue(field.label, name);
+  const placeholder = localizeWorkspaceValue(field.placeholder, '');
   const value = draft[name] ?? '';
   const escapedName = escapeHtml(name);
   const escapedLabel = escapeHtml(label);
@@ -218,7 +219,7 @@ function renderWorkspaceField(agent, field, draft, formId) {
     const options = Array.isArray(field.options) ? field.options : [];
     const optionsHtml = options.map((option) => {
       const optionValue = typeof option === 'string' ? option : String(option?.value ?? '');
-      const optionLabel = typeof option === 'string' ? option : window.localizeWorkspaceValue(option?.label, optionValue);
+      const optionLabel = typeof option === 'string' ? option : localizeWorkspaceValue(option?.label, optionValue);
       const selected = String(value) === optionValue ? ' selected' : '';
       return '<option value="' + escapeHtml(optionValue) + '"' + selected + '>' + escapeHtml(optionLabel) + '</option>';
     }).join('');
@@ -283,8 +284,8 @@ function renderWorkspaceField(agent, field, draft, formId) {
 }
 
 function renderWorkspaceForm(agent, block) {
-  const title = window.localizeWorkspaceValue(block.title, window.t('workspace_tab_form'));
-  const desc = window.localizeWorkspaceValue(block.description, '');
+  const title = localizeWorkspaceValue(block.title, window.t('workspace_tab_form'));
+  const desc = localizeWorkspaceValue(block.description, '');
   const fields = Array.isArray(block.fields) ? block.fields : [];
   const formId = block.id || 'form';
   if (fields.length === 0) {
@@ -325,7 +326,8 @@ function renderFlowEditorBlock(agent, block) {
       // 语言给现值（原 currentLanguage 词法读取），其余 classic 函数经 window 晚绑定。
       currentLanguage: getCurrentLanguage(),
       escapeHtml,
-      localizeWorkspaceValue: window.localizeWorkspaceValue, // 桥接期：定义于 app-core（i18n 域收敛）
+      // 格式化族（P4 T1 起具名 import 自 format-utils）
+      localizeWorkspaceValue: localizeWorkspaceValue,
       getCurrentAgentRecord: window.getCurrentAgentRecord,   // 桥接期：定义于 app-main（编排域收敛）
       getWorkspaceFormDraft,
       saveWorkspaceFormDraft,
@@ -335,7 +337,7 @@ function renderFlowEditorBlock(agent, block) {
       getAgentWorkspaceState,
     });
   }
-  const title = window.localizeWorkspaceValue(block.title, getCurrentLanguage() === 'zh' ? '编排' : 'Flows');
+  const title = localizeWorkspaceValue(block.title, getCurrentLanguage() === 'zh' ? '编排' : 'Flows');
   return [
     '<section class="assembly-intro">',
     '<div class="workspace-section-title">' + escapeHtml(title) + '</div>',
@@ -361,9 +363,9 @@ function renderDirectorySummaryPanel(agent, block) {
   const summary = getDirectorySummaryData(agent, block);
   if (!summary) return '';
 
-  const title = window.localizeWorkspaceValue(block?.directorySummary?.title, '目录概览');
-  const pathLabel = window.localizeWorkspaceValue(block?.directorySummary?.pathLabel, '目录路径');
-  const updatedLabel = window.localizeWorkspaceValue(block?.directorySummary?.updatedLabel, '最后变更');
+  const title = localizeWorkspaceValue(block?.directorySummary?.title, '目录概览');
+  const pathLabel = localizeWorkspaceValue(block?.directorySummary?.pathLabel, '目录路径');
+  const updatedLabel = localizeWorkspaceValue(block?.directorySummary?.updatedLabel, '最后变更');
   const names = Array.isArray(summary.sampleNames) ? summary.sampleNames : [];
 
   return [
@@ -380,8 +382,8 @@ function renderDirectorySummaryPanel(agent, block) {
 }
 
 function renderWorkspaceStatusGrid(agent, block) {
-  const title = window.localizeWorkspaceValue(block.title, window.t('workspace_tab_live'));
-  const desc = window.localizeWorkspaceValue(block.description, agent?.description || '');
+  const title = localizeWorkspaceValue(block.title, window.t('workspace_tab_live'));
+  const desc = localizeWorkspaceValue(block.description, agent?.description || '');
   const sessions = getWorkspaceSessions(agent);
   const summary = sessions.find((session) => session.id === (agent?.active_workspace_session_id || agent?.workspace_sessions?.activeSessionId)) || sessions[0] || null;
   const connected = agent ? (agent.connected !== false ? window.t('status_connected') : window.t('status_disconnected')) : window.t('status_no_agent');
@@ -395,10 +397,10 @@ function renderWorkspaceStatusGrid(agent, block) {
     { label: window.t('workspace_live_session'), value: summary ? (summary.title || summary.id || '-') : window.t('workspace_history_empty'), note: summary?.updatedAt ? formatWorkspaceDate(summary.updatedAt) : '-' },
     directorySummary
       ? {
-          label: window.localizeWorkspaceValue(block?.directorySummary?.countLabel, 'Skills'),
+          label: localizeWorkspaceValue(block?.directorySummary?.countLabel, 'Skills'),
           value: String(directorySummary.skillCount ?? 0),
           note: directorySummary.exists
-            ? `${window.localizeWorkspaceValue(block?.directorySummary?.countNote, 'Entries')}: ${directorySummary.entryCount ?? 0}`
+            ? `${localizeWorkspaceValue(block?.directorySummary?.countNote, 'Entries')}: ${directorySummary.entryCount ?? 0}`
             : (directorySummary.error || 'Not ready'),
         }
       : null,
@@ -681,8 +683,8 @@ function getCompatibilityTagLabel(value) {
 }
 
 function renderFeatureRepositoryBlock(agent, block) {
-  const title = window.localizeWorkspaceValue(block.title, getRepoLocaleText('插件仓库', 'Plugin Repository'));
-  const desc = window.localizeWorkspaceValue(block.description, '');
+  const title = localizeWorkspaceValue(block.title, getRepoLocaleText('插件仓库', 'Plugin Repository'));
+  const desc = localizeWorkspaceValue(block.description, '');
   const repository = getFeatureRepositoryData(agent, block);
   const packages = Array.isArray(repository?.packages) ? repository.packages : [];
   const assemblySelection = block?.assemblySelection || null;

@@ -50,6 +50,8 @@ import {
   computeReadout,
   keepZoneHasDialogue,
 } from './trim-ratio-core.js';
+import { getRuntimeId } from './identity.js';
+import { fmtPct } from './format-utils.js';
 
 /* ── Page state ── */
 let trimPageState = {
@@ -335,7 +337,7 @@ trimPageRatioInput.addEventListener('wheel', onRatioWheelAdjust, { passive: fals
 // 轴节点：系统上下文（时间轴起点，弱呈现）
 function renderPreambleNode() {
   if (trimPageState.preamblePercent <= 0) return '';
-  return `<div class="trim-tl-node preamble"><div class="trim-tl-sub">${L('系统上下文', 'System context')} · ${window.fmtPct(trimPageState.preamblePercent)}</div></div>`;
+  return `<div class="trim-tl-node preamble"><div class="trim-tl-sub">${L('系统上下文', 'System context')} · ${fmtPct(trimPageState.preamblePercent)}</div></div>`;
 }
 
 // 比例模式时间轴：每轮包含用户输入锚点、assistant 回复锚点与对应工具调用摘要
@@ -430,7 +432,7 @@ function renderRatioRoundNode(rd, opts) {
   const partial = rd.startIndex < st.cutIndex && rd.endIndex >= st.cutIndex;
   const stateClass = folded ? ' folded' : '';
   const clickable = !folded && !partial && opts.safeCutSet.has(rd.startIndex);
-  const pct = opts.totalChars > 0 ? window.fmtPct(rd.charCount / opts.totalChars) : '';
+  const pct = opts.totalChars > 0 ? fmtPct(rd.charCount / opts.totalChars) : '';
   const detail = partial ? buildRoundDetail(st.messages, rd.roundIndex) : [];
   const cutAfterUser = partial && st.messages.some((m) => m.roundIndex === rd.roundIndex && m.role === 'user' && m.index + 1 === st.cutIndex);
   const cutInDetail = partial && detail.some((node) => node.cutIndex === st.cutIndex);
@@ -471,7 +473,7 @@ function renderManualRoundNode(r, idx) {
   const checked = r.suggestedTrim ? ' checked' : '';
   const stateClass = r.suggestedTrim ? ' folded' : '';
   const calls = (r.toolCalls || []).filter((tc) => tc && typeof tc.name === 'string' && tc.name !== 'undefined').length;
-  const pct = window.fmtPct(r.charPercent || 0);
+  const pct = fmtPct(r.charPercent || 0);
   return `<div class="trim-tl-node round manual${stateClass}" data-trim-index="${idx}">
     <div class="trim-tl-title"><input type="checkbox" class="trim-checkbox" data-trim-index="${idx}"${checked} /><span class="trim-tl-title-text">${escapeHtml(r.userPreview || L('（无输入）', '(no input)'))}</span></div>
     <div class="trim-tl-sub">${L('第', 'Round')} ${idx + 1} ${L('轮', '')}${calls ? ` · ${calls} ${L('次调用', 'calls')}` : ''} · ${pct}</div>
@@ -481,7 +483,7 @@ function renderManualRoundNode(r, idx) {
 
 // 切点：轴上的橙色标记——上方已精简，下方保留
 function renderCutNode(readout) {
-  return `<div class="trim-tl-cut"><span>${L('保留从这里开始', 'Keep from here')}</span><span class="trim-tl-cut-meta">${L('释放', 'frees')} ${window.fmtPct(readout.releasedPercent)}</span></div>`;
+  return `<div class="trim-tl-cut"><span>${L('保留从这里开始', 'Keep from here')}</span><span class="trim-tl-cut-meta">${L('释放', 'frees')} ${fmtPct(readout.releasedPercent)}</span></div>`;
 }
 
 function renderList(opts = {}) {
@@ -612,16 +614,16 @@ function updateReadout() {
     const readout = computeReadout(st.messages, st.preambleCharCount, st.cutIndex);
     trimPageReadout.innerHTML = st.unmet
       ? `<div class="trim-page-readout-main">${L('无法达到该比例：对话文本精简后仍保留', 'Target unreachable: dialogue text is kept after trimming')}</div>
-         <div class="trim-page-readout-sub">${L('保留', 'Keeps')} ${window.fmtPct(readout.keptPercent)} · ${readout.keptMessageCount} ${L('条消息', 'msgs')}</div>`
-      : `<div class="trim-page-readout-main">${L('保留', 'Keeps')} <b>${window.fmtPct(readout.keptPercent)}</b> · ${readout.keptMessageCount} ${L('条消息', 'msgs')}</div>
-         <div class="trim-page-readout-sub">${L('估算', 'Est.')} ${fmtChars(readout.keptCharCount)} / ${fmtChars(readout.totalCharCount)} ${L('字符 · 释放', 'chars · frees')} ${window.fmtPct(readout.releasedPercent)}</div>`;
+         <div class="trim-page-readout-sub">${L('保留', 'Keeps')} ${fmtPct(readout.keptPercent)} · ${readout.keptMessageCount} ${L('条消息', 'msgs')}</div>`
+      : `<div class="trim-page-readout-main">${L('保留', 'Keeps')} <b>${fmtPct(readout.keptPercent)}</b> · ${readout.keptMessageCount} ${L('条消息', 'msgs')}</div>
+         <div class="trim-page-readout-sub">${L('估算', 'Est.')} ${fmtChars(readout.keptCharCount)} / ${fmtChars(readout.totalCharCount)} ${L('字符 · 释放', 'chars · frees')} ${fmtPct(readout.releasedPercent)}</div>`;
     return;
   }
   // 按轮次模式读数（轮级口径，与旧页脚一致）
   const rounds = st.rounds;
   const trimmed = rounds.filter((r) => r.suggestedTrim);
   const freedPercent = trimmed.reduce((sum, r) => sum + (r.charPercent || 0), 0);
-  trimPageReadout.innerHTML = `${L('共', '')} ${rounds.length} ${L('轮，精简', 'rounds, trim')} ${trimmed.length} ${L('轮 · 释放约', '· frees ~')} <span class="trim-footer-pct">${window.fmtPct(freedPercent)}</span> ${L('上下文', 'context')}`;
+  trimPageReadout.innerHTML = `${L('共', '')} ${rounds.length} ${L('轮，精简', 'rounds, trim')} ${trimmed.length} ${L('轮 · 释放约', '· frees ~')} <span class="trim-footer-pct">${fmtPct(freedPercent)}</span> ${L('上下文', 'context')}`;
 }
 
 /* ── Submit（编排自 session-dialogs.js submitTrimCompact 原样迁移） ── */
@@ -742,7 +744,7 @@ async function submitTrimPage() {
       const readyAgent = (isRemoteTrim ? null : result?.agent) || null;
       const targetStopped = false;
       const connectedTarget = readyAgent ? (window.upsertConnectedAgent(readyAgent) || readyAgent) : null;
-      const nextRuntimeId = connectedTarget ? (window.getRuntimeId(connectedTarget) || null) : null;
+      const nextRuntimeId = connectedTarget ? (getRuntimeId(connectedTarget) || null) : null;
       if (archiveAfter && archiveSucceeded) {
         // The server has committed both the successor and source archive. This is
         // the replacement operation's terminal success boundary; source runtime

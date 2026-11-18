@@ -74,6 +74,7 @@ import { currentRuntimeAgentId } from './orchestration-state.js';
 import { refreshMeasuredChatRows } from './chat-row-visibility.js';
 import { chatSurface } from './p2-bootstrap-chat-surface.js';
 import { assemblyUi } from './p2-bootstrap-assembly.js';
+import { getRuntimeContextKey } from './identity.js';
 
 // 等价重建 app-core 的两个 DOM 引用（见头注 R3：元素从不替换）。
 const container = document.getElementById('chat-container');
@@ -497,8 +498,8 @@ function consumePendingChatViewportAnchor() {
 }
 
 function getChatViewportContextKey() {
-  if (!currentRuntimeAgentId || typeof window.getRuntimeContextKey !== 'function') return null; // 桥接期：定义于 app-core
-  return window.getRuntimeContextKey(currentRuntimeAgentId);
+  if (!currentRuntimeAgentId) return null;
+  return getRuntimeContextKey(currentRuntimeAgentId);
 }
 
 // Alias used by the renderer and runtime-cache boundary. Keep context identity

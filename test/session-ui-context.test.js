@@ -15,6 +15,8 @@ const inputRenderSource = fs.readFileSync(
   'utf8',
 );
 const uiSource = fs.readFileSync(new URL('../public/src/app-ui.js', import.meta.url), 'utf8');
+// 身份解析域（P4 T1 从 app-core 抽出）：裸 vm 夹具按真实源码装载该域（去 export）。
+const identitySource = fs.readFileSync(new URL('../public/src/modules/identity.js', import.meta.url), 'utf8');
 let caseSeq = 0;
 // 工单 036：会话草稿缓存已从 voice-input.js 迁至 input-composer.js
 const inputComposerSource = fs.readFileSync(
@@ -87,10 +89,17 @@ function buildCoreClassicContext() {
   for (const [domain, key, initialValue] of STATE_KEYS) {
     context.KernelState.defineKey(domain, key, initialValue);
   }
+  // 身份域：宿主导出 + 全部身份函数（真实源码，仅剥离 export 前缀）
+  const identityBlock = sourceBetween(
+    identitySource,
+    '/** app-core 的宿主记录读取器（classic，经 window 晚绑定）。 */',
+    '// ── classic 兼容桥',
+  ).replace(/^export /gm, '');
+  vm.runInContext(identityBlock, context);
   const cacheBlock = sourceBetween(
     coreSource,
     'const MAX_CACHED_RUNTIME_VIEWS = 4;',
-    '\nfunction getFeatureStatus',
+    '\nfunction getEmptyStateHtml',
   );
   vm.runInContext(cacheBlock, context);
   installRuntimeViewCache(context);

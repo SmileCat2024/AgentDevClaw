@@ -87,6 +87,13 @@ export function installBrowserStubs({ window: windowOverrides, document: documen
   };
   globalThis.window = applyOverrides({
     addEventListener() {},
+    // 浏览器 window 恒有 fetch；桩上按 globalThis.fetch 转发（用例替换 globalThis.fetch
+    // 后仍生效）。模块在求值期捕获 window.fetch（transport 的同源/Viewer 分流补丁），
+    // 缺这一面会让装载直接 TypeError。
+    fetch: (...args) => globalThis.fetch(...args),
+    // 浏览器 window.location 恒在：transport 求值期读 protocol 决定同源 / 直连
+    // ViewerWorker 的分流（http(s) → 同源代理）。
+    location: { protocol: 'http:', href: 'http://127.0.0.1:14200/', pathname: '/', search: '' },
     removeEventListener() {},
     ClawToast: { show() {} },
     requestAnimationFrame(cb) { return setTimeout(cb, 0); },

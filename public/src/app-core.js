@@ -4,365 +4,21 @@ window.AgentLoaderHost = Object.freeze({ loadedAgentDetailIds });
 // Template resets can occur before ESM execution; claim absorbs the latest value.
 window.KernelState.defineKey('agent-loader', 'FEATURE_TEMPLATE_MAP', {});
 
-// 跨前端模块共享的纯身份规范化函数。必须在 app-core 提前声明：侧栏布局/渲染
-// 模块会在 app-main 启动完成前通过 focus/visibility 事件触发异步首屏渲染。
-function normalizeAgentIdentity(value) {
-  return String(value || '').trim();
-}
+// P4 T1 从本文件抽出的四族（owner 已在模块相，classic 侧只剩桥键）：
+//   - 首屏 DOM 引用区 → modules/dom-refs.js（域 dom-refs：container / currentAgentTitle）
+//   - 身份解析域     → modules/identity.js（域 identity：10 键，本文件内部经
+//                      window.<fn> 调用，见各调用点注释）
+//   - 传输域         → modules/transport.js（域 transport：invoke，classic 侧
+//                      app-main / 悬置域 wg-* 仍经 window.invoke 调用）
+//   - 展示格式化函数族 → modules/format-utils.js（域 format-utils：
+//                      localizeWorkspaceValue ← 悬置域 im-ui）
+// 本文件保留的是会话视图/编排/渲染入口状态与首屏渲染期仍被 classic 消费的
+// 宿主工厂（createP2Bootstrap*Host）。
 
-const VIEWER_BASE_URL = 'http://127.0.0.1:2026';
 const PREBUILT_AGENTS = [];
 const pendingPrebuiltAgentIds = new Set();
 let suppressSidebarRerender = false;
 const restartingRuntimeIds = new Set();
-const nativeFetch = window.fetch.bind(window);
-// Browser deployments always use the product server's same-origin Viewer proxy.
-// This remains correct when a gateway exposes the app on another port or under
-// a path prefix such as /agentdev/. Non-HTTP desktop shells keep the direct
-// ViewerWorker fallback.
-const USE_SAME_ORIGIN_VIEWER_PROXY = window.location.protocol === 'http:' || window.location.protocol === 'https:';
-
-window.fetch = function(input, init) {
-  if (USE_SAME_ORIGIN_VIEWER_PROXY) {
-    return nativeFetch(input, init);
-  }
-  if (typeof input === 'string' && input.startsWith('/api/')) {
-    return nativeFetch(VIEWER_BASE_URL + input, init);
-  }
-  if (input instanceof Request && input.url.startsWith('/api/')) {
-    return nativeFetch(VIEWER_BASE_URL + input.url, init);
-  }
-  return nativeFetch(input, init);
-};
-
-function createViewerReadinessHost() {
-  return {
-    now: () => Date.now(),
-    fetch: (...args) => nativeFetch(...args),
-    url: () => USE_SAME_ORIGIN_VIEWER_PROXY ? '/api/agents' : (VIEWER_BASE_URL + '/api/agents'),
-    wait: (delay) => new Promise(resolve => setTimeout(resolve, delay)),
-  };
-}
-
-// ── Web-based file/directory picker (fallback for non-Windows) ──
-
-window._showWebPicker = function (mode) {
-  return new Promise((resolve) => {
-    const isZh = typeof currentLanguage !== 'undefined' && currentLanguage === 'zh';
-    const titleMap = {
-      directory: isZh ? '选择目录' : 'Select Directory',
-      empty_directory: isZh ? '选择空目录' : 'Select Empty Directory',
-      files: isZh ? '选择文件' : 'Select Files',
-    };
-    const title = titleMap[mode] || titleMap.directory;
-    const isFileMode = mode === 'files';
-
-    const overlay = document.createElement('div');
-    overlay.className = 'fs-dir-picker-overlay';
-    overlay.innerHTML = `
-      <div class="fs-dir-picker">
-        <div class="fs-dir-picker-header">
-          <span>${title}</span>
-          <button class="fs-dir-picker-close">&times;</button>
-        </div>
-        <div class="fs-dir-picker-toolbar">
-          <button class="fs-dir-picker-up" title="${isZh ? '上一级' : 'Parent'}">&#8593;</button>
-          <input type="text" class="fs-dir-picker-path" value="" />
-        </div>
-        <div class="fs-dir-picker-drives"></div>
-        <div class="fs-dir-picker-body"><div class="fs-dir-picker-spinner"></div></div>
-        <div class="fs-dir-picker-footer">
-          <span class="fs-dir-picker-hint" style="flex:1;font-size:12px;color:var(--text-muted);${isFileMode ? '' : 'display:none'}"></span>
-          <button class="fs-dir-picker-cancel">${isZh ? '取消' : 'Cancel'}</button>
-          <button class="fs-dir-picker-select">${isZh ? '选择此目录' : 'Select'}</button>
-        </div>
-      </div>
-    `;
-    document.body.appendChild(overlay);
-
-    let currentPath = '';
-    const selectedFiles = new Set();
-
-    function escHtml(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
-
-    async function loadDir(targetPath) {
-      const body = overlay.querySelector('.fs-dir-picker-body');
-      const pathInput = overlay.querySelector('.fs-dir-picker-path');
-      const upBtn = overlay.querySelector('.fs-dir-picker-up');
-      const drivesEl = overlay.querySelector('.fs-dir-picker-drives');
-      body.innerHTML = '<div class="fs-dir-picker-spinner"></div>';
-
-      try {
-        const url = `/protoclaw/browse_dirs?path=${encodeURIComponent(targetPath)}${isFileMode ? '&includeFiles=true' : ''}`;
-        const res = await fetch(url);
-        if (!res.ok) {
-          body.innerHTML = `<div class="fs-dir-picker-error">${isZh ? '无法读取此目录' : 'Cannot read this directory'}</div>`;
-          return;
-        }
-        const data = await res.json();
-        currentPath = data.currentPath;
-        pathInput.value = currentPath;
-        upBtn.disabled = !data.parent;
-        upBtn.onclick = () => { if (data.parent) loadDir(data.parent); };
-
-        if (data.drives && data.drives.length > 1) {
-          drivesEl.innerHTML = data.drives.map(d =>
-            `<button class="fs-dir-picker-drive ${d.path === currentPath ? 'active' : ''}" data-path="${escHtml(d.path)}">${escHtml(d.label)}</button>`
-          ).join('');
-          drivesEl.querySelectorAll('.fs-dir-picker-drive').forEach(b => {
-            b.onclick = () => loadDir(b.getAttribute('data-path'));
-          });
-          drivesEl.style.display = '';
-        } else {
-          drivesEl.style.display = 'none';
-        }
-
-        if (data.entries.length === 0) {
-          body.innerHTML = `<div class="fs-dir-picker-empty">${isZh ? '(空目录)' : '(empty)'}</div>`;
-        } else {
-          body.innerHTML = data.entries.map(e => {
-            const icon = e.isDirectory ? '&#128193;' : '&#128196;';
-            const cls = e.isDirectory ? 'fs-dir-entry' : 'fs-dir-entry fs-dir-entry-file';
-            const sel = selectedFiles.has(e.path) ? ' selected' : '';
-            return `<div class="${cls}${sel}" data-path="${escHtml(e.path)}" data-is-dir="${e.isDirectory}">${icon} ${escHtml(e.name)}</div>`;
-          }).join('');
-          body.querySelectorAll('.fs-dir-entry').forEach(el => {
-            const isDir = el.getAttribute('data-is-dir') === 'true';
-            if (isDir) {
-              el.ondblclick = () => loadDir(el.getAttribute('data-path'));
-            }
-            el.onclick = () => {
-              if (!isDir && isFileMode) {
-                if (el.classList.contains('selected')) {
-                  el.classList.remove('selected');
-                  selectedFiles.delete(el.getAttribute('data-path'));
-                } else {
-                  el.classList.add('selected');
-                  selectedFiles.add(el.getAttribute('data-path'));
-                }
-                updateHint();
-              }
-            };
-          });
-        }
-      } catch {
-        body.innerHTML = `<div class="fs-dir-picker-error">${isZh ? '加载失败' : 'Failed to load'}</div>`;
-      }
-    }
-
-    function updateHint() {
-      const hint = overlay.querySelector('.fs-dir-picker-hint');
-      if (hint) {
-        hint.textContent = isZh ? `已选择 ${selectedFiles.size} 个文件` : `${selectedFiles.size} file(s) selected`;
-      }
-    }
-
-    overlay.querySelector('.fs-dir-picker-path').addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') { e.preventDefault(); loadDir(e.target.value); }
-    });
-
-    overlay.querySelector('.fs-dir-picker-select').onclick = () => {
-      if (isFileMode) {
-        resolve({ paths: Array.from(selectedFiles), cancelled: selectedFiles.size === 0 });
-      } else {
-        if (currentPath) resolve({ path: currentPath, cancelled: false });
-      }
-      overlay.remove();
-    };
-
-    const close = () => {
-      if (isFileMode) resolve({ paths: [], cancelled: true });
-      else resolve({ path: '', cancelled: true });
-      overlay.remove();
-    };
-    overlay.querySelector('.fs-dir-picker-cancel').onclick = close;
-    overlay.querySelector('.fs-dir-picker-close').onclick = close;
-    overlay.addEventListener('click', (e) => { if (e.target === overlay) close(); });
-
-    loadDir('');
-  });
-};
-
-// HTTP 回退的适用判定：页面由 Claw 服务（或其代理）经 http(s) 提供，相对路径
-// fetch 自然落在同源服务上。不能按端口白名单判断——自定义 PORT、隔离实例、
-// 反向代理场景都会偏离默认端口，端口检查会让 loadAgents 全链失败。
-const isServerServedPage = window.location.protocol === 'http:' || window.location.protocol === 'https:';
-
-async function invoke(command, payload = {}) {
-  if (window.__PROTOCLAW_TAURI_BRIDGE__ && typeof window.__PROTOCLAW_TAURI_BRIDGE__.invoke === 'function') {
-    try {
-      return await window.__PROTOCLAW_TAURI_BRIDGE__.invoke(command, payload);
-    } catch (error) {
-      if (!isServerServedPage) {
-        throw error;
-      }
-    }
-  }
-  if (isServerServedPage) {
-    if (command === 'get_connected_agents') {
-      // 归属参数透传：PH 类工作空间的会话切片必须按调用方实际浏览的归属
-      // 返回（项目 / 目录）。缺省时服务端回退 workspace_state.openDirectory，
-      // 用户正在浏览项目时会拿到目录切片并覆盖项目列表。
-      const query = payload && typeof payload === 'object'
-        ? Object.entries(payload)
-          .filter(([, value]) => value !== undefined && value !== null && String(value) !== '')
-          .map(([key, value]) => encodeURIComponent(key) + '=' + encodeURIComponent(String(value)))
-          .join('&')
-        : '';
-      const res = await fetch('/protoclaw/get_connected_agents' + (query ? '?' + query : ''));
-      if (!res.ok) {
-        // Keep the array return shape for existing callers, while carrying the
-        // source failure to loadAgents for one consolidated diagnostic event.
-        console.warn(`[sidebar] get_connected_agents HTTP ${res.status}: connected snapshot unavailable this round`);
-        const emptySnapshot = [];
-        Object.defineProperty(emptySnapshot, '__sidebarDiagnostic', {
-          value: {
-            errorCode: `connected-agents-http-${res.status}`,
-            phase: 'connected-http-error',
-          },
-          enumerable: false,
-        });
-        return emptySnapshot;
-      }
-      return res.json();
-    }
-    if (command === 'get_prebuilt_agents') {
-      const res = await fetch('/protoclaw/get_prebuilt_agents');
-      return res.ok ? res.json() : [];
-    }
-    if (command === 'get_agents_status') {
-      const res = await fetch('/protoclaw/get_agents_status');
-      return res.ok ? res.json() : [];
-    }
-    if (command === 'start_agent') {
-      const res = await fetch('/protoclaw/start_agent', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      if (!res.ok) {
-        throw new Error(await res.text());
-      }
-      return res.json();
-    }
-    if (command === 'stop_agent') {
-      const res = await fetch('/protoclaw/stop_agent', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      if (!res.ok) {
-        throw new Error(await res.text());
-      }
-      return res.json();
-    }
-    if (command === 'restart_agent') {
-      const res = await fetch('/protoclaw/restart_agent', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      if (!res.ok) {
-        throw new Error(await res.text());
-      }
-      return res.json();
-    }
-    if (command === 'select_empty_directory') {
-      const res = await fetch('/protoclaw/select_empty_directory', {
-        method: 'POST',
-      });
-      if (!res.ok) {
-        throw new Error(await res.text());
-      }
-      const data = await res.json();
-      if (data.useWebPicker) return await window._showWebPicker(data.mode || 'empty_directory');
-      return data;
-    }
-    if (command === 'select_files') {
-      const res = await fetch('/protoclaw/select_files', {
-        method: 'POST',
-      });
-      if (!res.ok) {
-        throw new Error(await res.text());
-      }
-      const data = await res.json();
-      if (data.useWebPicker) return await window._showWebPicker(data.mode || 'files');
-      return data;
-    }
-    if (command === 'select_directory') {
-      const res = await fetch('/protoclaw/select_directory', {
-        method: 'POST',
-      });
-      if (!res.ok) {
-        throw new Error(await res.text());
-      }
-      const data = await res.json();
-      if (data.useWebPicker) return await window._showWebPicker(data.mode || 'directory');
-      return data;
-    }
-  }
-
-  throw new Error('Web invoke bridge is not available');
-}
-
-const container = document.getElementById('chat-container');
-const agentList = document.getElementById('agent-list');
-const prebuiltAgentList = document.getElementById('prebuilt-agent-list');
-const toolAgentList = document.getElementById('tool-agent-list');
-const externalAgentList = document.getElementById('external-agent-list');
-const prebuiltGroup = document.getElementById('prebuilt-group');
-const toolGroup = document.getElementById('tool-group');
-const externalGroup = document.getElementById('external-group');
-const prebuiltCount = document.getElementById('prebuilt-count');
-const toolCount = document.getElementById('tool-count');
-const externalCount = document.getElementById('external-count');
-const currentAgentTitle = document.getElementById('current-agent-name');
-const sidebar = document.getElementById('sidebar');
-const sidebarToggle = document.getElementById('sidebar-toggle');
-const sidebarResizer = document.getElementById('sidebar-resizer');
-const sidebarCollapseHint = document.getElementById('sidebar-collapse-hint');
-const featurePanel = document.getElementById('feature-panel');
-const featurePanelTitle = document.getElementById('feature-panel-title');
-const featurePanelBody = document.getElementById('feature-panel-body');
-const featurePanelResizer = document.getElementById('feature-panel-resizer');
-const featurePanelCollapseHint = document.getElementById('feature-panel-collapse-hint');
-const agentContextMenu = document.getElementById('agent-context-menu');
-const restartAgentAction = document.getElementById('restart-agent-action');
-const stopAgentAction = document.getElementById('stop-agent-action');
-const deleteAgentAction = document.getElementById('delete-agent-action');
-const compactContextMenu = document.getElementById('compact-context-menu');
-const compactSummaryAction = document.getElementById('compact-summary-action');
-const compactTrimAction = document.getElementById('compact-trim-action');
-const compactBranchAction = document.getElementById('compact-branch-action');
-const projectContextMenu = document.getElementById('project-context-menu');
-const deleteProjectAction = document.getElementById('delete-project-action');
-const featureRepoContextMenu = document.getElementById('feature-repo-context-menu');
-const deleteFeatureAction = document.getElementById('delete-feature-action');
-const ctxMenu = document.getElementById('ctx-menu');
-const followLatestButton = document.getElementById('follow-latest-btn');
-const workspaceTabsBar = document.getElementById('workspace-tabs-bar');
-const projectDocsetToggle = document.getElementById('project-docset-toggle');
-const chatProcessToggle = document.getElementById('chat-process-toggle');
-const projectDocsetOverlay = document.getElementById('project-docset-overlay');
-const projectDocsetSheet = document.getElementById('project-docset-sheet');
-// rail 面板按钮不再启动快照（ADR-0044 P2b：由 syncRailButtons 按注册表
-// 动态生成，消费方动态查询）；工具按钮仍静态声明于 index.html。
-const languageToggle = document.getElementById('language-toggle');
-const themeToggle = document.getElementById('theme-toggle');
-const settingsToggle = document.getElementById('settings-toggle');
-if (projectDocsetToggle) {
-  projectDocsetToggle.addEventListener('click', () => window.toggleProjectDocsetOverlay());
-}
-if (chatProcessToggle) {
-  chatProcessToggle.addEventListener('click', () => window.toggleChatProcessVisibility());
-}
-if (projectDocsetOverlay) {
-  projectDocsetOverlay.addEventListener('click', (event) => {
-    if (event.target === projectDocsetOverlay) {
-      window.toggleProjectDocsetOverlay(false);
-    }
-  });
-}
 
 window.KernelState.defineKey('agent-store', 'focusedAgentId', null);
 window.KernelState.defineKey('orchestration', 'currentRuntimeAgentId', null);
@@ -419,15 +75,6 @@ window.KernelState.defineKey('render-entry', 'currentProjectDocsetPage', 'requir
 window.KernelState.defineKey('panel-layout-state', 'featurePanelWidth', 460);
 window.KernelState.defineKey('i18n-environment', 'currentTheme', localStorage.getItem('agentdev-theme') || 'dark');
 window.KernelState.defineKey('i18n-environment', 'currentLanguage', localStorage.getItem('agentdev-language') || 'zh');
-/**
- * preset 名 → 用户可见显示名。
- * `__default__` 是 resolver 层的合成名（全局默认模型不在 presets.json 里），
- * 协议合成名不进 UI；模型切换按钮、toast、用量列表等显示点统一过此函数。
- */
-function formatPresetDisplayName(name) {
-  if (name === '__default__') return currentLanguage === 'zh' ? '全局默认' : 'Default';
-  return name;
-}
 const CHAT_PROCESS_VISIBILITY_KEY = 'agentdev-chat-show-process';
 function loadChatProcessVisibility() {
   try {
@@ -471,12 +118,13 @@ window.KernelState.defineKey('session-view-storage', 'currentTodoPlanSignature',
 let _interruptTargetCache = new Map(); // key: runtimeContextKey, value: taskId|null
 let _lastInterruptUserActionAt = 0; // timestamp of last user click on interrupt control
 function getInterruptTargetId() {
-  const key = getRuntimeContextKey();
+  // 桥接期：定义于 identity.js（app-main 迁 ESM 后改具名 import）。
+  const key = window.getRuntimeContextKey();
   if (!key) return null;
   return _interruptTargetCache.get(key) || null;
 }
 function setInterruptTargetId(taskId) {
-  const key = getRuntimeContextKey();
+  const key = window.getRuntimeContextKey();
   if (!key) return;
   if (taskId) {
     _interruptTargetCache.set(key, taskId);
@@ -639,7 +287,7 @@ const _agentRuntimeCache = new Map();
 const _userCollapseStateByContext = new Map();
 
 function getUserCollapseStateContextKey(runtimeId = currentRuntimeAgentId) {
-  const runtimeKey = typeof getRuntimeContextKey === 'function' ? getRuntimeContextKey(runtimeId) : null;
+  const runtimeKey = typeof window.getRuntimeContextKey === 'function' ? window.getRuntimeContextKey(runtimeId) : null;
   if (runtimeKey) return runtimeKey;
   const agentKey = String(focusedAgentId || '').trim();
   return agentKey ? `agent:${agentKey}` : 'global';
@@ -672,187 +320,13 @@ function resetUserCollapseStateForContext(contextKey = getUserCollapseStateConte
   activateUserCollapseStateForContext(key);
 }
 
-// Local resource identity contract.
-// agentId is the stable logical Agent / workspace owner; sessionId is a
-// persisted conversation identity; runtimeId is one ViewerWorker instance;
-// parentId is only the child-runtime -> host relationship; focusedAgentId is
-// page display state and is not read here. A stopped runtime resolves to null;
-// no identity is guessed from focus, name, PID, list position, or parentId.
-function normalizeResourceIdentity(value) {
-  if (value === null || value === undefined) return '';
-  return String(value).trim();
-}
-
-function hasIdentityAlias(record, aliases) {
-  return !!(record && typeof record === 'object' && !Array.isArray(record)
-    && aliases.some((key) => record[key] !== undefined && record[key] !== null));
-}
-
-function resolveIdentityAliases(record, aliases) {
-  if (!record || typeof record !== 'object' || Array.isArray(record)) return null;
-  const values = aliases
-    .map((key) => normalizeResourceIdentity(record[key]))
-    .filter(Boolean);
-  if (new Set(values).size > 1) return null;
-  return values[0] || null;
-}
-
-function getParentAgentId(record) {
-  return resolveIdentityAliases(record, ['parentId', 'parent_id']);
-}
-
-function getLogicalAgentId(record) {
-  if (typeof record === 'string' || typeof record === 'number') {
-    return normalizeResourceIdentity(record) || null;
-  }
-  if (!record || typeof record !== 'object' || Array.isArray(record)) return null;
-  const explicitAgentId = resolveIdentityAliases(record, ['agentId', 'logicalAgentId']);
-  if (hasIdentityAlias(record, ['agentId', 'logicalAgentId'])) {
-    return explicitAgentId;
-  }
-  const parentId = getParentAgentId(record);
-  if (parentId) return parentId;
-  // A host record owns its own logical identity. A child without parentId is
-  // intentionally unresolved rather than guessed from its display fields.
-  if (record.source === 'prebuilt' || record.source === 'host' || record.source === 'workspace') {
-    return normalizeResourceIdentity(record.id) || null;
-  }
-  if (!record.source && !hasIdentityAlias(record, ['runtimeId', 'runtime_session_id', 'runtimeSessionId'])) {
-    return normalizeResourceIdentity(record.id) || null;
-  }
-  return null;
-}
-
-function getRuntimeId(record) {
-  if (typeof record === 'string' || typeof record === 'number') {
-    return normalizeResourceIdentity(record) || null;
-  }
-  if (!record || typeof record !== 'object' || Array.isArray(record)) return null;
-  const explicitRuntimeId = resolveIdentityAliases(record, ['runtimeId', 'runtime_session_id', 'runtimeSessionId']);
-  if (hasIdentityAlias(record, ['runtimeId', 'runtime_session_id', 'runtimeSessionId'])) {
-    return explicitRuntimeId;
-  }
-  // Child/external records use their own record id as the runtime identity.
-  // A host record with no live runtime has no runtimeId; parentId is never a
-  // substitute for a missing runtime.
-  if (record.source === 'child' || record.source === 'external' || getParentAgentId(record)) {
-    return normalizeResourceIdentity(record.id) || null;
-  }
-  return null;
-}
-
-/**
- * 控制类请求（tool_state / swap 系）的宿主身份收敛点。本地会话取 allAgents
- * 记录的逻辑 id；远程会话不在 allAgents（ADR-0010 统一投影），宿主身份取自
- * 远程目录条目，避免请求体缺 agentId 被服务端 400 拒绝。
- */
-function getCurrentControlAgentId() {
-  const record = typeof getCurrentAgentRecord === 'function' ? getCurrentAgentRecord() : null;
-  const logical = getLogicalAgentId(record);
-  if (logical) return logical;
-  if (typeof window !== 'undefined' && window.RemoteConnections?.getEntryHostAgentId) {
-    const runtimeRef = typeof currentRuntimeAgentId !== 'undefined' ? currentRuntimeAgentId : '';
-    if (runtimeRef) return window.RemoteConnections.getEntryHostAgentId(runtimeRef);
-  }
-  return null;
-}
-
-function getActiveSessionId(record = typeof getCurrentAgentRecord === 'function' ? getCurrentAgentRecord() : null) {
-  // workspace_sessions.activeSessionId is the current canonical nested field;
-  // the top-level fields are legacy/API aliases and are only consulted when
-  // the canonical field is absent. This makes stale legacy data deterministic.
-  const hasNestedSession = hasIdentityAlias(record?.workspace_sessions, ['sessionId', 'activeSessionId']);
-  const nestedSessionId = resolveIdentityAliases(record?.workspace_sessions, ['sessionId', 'activeSessionId']);
-  if (hasNestedSession) return nestedSessionId;
-  if (hasIdentityAlias(record, ['sessionId', 'active_workspace_session_id'])) {
-    return resolveIdentityAliases(record, ['sessionId', 'active_workspace_session_id']);
-  }
-  return null;
-}
-
-function getAgentRuntimeId(agent) {
-  return getRuntimeId(agent) || '';
-}
-
-function buildLocalResourceRef(input) {
-  const record = input && typeof input === 'object' ? input : {};
-  return {
-    scope: 'local',
-    agentId: getLogicalAgentId(record),
-    parentId: getParentAgentId(record),
-    sessionId: getActiveSessionId(record),
-    runtimeId: getRuntimeId(record),
-  };
-}
-
-function getActiveWorkspaceSessionId(agent = typeof getCurrentAgentRecord === 'function' ? getCurrentAgentRecord() : null) {
-  return getActiveSessionId(agent) || '';
-}
-
-// ── Viewer-local session binding ────────────────────────────────────────────
-// 会话身份的 viewer 侧真相：用户主动切换时冻结的 runtimeId → sessionId 绑定。
-// Server 端 host 级 activeSessionId 会被外部入口（IM 转接 / CLI / 调度 /
-// 其他标签页的 create+activate）改写；若 getRuntimeContextKey 被动跟随
-// allAgents 里的该值派生，正在查看的会话的草稿 key / 录音归属 / 输入签名
-// 会在用户毫无操作时整体漂移（输入面重建、录音被取消、草稿写错槽）。
-// 绑定只在用户主动切换（switchAgent / 会话打开与创建）时写入。
-var _viewerSessionBindings = new Map();
-
-function setViewerSessionBinding(runtimeId, sessionId) {
-  const normalizedRuntimeId = String(runtimeId || '').trim();
-  if (!normalizedRuntimeId) return;
-  const normalizedSessionId = String(sessionId || '').trim();
-  if (normalizedSessionId) {
-    _viewerSessionBindings.set(normalizedRuntimeId, normalizedSessionId);
-  } else {
-    _viewerSessionBindings.delete(normalizedRuntimeId);
-  }
-}
-
-function getViewerSessionBinding(runtimeId) {
-  const normalizedRuntimeId = String(runtimeId || '').trim();
-  if (!normalizedRuntimeId) return '';
-  return String(_viewerSessionBindings.get(normalizedRuntimeId) || '').trim();
-}
-
-// 从 allAgents 派生 runtime 当前关联的会话（server 侧视角，可被外部入口改写）。
-function _deriveRuntimeSessionIdFromAgents(runtimeId) {
-  const normalizedRuntimeId = String(runtimeId || '').trim();
-  if (!normalizedRuntimeId || !Array.isArray(allAgents)) return '';
-  const runtimeRecord = allAgents.find((item) => {
-    const itemId = String(item?.id || '').trim();
-    const itemRuntimeId = String(item?.runtime_session_id || item?.runtimeSessionId || '').trim();
-    return itemId === normalizedRuntimeId || itemRuntimeId === normalizedRuntimeId;
-  });
-  return String(runtimeRecord?.active_workspace_session_id || '').trim();
-}
-
-function getRuntimeWorkspaceSessionId(runtimeId) {
-  // Viewer 绑定优先：它代表用户正在查看的会话。仅在尚未建立绑定
-  // （初始恢复、未经 switchAgent 的路径）时回退到 server 派生值。
-  const viewerSessionId = getViewerSessionBinding(runtimeId);
-  if (viewerSessionId) return viewerSessionId;
-  return _deriveRuntimeSessionIdFromAgents(runtimeId);
-}
-
-function getRuntimeContextKey(runtimeId = currentRuntimeAgentId, agent = typeof getCurrentAgentRecord === 'function' ? getCurrentAgentRecord() : null) {
-  const normalizedRuntimeId = String(runtimeId || '').trim();
-  if (!normalizedRuntimeId) return null;
-  const hostId = String(agent?.parent_id || agent?.id || focusedAgentId || '').trim();
-  const sessionId = getRuntimeWorkspaceSessionId(normalizedRuntimeId) || getActiveWorkspaceSessionId(agent);
-  if (hostId && sessionId) {
-    return `host:${hostId}|session:${sessionId}`;
-  }
-  return `runtime:${normalizedRuntimeId}`;
-}
-
 // Temporary adapter for classic lexical state. Cache policy lives in ESM;
 // these closures keep viewport/collapse initialization at its original time.
 function createRuntimeViewCacheHost() {
   return {
     cache: _agentRuntimeCache,
     capacity: MAX_CACHED_RUNTIME_VIEWS,
-    contextKey: (runtimeId) => getRuntimeContextKey(runtimeId),
+    contextKey: (runtimeId) => window.getRuntimeContextKey(runtimeId),
     readView: () => readCurrentSessionViewState(),
     signatures: () => ({ hookInspector: currentHookInspectorSignature,
       overview: currentOverviewSignature,
@@ -867,7 +341,8 @@ function createRuntimeViewCacheHost() {
       ? rememberChatViewportAnchorForContext(contextKey)
       : (typeof getRememberedChatViewportAnchorForContext === 'function'
         ? getRememberedChatViewportAnchorForContext(contextKey) : null),
-    scrollTop: () => container ? container.scrollTop : 0,
+    // 桥接期：container 的 owner 已迁 dom-refs.js（app-main 迁 ESM 后改具名 import）。
+    scrollTop: () => window.container ? window.container.scrollTop : 0,
     activeCollapseContext: () => getUserCollapseStateContextKey(),
     forgetContext(contextKey) {
       _userCollapseStateByContext.delete(contextKey);
@@ -885,20 +360,10 @@ function createRuntimeViewCacheHost() {
   };
 }
 
-function getFeatureStatus(feature) {
-  return feature && feature.status ? feature.status : (feature && feature.enabled ? 'enabled' : 'partial');
-}
-
-function getFeatureStatusLabel(status) {
-  if (status === 'removed') return t('feature_removed');
-  if (status === 'disabled') return t('feature_disabled');
-  if (status === 'partial') return t('feature_partial');
-  return t('feature_enabled');
-}
-
-function getStatusBadgeClass(status) {
-  return 'feature-badge status-' + escapeHtml(status || 'enabled');
-}
+// 格式化函数族（formatPresetDisplayName / localizeWorkspaceValue / fmtPct /
+// getFeatureStatus / getFeatureStatusLabel / getStatusBadgeClass）已迁
+// modules/format-utils.js（P4 T1）：本文件零内部调用点，classic 消费方
+// （悬置域 im-ui）经 window.localizeWorkspaceValue 桥键。
 
 function getEmptyStateHtml() {
   if (_chatLoadingSession) {
@@ -928,22 +393,6 @@ function getEmptyStateHtml() {
 
 function getFeaturePanelEmptyHtml() {
   return '<div class="feature-panel-empty"><div>' + escapeHtml(t('panel_hint')) + '</div></div>';
-}
-
-function localizeWorkspaceValue(value, fallback = '') {
-  if (value == null) return fallback;
-  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
-    return String(value);
-  }
-  if (typeof value === 'object') {
-    return String(value[currentLanguage] || value.zh || value.en || fallback);
-  }
-  return fallback;
-}
-
-/** 比例小数（0–1）→ 百分数文本（trim / 分支对话框的 preamble 占比等共用口径）。 */
-function fmtPct(frac) {
-  return (frac * 100).toFixed(1) + '%';
 }
 
 function convertLegacyWorkspaceToUi(workspace) {
@@ -1038,13 +487,13 @@ function isUiOnlyAgentId(agentId) {
   if (directAgent) {
     return isWorkspaceSurfaceUnit(directAgent);
   }
-  const runtimeAgent = allAgents.find((item) => !isWorkspaceSurfaceUnit(item) && getAgentRuntimeId(item) === agentId);
+  const runtimeAgent = allAgents.find((item) => !isWorkspaceSurfaceUnit(item) && window.getAgentRuntimeId(item) === agentId);
   return isWorkspaceSurfaceUnit(runtimeAgent);
 }
 
 function getRuntimeRecord(agentId = currentRuntimeAgentId) {
   if (!agentId) return null;
-  return allAgents.find((item) => !isWorkspaceSurfaceUnit(item) && getAgentRuntimeId(item) === agentId) || null;
+  return allAgents.find((item) => !isWorkspaceSurfaceUnit(item) && window.getAgentRuntimeId(item) === agentId) || null;
 }
 
 function findAgentByIdentity(agentId) {
@@ -1053,7 +502,7 @@ function findAgentByIdentity(agentId) {
     item.id === agentId
     || item.runtime_session_id === agentId
     || item.runtimeSessionId === agentId
-    || (!isWorkspaceSurfaceUnit(item) && getAgentRuntimeId(item) === agentId)
+    || (!isWorkspaceSurfaceUnit(item) && window.getAgentRuntimeId(item) === agentId)
   ) || null;
 }
 
@@ -1083,57 +532,6 @@ function resolveWorkspaceFallbackAgentId(agent = getCurrentAgentRecord()) {
 // - 只暴露已证实存在 P2 消费方（modules/ 下的文件）的键；新增键须附消费证据。
 // - 撤除条件（P3）：该域消费方全部改为 import 已迁 ESM 的 owner 后，删除对应
 //   工厂与适配模块；在此之前不得把它当作状态真相源。
-
-/**
- * DOM 引用（DOM 域，只读）。全部是加载期 document.getElementById 得到的 const
- * 引用，元素从不替换，因此按引用原样交出；写入口不存在（classic 侧也无写点）。
- * 消费方：chat-* / input-* / debug-panel-host / ctx-menu-* / workspace-docset /
- * theme-lang / sidebar-render。
- */
-function createP2BootstrapDomHost() {
-  return Object.freeze({
-    container,
-    // app-ui 批次（P4 T2 末件）增补：workspace surface 渲染 / 侧栏抽屉 / 中央区
-    // 级联适配 / 设置 flyout 直接读写这些元素（原 classic 裸标识符，迁 ESM 后
-    // 经 domRefs 取同一引用）。全部是加载期 const 引用，元素从不替换。
-    sidebar,
-    sidebarToggle,
-    sidebarResizer,
-    sidebarCollapseHint,
-    featurePanelResizer,
-    featurePanelCollapseHint,
-    workspaceTabsBar,
-    settingsToggle,
-    agentList,
-    externalAgentList,
-    externalGroup,
-    externalCount,
-    currentAgentTitle,
-    featurePanel,
-    featurePanelTitle,
-    featurePanelBody,
-    agentContextMenu,
-    restartAgentAction,
-    stopAgentAction,
-    deleteAgentAction,
-    compactContextMenu,
-    compactSummaryAction,
-    compactTrimAction,
-    compactBranchAction,
-    projectContextMenu,
-    deleteProjectAction,
-    featureRepoContextMenu,
-    deleteFeatureAction,
-    ctxMenu,
-    followLatestButton,
-    projectDocsetToggle,
-    projectDocsetOverlay,
-    projectDocsetSheet,
-    chatProcessToggle,
-    languageToggle,
-    themeToggle,
-  });
-}
 
 /**
  * 聊天表面状态：跟随滚动开关、视口观察/结算句柄、过程可见性偏好。
@@ -1341,7 +739,8 @@ function createP2BootstrapSessionSwitchHost() {
 /**
  * 上下文菜单待执行目标（6 个顶层 let）：打开菜单时写入、关闭时清空、动作
  * handler 读取后执行。消费方：context-menu / ctx-menu-handlers——这对文件是
- * 该 6 键当前唯一的读写方；菜单用到的 DOM 引用在 createP2BootstrapDomHost。
+ * 该 6 键当前唯一的读写方；菜单用到的 DOM 引用在 dom-refs.js（经 p2-bootstrap-dom
+ * 适配模块的 domRefs 取用）。
  * 6 键都可写，因此 get/set 成对转发到原声明。
  */
 function createP2BootstrapContextMenuHost() {

@@ -46,8 +46,8 @@ import { allAgents, focusedAgentId } from './agent-store-state.js';
 import { currentMessages } from './session-view-storage.js';
 import { callActivity } from './p2-bootstrap-call-activity.js';
 import { ClawToast } from './toast-notify.js';
-import { getAgentRuntimeId } from './template-engine.js';
 import { applySessionMutationDelta } from './sidebar-operations.js';
+import { getAgentRuntimeId, getLogicalAgentId, normalizeAgentIdentity } from './identity.js';
 
 // ── 幂等键（ADR-0011）：写类提交统一携带（本地忽略、远程强制）───────────
 function newIdempotencyKey() {
@@ -114,21 +114,21 @@ function getAutoTitleSessionInfo() {
   // 当用户在查看某个 runtime 时，优先使用该 runtime agent 的 session 信息。
   // host agent 的 active_workspace_session_id 指向 "primary" runtime（通常是最近启动的），
   // 但用户可能正在查看另一个 runtime 的会话。
-  const runtimeId = window.normalizeAgentIdentity(currentRuntimeAgentId);
+  const runtimeId = normalizeAgentIdentity(currentRuntimeAgentId);
   if (runtimeId) {
     const runtimeAgent = allAgents.find(function(a) {
-      return window.normalizeAgentIdentity(a && a.id) === runtimeId;
+      return normalizeAgentIdentity(a && a.id) === runtimeId;
     });
     if (runtimeAgent) {
       const sessionId = String(runtimeAgent.active_workspace_session_id || '').trim();
       if (sessionId) {
         // Runtime child records own the live session projection, but server
         // session routes are scoped by the logical workspace agent.
-        const logicalAgentId = typeof window.getLogicalAgentId === 'function'
-          ? window.getLogicalAgentId(runtimeAgent)
+        const logicalAgentId = typeof getLogicalAgentId === 'function'
+          ? getLogicalAgentId(runtimeAgent)
           : String(runtimeAgent.parent_id || '').trim();
         const hostAgent = allAgents.find(function(a) {
-          return window.normalizeAgentIdentity(a && a.id) === logicalAgentId;
+          return normalizeAgentIdentity(a && a.id) === logicalAgentId;
         }) || null;
         const session = hostAgent?.workspace_sessions?.sessions?.find(function(s) {
           return s && String(s.id || '').trim() === sessionId;
@@ -186,7 +186,7 @@ function isAppOwnedTitlePolicy(agentRecord) {
 function isValidTitleEvent(info) {
   const agentRecord = (info && info.agent) || {};
   const hostAgent = allAgents.find(function(a) {
-    return window.normalizeAgentIdentity(a && a.id) === window.normalizeAgentIdentity(info.agentId);
+    return normalizeAgentIdentity(a && a.id) === normalizeAgentIdentity(info.agentId);
   });
   return !isAppOwnedTitlePolicy(agentRecord) && !isAppOwnedTitlePolicy(hostAgent);
 }
@@ -290,7 +290,7 @@ function _findSessionOwner(sessionId) {
         agent: agent,
         session: session,
         sessionId: sessionId,
-        runtimeId: typeof getAgentRuntimeId === 'function' ? getAgentRuntimeId(agent) : (agent.runtime_session_id || agent.id),
+        runtimeId: getAgentRuntimeId(agent) || agent.runtime_session_id || agent.id,
         title: String(session.title || '').trim(),
         titleState: session.titleState || '',
       };
@@ -333,8 +333,8 @@ function _tryTitleForSession(agent, sessionId, sessionTitle, titleState, session
   callActivity._autoTitleTriggered.add(sessionId);
 
   // Fire and forget — don't block the poll loop
-  const logicalAgentId = typeof window.getLogicalAgentId === 'function'
-    ? window.getLogicalAgentId(agent)
+  const logicalAgentId = typeof getLogicalAgentId === 'function'
+    ? getLogicalAgentId(agent)
     : String(agent.parent_id || '').trim();
   autoGenerateSessionTitle(logicalAgentId || agent.id, sessionId, !!messages);
 }

@@ -651,9 +651,6 @@ async function panelCase({
       sandbox.featurePanelBody = { addEventListener() {} };
       sandbox.renderFeaturePanel = () => {};
       sandbox.renderAgentList = () => {};
-      sandbox.getRuntimeWorkspaceSessionId = (runtimeId) => (
-        viewerSessionId && !String(runtimeId || '').startsWith('remote:') ? viewerSessionId : ''
-      );
       // app-main（编排域）的幂等键入口：本沙箱不装载 app-main，按契约给确定性值。
       sandbox.newIdempotencyKey = () => 'test-idem-key';
       sandbox.loadSource('public/src/modules/claw-host.js');
@@ -663,6 +660,12 @@ async function panelCase({
     // 远程目录 accessor（已迁 ESM，P4 T3）：真实 import 后 window.RemoteConnections
     // 才存在，面板的身份解析与 capabilityFor 门控都经它取数。
     await c.load('public/src/modules/remote-connections.js');
+    // 会话身份（P4 T1：owner 是 identity 域）：本地会话的 viewer 绑定按生产
+    // switchAgent 的同一入口播种（远程条目不经本地绑定）。
+    const identity = await c.load('public/src/modules/identity.js');
+    if (viewerSessionId && !String(currentRuntimeAgentId || '').startsWith('remote:')) {
+      identity.setViewerSessionBinding(currentRuntimeAgentId, viewerSessionId);
+    }
     const unlink = linkHostGlobals(c, PANEL_HOST_GLOBALS);
     // 守卫开关的操作反馈已改走 toast-notify 的具名导出：把真实模块对象的 show
     // 换成无副作用记录器（本文件不断言 toast 呈现面）。

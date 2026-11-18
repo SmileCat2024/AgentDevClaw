@@ -40,6 +40,7 @@ import { clearRecapForNewMessage } from './p2-w2-3a-recap-state.js';
 import { updateRollbackActionVisibility } from './input-actions.js';
 import { updateInputModelSwitcher, updateThinkingEffortSwitcher } from './input-model-switcher.js';
 import { ContextGuardToggle } from './context-guard-toggle.js';
+import { getActiveSessionId, getLogicalAgentId, getRuntimeContextKey } from './identity.js';
 
 // First-paint helpers retain classic timing. Async load orchestration is ESM.
 export function createSessionDataLoaderHost() {
@@ -74,8 +75,8 @@ export function createSessionDataLoaderHost() {
     },
     // 桥接期：定义于 runtime-status（运行时状态域收敛时移除）
     resetRuntimeStatus: () => window.resetRuntimeStatusForSwitch(),
-    // 桥接期：定义于 app-core（会话视图域收敛时移除）
-    activateCollapse: (id) => window.activateUserCollapseStateForContext(window.getRuntimeContextKey(id)),
+    // 桥接期：activateUserCollapseStateForContext 定义于 app-core（会话视图域收敛时移除）
+    activateCollapse: (id) => window.activateUserCollapseStateForContext(getRuntimeContextKey(id)),
     // 只清「当前摘要文本 / 挂起意图」两键；recap-hint 的 _clearRecapForNewMessage
     // 另带 DOM 提示清理与会话记账，语义不同，不能替代这里。
     clearRecap: () => { clearRecapForNewMessage(); },
@@ -116,9 +117,9 @@ export function createRuntimeStatusLoaderHost() {
     // 桥接期：getCurrentRuntimeRecord / getCurrentAgentRecord 定义于 app-main
     // （编排域收敛时移除）
     ownerRecord: () => window.getCurrentRuntimeRecord() || window.getCurrentAgentRecord(),
-    // 桥接期：定义于 app-core（身份域收敛时移除）
-    logicalId: (record) => window.getLogicalAgentId(record),
-    sessionId: (record) => window.getActiveSessionId(record),
+    // 身份三元组来自 identity 域（P4 T1 起具名 import）
+    logicalId: (record) => getLogicalAgentId(record),
+    sessionId: (record) => getActiveSessionId(record),
     runtimeRecord: (id) => window.getRuntimeRecord(id),
     // 桥接期：定义于 runtime-status（运行时状态域收敛时移除）
     applyGuard: (data, id) => { if (typeof window.applyContextGuardStatus === 'function') window.applyContextGuardStatus(data, id); },

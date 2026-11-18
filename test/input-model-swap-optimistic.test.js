@@ -570,10 +570,11 @@ describe('模型状态统一提交与呈现', () => {
   it('当前视图与宿主 active 不同时，下一轮真正调用新模型且不改变另一个会话', async () => {
     await withSandbox(async (s) => {
       // 身份派生使用生产代码，保留 host.active 与 viewer 绑定不一致的真实场景。
-      // （app-core 仍是 classic 真源，此处只取身份派生那一段：整份加载会覆盖本
-      //  用例刻意注入的宿主桩，使场景失真。）
-      const core = readFileSync(new URL('../public/src/app-core.js', import.meta.url), 'utf8');
-      s.ctx.run(sourceBetween(core, 'function normalizeResourceIdentity(', 'function getRuntimeContextKey('));
+      // （身份域 P4 T1 起在 modules/identity.js，此处只取那一段源码：整份加载会
+      //  覆盖本用例刻意注入的宿主桩，使场景失真。）
+      const identity = readFileSync(new URL('../public/src/modules/identity.js', import.meta.url), 'utf8');
+      s.ctx.run(sourceBetween(identity, 'function normalizeAgentIdentity(', '// ── classic 兼容桥')
+        .replace(/^export function /gm, 'function '));
       s.ctx.getCurrentAgentRecord = () => ({ id: 'host-agent', workspace_sessions: { activeSessionId: 'sess-2' } });
       s.ctx.run(`setViewerSessionBinding('rt-1', 'sess-1')`);
       const calls = { 'sess-1': [], 'sess-2': [] };

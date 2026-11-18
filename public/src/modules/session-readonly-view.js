@@ -41,6 +41,7 @@ import { ClawToast } from './toast-notify.js';
 import { commitSessionViewPatch } from './session-view-commit-host.js';
 import { saveCurrentRuntimeToCache } from './runtime-view-cache-host.js';
 import { beginChatLoadingSession, clearChatLoadingSession } from './chat-loading-host.js';
+import { getRuntimeContextKey } from './identity.js';
 
 let _state = null;
 
@@ -176,7 +177,7 @@ export async function openReadOnlySession(options) {
 
   // 离开存活 runtime：先存视图缓存，只读视图不持有任何 runtime 态。
   if (currentRuntimeAgentId && readOnlyMode !== true) {
-    saveCurrentRuntimeToCache(currentRuntimeAgentId, window.getRuntimeContextKey(currentRuntimeAgentId));
+    saveCurrentRuntimeToCache(currentRuntimeAgentId, getRuntimeContextKey(currentRuntimeAgentId));
   }
   if (typeof window.saveCurrentWorkspaceSurfaceScroll === 'function') window.saveCurrentWorkspaceSurfaceScroll();
   if (typeof window._storeVisibleSessionInputDraft === 'function') window._storeVisibleSessionInputDraft();

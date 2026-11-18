@@ -16,27 +16,29 @@ import test from 'node:test';
 import { installRuntimeSwitch } from './helpers/runtime-switch.js';
 import { withThreadEngineCase } from './helpers/thread-engine.js';
 
-const coreSource = fs.readFileSync(new URL('../public/src/app-core.js', import.meta.url), 'utf8');
+// 身份解析域（P4 T1 从 app-core 抽出）：绑定段与规范化函数从 identity.js 取真实源码。
+const identitySource = fs.readFileSync(new URL('../public/src/modules/identity.js', import.meta.url), 'utf8');
 const mainSourceTop = fs.readFileSync(new URL('../public/src/app-main.js', import.meta.url), 'utf8');
 
 function extractHostResolverSource() {
-  const normalizeStart = coreSource.indexOf('function normalizeAgentIdentity');
-  const normalizeEnd = coreSource.indexOf('const VIEWER_BASE_URL', normalizeStart);
+  const normalizeStart = identitySource.indexOf('export function normalizeAgentIdentity');
+  const normalizeEnd = identitySource.indexOf('function normalizeResourceIdentity', normalizeStart);
   const start = mainSourceTop.indexOf('function getCurrentSessionHostAgentId()');
   const end = mainSourceTop.indexOf('function getCurrentRuntimeRecord()', start);
-  assert.notEqual(normalizeStart, -1, 'identity normalizer should exist in app-core');
+  assert.notEqual(normalizeStart, -1, 'identity normalizer should exist in identity.js');
   assert.notEqual(normalizeEnd, -1, 'identity normalizer end marker should exist');
   assert.notEqual(start, -1, 'host resolver should exist');
   assert.notEqual(end, -1, 'host resolver end marker should exist');
-  return coreSource.slice(normalizeStart, normalizeEnd) + '\n' + mainSourceTop.slice(start, end);
+  return identitySource.slice(normalizeStart, normalizeEnd).replace('export ', '')
+    + '\n' + mainSourceTop.slice(start, end);
 }
 
 function extractBindingSource() {
-  const start = coreSource.indexOf('var _viewerSessionBindings = new Map()');
-  const end = coreSource.indexOf('function getRuntimeContextKey', start);
+  const start = identitySource.indexOf('const viewerSessionBindings = new Map()');
+  const end = identitySource.indexOf('export function getRuntimeContextKey', start);
   assert.notEqual(start, -1, 'binding segment start should exist');
   assert.notEqual(end, -1, 'binding segment end should exist');
-  return coreSource.slice(start, end);
+  return identitySource.slice(start, end).replace(/^export /gm, '');
 }
 
 /** app-main 的顶栏标题兜底（视图绑定会话优先，不串宿主 active）。 */

@@ -3,10 +3,11 @@ import { createViewerReadiness } from './startup-readiness.js';
 import { loadFeatureTemplateMap, reloadFeatureTemplateMap } from './agent-loader-host.js';
 import { loadAgents } from './agent-snapshot-loader-host.js';
 import { poll } from './poll-coordinator-host.js';
+import { createViewerReadinessHost } from './transport.js';
 
 const startup = createApplicationStartup({
   ...window.createApplicationStartupHost(),
-  waitViewer: createViewerReadiness(window.createViewerReadinessHost()),
+  waitViewer: createViewerReadiness(createViewerReadinessHost()),
   loadTemplates: loadFeatureTemplateMap,
   reloadTemplates: reloadFeatureTemplateMap,
   loadAgents,

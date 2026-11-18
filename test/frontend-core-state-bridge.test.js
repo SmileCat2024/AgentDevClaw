@@ -27,7 +27,9 @@ async function withCore({ stored = {}, beforeClaim } = {}, callback) {
   };
   const ctx = createFrontendSandbox({ document });
   const previousWindow = globalThis.window;
+  const previousDocument = globalThis.document;
   globalThis.window = ctx;
+  globalThis.document = ctx.document;
   ctx.localStorage.setItem('agentdev-theme', stored.theme || 'dark');
   ctx.localStorage.setItem('agentdev-language', stored.language || 'zh');
   ctx.loadSource('public/src/app-core.js');
@@ -38,6 +40,8 @@ async function withCore({ stored = {}, beforeClaim } = {}, callback) {
   } finally {
     if (previousWindow === undefined) delete globalThis.window;
     else globalThis.window = previousWindow;
+    if (previousDocument === undefined) delete globalThis.document;
+    else globalThis.document = previousDocument;
   }
 }
 
@@ -70,11 +74,17 @@ test('app-core registers persisted language/theme and panel width before ESM cla
   });
 });
 
-test('app-core performs DOM queries and click-listener installation once, before and after state claims', async () => {
+test('DOM 引用域迁出 app-core：classic 相不再查询元素，dom-refs 在模块相查询一次并绑定监听', async () => {
   await withCore({}, async ({ ctx, elements, queries, listeners }) => {
-    const initialQueries = [...queries];
-    const initialListenerCount = listeners.length;
-    assert.deepEqual(initialQueries.filter((id) => [
+    // P4 T1：DOM 引用区（含三条顶层 click 监听）已迁 modules/dom-refs.js。
+    // classic 相（app-core 求值）不再碰 DOM。
+    assert.equal(queries.length, 0, 'app-core 不再做 DOM 查询');
+    assert.equal(listeners.length, 0, 'app-core 不再安装 click 监听');
+
+    await loadModuleOnce('public/src/modules/dom-refs.js', { installGlobals: false });
+    const domQueries = [...queries];
+    const domListenerCount = listeners.length;
+    assert.deepEqual(domQueries.filter((id) => [
       'project-docset-toggle', 'chat-process-toggle', 'project-docset-overlay',
     ].includes(id)), [
       'project-docset-toggle', 'chat-process-toggle', 'project-docset-overlay',
@@ -88,10 +98,13 @@ test('app-core performs DOM queries and click-listener installation once, before
     elements.get('project-docset-overlay').handlers.get('click')({ target: elements.get('project-docset-overlay') });
     assert.deepEqual(calls, [['docset', undefined], ['process'], ['docset', false]]);
 
+    // 后续 state claim 不重跑 DOM 查询 / 监听安装（元素引用是同一批）
     const language = await loadModuleOnce('public/src/modules/i18n-environment-state.js', { installGlobals: false });
     const panel = await loadModuleOnce('public/src/modules/panel-layout-state.js', { installGlobals: false });
-    assert.equal(queries.length, initialQueries.length);
-    assert.equal(listeners.length, initialListenerCount);
+    assert.equal(language.module.getCurrentLanguage(), 'zh');
+    assert.equal(panel.module.getFeaturePanelWidth(), 460);
+    assert.equal(queries.length, domQueries.length);
+    assert.equal(listeners.length, domListenerCount);
     elements.get('project-docset-toggle').handlers.get('click')();
     assert.deepEqual(calls.at(-1), ['docset', undefined]);
   });

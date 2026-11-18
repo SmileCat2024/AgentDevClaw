@@ -401,7 +401,6 @@ function createHostStubs(calls) {
     beginChatLoadingSession: () => { calls.beginChatLoading += 1; },
     clearChatLoadingSession: () => {},
     upsertConnectedAgent: (agent) => agent,
-    getRuntimeId: (agent) => agent?.id || '',
     isRemoteNamespaceAgentId: () => false,
     getWorkspaceSessionById: () => null,
     getPathLeaf: () => '',
@@ -865,7 +864,8 @@ describe('trim page submit: thread succession vs session navigation', () => {
     const { module, calls } = await createTrimPage({
       fetchImpl: compactFetch({
         session: { id: 'session-B', title: 'Trimmed' },
-        agent: { id: 'rt-B' },
+        // 真实 ViewerWorker agent 记录形态（child runtime 带 source 与 runtime 别名）
+        agent: { id: 'rt-B', source: 'child', runtime_session_id: 'rt-B' },
         threadSuccession: { applied: false, reason: 'no_thread_for_session' },
         revision: 3,
       }),

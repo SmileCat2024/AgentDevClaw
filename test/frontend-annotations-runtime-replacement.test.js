@@ -16,7 +16,8 @@
  *
  * 装载路线（ESM 迁移配方第三节）：真实 import。状态依赖（焦点 / runtime ref /
  * 当前消息）由已 ESM 化的状态模块 setter 驱动；window 上的寻址函数
- * （getRuntimeWorkspaceSessionId 等）仍是 classic 定义，按生产契约在 window 上桩。
+ * （getRuntimeWorkspaceSessionId 等）已迁 identity 域（P4 T1），本用例按生产
+ * switchAgent 的同一入口（viewer 侧绑定）播种。
  */
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -129,9 +130,10 @@ async function setup() {
   orchestration.setCurrentRuntimeAgentId('runtime-old');
   sessionStorage.setCurrentMessages([null, { turn: 1, role: 'assistant' }]);
   sessionByRuntime = new Map([['runtime-old', 'sess-A'], ['runtime-new', 'sess-A'], ['runtime-new2', 'sess-B']]);
-  // 生产契约：classic app-core 定义，按当前 runtime 解析工作空间会话
-  window.getRuntimeWorkspaceSessionId = (ref) => sessionByRuntime.get(ref) || '';
-  window.getActiveWorkspaceSessionId = () => sessionByRuntime.get(orchestration.currentRuntimeAgentId) || '';
+  // 会话身份（P4 T1 起 owner 是 identity 域）：生产里 switchAgent 建立 viewer 侧
+  // runtimeId → sessionId 绑定；本用例按同一入口播种全部 runtime 的绑定。
+  const identity = await import('../public/src/modules/identity.js');
+  for (const [ref, sessionId] of sessionByRuntime) identity.setViewerSessionBinding(ref, sessionId);
   window.isRemoteNamespaceAgentId = () => false;
 
   fetchImpl = async (url, options) => {

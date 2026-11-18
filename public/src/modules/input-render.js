@@ -65,6 +65,7 @@ import {
   readPartialCompactStartedAt,
   writePartialCompactStartedAt,
 } from './p2-w2-3b-rollback-domain.js';
+import { getRuntimeContextKey } from './identity.js';
 
 // 渲染去重签名（渲染器内部状态）：声明式入口下由本模块统一维护，
 // 外部不再手动 reset（工单 037 退役 lastRenderedInputSignature 的手动协议）。
@@ -126,7 +127,7 @@ function _notifyLeaseActionError(lease) {
 function getInputRenderSignature(requests, renderMode) {
   const runtimeId = window.currentRuntimeAgentId || 'none';
   if (renderMode === 'persistent') {
-    const contextKey = window.getRuntimeContextKey(runtimeId) || `runtime:${runtimeId}`;
+    const contextKey = getRuntimeContextKey(runtimeId) || `runtime:${runtimeId}`;
     // 接续等待表面（无 runtime 态）：签名携带等待会话身份，等待会话之间
     // 切换时触发 composer 会话卡重绑（草稿按会话迁移），不残留上一条
     // 等待会话的草稿。
@@ -139,7 +140,7 @@ function getInputRenderSignature(requests, renderMode) {
   // 共同决定（工单 037）。交互状态入签名后，choice 域的状态写入经声明入口
   // 即可重建选择卡，无需外部 reset。
   if (renderMode === 'choice' && typeof window.getChoiceInteractionSignature === 'function') {
-    const contextKey = window.getRuntimeContextKey(runtimeId) || `runtime:${runtimeId}`;
+    const contextKey = getRuntimeContextKey(runtimeId) || `runtime:${runtimeId}`;
     const lease = Array.isArray(requests) && requests.length > 0 ? requests[0] : null;
     const interaction = lease ? window.getChoiceInteractionSignature(lease.requestId) : 'new';
     return `choice|${contextKey}|${lease ? lease.requestId : ''}|${interaction}`;

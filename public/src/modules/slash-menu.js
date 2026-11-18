@@ -46,6 +46,7 @@ import { getCurrentLanguage } from './i18n-environment-state.js';
 import { ClawToast } from './toast-notify.js';
 import { autoResize } from './input-actions.js';
 import { activeKey } from './session-reference-picker.js';
+import { getLogicalAgentId, getRuntimeId, getRuntimeWorkspaceSessionId } from './identity.js';
 
 // ── 模块局部状态（app-core 全局状态纪律：状态放所属模块局部）──
 let _hostCommands = [];
@@ -115,17 +116,15 @@ function _currentTarget() {
   //   不从页面焦点（focusedAgentId）猜测
   // - sessionId 从 runtime 的 viewer 绑定派生（代表用户正在查看的会话），
   //   allAgents 缓存派生值只在无绑定时兜底
-  // 桥接期晚绑定（首次使用处）：getRuntimeId / getLogicalAgentId /
-  // getRuntimeWorkspaceSessionId 定义于 app-core（身份解析域），
-  // getCurrentRuntimeRecord / getCurrentAgentRecord 定义于 app-main（编排域）。
-  // 两者迁为 import 后删除各自的 window. 前缀。
-  const runtimeId = window.getRuntimeId(currentRuntimeAgentId)
+  // 身份三元组来自 identity 域（P4 T1 起具名 import）；getCurrentRuntimeRecord /
+  // getCurrentAgentRecord 仍定义于 app-main（编排域），经 window 晚绑定。
+  const runtimeId = getRuntimeId(currentRuntimeAgentId)
     || (typeof currentRuntimeAgentId === 'string' ? currentRuntimeAgentId : '');
   if (!runtimeId) return { agentId: '', runtimeId: '', sessionId: '' };
   const record = (typeof window.getCurrentRuntimeRecord === 'function' && window.getCurrentRuntimeRecord())
     || (typeof window.getCurrentAgentRecord === 'function' ? window.getCurrentAgentRecord() : null);
-  const agentId = (record ? window.getLogicalAgentId(record) : '') || '';
-  const sessionId = window.getRuntimeWorkspaceSessionId(runtimeId) || '';
+  const agentId = (record ? getLogicalAgentId(record) : '') || '';
+  const sessionId = getRuntimeWorkspaceSessionId(runtimeId) || '';
   return { agentId, runtimeId, sessionId };
 }
 

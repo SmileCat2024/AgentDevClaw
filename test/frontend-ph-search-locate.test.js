@@ -702,8 +702,13 @@ async function withRemoteActionsCase({ bumpEpochDuringWait = false } = {}, probe
         });
       };
       // 定位滚动容器：真实 domRefs.container（#chat-container）的等价替身。
-      const realDomHost = sandbox.window.createP2BootstrapDomHost;
-      sandbox.window.createP2BootstrapDomHost = () => ({ ...realDomHost(), container });
+      // DOM 引用已迁 dom-refs.js（P4 T1）：容器改由 document 桩给出（模块相解析）。
+      const realGetElementById = sandbox.document.getElementById;
+      const chatContainer = container;
+      sandbox.document.getElementById = (id) => (id === 'chat-container'
+        ? chatContainer
+        : (typeof realGetElementById === 'function'
+          ? realGetElementById.call(sandbox.document, id) : null));
       // 远程激活成功会经真实 toast-notify 弹提示：它的 buildToastElement 用
       // createElement 造节点、再用 querySelector 取子节点挂监听，默认元素桩的
       // querySelector 返回 null 会在提示渲染上抛错（宿主 DOM 边界，非被测契约）。

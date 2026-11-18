@@ -37,6 +37,7 @@ import { activeFeaturePanel } from './render-entry-state.js';
 import { domRefs } from './p2-bootstrap-dom.js';
 import { debugPanel } from './p2-bootstrap-debug-panel.js';
 import { renderFeaturePanel } from './debug-panel-host.js';
+import { getRuntimeId } from './identity.js';
 
 const { featurePanelBody } = domRefs;
 
@@ -355,7 +356,7 @@ export async function loadLogs(forceRender = false) {
     const params = new URLSearchParams({
       scope: 'current',
     });
-    const runtimeId = window.getRuntimeId(currentRuntimeAgentId); // 桥接期：定义于 app-core
+    const runtimeId = getRuntimeId(currentRuntimeAgentId);
     if (!runtimeId) {
       if (forceRender && activeFeaturePanel === 'logs') {
         debugPanel.currentLogsTruncation = null;

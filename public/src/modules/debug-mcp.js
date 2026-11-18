@@ -28,6 +28,7 @@ import { escapeHtml } from './markdown-utils.js';
 import { currentRuntimeAgentId } from './orchestration-state.js';
 import { activeFeaturePanel } from './render-entry-state.js';
 import { debugPanel } from './p2-bootstrap-debug-panel.js';
+import { getRuntimeId } from './identity.js';
 
 // ═══════════════════════════════════════════════════════════════
 // MCP 信息
@@ -115,7 +116,7 @@ export async function loadMcpInfo(forceRender = false) {
     // 带当前会话 agentId（远程会话为命名空间 id，经代理闸还原裸 id 后转发）。
     // viewer 端 mcp-info 是全局端点，本地身份也带此参数但被服务端忽略，行为不变。
     const params = new URLSearchParams();
-    const runtimeId = window.getRuntimeId(currentRuntimeAgentId);
+    const runtimeId = getRuntimeId(currentRuntimeAgentId);
     if (runtimeId) {
       params.set('agentId', runtimeId);
     }

@@ -13,10 +13,12 @@
  *     状态（debugPanel.selectedFeatureName，app-core 的 classic let 经宿主成对读写）、
  *     源路径缩短（overview-data）、面板重绘（debug-panel-host）、Feature 详情
  *     选择器（debug-overview）。
- *   - 仍 classic 的显式 window 晚绑定（行尾注明定义域）：getFeatureStatus /
- *     getStatusBadgeClass / getFeatureStatusLabel / getCurrentControlAgentId /
- *     getRuntimeId（app-core）、getCurrentAgentRecord / _scheduleInspectorRefresh
- *     （app-main）、window.ClawFW.featureCatalog（catalog 命名空间）。
+ *   - 展示格式化族（getFeatureStatus / getStatusBadgeClass / getFeatureStatusLabel）
+ *     与身份解析（getCurrentControlAgentId / getRuntimeId）P4 T1 起具名 import
+ *     自 format-utils / identity。
+ *   - 仍 classic 的显式 window 晚绑定（行尾注明定义域）：getCurrentAgentRecord /
+ *     _scheduleInspectorRefresh（app-main）、window.ClawFW.featureCatalog
+ *     （catalog 命名空间）。
  *
  * 时序审计（R4，首屏链已在模块相由 boot.js 触发）：
  *   - 顶层语句只有兼容桥注册（defineKey / claim）与 data-action 注册（含
@@ -39,6 +41,8 @@ import { debugPanel } from './p2-bootstrap-debug-panel.js';
 import { shortenSourcePath } from './overview-data.js';
 import { renderFeaturePanel } from './debug-panel-host.js';
 import { openFeatureDetails, closeFeatureDetails } from './debug-overview.js';
+import { getCurrentControlAgentId, getRuntimeId } from './identity.js';
+import { getFeatureStatus, getFeatureStatusLabel, getStatusBadgeClass } from './format-utils.js';
 
 // ═══════════════════════════════════════════════════════════════
 // Features / Reverse Hooks 面板
@@ -119,9 +123,9 @@ let _commandFeatures = null;          // Map<string, number> | null（feature �
 let _commandFeaturesKey = null;
 
 function _ensureCommandFeatures() {
-  if (typeof window.getCurrentControlAgentId !== 'function' || typeof window.getRuntimeId !== 'function') return; // 桥接期：定义于 app-core
-  const agentId = window.getCurrentControlAgentId();
-  const runtimeId = window.getRuntimeId(currentRuntimeAgentId);
+  // 两个解析入口都来自 identity 域（P4 T1 起具名 import）
+  const agentId = getCurrentControlAgentId();
+  const runtimeId = getRuntimeId(currentRuntimeAgentId);
   if (!agentId || !runtimeId) return;
   const key = agentId + '::' + runtimeId;
   if (key === _commandFeaturesKey) return;
@@ -159,14 +163,14 @@ function _ensureMountFacts() {
 function _runtimeSignals() {
   const fc = window.ClawFW && window.ClawFW.featureCatalog;
   let mountedNames = null;
-  if (fc && typeof window.getCurrentControlAgentId === 'function') { // 桥接期：定义于 app-core
+  if (fc) {
     // 只对本地装配域 APP（编程小助手 / coder）应用 $mount 装配事实：
     // 远程会话（record 不在 allAgents）的装配声明不在本机 overview 里；
     // 其他宿主不在装配域。挂载事实未就绪时为 null，enrich 回退 seed 静态 group。
     const record = (typeof window.getCurrentAgentRecord === 'function') ? window.getCurrentAgentRecord() : null; // 桥接期：定义于 app-main
     if (record) {
       mountedNames = fc.resolveMountedNames(
-        fc.getMountFactsSnapshot(), window.getCurrentControlAgentId());
+        fc.getMountFactsSnapshot(), getCurrentControlAgentId());
     }
   }
   return { commandFeatures: _commandFeatures, mountedNames };
@@ -249,7 +253,7 @@ export function renderFeaturesPanel() {
   const suppressHeaders = groups.length === 1 && groups[0].id !== '_unmapped';
 
   const buildFeatureCard = (feature) => {
-    const status = window.getFeatureStatus(feature);
+    const status = getFeatureStatus(feature);
     const displayName = fc ? fc.resolveDisplayName(feature, getCurrentLanguage()) : feature.name;
     // slash 命令数：_commandFeatures 为 null（数据不可用）时省略该项，不显示误导性的 0
     const commandCount = _commandFeatures ? (_commandFeatures.get(feature.name) || 0) : null;
@@ -263,7 +267,7 @@ export function renderFeaturesPanel() {
       '<div class="feature-card-file">' + escapeHtml(shortenSourcePath(feature.source) || t('feature_source_missing')) + '</div>',
       '</div>',
       '</div>',
-      '<div class="' + window.getStatusBadgeClass(status) + '">' + escapeHtml(window.getFeatureStatusLabel(status)) + '</div>',
+      '<div class="' + getStatusBadgeClass(status) + '">' + escapeHtml(getFeatureStatusLabel(status)) + '</div>',
       '</div>',
       '<div class="feature-card-detail">',
       '<span>' + String(feature.hookCount) + ' ' + escapeHtml(t('feature_hooks')) + '</span>',
@@ -312,7 +316,7 @@ export function renderFeaturesPanel() {
       '<div class="feature-tool-list">' + currentHookInspector.standaloneTools.map(tool => {
         const isSuper = tool.state === 'superseded';
         const actionHtml = isSuper
-          ? '<div class="' + window.getStatusBadgeClass(tool.state || 'enabled') + '">' + escapeHtml(t('feature_tool_superseded')) + '</div>'
+          ? '<div class="' + getStatusBadgeClass(tool.state || 'enabled') + '">' + escapeHtml(t('feature_tool_superseded')) + '</div>'
           : buildToolToggleHtml('tool', tool.name, tool.state === 'enabled');
         return [
         '<div class="feature-tool-card">',
@@ -688,7 +692,7 @@ function renderFeatureToolCard(tool) {
   ].filter(Boolean).join('');
   const isSuper = tool.state === 'superseded';
   return '<div class="feature-tool-card"><div class="feature-tool-top"><div class="feature-tool-name">' + SVG_TOOL_ICON + escapeHtml(tool.name)
-    + '</div><div class="feature-tool-actions">' + (isSuper ? '<div class="' + window.getStatusBadgeClass('superseded') + '">' + escapeHtml(t('feature_tool_superseded')) + '</div>' : buildToolToggleHtml('tool', tool.name, tool.state === 'enabled')) + '</div></div>'
+    + '</div><div class="feature-tool-actions">' + (isSuper ? '<div class="' + getStatusBadgeClass('superseded') + '">' + escapeHtml(t('feature_tool_superseded')) + '</div>' : buildToolToggleHtml('tool', tool.name, tool.state === 'enabled')) + '</div></div>'
     + (tool.description ? '<div class="feature-tool-desc">' + escapeHtml(tool.description) + '</div>' : '')
     + (props.length ? '<div class="gateway-tool-params">' + props.map(prop => '<span class="gateway-tool-tag">' + escapeHtml(prop) + '</span>').join('') + '</div>' : '')
     + (metaPills ? '<div class="feature-tool-meta">' + metaPills + '</div>' : '')
@@ -727,8 +731,8 @@ function toggleToolSchema(toolKey) {
  */
 async function toggleToolState(scope, name, checkbox) {
   const action = checkbox.checked ? 'enable' : 'disable';
-  const body = { agentId: window.getCurrentControlAgentId(), scope, name, action };
-  const runtimeId = window.getRuntimeId(currentRuntimeAgentId);
+  const body = { agentId: getCurrentControlAgentId(), scope, name, action };
+  const runtimeId = getRuntimeId(currentRuntimeAgentId);
   if (runtimeId) body.runtimeId = runtimeId;
   try {
     const resp = await fetch('/protoclaw/agent/tool_state', {
@@ -756,8 +760,8 @@ async function toggleToolState(scope, name, checkbox) {
  */
 async function toggleHookState(lifecycle, featureName, methodName, checkbox) {
   const action = checkbox.checked ? 'enable' : 'disable';
-  const body = { agentId: window.getCurrentControlAgentId(), scope: 'hook', lifecycle, featureName, methodName, action };
-  const runtimeId = window.getRuntimeId(currentRuntimeAgentId);
+  const body = { agentId: getCurrentControlAgentId(), scope: 'hook', lifecycle, featureName, methodName, action };
+  const runtimeId = getRuntimeId(currentRuntimeAgentId);
   if (runtimeId) body.runtimeId = runtimeId;
   try {
     const resp = await fetch('/protoclaw/agent/tool_state', {
@@ -918,7 +922,7 @@ export function renderFeatureDetailOverlay(feature) {
       '<div class="feature-detail-stats">',
       '<div class="feature-detail-stat"><div class="feature-detail-stat-label">' + escapeHtml(t('feature_hooks')) + '</div><div class="feature-detail-stat-value">' + String(feature.hookCount) + '</div></div>',
       '<div class="feature-detail-stat"><div class="feature-detail-stat-label">' + escapeHtml(t('feature_active_tools')) + '</div><div class="feature-detail-stat-value">' + String(feature.enabledToolCount) + '/' + String(feature.toolCount) + '</div></div>',
-      '<div class="feature-detail-stat"><div class="feature-detail-stat-label">' + escapeHtml(t('feature_status_label')) + '</div><div class="feature-detail-stat-value">' + escapeHtml(window.getFeatureStatusLabel(window.getFeatureStatus(feature))) + '</div></div>',
+      '<div class="feature-detail-stat"><div class="feature-detail-stat-label">' + escapeHtml(t('feature_status_label')) + '</div><div class="feature-detail-stat-value">' + escapeHtml(getFeatureStatusLabel(getFeatureStatus(feature))) + '</div></div>',
       '</div>',
       '<div class="feature-detail-source">' + escapeHtml(shortenSourcePath(feature.source) || t('feature_source_missing')) + provHtml + '</div>',
       capsBlock,

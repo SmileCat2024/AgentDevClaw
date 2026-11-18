@@ -31,7 +31,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import { withP2EsmCase } from './helpers/p2-esm-case.js';
-import { prepareEsmModules, SESSION_VIEW_DOMAIN } from './p2-classic-hosts.js';
+import { IDENTITY_DOMAIN, prepareEsmModules, SESSION_VIEW_DOMAIN } from './p2-classic-hosts.js';
 
 const THREAD_ENGINE = 'public/src/modules/thread-store.js';
 
@@ -50,7 +50,6 @@ function makeFixture({
   runtimeAgentIdBefore = 'runtime-old',
 } = {}) {
   const counters = {
-    bindings: [],
     loads: [],
     renderAgentListCalls: 0,
     threadFetchCalls: 0,
@@ -72,9 +71,6 @@ function makeFixture({
         runtime_session_id: 'runtime-new',
       }],
       getCurrentHostAgentRecord: () => ({ id: 'coder', active_workspace_session_id: hostActiveSessionId }),
-      getRuntimeWorkspaceSessionId: (runtimeId) => (runtimeId === 'runtime-old' ? 'session-old' : 'session-new'),
-      getRuntimeContextKey: (runtimeId) => `host:programming-helper|session:${runtimeId === 'runtime-old' ? 'session-old' : 'session-new'}`,
-      setViewerSessionBinding: (runtimeId, sessionId) => { counters.bindings.push([runtimeId, sessionId]); },
       loadAgents: async () => {},
       loadAgentData: async (runtimeId) => { counters.loads.push(runtimeId); },
       saveCurrentRuntimeToCache() {},
@@ -114,7 +110,7 @@ async function withRebindCase(options, probe) {
         sandbox.KernelState.defineKey(domain, key, sandbox[key]);
       }
       // thread-store 的会话视图提交原语依赖（ADR-0026）。
-      prepareEsmModules(sandbox, SESSION_VIEW_DOMAIN);
+      prepareEsmModules(sandbox, [...IDENTITY_DOMAIN, ...SESSION_VIEW_DOMAIN]);
     },
     globals: fixture.globals,
   }, async (c) => {
@@ -133,12 +129,16 @@ async function withRebindCase(options, probe) {
       state.sessionIndex['coder::session-new'] = thread;
     };
     installFacts('session-old', ['session-old']);
+    // 会话身份（P4 T1：identity 域 owner）：冻结在旧 head 上的 viewer 绑定
+    fixture.identity = await c.load('public/src/modules/identity.js');
+    fixture.identity.setViewerSessionBinding('runtime-old', 'session-old');
     return probe({
       c,
       ctx,
       engine,
       // 可变计数用 getter 读实时值（展开会拍成快照）。
-      get bindings() { return fixture.counters.bindings; },
+      // 会话绑定写点（P4 T1：owner 是 identity 域）：读真实绑定而不是桩的调用记录
+      get identity() { return fixture.identity; },
       get loads() { return fixture.counters.loads; },
       get migratedImages() { return fixture.counters.migratedImages; },
       get dismissedToasts() { return fixture.counters.dismissedToasts; },
@@ -170,7 +170,8 @@ describe('thread-store: head-advanced rebind across the succession gap', () => {
     await kit.eventHandler(HEAD_ADVANCED_EVENT);
 
     assert.ok(kit.loads.includes('runtime-new'), 'successor runtime data must be loaded');
-    assert.deepEqual(kit.bindings.at(-1), ['runtime-new', 'session-new']);
+    assert.equal(kit.identity.getViewerSessionBinding('runtime-new'), 'session-new',
+      'successor runtime 的 viewer 绑定已建立');
     assert.equal(kit.ctx.currentRuntimeAgentId, 'runtime-new');
     assert.equal(kit.ctx.window.ClawThreads.activeConversation.threadId, 'wt-viewed');
     assert.equal(kit.ctx.window.ClawThreads.activeConversation.sessionId, 'session-new');
@@ -212,7 +213,8 @@ describe('thread-store: head-advanced rebind across the succession gap', () => {
     await kit.eventHandler(HEAD_ADVANCED_EVENT);
 
     assert.equal(kit.loads.length, 0, 'must not rebind when the user left this thread');
-    assert.equal(kit.bindings.length, 0);
+    assert.equal(kit.identity.getViewerSessionBinding('runtime-new'), '',
+      '用户已离开该线程：不得建立 successor 绑定');
     assert.notEqual(kit.ctx.currentRuntimeAgentId, 'runtime-new');
     assert.equal(kit.ctx.window.ClawThreads.activeConversation.threadId, 'wt-other');
   }));

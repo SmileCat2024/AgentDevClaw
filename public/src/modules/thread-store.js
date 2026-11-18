@@ -77,6 +77,7 @@
 import { currentRuntimeAgentId, setCurrentRuntimeAgentId } from './orchestration-state.js';
 import { allAgents, setFocusedAgentId, setReadOnlyMode } from './agent-store-state.js';
 import { setLastRenderedChatSig, setLastRenderedWorkspaceHtml } from './render-entry-state.js';
+import { getRuntimeContextKey, getRuntimeWorkspaceSessionId, setViewerSessionBinding } from './identity.js';
 
 // 线程事实的唯一真相源（本域状态）。`let` 而非 `const`：桥键 setter 允许 classic
 // 写方整对象替换（D4 原样转发），替换后所有闭包读同一活绑定。
@@ -278,10 +279,7 @@ export function _currentActiveSession() {
       ? window.getCurrentHostAgentRecord()
       : null;
     const runtimeId = String(currentRuntimeAgentId || '').trim();
-    // getRuntimeWorkspaceSessionId 定义于 app-core（classic）
-    const sessionId = runtimeId && typeof window.getRuntimeWorkspaceSessionId === 'function'
-      ? String(window.getRuntimeWorkspaceSessionId(runtimeId) || '').trim()
-      : '';
+    const sessionId = runtimeId ? String(getRuntimeWorkspaceSessionId(runtimeId) || '').trim() : '';
     if (host?.id && sessionId) {
       return { agentId: host.id, sessionId };
     }
@@ -596,8 +594,8 @@ export async function _rebindConversationToThreadHead(threadId, fromSessionId, t
       return;
     }
     const previousRuntimeId = String(currentRuntimeAgentId || '').trim();
-    if (previousRuntimeId && typeof window.getRuntimeWorkspaceSessionId === 'function'
-      && window.getRuntimeWorkspaceSessionId(previousRuntimeId) !== fromSessionId) return;
+    if (previousRuntimeId && typeof getRuntimeWorkspaceSessionId === 'function'
+      && getRuntimeWorkspaceSessionId(previousRuntimeId) !== fromSessionId) return;
     window._storeVisibleSessionInputDraft();
     const previousRuntimeIdForDraft = String(currentRuntimeAgentId || selectedConversation?.runtimeId || '').trim();
     const previousAttachmentKey = window.SessionReference?.activeKey?.() || '';
@@ -612,9 +610,9 @@ export async function _rebindConversationToThreadHead(threadId, fromSessionId, t
     // saveCurrentRuntimeToCache 只是 runtime-view-cache-host 的 ESM 具名导出，从未上 window
     // 面——该分支在生产恒不执行（原样保留，删除属另案）。
     if (previousRuntimeId && typeof window.saveCurrentRuntimeToCache === 'function') {
-      window.saveCurrentRuntimeToCache(previousRuntimeId, window.getRuntimeContextKey(previousRuntimeId));
+      window.saveCurrentRuntimeToCache(previousRuntimeId, getRuntimeContextKey(previousRuntimeId));
     }
-    window.setViewerSessionBinding(nextRuntimeId, toSessionId);
+    setViewerSessionBinding(nextRuntimeId, toSessionId);
     window.applySessionViewPatch({ identity: { agentId: ownerAgentId, sessionId: toSessionId } });
     const openedConversation = ClawThreads.activeConversation;
     if (openedConversation?.threadId === threadId && openedConversation.agentId === ownerAgentId) {
@@ -667,8 +665,8 @@ export function _reconcileConversationWithThreadHead() {
   const headSessionId = String(thread.headSessionId || '').trim();
   if (!headSessionId) return;
   const runtimeId = String(currentRuntimeAgentId || '').trim();
-  const boundSessionId = runtimeId && typeof window.getRuntimeWorkspaceSessionId === 'function'
-    ? String(window.getRuntimeWorkspaceSessionId(runtimeId) || '').trim()
+  const boundSessionId = runtimeId && typeof getRuntimeWorkspaceSessionId === 'function'
+    ? String(getRuntimeWorkspaceSessionId(runtimeId) || '').trim()
     : '';
   const viewedSessionId = boundSessionId || String(selected.sessionId || '').trim();
   if (!viewedSessionId) return;

@@ -2,9 +2,10 @@
  * P2 跨批测试地基验收：真实 classic bootstrap → ESM 适配图。
  *
  * 选取 P2 首屏边界的两条真实链路：
- *   - p2-bootstrap-dom：classic 顶层 `const container` 是词法绑定（不是 window
- *     属性），ESM 侧只能经 classic 提供的 `createP2BootstrapDomHost()` 工厂
- *     （真实 host seam）取值。断言引用身份，钉住「不复制、不搬词法绑定」。
+ *   - p2-bootstrap-dom：DOM 引用域（dom-refs）已迁模块相（P4 T1），原 classic
+ *     顶层 `const container` 词法绑定不复存在；仍有 classic 消费方的两个键
+ *     （container / currentAgentTitle）经桥键暴露。断言 ESM 导出与桥键读回的
+ *     是同一元素引用，钉住「不复制元素引用」。
  *   - agent-loader-host：模块顶层读 classic 的 window.AgentLoaderHost，并向
  *     KernelState 注册/认领自己的桥域；其静态依赖（agent-store / orchestration /
  *     session-view-*）各自 claim，验证跨批典型的多域图。
@@ -49,14 +50,16 @@ test('classic 词法经真实 host seam 进入 ESM；跨域桥与 classic 状态
   const first = bootstrapCaseOptions();
 
   const evidence = await withP2EsmCase(first.options, async (c) => {
-    // classic 顶层 const 是词法绑定：window 上没有该属性，只有工厂能取到。
-    assert.equal(c.read('typeof container'), 'object');
-    assert.equal(c.read('Object.prototype.hasOwnProperty.call(window, "container")'), false);
+    // DOM 引用 owner 已迁模块相（P4 T1）：classic 侧不再有顶层 const 词法绑定，
+    // 裸标识符改为解析到桥键访问器；两条路径读同一元素引用。
+    assert.equal(c.read('typeof Object.getOwnPropertyDescriptor(window, "container").get'), 'function',
+      'classic 侧拿到的是桥键访问器，不再是顶层 const');
+    assert.equal(c.read('typeof container'), 'object', 'classic 裸标识符解析到桥键');
 
     const dom = await c.load(BOOTSTRAP_DOM);
     assert.equal(Object.isFrozen(dom.domRefs), true);
-    assert.equal(dom.domRefs.container, c.read('container'), 'domRefs 必须是 classic 词法引用的同一元素');
-    assert.equal(dom.domRefs.container, c.read('createP2BootstrapDomHost().container'));
+    assert.equal(dom.domRefs.container, c.read('window.container'), '桥键与命名导出是同一元素引用');
+    assert.equal(dom.domRefs.currentAgentTitle, c.read('window.currentAgentTitle'));
 
     const host = await c.load(AGENT_LOADER_HOST);
     for (const name of ['loadFeatureTemplateMap', 'reloadFeatureTemplateMap', 'loadAgentDetail',
@@ -88,7 +91,7 @@ test('classic 词法经真实 host seam 进入 ESM；跨域桥与 classic 状态
     const host = await c.load(AGENT_LOADER_HOST);
     assert.notEqual(dom, evidence.dom, 'bootstrap 适配模块是新一代实例');
     assert.notEqual(host, evidence.host);
-    assert.equal(dom.domRefs.container, c.read('container'), '新 case 的词法引用仍经同一 host seam');
+    assert.equal(dom.domRefs.container, c.read('window.container'), '新 case 的桥键与导出仍是同一引用');
     assert.notEqual(dom.domRefs.container, evidence.dom.domRefs.container, '新 case 的 DOM 引用是新的沙箱对象');
     assert.deepEqual(
       JSON.parse(c.read('JSON.stringify(KernelState.stats())')),

@@ -33,6 +33,8 @@ import {
 import { renderWorkspaceField } from './workspace-blocks.js';
 import { getAgentWorkspaceState, getPathLeaf } from './project-data.js';
 import { loadAgents } from './agent-snapshot-loader-host.js';
+import { invoke } from './transport.js';
+import { localizeWorkspaceValue } from './format-utils.js';
 
 // ── Artifacts block ──
 
@@ -108,10 +110,10 @@ function getWorkspaceLabelFromId(value) {
 
 function renderWorkspaceArtifactsBlock(agent, block) {
   const data = getWorkspaceArtifactData(agent, block);
-  const title = window.localizeWorkspaceValue(block.title, 'Artifacts');
-  const desc = window.localizeWorkspaceValue(block.description, '');
+  const title = localizeWorkspaceValue(block.title, 'Artifacts');
+  const desc = localizeWorkspaceValue(block.description, '');
   const items = Array.isArray(data?.items) ? data.items : [];
-  const emptyText = window.localizeWorkspaceValue(block.emptyText, 'No artifacts yet.');
+  const emptyText = localizeWorkspaceValue(block.emptyText, 'No artifacts yet.');
   const currentOpenDirectory = String(getAgentWorkspaceState(agent)?.openDirectory || '').trim();
   const scopedDesc = currentOpenDirectory
     ? ((desc ? desc + ' ' : '') + currentOpenDirectory)
@@ -231,7 +233,7 @@ function renderProjectRequirementCards(agent, requirementBlock, draft) {
   const rows = fields.map((field) => {
     const key = String(field?.name || '').trim();
     if (!key) return '';
-    const label = window.localizeWorkspaceValue(field.label, key);
+    const label = localizeWorkspaceValue(field.label, key);
     const value = draft[key];
     if (value === undefined || value === null || String(value).trim() === '') return '';
     return [
@@ -524,9 +526,9 @@ function renderProjectDocsetContent(agent, block, data) {
 
 function renderProjectDocsetBlock(agent, block) {
   const data = getProjectDocsetData(agent, block);
-  const title = window.localizeWorkspaceValue(block.title, 'Project Docset');
-  const desc = window.localizeWorkspaceValue(block.description, '');
-  const emptyText = window.localizeWorkspaceValue(block.emptyText, 'No project docset yet.');
+  const title = localizeWorkspaceValue(block.title, 'Project Docset');
+  const desc = localizeWorkspaceValue(block.description, '');
+  const emptyText = localizeWorkspaceValue(block.emptyText, 'No project docset yet.');
 
   if (!data?.exists) {
     return [
@@ -607,7 +609,7 @@ async function importProjectMaterialsByPath(mode = 'files') {
   try {
     let materials = [];
     if (mode === 'folder') {
-      const selected = await window.invoke('select_directory');
+      const selected = await invoke('select_directory');
       if (!selected || selected.cancelled || !selected.path) return;
       materials = [{
         name: getPathLeaf(selected.path) || selected.path,
@@ -615,7 +617,7 @@ async function importProjectMaterialsByPath(mode = 'files') {
         sourceKind: 'directory',
       }];
     } else {
-      const selected = await window.invoke('select_files');
+      const selected = await invoke('select_files');
       const paths = Array.isArray(selected?.paths) ? selected.paths.filter(Boolean) : [];
       if (!paths.length) return;
       materials = paths.map((sourcePath) => ({

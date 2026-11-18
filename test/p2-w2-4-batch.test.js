@@ -34,6 +34,8 @@ const MODULES = {
   overviewData: 'public/src/modules/overview-data.js',
   autoTitle: 'public/src/modules/auto-title.js',
   messageTimeline: 'public/src/modules/message-timeline.js',
+  // 身份解析域（P4 T1 从 app-core 抽出）：getAgentRuntimeId 的唯一实现
+  identity: 'public/src/modules/identity.js',
 };
 const BATCH_ENTRY = 'public/src/modules/p2-w2-4-title-timeline-bootstrap.js';
 
@@ -146,13 +148,15 @@ describe('P2-4 接口面：四个模块的公开导出', () => {
 
     for (const name of ['clearFeatureTemplateCache', 'clearTruncatedHighlightData',
       'renderJsonHighlight', 'applyTemplate', 'parseToolResult', 'getToolRenderTemplate',
-      'getToolDisplayName', 'collectTemplateNames', 'warmTemplatesInBackground',
-      'getAgentRuntimeId']) {
+      'getToolDisplayName', 'collectTemplateNames', 'warmTemplatesInBackground']) {
       assert.equal(typeof templateEngine[name], 'function', `template-engine 缺少导出 ${name}`);
     }
+    // getAgentRuntimeId 曾是本文件与 app-core 的双定义；P4 T1 起唯一实现在
+    // modules/identity.js（按需具名 import），不再从这里导出。
+    assert.equal(templateEngine.getAgentRuntimeId, undefined, 'getAgentRuntimeId 不得在 template-engine 留第二份实现');
     assert.deepEqual(Object.keys(templateEngine).sort(), [
       'applyTemplate', 'clearFeatureTemplateCache', 'clearTruncatedHighlightData',
-      'collectTemplateNames', 'getAgentRuntimeId', 'getToolDisplayName',
+      'collectTemplateNames', 'getToolDisplayName',
       'getToolRenderTemplate', 'parseToolResult', 'renderJsonHighlight',
       'warmTemplatesInBackground',
     ]);
@@ -428,8 +432,8 @@ describe('P2-4 原行为：工具模板解析、高亮截断与展开动作', ()
     ]), ['math', 'user-input']);
   });
 
-  it('getAgentRuntimeId 用本文件（classic 装载序赢家）实现', () => {
-    const { getAgentRuntimeId } = env.modules.templateEngine;
+  it('getAgentRuntimeId 唯一实现在 identity 域（P4 T1 起不再由本文件提供）', () => {
+    const { getAgentRuntimeId } = env.modules.identity;
     assert.equal(getAgentRuntimeId({ id: 'child', source: 'child', runtime_session_id: 'rt-1' }), 'rt-1');
     assert.equal(getAgentRuntimeId({ id: 'host', source: 'prebuilt' }), '');
   });

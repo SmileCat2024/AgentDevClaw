@@ -251,12 +251,8 @@ async function withHandoffHarness({ cache = {} } = {}, fn) {
     saveCurrentRuntimeToCache: (runtimeId) => {
       calls.saveCurrentRuntimeToCache.push(runtimeId);
     },
-    setViewerSessionBinding: () => {},
-    _deriveRuntimeSessionIdFromAgents: () => null,
-    getActiveWorkspaceSessionId: () => null,
     resetRuntimeStatusForSwitch: () => { calls.resetRuntimeStatusForSwitch += 1; },
     activateUserCollapseStateForContext: () => {},
-    getRuntimeContextKey: (runtimeId) => `ctx:${runtimeId}`,
     restoreRuntimeFromCache: (runtimeId) => {
       const sandbox = refs.window;
       const cached = cache[runtimeId];
@@ -367,7 +363,7 @@ test('reading anchor waits for a scroll pause and captures the latest position',
   assert.equal(scans, 0, 'continuous scroll must not scan historical rows');
   h.flushTimers();
   assert.equal(scans, 1);
-  const anchor = h.sandbox.getRememberedChatViewportAnchorForContext('ctx:A');
+  const anchor = h.sandbox.getRememberedChatViewportAnchorForContext('runtime:A');
   assert.equal(anchor.rowIdx, 2);
   assert.equal(anchor.offset, 20);
   });
@@ -384,8 +380,8 @@ test('switch boundary can capture immediately; an outgoing idle save cannot over
   h.sandbox.currentRuntimeAgentId = 'B';
   h.container.scrollTop = 900;
   h.flushTimers();
-  assert.equal(h.sandbox.getRememberedChatViewportAnchorForContext('ctx:A').offset, 400);
-  assert.equal(h.sandbox.getRememberedChatViewportAnchorForContext('ctx:B'), null);
+  assert.equal(h.sandbox.getRememberedChatViewportAnchorForContext('runtime:A').offset, 400);
+  assert.equal(h.sandbox.getRememberedChatViewportAnchorForContext('runtime:B'), null);
   });
 });
 

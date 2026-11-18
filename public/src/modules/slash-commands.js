@@ -32,6 +32,7 @@ import { focusedAgentId } from './agent-store-state.js';
 import { getCurrentLanguage } from './i18n-environment-state.js';
 import { sessionOpsAllowed } from './session-menu-decls.js';
 import { ClawToast } from './toast-notify.js';
+import { getActiveWorkspaceSessionId, getLogicalAgentId, getRuntimeId, getRuntimeWorkspaceSessionId } from './identity.js';
 
 function _resolveSessionContext() {
   // 输入框属于当前 runtime 视图：agent record 从 runtime 反查（焦点派生的
@@ -41,16 +42,16 @@ function _resolveSessionContext() {
   // 纯解析（无副作用）：applies 谓词每次击键都会调用，失败提示由
   // _currentSessionContext 包装层负责。
   // 桥接期晚绑定（首次使用处）：getRuntimeId / getLogicalAgentId /
-  // getRuntimeWorkspaceSessionId / getActiveWorkspaceSessionId 定义于 app-core
+  // getRuntimeWorkspaceSessionId / getActiveWorkspaceSessionId 来自 identity 域
   // （身份与会话解析域），getCurrentRuntimeRecord / getCurrentAgentRecord 定义于
   // app-main（编排域）；迁为 import 后删除各自的 window. 前缀。
-  const runtimeId = window.getRuntimeId(currentRuntimeAgentId)
+  const runtimeId = getRuntimeId(currentRuntimeAgentId)
     || (typeof currentRuntimeAgentId === 'string' ? currentRuntimeAgentId : '');
   const record = (typeof window.getCurrentRuntimeRecord === 'function' && window.getCurrentRuntimeRecord())
     || (typeof window.getCurrentAgentRecord === 'function' ? window.getCurrentAgentRecord() : null);
-  let agentId = record ? (window.getLogicalAgentId(record) || record.id || '') : '';
-  let sessionId = (runtimeId && window.getRuntimeWorkspaceSessionId(runtimeId))
-    || (record ? window.getActiveWorkspaceSessionId(record) : null);
+  let agentId = record ? (getLogicalAgentId(record) || record.id || '') : '';
+  let sessionId = (runtimeId && getRuntimeWorkspaceSessionId(runtimeId))
+    || (record ? getActiveWorkspaceSessionId(record) : null);
   // 远程会话（R2-02，ADR-0012）：远程条目不在 allAgents，record 链落空。
   // 身份从远程目录解析：sessionId 用目录条目值（命名空间化），agentId 收敛
   // 宿主级命名空间 id（数据层身份纪律，ADR-0012）。目录未含条目时返回

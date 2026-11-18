@@ -1,3 +1,4 @@
+import { getRuntimeId } from './identity.js';
 /**
  * navigation-core.js — 会话导航事务核心原语（ADR-0014 Phase 1）
  *
@@ -155,9 +156,8 @@ export function resolveHostAgentId(entry, fallbackId = '') {
  *   - start/restart 响应：{ runtime: { id | viewerAgentId }, agent: {...} }
  *   - mutation 响应：{ agent: <child 条目> }
  *   - 裸 agent 条目：直接解析
- * 剥壳后的条目解析委托 getRuntimeId（app-core 权威实现：alias 链 + source
- * 判定，宿主条目不误取自身 id 当 runtime）；此函数只补响应包装的剥壳层。
- * 无 getRuntimeId 的环境（单测）回退到裸 alias 链。
+ * 剥壳后的条目解析委托 identity 域的 getRuntimeId（alias 链 + source 判定，
+ * 宿主条目不误取自身 id 当 runtime）；此函数只补响应包装的剥壳层。
  */
 export function extractRuntimeId(source) {
   if (!source || typeof source !== 'object') return '';
@@ -166,11 +166,7 @@ export function extractRuntimeId(source) {
     if (fromRuntime) return fromRuntime;
   }
   const agent = source.agent && typeof source.agent === 'object' ? source.agent : source;
-  // 桥接期：getRuntimeId 仍定义于 app-core（身份域收敛时改为 import）。
-  if (typeof window.getRuntimeId === 'function') {
-    return window.getRuntimeId(agent) || '';
-  }
-  return String(agent.runtime_session_id || agent.runtimeSessionId || agent.id || '').trim();
+  return getRuntimeId(agent) || '';
 }
 
 /**

@@ -103,8 +103,11 @@ test('real loadAgents reuses an in-flight request across owner claim and release
   ctx.createCompactResumeHost = () => ({ state: {}, now: () => Date.now() });
   ctx.createAgentCallStatesHost = () => ({ state: {} });
   const previousWindow = globalThis.window;
+  const previousDocument = globalThis.document;
   const previousFetch = globalThis.fetch;
   globalThis.window = ctx;
+  // dom-refs（随 sidebar-render → p2-bootstrap-dom 进图）在模块相解析 DOM 引用。
+  globalThis.document = ctx.document;
   // 装载器宿主的 viewer 快照走裸 fetch（模块在宿主 realm 求值）：给确定性响应，
   // 不让真实网络参与本用例。
   globalThis.fetch = async () => ({ ok: true, status: 200, json: async () => ({ agents: [] }) });
@@ -132,6 +135,8 @@ test('real loadAgents reuses an in-flight request across owner claim and release
     release();
     if (previousWindow === undefined) delete globalThis.window;
     else globalThis.window = previousWindow;
+    if (previousDocument === undefined) delete globalThis.document;
+    else globalThis.document = previousDocument;
     if (previousFetch === undefined) delete globalThis.fetch;
     else globalThis.fetch = previousFetch;
   }

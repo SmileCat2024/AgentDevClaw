@@ -144,7 +144,8 @@ function syncCaseOptions() {
         // 内部读 getCurrentHostAgentRecord + getRuntimeWorkspaceSessionId）：
         // 用例给一条确定的宿主/绑定事实，函数本身仍是生产实现。
         getCurrentHostAgentRecord: () => ({ id: 'rt-a', source: 'prebuilt' }),
-        getRuntimeWorkspaceSessionId: (runtimeId) => (runtimeId === 'rt-a' ? 'sess-q' : ''),
+        // 会话身份（P4 T1：identity 域 owner）：window 桩不再生效，用例改用
+        // viewer 侧绑定（生产 switchAgent 的同一入口）播种，见各用例体。
         renderAgentList: () => {},
         renderCurrentMainView: () => {},
         updateQueueIndicator: () => {},
@@ -407,6 +408,8 @@ test('线程暂存文本：投影经具名 import 读交互域状态并渲染真
   const { options } = syncCaseOptions();
   await withP2EsmCase(options, async (c) => {
     const { orchestration, projection } = await loadGraph(c);
+    const identity = await c.load('public/src/modules/identity.js');
+    identity.setViewerSessionBinding('rt-a', 'sess-q');
     const thread = {
       threadId: 'wt-q', agentId: 'rt-a', headSessionId: 'sess-q',
       sessionIds: ['sess-q'], status: 'rotating', pendingTexts: ['暂存一', '暂存二'],

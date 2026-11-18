@@ -127,6 +127,7 @@ import {
   applyComposerMode,
   syncPersistentComposerSessionCard,
 } from './input-composer.js';
+import { normalizeAgentIdentity } from './identity.js';
 
 window.KernelState.defineKey('input-queue', '_pendingQueuedCount', 0);
 window.KernelState.defineKey('input-queue', '_queuedTexts', []); // 仅用于气泡展示
@@ -1070,8 +1071,7 @@ export async function interruptAgent() {
     // 等待 call.finish/callActive:false，以免旧轮询制造“假恢复”。
     clearInterruptSuppression(targetRuntimeId);
     if (wasCalling) callActivity._agentCallActive.set(targetRuntimeId, true);
-    // 桥接期：normalizeAgentIdentity 定义于 app-core（classic）
-    if (window.normalizeAgentIdentity(currentRuntimeAgentId) === window.normalizeAgentIdentity(targetRuntimeId)) {
+    if (normalizeAgentIdentity(currentRuntimeAgentId) === normalizeAgentIdentity(targetRuntimeId)) {
       _syncPersistentActionButton();
       // 桥接期：updateNotificationStatus 定义于 runtime-status（classic）
       window.updateNotificationStatus(lastNotificationStatusPayload || null);

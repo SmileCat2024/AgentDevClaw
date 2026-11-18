@@ -26,18 +26,29 @@ function fixturesFor({
   return {
     currentLanguage: 'zh',
     getCurrentHostAgentRecord: () => ({ id: hostAgentId, source: 'prebuilt' }),
-    getRuntimeWorkspaceSessionId: (rid) => (rid === runtimeId ? runtimeSessionId : ''),
     readCurrentSessionViewState: () => ({ identity: viewIdentity }),
     applySessionViewPatch: () => {},
     captureSessionViewToken: () => ({}),
     commitSessionViewPatch: () => false,
     findSidebarOperation: () => null,
-    setViewerSessionBinding: () => {},
     switchAgent: () => Promise.resolve(),
     renderAgentList: () => {},
     updateQueueIndicator: () => {},
     lastRenderedWorkspaceHtml: '',
   };
+}
+
+const IDENTITY = 'public/src/modules/identity.js';
+
+/**
+ * 会话身份（P4 T1 起 owner 是 identity 域）：生产里 switchAgent 建立 viewer 侧
+ * runtimeId → sessionId 绑定；用例按同一入口播种，不再给身份函数装同名桩。
+ */
+async function seedIdentity(c, runtimeId, sessionId) {
+  if (!runtimeId || !sessionId) return null;
+  const identity = await c.load(IDENTITY);
+  identity.setViewerSessionBinding(runtimeId, sessionId);
+  return identity;
 }
 
 /** 把全局线程指向写成用例给定的指向（状态写入只落唯一 ClawThreads）。 */
@@ -62,7 +73,8 @@ test('getActiveThreadInputTarget：宿主已切走（残留指向他空间线程
   await withThreadEngineCase({
     fixtures: fixturesFor({ hostAgentId: 'programming-helper' }),
     threads: [WT],
-  }, async ({ ctx }) => {
+  }, async ({ c, ctx }) => {
+    await seedIdentity(c, 'rt-ph', 'sess-A');
     setConversation(ctx, { agentId: 'coder', threadId: 'wt-1', sessionId: 'sess-head', runtimeId: '', wasHead: true });
     // 用户在 ph 会话 A 视图，全局残留指向 coder 线程
     ctx.currentRuntimeAgentId = 'rt-ph';
@@ -80,7 +92,8 @@ test('getActiveThreadInputTarget：视图确属该线程（head 健康 / 等待�
       viewIdentity: { agentId: 'coder', sessionId: 'sess-head' },
     }),
     threads: [WT],
-  }, async ({ ctx }) => {
+  }, async ({ c, ctx }) => {
+    await seedIdentity(c, 'rt-coder', 'sess-head');
     setConversation(ctx, { agentId: 'coder', threadId: 'wt-1', sessionId: 'sess-head', runtimeId: 'rt-coder', wasHead: true });
     ctx.currentRuntimeAgentId = 'rt-coder';
     ctx.focusedAgentId = 'coder';
@@ -141,7 +154,8 @@ test('_syncActiveThreadSubscription：等待重绑豁免以宿主焦点为界—
   await withThreadEngineCase({
     fixtures: fixturesFor({ hostAgentId: 'programming-helper', runtimeId: 'rt-ph', runtimeSessionId: 'sess-A' }),
     threads: [WT],
-  }, async ({ ctx, engine }) => {
+  }, async ({ c, ctx, engine }) => {
+    await seedIdentity(c, 'rt-ph', 'sess-A');
     setConversation(ctx, { agentId: 'coder', threadId: 'wt-1', sessionId: 'sess-head', runtimeId: '', wasHead: true });
     ctx.currentRuntimeAgentId = 'rt-ph';
     ctx.focusedAgentId = 'programming-helper';
@@ -179,8 +193,6 @@ test('openConversationTarget 接续等待分支：切换落在该会话的聊天
         { id: 'programming-helper', source: 'prebuilt' },
       ],
       getCurrentHostAgentRecord: () => ({ id: 'programming-helper', source: 'prebuilt' }),
-      getRuntimeWorkspaceSessionId: (runtimeId) => (runtimeId === 'rt-ph' ? 'sess-A' : ''),
-      setViewerSessionBinding: () => {},
       renderAgentList: () => {},
       renderCurrentMainView: () => {},
       updateQueueIndicator: () => {},

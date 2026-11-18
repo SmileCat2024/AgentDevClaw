@@ -21,6 +21,7 @@ import { ClawToast } from './toast-notify.js';
 import { currentRuntimeAgentId } from './orchestration-state.js';
 import { escapeHtml } from './markdown-utils.js';
 import { getCurrentLanguage } from './i18n-environment-state.js';
+import { getLogicalAgentId, getRuntimeWorkspaceSessionId } from './identity.js';
 
 // ── 引用状态（模块局部） ──────────────────────────────────────────
 
@@ -38,9 +39,9 @@ let _lastKnownRefKey = null;
 
 function _activeRefKey() {
   const runtimeId = String(currentRuntimeAgentId || '').trim();
-  // 桥接期：getRuntimeWorkspaceSessionId 仍定义于 app-core（身份域收敛时 import）。
-  const sessionId = runtimeId && typeof window.getRuntimeWorkspaceSessionId === 'function'
-    ? String(window.getRuntimeWorkspaceSessionId(runtimeId) || '').trim()
+  // 会话身份来自 identity 域（P4 T1 起具名 import）。
+  const sessionId = runtimeId && typeof getRuntimeWorkspaceSessionId === 'function'
+    ? String(getRuntimeWorkspaceSessionId(runtimeId) || '').trim()
     : '';
   if (runtimeId && sessionId) {
     _lastKnownRefKey = `${runtimeId}::${sessionId}`;
@@ -85,17 +86,14 @@ function _appendRefToKey(key, ref) {
 function _currentSessionIdentity() {
   const runtimeId = String(currentRuntimeAgentId || '').trim();
   if (!runtimeId) return null;
-  // 桥接期：以下三个解析函数仍定义于 app-core / app-main（身份域与列表域
-  // 收敛时改为 import）。
-  const sessionId = typeof window.getRuntimeWorkspaceSessionId === 'function'
-    ? String(window.getRuntimeWorkspaceSessionId(runtimeId) || '').trim()
-    : '';
+  // 会话身份来自 identity 域（P4 T1 起具名 import）。
+  const sessionId = String(getRuntimeWorkspaceSessionId(runtimeId) || '').trim();
   if (!sessionId) return null;
   const host = typeof window.getCurrentHostAgentRecord === 'function'
     ? window.getCurrentHostAgentRecord()
     : null;
   const agentId = String(
-    (typeof window.getLogicalAgentId === 'function' && host && window.getLogicalAgentId(host))
+    (typeof getLogicalAgentId === 'function' && host && getLogicalAgentId(host))
     || host?.id
     || 'programming-helper',
   ).trim();

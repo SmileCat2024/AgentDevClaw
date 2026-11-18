@@ -14,6 +14,16 @@
  * MODULE_ENTRY_IMPORTS 有意识登记（R4：装载链改变即时序改变）。
  */
 
+// ── T1 原料层：app-core 内部三族抽取（三族四个模块）──
+// app-core 仍是 classic（不能 import ESM），三族迁出后由本入口在模块相求值；
+// 每族对外给命名导出（已迁消费方改具名 import），并只为「仍有 classic / window
+// 面消费方」的键注册桥键。求值顺序：dom-refs 无依赖；identity / transport 只
+// 依赖 window 上的桥键与 classic 函数，晚绑定读取，顺序不影响语义。
+import './dom-refs.js'; // 首屏 DOM 引用域（37 键 + 三条顶层 click 监听）；桥 domain dom-refs（3 键）
+import './identity.js'; // 会话/运行身份解析域；桥 domain identity（10 键 ← app-core / app-main / desktop-notify）
+import './transport.js'; // 传输域：fetch 分流补丁 + invoke + Viewer 就绪宿主；桥 domain transport（invoke ← app-main / wg-*）
+import './format-utils.js'; // 展示格式化函数族；桥 domain format-utils（localizeWorkspaceValue ← im-ui）
+
 // ── T2 渲染层批次 ──
 // session-view-state：会话视图提交边界（token 捕获 / patch 门 / 代次守卫）。
 // 求值期已由 kernel-entry 的首条 import（session-view-commit-host）经具名导出带入，
