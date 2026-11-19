@@ -18,7 +18,12 @@ import { readHookDeclarations } from '@agentdevjs/core';
 import { existsSync, readdirSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { scanFeatureCatalog } from '../feature-runtime/catalog.js';
+import {
+  catalogRootsWithWorkspaceRepositories,
+  isCatalogEntryVisibleTo,
+  scanFeatureCatalog,
+} from '../feature-runtime/catalog.js';
+import { pluginSettingsKey } from '../feature-runtime/plugin-settings.js';
 import { buildScopeLayers } from './feature-config.js';
 import { extractFeatureMounts, stripMountDeclarations } from '../shared/feature-mount.js';
 import {
@@ -197,18 +202,32 @@ export function buildBuiltinShowcase(tables) {
 export function buildStorePackages(catalog) {
   const packages = [];
   for (const [packageName, versions] of catalog.packages) {
-    const userVersions = versions.filter((entry) => entry.source === 'custom');
-    if (!userVersions.length) continue;
-    const head = userVersions[0];
-    packages.push({
-      package: packageName,
-      displayName: head.manifestName || packageName.replace(/^@[^/]+\//, ''),
-      description: head.manifestDescription || '',
-      versions: userVersions.map((entry) => ({
-        version: entry.version,
-        digest: entry.archiveDigest,
-      })),
-    });
+    // 货架来源 = 用户区 + 空间私有区；官方仓库的包是官方 agent 静态装配的原料
+    const storeVersions = versions.filter((entry) => entry.source === 'custom' || entry.source === 'workspace');
+    if (!storeVersions.length) continue;
+    // 按可见范围分组：同包可能既有全局版本、又有某空间私有版本，各成一条
+    // 货架项（scopeAgentId = null 表示全局可见，否则只对该空间可见）
+    const byScope = new Map();
+    for (const entry of storeVersions) {
+      const key = entry.scopeAgentId || '';
+      const list = byScope.get(key) || [];
+      list.push(entry);
+      byScope.set(key, list);
+    }
+    for (const [scopeAgentId, list] of byScope) {
+      const head = list[0];
+      packages.push({
+        package: packageName,
+        scopeAgentId: scopeAgentId || null,
+        source: list.some((entry) => entry.source === 'workspace') ? 'workspace' : 'custom',
+        displayName: head.manifestName || packageName.replace(/^@[^/]+\//, ''),
+        description: head.manifestDescription || '',
+        versions: list.map((entry) => ({
+          version: entry.version,
+          digest: entry.archiveDigest,
+        })),
+      });
+    }
   }
   return packages;
 }
@@ -242,10 +261,19 @@ export async function collectScopeMounts(agentId, catalog) {
       result[runtimeName] = { ...mount, missing: false };
       continue;
     }
-    const versions = catalog.packages.get(mount.package) || [];
+    const versions = (catalog.packages.get(mount.package) || [])
+      .filter((entry) => isCatalogEntryVisibleTo(entry, agentId));
+    const matched = versions.find((entry) => entry.version === mount.version);
+    const declaredFeatures = Array.isArray(matched?.manifestFeatures) ? matched.manifestFeatures : null;
+    const disabled = new Set(mount.disabledFeatures || []);
     result[runtimeName] = {
       ...mount,
-      missing: !versions.some((entry) => entry.version === mount.version),
+      missing: !matched,
+      // 多 feature 包（ADR-0052）：界面据此标注「含 N 个 feature」并渲染 feature 级开关
+      featureCount: declaredFeatures?.length || 1,
+      features: declaredFeatures
+        ? declaredFeatures.map((declared) => ({ name: declared.name, disabled: disabled.has(declared.name) }))
+        : null,
     };
   }
   return result;
@@ -265,7 +293,9 @@ export async function collectGlobalMounts(catalog, resolvers) {
       result[runtimeName] = { ...mount, missing: false };
       continue;
     }
-    const versions = catalog.packages.get(mount.package) || [];
+    // 默认装配源是全局层声明：空间私有包不参与（私有包只能由该空间自己装配）
+    const versions = (catalog.packages.get(mount.package) || [])
+      .filter((entry) => entry.source !== 'workspace');
     result[runtimeName] = {
       ...mount,
       missing: !versions.some((entry) => entry.version === mount.version),
@@ -300,11 +330,14 @@ export async function collectUnmountedOptionalNames(agentId) {
 export async function collectScopeMountManifests(agentId, { catalogRoots, scopeIdentity } = {}) {
   const scope = STORE_SCOPES.find((s) => s.agentId === agentId);
   const identity = scopeIdentity ?? scope?.identity ?? null;
-  const catalog = await scanFeatureCatalog(catalogRoots || {});
+  const catalog = await scanFeatureCatalog(catalogRootsWithWorkspaceRepositories(catalogRoots, [agentId]));
   const mounts = await collectScopeMounts(agentId, catalog);
-  const extras = Object.keys(mounts);
+  const builtinExtras = Object.keys(mounts);
+  // 多 feature 包的配置键是各 feature 名，白名单 extras 需同步展开；先收集再合并，
+  // 避免遍历过程中改动 extras（新增项不是 mounts 的键，会取到 undefined 挂载）
+  const expandedFeatureNames = [];
   const manifests = [];
-  for (const runtimeName of extras) {
+  for (const runtimeName of builtinExtras) {
     const mount = mounts[runtimeName];
     try {
       if (mount.kind === 'builtin') {
@@ -319,20 +352,54 @@ export async function collectScopeMountManifests(agentId, { catalogRoots, scopeI
         }
       } else {
         const entry = (catalog.packages.get(mount.package) || [])
-          .find((e) => e.version === mount.version);
+          .find((e) => e.version === mount.version && isCatalogEntryVisibleTo(e, agentId));
+        if (entry?.pluginSettings) {
+          const configKey = pluginSettingsKey(mount.package);
+          expandedFeatureNames.push(configKey);
+          manifests.push({ featureName: configKey, mountName: runtimeName,
+            manifest: { name: entry.manifestName || mount.package, settings: { properties: entry.pluginSettings.properties } } });
+          continue;
+        }
+        // 多 feature 包：每个 feature 的 settings 单独成节，配置键 = feature 名；
+        // extras 同步展开，前端白名单按 feature 名放行（装了包 = 可配它的各 feature）
+        if (Array.isArray(entry?.manifestFeatures) && entry.manifestFeatures.length > 0) {
+          for (const declared of entry.manifestFeatures) {
+            if (!expandedFeatureNames.includes(declared.name)) expandedFeatureNames.push(declared.name);
+            const settings = entry.manifestFeatureSettings?.[declared.name];
+            if (settings && typeof settings === 'object' && settings.properties) {
+              manifests.push({ featureName: declared.name, mountName: runtimeName, manifest: { settings } });
+            }
+          }
+          // 包级通用 settings（顶层 properties）在多 feature 包内不单独成节：
+          // 每个 feature 的配置由 settings.features[name] 定义，避免一个键对应多个实例
+          continue;
+        }
         if (entry?.manifestSettings?.properties) {
           manifests.push({ featureName: runtimeName, manifest: { settings: entry.manifestSettings } });
         }
       }
     } catch { /* 单项读取失败不阻断清单 */ }
   }
-  return { extras, manifests };
+  return { extras: [...builtinExtras, ...expandedFeatureNames], manifests };
 }
 
-export function setupFeatureStoreRoutes(app, express) {
+export function setupFeatureStoreRoutes(app, express, pluginSettingsOptions) {
+  app.get('/protoclaw/plugin_settings', async (req, res) => {
+    res.set('Cache-Control', 'no-store');
+    try {
+      const { readRequestPluginSettings } = await import('../feature-runtime/plugin-settings-context.js');
+      const { browser } = await readRequestPluginSettings(req.query.packageName, req.query, pluginSettingsOptions);
+      res.json({ settings: browser });
+    } catch (error) {
+      res.status(error.statusCode || 500).json({ error: error.message });
+    }
+  });
   app.get('/api/feature-store/overview', async (_req, res) => {
     try {
-      const catalog = await scanFeatureCatalog();
+      const catalog = await scanFeatureCatalog(catalogRootsWithWorkspaceRepositories(
+        null,
+        STORE_SCOPES.map((scope) => scope.agentId),
+      ));
       let builtin = [];
       const base = {};
       try {

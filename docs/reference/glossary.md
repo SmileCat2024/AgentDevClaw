@@ -74,11 +74,15 @@
 - **Claw 本地 feature** — `local-features/`，权威修改点在本仓库。
 - **发布产物 / 用户仓库** — `resources/features/*.tgz` 与 `~/.agentdev/AgentDevClaw/user-features/`，被分发被装配的对象，不参与本机开发解析。
   _Avoid_: 把框架修复只留在 Claw 侧 `node_modules`（会被安装冲掉，不回流源码）；开发流程手工 pack / 拷贝 tgz。
+- **空间私有仓库** — `~/.agentdev/AgentDevClaw/workspaces/<agentId>/features/`，只有该工作空间可见、可装配的插件包；导入入口在工作空间插件页（「导入到本空间」），插件管理器不写这里。
+  _Avoid_: 把空间私有包当全局库存（其他空间不可见）；在插件管理器里导入私有包（那里只写用户区）；改完私有包后忘记它不参与跨空间共享。
 - **Capability** — feature 经 `getCapabilities()` 声明；两类命令：`invoke`（表单 + 执行）与 `prompt`（挂 pill，随消息以 `capabilityActivations` 流动）。
   _Avoid_: 期待 CapabilityRegistry 共享状态或提供 bind / reactive / watch-state——负面清单，永不提供。
 - **插件（plugin package）** — 以 tgz 分发的扩展包（ADR-0045），manifest 声明三面：feature 面（runtime 工具）、ui 面（面板）、server 面（数据路由）；服务端实现域 `server/feature-runtime/`。UI 用语统一"插件"（插件管理器 / 默认装配）；代码域 feature 一词继续指 agent 装配的能力单元。
   _Avoid_: 把"插件"与"feature"当同义词——生态包 / 本地 feature 是 feature 的两类源码来源，插件是包化分发形态；改插件实现出仓或走用户仓库 tgz，不进 `local-features/`。
-- **导入 vs 装配** — 插件生效的两级动作：导入（上传 tgz 入插件仓库，解析三面内容，不激活任何东西）；装配（`$mount` 声明写入作用域层，层级决定可见性——global 层装配处处可见，agent 层装配限该工作空间，ADR-0046）。
+- **导入 vs 装配** — 插件生效的两级动作：导入（上传 tgz 入插件仓库，解析三面内容，不激活任何东西）；装配（`$mount` 声明写入作用域层，装配层级 = 可见性层级——工作空间层限该空间，global 层是默认装配源、只对声明 `defaultMounts` 的工作空间生效，ADR-0046）。
+- **插件包 / 插件 feature** — 一个插件包可携带多个 feature（`manifest.features[]`，ADR-0052）；装配、卸载、删除按包，feature 只是运行时实例与配置键。多 feature 包可用 `$mount.disabledFeatures` 按实例禁用（包仍装配，配置与面板保留）。
+  _Avoid_: 把 feature 当装配单位；给单个 feature 独立装卸/版本；单 feature 包用 `disabledFeatures`（装配链拒绝，应改用 `enabled: false`）。
   _Avoid_: 期待导入即生效；用 manifest scope 裁决可见性——scope 已降为装配建议（ADR-0045 决策 5 修订）。
 
 ## 渲染与前端状态

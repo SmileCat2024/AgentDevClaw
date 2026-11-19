@@ -16,11 +16,9 @@
  *     的相对子路径（无 .. 、无绝对段）；宿主包装 handler 做异常计数
  *     熔断（同一包连续 5 次未捕获异常 → 摘除该包全部路由并显式警告，
  *     remountPluginServerRoutes() 可整体重建）。
- *   - context.getConfig()：每次请求现读该包的四层作用域合成配置
- *     （resolveScopeConfig），配置修改无需重启。身份选择取装配事实中第一个
- *     身份（agent 层是 $mount 与插件配置的权威层）；默认装配源条目已展开
- *     归属到 opt-in 身份，配置按该身份合成（ADR-0046：数据面读 global +
- *     装配层）。
+ *   - 新声明的包用 context.getConfig(req)：宿主在调用 handler 前按请求的
+ *     工作空间、会话归属与包摘要验证并解析一次，配置修改无需重启。
+ *   - 存量包保留 context.getConfig()：按第一个装配身份合成全局与空间参数。
  *
  * 信任与依赖模型（ADR-0045）：server 面在主 server.js 进程内执行，与
  * 工具面同级的信任（本机代码）；依赖约束为 node 内置模块 + 相对导入
@@ -32,11 +30,12 @@ import path from 'path';
 import { existsSync } from 'fs';
 import { pathToFileURL } from 'url';
 
-import { scanFeatureCatalog } from './catalog.js';
+import { catalogRootsWithWorkspaceRepositories, isCatalogEntryVisibleTo, scanFeatureCatalog } from './catalog.js';
 import { collectAssemblyFacts } from './plugin-ui.js';
-import { readGlobalDeclaredMounts } from './install-service.js';
+import { IDENTITY_SCOPES, readGlobalDeclaredMounts } from './install-service.js';
 import { versionServerDir, ensureFacetExtracted } from './feature-assets.js';
 import { resolveScopeConfig } from '../routes/feature-config.js';
+import { readRequestPluginSettings } from './plugin-settings-context.js';
 import { createClawLogger as createLogger } from '../shared/claw-logger.js';
 
 const log = createLogger('plugin-server');
@@ -49,7 +48,10 @@ const CIRCUIT_BREAK_THRESHOLD = 5;
  * @returns {Promise<{mounts: Array<{packageName, version, prefix, entryPath, identities}>, warnings: string[]}>}
  */
 export async function buildPluginServerMounts({ catalogRoots, resolvers, serverRoot } = {}) {
-  const catalog = await scanFeatureCatalog(catalogRoots);
+  const catalog = await scanFeatureCatalog(catalogRootsWithWorkspaceRepositories(
+    catalogRoots,
+    Object.values(IDENTITY_SCOPES).map((scope) => scope.agentId),
+  ));
   const assemblyFacts = collectAssemblyFacts(resolvers);
 
   const warnings = [];
@@ -64,8 +66,16 @@ export async function buildPluginServerMounts({ catalogRoots, resolvers, serverR
     );
     if (withServer.length === 0) continue;
 
-    // 禁用事实（enabled:false）等同未装配：数据面整体摘除（三态处置）
-    const mounted = (assemblyFacts.get(packageName) || []).filter((fact) => fact.enabled !== false);
+    // 禁用事实（enabled:false）等同未装配：数据面整体摘除（三态处置）。
+    // 空间私有包只对所属身份可见：其他身份的装配事实按不可见丢弃（不跨空间）
+    const mounted = (assemblyFacts.get(packageName) || [])
+      .filter((fact) => fact.enabled !== false)
+      .filter((fact) => {
+        const sameVersion = versions.filter((entry) => entry.version === fact.version);
+        // 仓库中根本没有该版本（ghost 装配）：保留事实，交由下游跳过并告警
+        if (sameVersion.length === 0) return true;
+        return sameVersion.some((entry) => isCatalogEntryVisibleTo(entry, fact.agentId));
+      });
     if (mounted.length === 0) continue; // 未装配不挂载（global 层装配同样生效）
 
     // 版本钉装配：取装配版本里最高者；catalog 更高版本不跟随
@@ -93,15 +103,16 @@ export async function buildPluginServerMounts({ catalogRoots, resolvers, serverR
       warnings.push(`插件 ${packageName}@${versionChoice.version} 的 server.entry 含非法路径段（${entryRel}）：跳过挂载`);
       continue;
     }
+    const serverScope = versionChoice.scopeAgentId || '';
     const entryPath = path.join(
-      versionServerDir({ packageName, version: versionChoice.version }, serverRoot),
+      versionServerDir({ packageName, version: versionChoice.version, scopeAgentId: serverScope }, serverRoot),
       entryRel,
     );
     if (!existsSync(entryPath)) {
       // 自愈：解出物缺失（目录被清 / tgz 未经导入链路直放入库）时从仓库
       // tgz 现场解出（digest 幂等）。失败只记 warning，不阻塞其他包。
       await ensureFacetExtracted(
-        { packageName, version: versionChoice.version, facet: 'server' },
+        { packageName, version: versionChoice.version, facet: 'server', scopeAgentId: serverScope },
         { catalog, catalogRoots, serverRoot },
       ).catch((error) => {
         warnings.push(`插件 ${packageName}@${versionChoice.version} server 面自愈解出失败：${error?.message || error}`);
@@ -118,6 +129,7 @@ export async function buildPluginServerMounts({ catalogRoots, resolvers, serverR
       prefix,
       entryPath,
       identities: mounted,
+      ...(versionChoice.pluginSettings ? { settingsDigest: versionChoice.archiveDigest } : {}),
     });
   }
 
@@ -186,7 +198,21 @@ export async function mountPluginServerRoutes(app, options = {}) {
     let broken = false;
 
     const base = `/protoclaw/plugin/${mount.prefix}`;
+    const requestSettings = new WeakMap();
     const guard = (handler) => async (req, res, next) => {
+      if ((mount.settingsDigest || req.query.digest !== undefined) && req.query.digest !== mount.settingsDigest) {
+        res.status(409).json({ error: '请求的插件实现与数据路由不匹配' });
+        return;
+      }
+      if (mount.settingsDigest) {
+        try {
+          const { values } = await readRequestPluginSettings(mount.packageName, req.query, options);
+          requestSettings.set(req, values);
+        } catch (error) {
+          res.status(error.statusCode || 500).json({ error: error.message });
+          return;
+        }
+      }
       if (broken) {
         res.status(503).json({ ok: false, error: { code: 'plugin-server-circuit-open', message: `插件 ${mount.packageName} 数据面已因连续异常被摘除（前缀 ${mount.prefix}）` } });
         return;
@@ -231,7 +257,11 @@ export async function mountPluginServerRoutes(app, options = {}) {
     const context = {
       // 每次调用现读：配置修改后无需重启（与工具面构造期一次合成不同，
       // 数据面生命周期跨配置变更）
-      getConfig() {
+      getConfig(req) {
+        if (mount.settingsDigest) {
+          if (!requestSettings.has(req)) throw new Error('getConfig(req) requires the current plugin request');
+          return structuredClone(requestSettings.get(req));
+        }
         try {
           if (!contextIdentity) {
             const { sparse } = readGlobalDeclaredMounts(options.resolvers);

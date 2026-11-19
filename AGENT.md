@@ -79,7 +79,7 @@ feature 三类来源（严格区分，改错层 = 白改）：
 
 1. **生态 feature 包**（`qqbot-feature`、`shell-feature`、`weixin-bot` 等 `@agentdevjs/*`）：权威源码在 `AgentDev/packages/<name>`。改实现 → 框架仓库改 + build → 重启 Claw。
 2. **Claw 本地 feature**（[local-features](local-features)）：权威修改点在本仓库，`npm run build:local-features` 构建。
-3. **发布产物与用户仓库**（[resources/features](resources/features)/*.tgz、`~/.agentdev/AgentDevClaw/user-features/`）：被分发、被装配的对象，不参与本机开发解析。开发流程无 tgz 拷贝环节；发布统一经 `npm run pack:features`。
+3. **发布产物与用户仓库**（[resources/features](resources/features)/*.tgz、`~/.agentdev/AgentDevClaw/user-features/`）：被分发、被装配的对象，不参与本机开发解析。开发流程无 tgz 拷贝环节；发布统一经 `npm run pack:features`。另有**空间私有仓库** `~/.agentdev/AgentDevClaw/workspaces/<agentId>/features/`：只有该工作空间可见、可装配的包（ADR-0046 2026-11-19 第二批修订，导入入口在工作空间插件页）。
 
 问题归属判定：
 

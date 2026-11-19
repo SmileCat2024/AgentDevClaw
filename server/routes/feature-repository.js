@@ -8,12 +8,16 @@ import {
   FEATURE_REPOSITORY_ROOT,
   USER_FEATURE_REPOSITORY_ROOT,
   FEATURE_MANIFEST_NAME,
+  workspaceFeatureRepositoryRoot,
 } from '../shared/constants.js';
 import { ensureDir, readJson } from '../shared/fs-helpers.js';
 import { compareSemver, uniqueStrings } from '../shared/feature-utils.js';
 import { summarizeArchive } from '../feature-runtime/catalog.js';
 import { gunzipFileToBuffer, readTarEntry } from '../shared/tgz-archive.js';
 import { extractClientAssets, extractServerAssets } from '../feature-runtime/feature-assets.js';
+import { IDENTITY_SCOPES } from '../feature-runtime/install-service.js';
+import { buildScopeLayers } from './feature-config.js';
+import { extractFeatureMounts } from '../shared/feature-mount.js';
 import { notifyPluginServerDirty } from '../shared/plugin-server-bus.js';
 
 /* ── feature metadata helpers ─────────────────────────────────────── */
@@ -216,6 +220,11 @@ export async function ensureFeatureProjectManifest(projectDir) {
     if (value && typeof value === 'object' && !Array.isArray(value)) {
       manifest[v3Field] = value;
     }
+  }
+
+  for (const field of ['features', 'pluginSettings']) {
+    const value = metaSource(field);
+    if (value !== undefined) manifest[field] = value;
   }
 
   await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
@@ -544,51 +553,108 @@ export function mergeFeatureRepositoryPackages(...catalogs) {
   }).sort((left, right) => String(left?.name || '').localeCompare(String(right?.name || ''), 'zh-CN'));
 }
 
-async function deleteFeaturePackage(packageId) {
-  const deletedFiles = [];
-
-  // 尝试从官方仓库删除
-  const officialPath = FEATURE_REPOSITORY_ROOT;
+/** 列出仓库根下的 tgz（packageId = 去掉扩展名的文件名，兼容旧调用形态）。 */
+async function listRepositoryArchives(root, source) {
+  const archives = [];
+  let entries;
   try {
-    const officialEntries = await fs.readdir(officialPath, { withFileTypes: true });
-    for (const entry of officialEntries) {
-      if (entry.isFile() && entry.name.toLowerCase().endsWith('.tgz')) {
-        const archivePath = path.join(officialPath, entry.name);
-        const archiveId = entry.name.replace(/\.tgz$/i, '');
-        if (archiveId === packageId) {
-          await fs.unlink(archivePath);
-          deletedFiles.push({ path: archivePath, source: 'official' });
-        }
+    entries = await fs.readdir(root, { withFileTypes: true });
+  } catch {
+    return archives; // 仓库目录不存在（如该空间从未导入过私有包）
+  }
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.toLowerCase().endsWith('.tgz')) continue;
+    archives.push({
+      archivePath: path.join(root, entry.name),
+      fileName: entry.name,
+      packageId: entry.name.replace(/\.tgz$/i, ''),
+      source,
+    });
+  }
+  return archives;
+}
+
+/**
+ * 收集某包在装配层里的引用（ADR-0046 决策 5：仓库删除 tgz 前必须无任何层级
+ * 装配引用）。scopeAgentId 给定时只查该工作空间层（空间私有包只与本空间装配
+ * 相关，全局默认装配引用的是全局库存包，不挡私有包删除）；未给定时查全部
+ * 装配身份的全部层（含 global 默认装配源）。
+ */
+function collectAssemblyReferences(packageName, scopeAgentId) {
+  const agentIds = new Map();
+  if (scopeAgentId) {
+    agentIds.set(scopeAgentId, scopeAgentId);
+  } else {
+    for (const scope of Object.values(IDENTITY_SCOPES)) agentIds.set(scope.agentId, scope.agentId);
+  }
+  const references = [];
+  for (const agentId of agentIds.values()) {
+    let layers;
+    try {
+      ({ layers } = buildScopeLayers({ agentId }));
+    } catch {
+      continue; // 未注册身份 / 层文件损坏：跳过，不挡删除
+    }
+    for (const layer of layers) {
+      if (scopeAgentId && layer.id === 'global') continue;
+      let mounts;
+      try {
+        ({ mounts } = extractFeatureMounts([{ id: layer.id, config: layer.sparse || {} }]));
+      } catch {
+        continue;
+      }
+      for (const [runtimeName, mount] of mounts) {
+        if (mount.kind === 'builtin' || mount.package !== packageName) continue;
+        references.push({ agentId, layerId: layer.id, runtimeName, version: mount.version });
       }
     }
-  } catch {
-    // 官方仓库可能不存在
   }
+  // global 层会随每个身份的层清单重复出现，按声明身份去重
+  const seen = new Set();
+  return references.filter((ref) => {
+    const key = `${ref.layerId}|${ref.agentId}|${ref.runtimeName}|${ref.version}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
 
-  // 尝试从用户仓库删除
-  const userPath = USER_FEATURE_REPOSITORY_ROOT;
+/**
+ * 解析待删档案的包坐标（文件名 → package/version）。坏包（tar 损坏 / 缺
+ * package.json）返回空坐标，仅按文件名匹配删除——这类包本来也无法装配。
+ */
+async function resolveArchiveCoordinates(archive) {
   try {
-    const userEntries = await fs.readdir(userPath, { withFileTypes: true });
-    for (const entry of userEntries) {
-      if (entry.isFile() && entry.name.toLowerCase().endsWith('.tgz')) {
-        const archivePath = path.join(userPath, entry.name);
-        const archiveId = entry.name.replace(/\.tgz$/i, '');
-        if (archiveId === packageId) {
-          await fs.unlink(archivePath);
-          deletedFiles.push({ path: archivePath, source: 'custom' });
-        }
-      }
-    }
+    const summary = await summarizeArchive(archive.archivePath, archive.fileName, archive.source);
+    return { ...archive, packageName: summary.packageName, version: summary.version };
   } catch {
-    // 用户仓库可能不存在
+    return { ...archive, packageName: '', version: '' };
   }
-
-  return deletedFiles;
 }
 
 /* ── route setup ──────────────────────────────────────────────────── */
 
 const pendingFeatureImports = new Map();
+
+/**
+ * 导入归属：agentId 为空 = 全局用户仓库；否则落该工作空间私有仓库
+ * （ADR-0046 空间级仓库：只有该空间可见、可装配）。agentId 仅作目录名，
+ * 非法字符统一安全化，不接受路径段。
+ */
+function importTargetRoot(agentId) {
+  const id = String(agentId || '').trim();
+  return id ? workspaceFeatureRepositoryRoot(id) : USER_FEATURE_REPOSITORY_ROOT;
+}
+
+/** 上传/导入携带的归属标识规范：仅允许注册表形态的简单 ID。 */
+function normalizeImportAgentId(raw) {
+  const id = String(raw || '').trim();
+  if (!id) return '';
+  if (!/^[a-zA-Z0-9_-]+$/.test(id)) {
+    throw Object.assign(new Error('agentId 非法（仅允许字母/数字/连字符/下划线）'), { statusCode: 400 });
+  }
+  return id;
+}
 
 /* ── 分片上传（chunked upload）──────────────────────────────────────
  * 公网部署常经反向代理暴露（如 nginx 默认 client_max_body_size 仅
@@ -658,17 +724,68 @@ export function setupFeatureRepositoryRoutes(app, express, options = {}) {
   const chunkUpload = multer({ dest: uploadsRoot, limits: { fileSize: CHUNK_UPLOAD_CHUNK_LIMIT_BYTES } });
   ensureUploadSweeper(uploadsRoot);
 
+  /**
+   * 删除仓库 tgz（ADR-0046 决策 5）。两种定位方式：
+   * - { packageName, version? }：按包坐标删除（插件管理器 / 工作空间商店）；
+   *   版本缺省 = 删该包的全部版本；
+   * - { packageId }：按仓库文件名删除（旧调用形态，Feature 仓库视图右键）。
+   * agentId 给定时只在该空间私有仓库内查找删除，否则在官方 + 用户仓库内查找。
+   * 前置检查：仍被装配层引用的包拒绝删除（409 + references），避免装配悬空。
+   */
   app.post('/protoclaw/feature_repository/delete', express.json(), async (req, res, next) => {
     try {
       const packageId = String(req.body.packageId || '').trim();
-      if (!packageId) {
-        res.status(400).json({ error: 'packageId is required' });
+      const packageName = String(req.body.packageName || '').trim();
+      const version = String(req.body.version || '').trim();
+      if (!packageId && !packageName) {
+        res.status(400).json({ error: 'packageName 或 packageId is required' });
+        return;
+      }
+      const scopeAgentId = normalizeImportAgentId(req.body.agentId);
+
+      const roots = scopeAgentId
+        ? [{ root: workspaceFeatureRepositoryRoot(scopeAgentId), source: 'workspace' }]
+        : [
+          { root: FEATURE_REPOSITORY_ROOT, source: 'official' },
+          { root: USER_FEATURE_REPOSITORY_ROOT, source: 'custom' },
+        ];
+      const archives = (await Promise.all(roots.map(({ root, source }) => listRepositoryArchives(root, source)))).flat();
+      const byFile = packageId ? archives.filter((archive) => archive.packageId === packageId) : archives;
+      const resolved = await Promise.all(byFile.map((archive) => resolveArchiveCoordinates(archive)));
+      const targets = resolved.filter((archive) => {
+        if (packageName && archive.packageName !== packageName) return false;
+        if (version && archive.version !== version) return false;
+        if (!packageName && !packageId) return false;
+        return true;
+      });
+      if (targets.length === 0) {
+        res.status(404).json({ error: '未找到匹配的插件包（可能已删除或坐标不符）' });
         return;
       }
 
-      const deleted = await deleteFeaturePackage(packageId);
-      // 包删除：装配引用悬空的数据面前缀应摘除
-      notifyPluginServerDirty(`删除 ${packageId}`);
+      // 前置检查：仍被装配引用的包拒绝删除，返回引用明细由前端提示先移除装配
+      const blocked = [];
+      for (const target of targets) {
+        if (!target.packageName) continue;
+        const references = collectAssemblyReferences(target.packageName, scopeAgentId);
+        if (references.length) blocked.push({ packageName: target.packageName, version: target.version, references });
+      }
+      if (blocked.length) {
+        res.status(409).json({
+          error: '插件仍被装配，请先移除装配再删除',
+          code: 'package_in_use',
+          blocked,
+        });
+        return;
+      }
+
+      const deleted = [];
+      for (const target of targets) {
+        await fs.unlink(target.archivePath);
+        deleted.push({ path: target.archivePath, source: target.source, packageName: target.packageName, version: target.version });
+      }
+      // 包删除：装配引用悬空的数据面前缀应摘除（防御性重建）
+      notifyPluginServerDirty(`删除 ${packageName || packageId}`);
       res.json({ deleted });
     } catch (error) {
       next(error);
@@ -691,11 +808,13 @@ export function setupFeatureRepositoryRoutes(app, express, options = {}) {
       }
 
       const uploadId = randomUUID();
-      const summary = await summarizeFeatureArchive(tempPath, originalName, 'custom');
+      const agentId = normalizeImportAgentId(req.body?.agentId);
+      const summary = await summarizeFeatureArchive(tempPath, originalName, agentId ? 'workspace' : 'custom');
       pendingFeatureImports.set(uploadId, {
         tempPath,
         originalName,
         summary,
+        agentId,
         createdAt: Date.now(),
       });
       res.json({ uploadId, summary });
@@ -717,12 +836,14 @@ export function setupFeatureRepositoryRoutes(app, express, options = {}) {
       }
 
       pendingFeatureImports.delete(uploadId);
-      await ensureDir(USER_FEATURE_REPOSITORY_ROOT);
+      // 归属目标：全局用户仓库，或该工作空间私有仓库（只有本空间可见可装配）
+      const targetRoot = importTargetRoot(pending.agentId);
+      await ensureDir(targetRoot);
       const safeName = path.basename(pending.originalName).replace(/[^a-zA-Z0-9._@+-]+/g, '-');
-      let targetPath = path.join(USER_FEATURE_REPOSITORY_ROOT, safeName);
+      let targetPath = path.join(targetRoot, safeName);
       if (existsSync(targetPath)) {
         const parsed = path.parse(safeName);
-        targetPath = path.join(USER_FEATURE_REPOSITORY_ROOT, `${parsed.name}-${Date.now()}${parsed.ext || '.tgz'}`);
+        targetPath = path.join(targetRoot, `${parsed.name}-${Date.now()}${parsed.ext || '.tgz'}`);
       }
       await fs.rename(pending.tempPath, targetPath);
 
@@ -742,6 +863,7 @@ export function setupFeatureRepositoryRoutes(app, express, options = {}) {
             packageName: archiveSummary.packageName,
             version: archiveSummary.version,
             archiveDigest: archiveSummary.archiveDigest,
+            scopeAgentId: pending.agentId || '',
           });
           assets = { ...result, packageName: archiveSummary.packageName, version: archiveSummary.version };
         }
@@ -754,6 +876,7 @@ export function setupFeatureRepositoryRoutes(app, express, options = {}) {
             packageName: archiveSummary.packageName,
             version: archiveSummary.version,
             archiveDigest: archiveSummary.archiveDigest,
+            scopeAgentId: pending.agentId || '',
           }, { expectServer: true });
         }
       } catch (error) {
@@ -765,10 +888,18 @@ export function setupFeatureRepositoryRoutes(app, express, options = {}) {
         return;
       }
 
-      const summary = await summarizeFeatureArchive(targetPath, path.basename(targetPath), 'custom');
+      const summary = await summarizeFeatureArchive(
+        targetPath, path.basename(targetPath), pending.agentId ? 'workspace' : 'custom',
+      );
       // 导入成功：装配引用悬空的版本可能就位（ghost 装配自动挂上），数据面重建
       notifyPluginServerDirty(`导入 ${archiveSummary?.packageName || path.basename(targetPath)}`);
-      res.json({ success: true, fileName: path.basename(targetPath), summary, assets });
+      res.json({
+        success: true,
+        fileName: path.basename(targetPath),
+        scopeAgentId: pending.agentId || null,
+        summary,
+        assets,
+      });
     } catch (error) {
       next(error);
     }
@@ -813,6 +944,7 @@ export function setupFeatureRepositoryRoutes(app, express, options = {}) {
         originalName: fileName,
         totalChunks,
         totalSize,
+        agentId: normalizeImportAgentId(req.body?.agentId),
         createdAt: Date.now(),
         updatedAt: Date.now(),
       });
@@ -891,11 +1023,14 @@ export function setupFeatureRepositoryRoutes(app, express, options = {}) {
           res.status(400).json({ error: `Assembled size mismatch: expected ${session.totalSize}, got ${assembledSize}` });
           return;
         }
-        const summary = await summarizeFeatureArchive(assembledPath, session.originalName, 'custom');
+        const summary = await summarizeFeatureArchive(
+          assembledPath, session.originalName, session.agentId ? 'workspace' : 'custom',
+        );
         pendingFeatureImports.set(uploadId, {
           tempPath: assembledPath,
           originalName: session.originalName,
           summary,
+          agentId: session.agentId || '',
           createdAt: Date.now(),
         });
         chunkUploadSessions.delete(uploadId);

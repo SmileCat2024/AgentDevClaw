@@ -4,7 +4,7 @@
  * 两个入口（同一数据面 GET /api/feature-store/overview）：
  * - 身份商店 phOpenFeatureStore('main' | 'coder')：按身份装配，面板内不切换身份。
  * - 插件管理器 window.clawOpenPluginManager()：Claw 级插件仓库与默认装配
- *   （设置菜单 → 插件仓库与默认装配）。负责 tgz 导入及默认装配/卸载；
+ *   （设置菜单 → 插件配置）。负责 tgz 导入及默认装配/卸载；
  *   插件参数统一从工作空间插件卡片的「设置」进入，再选择全局默认或本空间覆盖。
  *
  * 数据面：
@@ -62,6 +62,8 @@ let _fsState = {
   installingSince: 0,   // 安装开始时间戳（秒计时显示）
   lastFailed: null,     // 最近一次安装失败的包（错误横幅重试入口）
   category: 'all',     // 当前类型分页（类型是上级轴，装配状态是内容区内的上下区段）
+  import: null,        // 本空间 tgz 导入待确认（{ uploadId, summary }）
+  uploading: null,     // 上传进度（{ name, done, total }）
 };
 
 let _fsTickTimer = null;
@@ -81,6 +83,24 @@ function _fsInstallErrorText(err) {
     nothing_to_rebuild: _fsT('没有需要恢复的环境', 'Nothing to rebuild'),
   };
   return mapped[code] || String((err && err.message) || err);
+}
+
+/**
+ * 删除 tgz 失败的文案（服务端 code 见 feature-repository 的 delete 路由）：
+ * package_in_use 携带 blocked.references，提示先移除装配。
+ */
+function _fsDeleteErrorText(payload, fallback) {
+  if (payload && payload.code === 'package_in_use') {
+    const refs = (payload.blocked || [])
+      .flatMap((item) => item.references || [])
+      .map((ref) => `${ref.agentId}（${ref.layerId}）`)
+      .join('、');
+    return _fsT(
+      '插件仍被装配，请先移除装配再删除：' + (refs || '已装配身份'),
+      'Plugin is still assembled; remove the assembly first: ' + (refs || 'assembled identity'),
+    );
+  }
+  return payload?.error || fallback;
 }
 
 function _fsRuntimeKey(packageName) {
@@ -221,6 +241,30 @@ const _fsInstallBuiltin = async function(runtimeName) {
   }
 };
 
+/**
+ * 多 feature 包的 feature 级启用/禁用（ADR-0052）：改 $mount.disabledFeatures，
+ * 包本身仍装配。工具面随下次 runtime 启动生效；面板与数据面按包保留。
+ */
+export async function _fsSetDisabledFeatures(identity, runtimeName, disabledFeatures) {
+  const scope = _FS_IDENTITY_SCOPES[identity];
+  if (!scope) throw new Error('unknown identity: ' + identity);
+  await _fsMutateLayer(identity, (sparse) => {
+    const entry = sparse[runtimeName];
+    if (!entry || typeof entry !== 'object' || !entry.$mount || entry.$mount.kind === 'builtin') {
+      throw new Error('not a repository mount: ' + runtimeName);
+    }
+    const mount = entry.$mount;
+    const next = { package: mount.package, version: mount.version };
+    if (mount.enabled === false) next.enabled = false;
+    const clean = [...new Set((disabledFeatures || [])
+      .map((name) => String(name || '').trim())
+      .filter(Boolean))];
+    if (clean.length) next.disabledFeatures = clean;
+    entry.$mount = next;
+  });
+  await _fsAfterChange(identity);
+}
+
 /** 挂载管理页的移除按钮：带身份参数，不依赖商店当前的打开状态。 */
 export async function _fsRemoveFor(identity, runtimeName) {
   if (_fsState.busy) return;
@@ -284,9 +328,14 @@ function _fsMountedCard(feature, builtinItems, packageNames) {
   // 默认装配源条目（ADR-0046 2026-11-19 修订）：声明在 global 层，本身份层
   // 的移除动作对它无效，移除入口在插件管理器（设置菜单 → 插件管理）
   const isGlobal = mount.layerId === 'global';
-  const globalBadge = isGlobal
+  const isWorkspacePackage = packageNames.get(runtimeName)?.scopeAgentId === _FS_IDENTITY_SCOPES[_fsState.identity]?.agentId;
+  const globalBadge = (isGlobal
     ? '<span class="feature-prov-badge">' + escapeHtml(_fsT('默认', 'default')) + '</span>'
-    : '';
+    : '')
+    + (isWorkspacePackage
+      ? '<span class="feature-prov-badge" title="' + escapeHtml(_fsT('空间私有插件包', 'Workspace-private package')) + '">'
+        + escapeHtml(_fsT('本空间', 'Workspace')) + '</span>'
+      : '');
   // builtin 装配无 package/version（不走 tgz 仓库），徽章显示来源而非包坐标
   const status = mount.missing
     ? globalBadge + '<span class="feature-badge status-removed">' + escapeHtml(_fsT('包已不在仓库', 'missing')) + '</span>'
@@ -296,11 +345,11 @@ function _fsMountedCard(feature, builtinItems, packageNames) {
   const btn = isGlobal
     ? '<button type="button" class="fs-list-remove" disabled style="opacity:0.35;" title="' + escapeHtml(_fsT('来自默认装配，在 设置 → 插件管理 中移除', 'From default assembly; remove via Settings → Plugin Manager')) + '">&#215;</button>'
     : '<button type="button" class="fs-list-remove" title="' + escapeHtml(_fsT('移除', 'Remove')) + '" data-action="featureStore.removeMount" data-identity="' + escapeHtml(_fsState.identity) + '" data-name="' + escapeHtml(runtimeName) + '">&#215;</button>';
-  // tgz 装配项的配置参数入口（ADR-0046 落地第 1 步）：就地打开设置弹窗，
-  // 层 tab 提供「全局默认 | 本空间」两级编辑。builtin 的配置家在 Feature
-  // 配置编辑器（官方清单面板），不在此重复提供入口。
-  const settingsBtn = mount.kind !== 'builtin' && !mount.missing
-    ? '<button type="button" class="fs-settings-btn" title="' + escapeHtml(_fsT('设置', 'Settings')) + '" data-action="featureStore.openSettings" data-identity="' + escapeHtml(_fsState.identity) + '" data-name="' + escapeHtml(runtimeName) + '">&#9881;</button>'
+  // 参数入口只跳转到本空间设置页的「参数配置」（工作空间层唯一编辑面），
+  // 不在这里另开配置弹窗：同一层不应有两个编辑入口。builtin 的配置家在
+  // 同一个「参数配置」列表里，无需区分。
+  const settingsBtn = !mount.missing
+    ? '<button type="button" class="fs-settings-btn" title="' + escapeHtml(_fsT('在本空间参数配置中编辑', 'Edit in this workspace\'s parameters')) + '" data-action="phSettings.openFeatureConfig" data-identity="' + escapeHtml(_fsState.identity) + '" data-name="' + escapeHtml(runtimeName) + '">&#9881;</button>'
     : '';
   // displayName 与可安装区同源（builtin title / 包 displayName），查不到落回 runtime 名
   const pkg = packageNames.get(runtimeName);
@@ -334,7 +383,10 @@ function _fsBuildTypeGroups(mountedMap, mountedByPackage) {
       control: '<button type="button" class="fs-list-add" data-action="featureStore.installBuiltin" data-name="' + escapeHtml(item.runtimeName) + '">' + escapeHtml(_fsT('+ 添加', '+ Add')) + '</button>',
     });
   }
+  const scopeAgentId = _FS_IDENTITY_SCOPES[identity]?.agentId || '';
   for (const pkg of (_fsState.overview?.packages || [])) {
+    // 空间私有包只对其所属空间可见（ADR-0046 空间级仓库）
+    if (pkg.scopeAgentId && pkg.scopeAgentId !== scopeAgentId) continue;
     const runtimeKey = _fsRuntimeKey(pkg.package);
     // 已装配的包不上货架
     if (mountedByPackage.has(pkg.package)) continue;
@@ -351,10 +403,19 @@ function _fsBuildTypeGroups(mountedMap, mountedByPackage) {
       : '<button type="button" class="fs-list-add"' + (busyPkg ? ' disabled style="opacity:0.7;"' : '')
         + ' data-action="featureStore.install" data-package="' + escapeHtml(pkg.package) + '" data-version="' + escapeHtml(latest) + '">'
         + escapeHtml(_fsT('+ 添加', '+ Add')) + '</button>';
-    const control = (pkg.versions?.length > 1
+    const scopeBadge = pkg.scopeAgentId
+      ? '<span class="feature-prov-badge" title="' + escapeHtml(_fsT('导入到本空间的私有插件包', 'Private package imported into this workspace')) + '">'
+        + escapeHtml(_fsT('本空间', 'Workspace')) + '</span>'
+      : '';
+    // 私有包可删除（只删本空间仓库；全局库存包的删除入口在插件管理器）
+    const deleteButton = pkg.scopeAgentId
+      ? '<button type="button" class="fs-list-remove" title="' + escapeHtml(_fsT('从本空间仓库删除该版本', 'Delete this version from the workspace repository')) + '"'
+        + ' data-action="featureStore.deletePackage" data-package="' + escapeHtml(pkg.package) + '" data-version="' + escapeHtml(latest) + '">&#215;</button>'
+      : '';
+    const control = scopeBadge + (pkg.versions?.length > 1
       ? '<select class="fs-select"' + (busyPkg ? ' disabled' : '') + ' data-action="featureStore.selectVersion" data-event="change" data-package="' + escapeHtml(pkg.package) + '">' + versionOptions + '</select>'
       : '<span style="font-size:12px;color:var(--text-secondary);">' + escapeHtml(latest) + '</span>')
-      + addButton;
+      + addButton + deleteButton;
     items.push({
       name: runtimeKey,
       displayName: pkg.displayName || runtimeKey,
@@ -428,7 +489,12 @@ function _fsRenderStoreBody(mountedMap, mountedByPackage) {
   const availableFeatures = selected.filter((feature) => feature._item);
 
   const builtinItems = new Map((_fsState.overview?.builtin || []).map((item) => [item.runtimeName, item]));
-  const packageNames = new Map((_fsState.overview?.packages || []).map((pkg) => [_fsRuntimeKey(pkg.package), pkg]));
+  // 同名包可能同时有全局与私有两条货架项：私有优先（与解析优先级一致）
+  const installedScopeAgentId = _FS_IDENTITY_SCOPES[_fsState.identity]?.agentId || '';
+  const packageNames = new Map();
+  const scoped = (_fsState.overview?.packages || [])
+    .filter((pkg) => !pkg.scopeAgentId || pkg.scopeAgentId === installedScopeAgentId);
+  for (const pkg of scoped) packageNames.set(_fsRuntimeKey(pkg.package), pkg);
 
   const mountedHtml = mountedFeatures.length
     ? '<div class="feature-grid ph-mount-grid">'
@@ -502,14 +568,178 @@ function _fsRender() {
       )) + '</div>',
     '</div>',
     '</div>',
+    '<div class="feature-detail-head-actions">',
+    '<button type="button" class="settings-btn settings-btn-secondary" title="' + escapeHtml(_fsT('从本地 tgz 导入到本空间仓库（只有本空间可见）', 'Import a tgz into this workspace repository (private to this workspace)')) + '" data-action="featureStore.openUpload">' + escapeHtml(_fsT('导入到本空间', 'Import')) + '</button>',
     '<button class="feature-detail-close" type="button" data-action="featureStore.close">&times;</button>',
+    '</div>',
     '</div>',
     errorBanner,
     // 复用挂载管理页同款主体容器（24px 左右缘 + flex gap 14px 分组间距）
     '<div class="ph-mounts-body" style="overflow-y:auto;flex:1;">' + body + '</div>',
     '</div>',
     '</div>',
+    _fsRenderImportDialog(),
+    _fsRenderUploadingDialog(),
   ].join('');
+}
+
+// ── 本空间 tgz 导入（ADR-0046 空间级仓库）────────────────────────
+// 与插件管理器的全局导入共用服务端链路（parse_upload / confirm_import），
+// 区别只在归属：带 agentId 上传 → 落该工作空间私有仓库，其他空间不可见。
+
+function _fsImportAgentId() {
+  return _FS_IDENTITY_SCOPES[_fsState.identity]?.agentId || '';
+}
+
+function _fsRenderUploadingDialog() {
+  const u = _fsState.uploading;
+  if (!u) return '';
+  return [
+    '<div class="feature-detail-overlay">',
+    '<div class="feature-detail-window" style="max-width:420px;">',
+    '<div class="feature-detail-head"><div>',
+    '<div class="feature-detail-title">' + escapeHtml(_fsT('上传插件包', 'Uploading Plugin Package')) + '</div>',
+    '<div class="feature-detail-subtitle">' + escapeHtml(_fsT('完成后需确认才导入本空间仓库。', 'You review the package before it is imported into this workspace.')) + '</div>',
+    '</div></div>',
+    '<div style="padding:18px 22px;font-size:13px;">',
+    '<div style="margin-bottom:8px;word-break:break-all;">' + escapeHtml(u.name) + '</div>',
+    '<div id="fs-import-upload-progress">' + u.done + ' / ' + u.total + '</div>',
+    '</div>',
+    '</div>',
+    '</div>',
+  ].join('');
+}
+
+function _fsRenderImportDialog() {
+  const pending = _fsState.import;
+  if (!pending) return '';
+  const summary = pending.summary || {};
+  const panels = Array.isArray(summary.ui?.panels) ? summary.ui.panels : [];
+  const serverPrefix = typeof summary.server?.prefix === 'string' ? summary.server.prefix : '';
+  const featureTypes = Array.isArray(summary.featureTypes) ? summary.featureTypes : [];
+  return [
+    '<div class="feature-detail-overlay">',
+    '<div class="feature-detail-window" style="max-width:460px;">',
+    '<div class="feature-detail-head">',
+    '<div>',
+    '<div class="feature-detail-title">' + escapeHtml(_fsT('导入到本空间仓库', 'Import to Workspace Repository')) + '</div>',
+    '<div class="feature-detail-subtitle">' + escapeHtml(_fsT(
+      '导入后只有本空间可见、可装配；确认后即入仓库。',
+      'After import, only this workspace can see and mount it.',
+    )) + '</div>',
+    '</div>',
+    '<button class="feature-detail-close" type="button" data-action="featureStore.cancelImport">&times;</button>',
+    '</div>',
+    '<div class="fw-import-result">',
+    '<div class="fw-import-card">',
+    '<div class="fw-import-title">' + escapeHtml(summary.name || summary.id || summary.fileName || '-') + '</div>',
+    '<div class="fw-import-meta">' + escapeHtml([summary.packageName, summary.version, summary.fileName].filter(Boolean).join(' · ')) + '</div>',
+    summary.description ? '<div class="fw-import-meta">' + escapeHtml(summary.description) + '</div>' : '',
+    '<div class="workspace-tag-list">'
+    + featureTypes.map((type) => '<span class="workspace-tag">' + escapeHtml(type) + '</span>').join('')
+    + (panels.length ? '<span class="workspace-tag">' + escapeHtml(_fsT('面板 × ' + panels.length, 'UI panels × ' + panels.length)) + '</span>' : '')
+    + (serverPrefix ? '<span class="workspace-tag">' + escapeHtml(_fsT('数据服务 /' + serverPrefix, 'data service /' + serverPrefix)) + '</span>' : '')
+    + '</div>',
+    '</div>',
+    '<div class="workspace-actions" style="justify-content:flex-end;">',
+    '<button class="workspace-action secondary" type="button" data-action="featureStore.cancelImport">' + escapeHtml(_fsT('取消', 'Cancel')) + '</button>',
+    '<button class="workspace-action" type="button" data-action="featureStore.confirmImport">' + escapeHtml(_fsT('导入到本空间', 'Import')) + '</button>',
+    '</div>',
+    '</div>',
+    '</div>',
+    '</div>',
+  ].join('');
+}
+
+function _fsOpenUpload() {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.tgz';
+  input.onchange = async () => {
+    const file = input.files?.[0];
+    if (!file) return;
+    _fsState.uploading = { name: file.name, done: 0, total: Math.max(1, Math.ceil(file.size / (512 * 1024))) };
+    _fsRender();
+    try {
+      _fsState.import = await uploadTgzChunked(file, {
+        agentId: _fsImportAgentId(),
+        onProgress: (fraction) => {
+          if (!_fsState.uploading) return;
+          _fsState.uploading.done = Math.round(fraction * _fsState.uploading.total);
+          const el = document.getElementById('fs-import-upload-progress');
+          if (el) el.textContent = _fsState.uploading.done + ' / ' + _fsState.uploading.total;
+        },
+      });
+    } catch (error) {
+      window.alert((getCurrentLanguage() === 'zh' ? '上传 tgz 失败：' : 'Failed to upload tgz: ') + (error?.message || error));
+    } finally {
+      _fsState.uploading = null;
+      _fsRender();
+    }
+  };
+  input.click();
+}
+
+async function _fsCancelImport() {
+  const uploadId = _fsState.import?.uploadId;
+  _fsState.import = null;
+  _fsRender();
+  if (uploadId) {
+    await fetch('/protoclaw/feature_repository/cancel_import', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ uploadId }),
+    }).catch((e) => console.warn(e));
+  }
+}
+
+async function _fsConfirmImport() {
+  const pending = _fsState.import;
+  if (!pending?.uploadId) return;
+  try {
+    const resp = await fetch('/protoclaw/feature_repository/confirm_import', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ uploadId: pending.uploadId }),
+    });
+    if (!resp.ok) throw new Error(await resp.text().catch(() => 'import failed'));
+    _fsState.import = null;
+    await _fsAfterChange(_fsState.identity);
+    await _fsReloadOverview();
+  } catch (error) {
+    window.alert((getCurrentLanguage() === 'zh' ? '导入失败：' : 'Import failed: ') + (error?.message || error));
+  } finally {
+    _fsRender();
+  }
+}
+
+/** 从本空间私有仓库删除某版本 tgz（装配中的包会被服务端 409 拒绝）。 */
+async function _fsDeletePackage(packageName, version) {
+  if (_fsState.busy) return;
+  const label = packageName + (version ? '@' + version : '');
+  const confirmed = window.confirm(_fsT(
+    '从本空间仓库删除 ' + label + '？删除后需重新导入才能装配。',
+    'Delete ' + label + ' from the workspace repository? Re-import is required to assemble it again.',
+  ));
+  if (!confirmed) return;
+  _fsState.busy = true;
+  _fsState.error = '';
+  try {
+    const resp = await fetch('/protoclaw/feature_repository/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ packageName, version, agentId: _fsImportAgentId() }),
+    });
+    const payload = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(_fsDeleteErrorText(payload, resp.statusText));
+    await _fsAfterChange(_fsState.identity);
+    await _fsReloadOverview();
+  } catch (error) {
+    window.alert(_fsT('删除失败：' + (error?.message || error), 'Delete failed: ' + (error?.message || error)));
+  } finally {
+    _fsState.busy = false;
+    _fsRender();
+  }
 }
 
 // ── 面板开关（ph-settings 的入口卡片调用）────────────────
@@ -524,6 +754,8 @@ export async function phOpenFeatureStore(identity) {
   _fsState.installingPkg = null;
   _fsState.lastFailed = null;
   _fsState.category = 'all';
+  _fsState.import = null;
+  _fsState.uploading = null;
   _fsStopTick();
   _fsRender();
   // catalog 与 overview 并行预载；catalog 失败不阻断（分组落待归类兜底组）
@@ -534,10 +766,12 @@ export async function phOpenFeatureStore(identity) {
   _fsRender();
 }
 
-function phCloseFeatureStore() {
+export function phCloseFeatureStore() {
   _fsState.open = false;
   _fsState.busy = false;
   _fsState.installingPkg = null;
+  // 上传中的 tgz 不强制中断（服务端待确认态 10 分钟过期）；重开面板时可继续
+  _fsState.uploading = null;
   _fsStopTick();
   // 本地发起的安装不中断：服务端单飞队列继续跑完，重开面板时经
   // overview.installing 显示进行中状态，完成结果由 overview 自然呈现
@@ -563,6 +797,13 @@ window.ClawFW.actions.registerMany({
     _fsRender();
   },
   'featureStore.close': () => phCloseFeatureStore(),
+  'featureStore.openUpload': () => _fsOpenUpload(),
+  'featureStore.confirmImport': () => _fsConfirmImport(),
+  'featureStore.cancelImport': () => _fsCancelImport(),
+  'featureStore.deletePackage': (el) => _fsDeletePackage(
+    el.dataset.package,
+    el.closest('[data-fs-package]')?.dataset.fsVersion || el.dataset.version,
+  ),
 });
 
 // ══ 插件管理器（全局级治理入口，ADR-0046）══════════════════════
@@ -599,9 +840,8 @@ let _fsSettings = {
   displayName: '',
   manifest: null,   // { settings: { properties } } | null（无配置参数）
   resolved: null,   // resolved API 缓存（layers + merged）
-  scopeId: 'global', // 'global' | 'agent'
-  agentId: '',       // scope agentId（resolved/PUT 寻址用）
-  hasIdentity: false, // true = 商店卡片（有身份上下文，显示两层 tab）
+  scopeId: 'global', // 该弹窗只编辑全局默认层
+  agentId: '',       // 包的 settings 声明按哪个身份的装配事实取（resolved/PUT 寻址）
   error: '',
 };
 
@@ -865,12 +1105,19 @@ function _pmRenderGlobalSection(mountedMap) {
       ? '<span class="feature-badge status-removed">' + escapeHtml(_fsT('包已不在仓库', 'missing')) + '</span>'
       : '<span class="feature-prov-badge">' + escapeHtml(`${mount.package}@${mount.version}`) + '</span>';
     const btn = '<button type="button" class="fs-list-remove" title="' + escapeHtml(_fsT('移除默认装配', 'Remove default assembly')) + '" data-action="pluginManager.removeGlobal" data-name="' + escapeHtml(runtimeName) + '">&#215;</button>';
+    // 全局默认参数入口：与这条默认装配声明同层（global 层）；空间层覆盖在各
+    // 工作空间设置 → 参数配置里编辑，管理器不提供第二处空间编辑入口。
+    const identityKey = Object.keys(_pmState.overview?.mounts || {})
+      .find((key) => _pmState.overview.mounts[key]?.[runtimeName]) || 'main';
+    const settingsBtn = mount.missing
+      ? ''
+      : '<button type="button" class="fs-settings-btn" title="' + escapeHtml(_fsT('编辑全局默认参数', 'Edit global default parameters')) + '" data-action="featureStore.openSettings" data-identity="' + escapeHtml(identityKey) + '" data-name="' + escapeHtml(runtimeName) + '">&#9881;</button>';
     const pkg = packageNames.get(runtimeName);
     return _fsCard({
       name: runtimeName,
       displayName: pkg?.displayName || runtimeName,
       description: pkg?.description || '',
-    }, status + btn);
+    }, settingsBtn + status + btn);
   }).join('');
   return '<div class="fs-mounted-section"><div class="fs-section-title">' + escapeHtml(_fsT('默认装配', 'Default Assembly')) + '</div>'
     + '<div class="feature-grid ph-mount-grid">' + items + '</div></div>';
@@ -893,10 +1140,12 @@ function _pmRenderPackageSections(mountedMap) {
       ? '<button type="button" class="fs-list-add" disabled style="opacity:0.7;">' + escapeHtml(_fsT('装配中…', 'Installing…')) + '</button>'
       : '<button type="button" class="fs-list-add" data-action="pluginManager.installGlobal" data-package="' + escapeHtml(pkg.package) + '" data-version="' + escapeHtml(latest) + '">'
         + escapeHtml(_fsT('+ 设为默认', '+ Set as Default')) + '</button>';
+    const deleteButton = '<button type="button" class="fs-list-remove" title="' + escapeHtml(_fsT('从仓库删除该版本（装配中的包需先移除装配）', 'Delete this version from the repository (remove assembly first)')) + '"'
+      + ' data-action="pluginManager.deletePackage" data-package="' + escapeHtml(pkg.package) + '" data-version="' + escapeHtml(latest) + '">&#215;</button>';
     const control = (pkg.versions?.length > 1
       ? '<select class="fs-select"' + (_pmState.busy ? ' disabled' : '') + ' data-action="pluginManager.selectVersion" data-event="change" data-package="' + escapeHtml(pkg.package) + '">' + versionOptions + '</select>'
       : '<span style="font-size:12px;color:var(--text-secondary);">' + escapeHtml(latest) + '</span>')
-      + addButton;
+      + addButton + deleteButton;
     items.push({
       name: runtimeKey,
       displayName: pkg.displayName || runtimeKey,
@@ -953,8 +1202,10 @@ function _pmRender() {
       'Manage the plugin repository and default assembly: default assembly applies to workspaces that opted in (defaultMounts); per-workspace assembly lives in each workspace\'s settings.'
     )) + '</div>',
     '</div>',
-    '<button class="feature-detail-close" type="button" style="font-size:13px;padding:6px 12px;border-radius:6px;border:1px solid var(--border-color,#3a3a3a);" title="' + _fsT('从本地 tgz 文件导入插件包到仓库', 'Import a plugin package (.tgz) from local file into the repository') + '" data-action="pluginManager.openUpload">' + _fsT('上传 tgz', 'Upload tgz') + '</button>',
+    '<div class="feature-detail-head-actions">',
+    '<button class="settings-btn settings-btn-secondary" type="button" title="' + _fsT('从本地 tgz 文件导入插件包到仓库', 'Import a plugin package (.tgz) from local file into the repository') + '" data-action="pluginManager.openUpload">' + _fsT('上传 tgz', 'Upload tgz') + '</button>',
     '<button class="feature-detail-close" type="button" data-action="pluginManager.close">&times;</button>',
+    '</div>',
     '</div>',
     errorBanner,
     // 复用挂载管理页同款主体容器
@@ -997,20 +1248,54 @@ window.ClawFW.actions.registerMany({
   'pluginManager.openUpload': () => _pmOpenUpload(),
   'pluginManager.cancelImport': () => _pmCancelImport(),
   'pluginManager.confirmImport': () => _pmConfirmImport(),
+  'pluginManager.deletePackage': (el) => _pmDeletePackage(
+    el.dataset.package,
+    el.closest('[data-pm-package]')?.dataset.pmVersion || el.dataset.version,
+  ),
   'pluginManager.close': () => _pmClosePluginManager(),
 });
+
+/** 从全局仓库删除某版本 tgz（被任一装配身份引用时服务端 409 拒绝）。 */
+const _pmDeletePackage = async function(packageName, version) {
+  if (_pmState.busy) return;
+  const label = packageName + (version ? '@' + version : '');
+  const confirmed = window.confirm(_fsT(
+    '从插件仓库删除 ' + label + '？装配中的包需先移除装配。',
+    'Delete ' + label + ' from the plugin repository? Assembled packages must be unassembled first.',
+  ));
+  if (!confirmed) return;
+  _pmState.busy = true;
+  _pmState.error = '';
+  _pmRender();
+  try {
+    const resp = await fetch('/protoclaw/feature_repository/delete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ packageName, version }),
+    });
+    const payload = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(_fsDeleteErrorText(payload, resp.statusText));
+    await _fsAfterChange();
+    await _pmReloadOverview();
+  } catch (error) {
+    window.alert(_fsT('删除失败：' + (error?.message || error), 'Delete failed: ' + (error?.message || error)));
+  } finally {
+    _pmState.busy = false;
+    _pmRender();
+  }
+};
 
 // ── 插件设置弹窗：打开 / 渲染 / 写入 ──────────────────────────────
 
 /**
- * 打开设置弹窗。runtimeName 为 $mount 声明键；identityContext 传身份键
- * （'main' | 'coder'）时提供「全局默认 | 本空间」两层 tab，插件管理器的
- * 默认装配卡片无身份上下文（不传），只编辑全局默认层。
+ * 全局默认参数弹窗（只服务插件管理器的默认装配卡片）。
+ *
+ * 只编辑 global 层：工作空间层的参数在「工作空间设置 → 参数配置」里改，
+ * 那里是同一个工作空间的唯一编辑面。identityContext 仅用于取该包的 settings
+ * 声明（装配事实按身份聚合），不参与写入层的选择。
  */
-async function _fsOpenSettings(runtimeName, identityContext, options = {}) {
+async function _fsOpenSettings(runtimeName, identityContext) {
   const scope = identityContext && _FS_IDENTITY_SCOPES[identityContext];
-  const requestedScope = options.initialScope;
-  const initialScope = scope && requestedScope !== 'global' ? 'agent' : 'global';
   _fsSettings = {
     open: true,
     busy: true,
@@ -1018,10 +1303,8 @@ async function _fsOpenSettings(runtimeName, identityContext, options = {}) {
     displayName: String(runtimeName || ''),
     manifest: null,
     resolved: null,
-    scopeId: initialScope,
+    scopeId: 'global',
     agentId: scope ? scope.agentId : 'programming-helper',
-    hasIdentity: !!scope,
-    identityLabel: scope ? (getCurrentLanguage() === 'zh' ? scope.labelZh : scope.labelEn) : '',
     error: '',
   };
   _fsSettingsRender();
@@ -1031,7 +1314,7 @@ async function _fsOpenSettings(runtimeName, identityContext, options = {}) {
       _fsFetchJson(`/protoclaw/system_feature_manifests?agentId=${agentId}`),
       _fsFetchJson(`/protoclaw/feature_config/resolved?agentId=${agentId}`),
     ]);
-    const entry = (manifestsRes.features || []).find((f) => f.featureName === runtimeName) || null;
+    const entry = (manifestsRes.features || []).find((f) => f.featureName === runtimeName || f.mountName === runtimeName) || null;
     // resolved 无 layers 视为加载失败（两态判定依赖层队列）
     if (!Array.isArray(resolvedRes?.layers)) throw new Error(_fsT('配置层读取失败', 'failed to load config layers'));
     _fsSettings.manifest = entry;
@@ -1066,15 +1349,15 @@ function _fsSettingsTargetSparse() {
 function _fsSettingsRowHtml(row) {
   const prop = row.prop || {};
   const isZh = getCurrentLanguage() === 'zh';
-  const label = (prop.label && (isZh ? prop.label.zh : prop.label.en)) || row.key.split('.').pop();
-  const desc = prop.description && (isZh ? prop.description.zh : prop.description.en);
+  const label = (prop.label && (isZh ? prop.label.zh : prop.label.en)) || prop.title || row.key.split('.').pop();
+  const desc = typeof prop.description === 'string' ? prop.description : (isZh ? prop.description?.zh : prop.description?.en);
   const takeover = row.state?.status === 'takeover';
   const controlValue = row.controlValue == null ? '' : String(row.controlValue);
   let control = '';
   if (prop.type === 'boolean') {
     control = '<input type="checkbox" data-action="featureStore.settingsField" data-event="change" data-key="'
       + escapeHtml(row.key) + '"' + (row.controlValue ? ' checked' : '') + '>';
-  } else if (prop.type === 'number') {
+  } else if (prop.type === 'number' || prop.type === 'integer') {
     control = '<input type="number" class="fs-settings-input" data-action="featureStore.settingsField" data-event="change" data-key="'
       + escapeHtml(row.key) + '" value="' + escapeHtml(controlValue) + '">';
   } else {
@@ -1104,12 +1387,11 @@ function _fsSettingsRender() {
   const host = _fsSettingsHost();
   if (!_fsSettings.open) { host.innerHTML = ''; return; }
   const rows = _fsSettings.manifest ? _fsSettingsRows(_fsSettings.manifest, _fsSettings.resolved, _fsSettings.scopeId) : null;
-  const tabs = _fsSettings.hasIdentity
-    ? '<div class="fs-settings-tabs">'
-      + '<button type="button" class="fs-settings-tab' + (_fsSettings.scopeId === 'global' ? ' active' : '') + '" data-action="featureStore.settingsTab" data-scope="global">' + escapeHtml(_fsT('全局默认', 'Global default')) + '</button>'
-      + '<button type="button" class="fs-settings-tab' + (_fsSettings.scopeId === 'agent' ? ' active' : '') + '" data-action="featureStore.settingsTab" data-scope="agent">' + escapeHtml(_fsT('本空间（' + _fsSettings.identityLabel + '）', 'This workspace (' + _fsSettings.identityLabel + ')')) + '</button>'
-      + '</div>'
-    : '<div class="fs-settings-hint">' + escapeHtml(_fsT('全局默认配置，对所有工作空间生效；单个工作空间的覆盖在对应空间的插件商店卡片中设置', 'Global defaults for all workspaces; per-workspace overrides are edited in that workspace\'s plugin store')) + '</div>';
+  // 只有一层：global。工作空间层的覆盖在工作空间设置 → 参数配置里编辑。
+  const tabs = '<div class="fs-settings-hint">' + escapeHtml(_fsT(
+    '全局默认值：接受默认装配的工作空间共用。单个工作空间的覆盖在工作空间设置 → 参数配置中编辑。',
+    'Global defaults shared by workspaces that opted in. Per-workspace overrides are edited in that workspace\'s settings → Parameters.'
+  )) + '</div>';
   let bodyHtml = '';
   if (_fsSettings.busy) {
     bodyHtml = '<div class="fs-spinner-wrap"><div class="fs-spinner"></div></div>';
@@ -1133,14 +1415,6 @@ function _fsSettingsRender() {
     + '<div class="fs-settings-body">' + bodyHtml + '</div>'
     + '</div>'
     + '</div>';
-}
-
-/** 层 tab 切换：重渲染（resolved 已缓存，无网络往返）。 */
-function _fsSettingsSwitchTab(scopeId) {
-  if (scopeId !== 'global' && scopeId !== 'agent') return;
-  if (scopeId === 'agent' && !_fsSettings.hasIdentity) return;
-  _fsSettings.scopeId = scopeId;
-  _fsSettingsRender();
 }
 
 /**
@@ -1172,9 +1446,8 @@ function _fsCloseSettings() {
 }
 
 window.ClawFW.actions.registerMany({
-  'featureStore.openSettings': (el) => _fsOpenSettings(el.dataset.name, el.dataset.identity || null, { initialScope: el.dataset.scope }),
+  'featureStore.openSettings': (el) => _fsOpenSettings(el.dataset.name, el.dataset.identity || null),
   'featureStore.closeSettings': () => _fsCloseSettings(),
-  'featureStore.settingsTab': (el) => _fsSettingsSwitchTab(el.dataset.scope),
   'featureStore.settingsReset': (el) => _fsSettingsSave(el.dataset.key, null),
   'featureStore.settingsField': (el) => {
     let value;

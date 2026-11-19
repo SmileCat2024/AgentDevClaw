@@ -272,7 +272,8 @@ describe('身份插件商店分页', () => {
       assert.match(all, /agentero/);
       assert.match(all, /optional-browser/);
       assert.match(all, /data-action="featureStore\.removeMount"/);
-      assert.match(all, /data-action="featureStore\.openSettings"/);
+      // 卡片齿轮指向工作空间设置里的参数配置（该层唯一编辑面）
+      assert.match(all, /data-action="phSettings\.openFeatureConfig" data-identity="main" data-name="agentero"/);
       assert.match(all, /data-action="featureStore\.install"/);
       assert.match(all, /data-action="featureStore\.selectVersion"/);
 
@@ -436,64 +437,55 @@ describe('插件设置弹窗 — _fsSettingsRows 两态视图', () => {
 });
 
 describe('插件设置弹窗 — 打开与即时保存', () => {
-  it('打开：拉 manifests + resolved，行按层事实渲染（默认本空间层）', async () => {
+  it('打开：拉该身份装配声明的 manifests 与 resolved，行按 global 层渲染', async () => {
     await withStore({}, async (loaded) => {
       await loaded.actions.invoke('featureStore.openSettings', { dataset: { name: 'agentero', identity: 'main' } });
       const urls = loaded.fetchStub.calls.map((call) => call.url);
+      // settings 声明按装配身份聚合（包的参数行只在该身份的清单里）
       assert.ok(urls.some((url) => url.includes('/protoclaw/system_feature_manifests?agentId=programming-helper')));
       assert.ok(urls.some((url) => url.includes('/protoclaw/feature_config/resolved?agentId=programming-helper')));
-      // 从身份商店进入时默认编辑本空间层；上游 global 值仍可见并被跟随。
       const html = String(loaded.hosts.get('ph-plugin-settings-host').innerHTML);
       assert.match(html, /Vault 路径/);
-      // 跟随态：控件显示上游 global 值，并标注来源层
+      // 编辑层固定为 global：该层已有值 → 接管态，控件显示本层值
       assert.match(html, /data-key="agentero\.vaultPath" value="\/vault\/a"/);
-      assert.match(html, /class="fs-settings-state fs-settings-follow">跟随 全局</);
-      // 本空间层 tab 处于选中态（真实输出的类名 + 动作 + scope 三元组）
-      assert.match(html, /class="fs-settings-tab active" data-action="featureStore\.settingsTab" data-scope="agent"/);
+      assert.match(html, /本层已接管/);
+      assert.doesNotMatch(html, /data-scope="agent"/, '弹窗不提供工作空间层编辑');
     });
   });
 
-  it('显式全局入口仍打开全局层；无身份上下文也只能编辑全局层', async () => {
+  it('全局默认弹窗：只编辑 global 层，没有层 tab', async () => {
     await withStore({}, async (loaded) => {
-      await loaded.actions.invoke('featureStore.openSettings', { dataset: { name: 'agentero', identity: 'main', scope: 'global' } });
-      let html = String(loaded.hosts.get('ph-plugin-settings-host').innerHTML);
-      assert.match(html, /class="fs-settings-tab active" data-action="featureStore\.settingsTab" data-scope="global"/);
-
-      await loaded.actions.invoke('featureStore.openSettings', { dataset: { name: 'agentero' } });
-      html = String(loaded.hosts.get('ph-plugin-settings-host').innerHTML);
-      // 无身份上下文：不显示两层 tab，只提示全局默认配置
-      assert.doesNotMatch(html, /data-scope="agent"/);
-      assert.match(html, /全局默认配置/);
-      loaded.actions.invoke('featureStore.settingsTab', { dataset: { scope: 'agent' } });
-      loaded.actions.invoke('featureStore.settingsField', fieldEl('agentero.vaultPath', '/vault/z'));
-      await tick();
-      const put = loaded.fetchStub.calls.filter((call) => call.method === 'PUT').pop();
-      assert.equal(put.body.layerId, 'global');
-    });
-  });
-
-  it('工作空间插件清单的设置动作：dataset 的插件名/身份/本空间层三元一起透传到同一弹窗', async () => {
-    // 生产动作表：featureStore.openSettings(el) → _fsOpenSettings(el.dataset.name,
-    // el.dataset.identity, { initialScope: el.dataset.scope })。断言落在可观察后果上：
-    // 弹窗开在该插件、本空间层 tab 生效、保存写入 agentId + layerId=agent（身份透传）。
-    await withStore({}, async (loaded) => {
-      await loaded.actions.invoke('featureStore.openSettings', {
-        dataset: { name: 'agentero', identity: 'main', scope: 'agent' },
-      });
+      await loaded.actions.invoke('featureStore.openSettings', { dataset: { name: 'agentero', identity: 'main' } });
       const html = String(loaded.hosts.get('ph-plugin-settings-host').innerHTML);
-      assert.match(html, /class="fs-settings-tab active" data-action="featureStore\.settingsTab" data-scope="agent"/,
-        'scope=agent 时应直接落在本空间层');
+      // 单层：没有「全局默认 | 本空间」tab；提示指向工作空间设置里的参数配置
+      assert.doesNotMatch(html, /data-action="featureStore\.settingsTab"/);
+      assert.match(html, /参数配置/);
       assert.match(html, /Vault 路径/, '弹窗渲染的是该插件的 manifest 参数行');
 
-      // 身份透传证据：保存落到 identity 对应的 agent 层
-      await loaded.actions.invoke('featureStore.settingsField', fieldEl('agentero.vaultPath', '/vault/from-workspace'));
+      await loaded.actions.invoke('featureStore.settingsField', fieldEl('agentero.vaultPath', '/vault/from-global'));
       await tick();
       const put = loaded.fetchStub.calls.filter((call) => call.method === 'PUT').pop();
       assert.deepEqual(put.body, {
         agentId: 'programming-helper',
-        layerId: 'agent',
-        content: { agentero: { vaultPath: '/vault/from-workspace' } },
+        layerId: 'global',
+        content: { agentero: { vaultPath: '/vault/from-global' } },
       });
+    });
+  });
+
+  it('新增失败：包缺失时该插件不出现齿轮（无参数可配）', async () => {
+    // 管理器默认装配卡片的齿轮只在包仍可用时出现
+    const fetchStub = makeFetch({
+      overview: {
+        mounts: { global: { agentero: { package: 'agentero', version: '1.0.0', missing: true } } },
+        packages: [], builtin: [],
+      },
+    });
+    await withStore({ fetchStub }, async (loaded) => {
+      await loaded.store.clawOpenPluginManager();
+      const html = String(loaded.hosts.get('claw-plugin-manager-host').innerHTML);
+      assert.match(html, /包已不在仓库/);
+      assert.doesNotMatch(html, /data-action="featureStore\.openSettings"/);
     });
   });
 
@@ -513,11 +505,11 @@ describe('插件设置弹窗 — 打开与即时保存', () => {
       await loaded.actions.invoke('featureStore.openSettings', { dataset: { name: 'agentero', identity: 'main' } });
       await loaded.actions.invoke('featureStore.settingsField', fieldEl('agentero.vaultPath', '/vault/b'));
       await tick();
-      // PUT body：agentId/layerId 寻址正确，content 以 agent 层 sparse（{}）为底写入单字段
+      // PUT body：agentId/layerId 寻址正确，content 以 global 层 sparse（{}）为底写入单字段
       const put = loaded.fetchStub.calls.find((call) => call.method === 'PUT');
       assert.deepEqual(put.body, {
         agentId: 'programming-helper',
-        layerId: 'agent',
+        layerId: 'global',
         content: { agentero: { vaultPath: '/vault/b' } },
       });
       // 保存后重拉 resolved（stub 反映新层事实）→ 行翻转为接管
@@ -528,12 +520,12 @@ describe('插件设置弹窗 — 打开与即时保存', () => {
     });
   });
 
-  it('保存不丢同层既有字段：agent 层已有其他插件配置时，PUT content 必须保留它们', async () => {
+  it('保存不丢同层既有字段：global 层已有其他插件配置时，PUT content 必须保留它们', async () => {
     const fetchStub = makeFetch({
       resolved: {
         layers: [
-          { id: 'global', label: '全局', sparse: {} },
-          { id: 'agent', label: '编程小助手', sparse: { 'stylized-output': { intensity: 2 } } },
+          { id: 'global', label: '全局', sparse: { 'stylized-output': { intensity: 2 } } },
+          { id: 'agent', label: '编程小助手', sparse: {} },
         ],
         merged: {},
       },
@@ -549,23 +541,32 @@ describe('插件设置弹窗 — 打开与即时保存', () => {
   });
 
   it('重置（value=null）：字段从本层删除，恢复跟随', async () => {
-    const fetchStub = makeFetch({ resolved: RESOLVED_TAKEOVER });
+    const fetchStub = makeFetch({
+      resolved: {
+        layers: [
+          { id: 'global', label: '全局', sparse: { agentero: { vaultPath: '/vault/a' } } },
+          { id: 'agent', label: '编程小助手', sparse: {} },
+        ],
+        merged: {},
+      },
+    });
     await withStore({ fetchStub }, async (loaded) => {
       await loaded.actions.invoke('featureStore.openSettings', { dataset: { name: 'agentero', identity: 'main' } });
       await loaded.actions.invoke('featureStore.settingsReset', { dataset: { key: 'agentero.vaultPath' } });
       const put = fetchStub.calls.find((call) => call.method === 'PUT');
-      // 删除语义：content 中不再有该字段（agent 层空 → 键被剪枝）
+      // 删除语义：content 中不再有该字段（global 层空 → 键被剪枝）
       assert.equal(put.body.content.agentero, undefined);
       const html = String(loaded.hosts.get('ph-plugin-settings-host').innerHTML);
-      assert.match(html, /跟随 全局/);
+      assert.match(html, /默认值/);
     });
   });
 
-  it('插件管理器只显示仓库与默认装配，不再另造全局 Feature 参数入口', async () => {
+  it('插件管理器：默认装配卡片提供全局参数齿轮，仍不另造全局 Feature 参数入口', async () => {
     const fetchStub = makeFetch({
       overview: {
         packages: [{ package: 'agentero', displayName: 'Agentero', description: 'Library', versions: [{ version: '1.0.0' }] }],
         mounts: { global: { agentero: { package: 'agentero', version: '1.0.0' } } },
+        builtin: [],
       },
     });
     await withStore({ fetchStub }, async (loaded) => {
@@ -576,16 +577,95 @@ describe('插件设置弹窗 — 打开与即时保存', () => {
       assert.match(managerHtml, /默认装配/);
       assert.doesNotMatch(managerHtml, /打开全局配置|Global Defaults|全局装配/);
       assert.equal(loaded.actions.handlers['pluginManager.openGlobalConfig'], undefined);
+      // 全局默认参数的唯一入口：默认装配卡片齿轮（与声明同层）
+      assert.match(managerHtml, /data-action="featureStore\.openSettings"/);
+    });
+  });
+});
+
+describe('空间私有插件仓库（ADR-0046 空间级仓库）', () => {
+  // 同名 / 私有包在 overview 里以 scopeAgentId 标记归属（null = 全局可见）
+  const overviewWithPrivate = {
+    mounts: {},
+    builtin: [],
+    packages: [
+      { package: '@agentdev/global-plugin', displayName: 'GlobalPlugin', scopeAgentId: null, source: 'custom', versions: [{ version: '1.0.0' }] },
+      { package: '@agentdev/private-plugin', displayName: 'PrivatePlugin', scopeAgentId: 'coder', source: 'workspace', versions: [{ version: '1.0.0' }] },
+    ],
+  };
+
+  it('私有包只在其所属空间的商店出现，其他身份看不到', async () => {
+    const fetchStub = makeFetch({ overview: overviewWithPrivate });
+    await withStore({ fetchStub }, async (loaded) => {
+      await loaded.store.phOpenFeatureStore('main');
+      const mainHtml = String(loaded.hosts.get('ph-feature-store-host').innerHTML);
+      assert.match(mainHtml, /global-plugin/);
+      assert.doesNotMatch(mainHtml, /private-plugin/);
+
+      await loaded.store.phOpenFeatureStore('coder');
+      const coderHtml = String(loaded.hosts.get('ph-feature-store-host').innerHTML);
+      assert.match(coderHtml, /private-plugin/);
+      // 私有包卡片带「本空间」来源徽章
+      assert.match(coderHtml, /本空间/);
     });
   });
 
-  it('层 tab 守卫：无身份上下文（插件管理器全局装配卡）不能切到 agent 层', async () => {
-    await withStore({}, async (loaded) => {
-      await loaded.actions.invoke('featureStore.openSettings', { dataset: { name: 'agentero' } });
-      loaded.actions.invoke('featureStore.settingsTab', { dataset: { scope: 'agent' } });
-      await loaded.actions.invoke('featureStore.settingsReset', { dataset: { key: 'agentero.vaultPath' } });
-      const put = loaded.fetchStub.calls.find((call) => call.method === 'PUT');
-      assert.equal(put.body.layerId, 'global');
+  it('商店提供「导入到本空间」入口（动作接线到上传流程）', async () => {
+    await withStore({ fetchStub: makeFetch({ overview: overviewWithPrivate }) }, async (loaded) => {
+      await loaded.store.phOpenFeatureStore('main');
+      const html = String(loaded.hosts.get('ph-feature-store-host').innerHTML);
+      assert.match(html, /data-action="featureStore\.openUpload"/);
+      assert.equal(typeof loaded.actions.handlers['featureStore.confirmImport'], 'function');
+      assert.equal(typeof loaded.actions.handlers['featureStore.cancelImport'], 'function');
+    });
+  });
+
+  it('两处上传入口都用次级按钮配方，不复用固定 32px 的圆形关闭钮', async () => {
+    await withStore({ fetchStub: makeFetch({ overview: overviewWithPrivate }) }, async (loaded) => {
+      await loaded.store.phOpenFeatureStore('main');
+      const storeHtml = String(loaded.hosts.get('ph-feature-store-host').innerHTML);
+      await loaded.store.clawOpenPluginManager();
+      const managerHtml = String(loaded.hosts.get('claw-plugin-manager-host').innerHTML);
+      for (const [html, action] of [[storeHtml, 'featureStore.openUpload'], [managerHtml, 'pluginManager.openUpload']]) {
+        const match = html.match(new RegExp(`<button[^>]*data-action="${action}"[^>]*>`));
+        assert.ok(match, `${action} 按钮应存在于页面`);
+        assert.match(match[0], /class="settings-btn settings-btn-secondary"/);
+        assert.doesNotMatch(match[0], /feature-detail-close/);
+      }
+    });
+  });
+});
+
+describe('仓库删除入口', () => {
+  const overviewWithPrivate = {
+    mounts: {},
+    builtin: [],
+    packages: [
+      { package: '@agentdev/global-plugin', displayName: 'GlobalPlugin', scopeAgentId: null, source: 'custom', versions: [{ version: '1.0.0' }] },
+      { package: '@agentdev/private-plugin', displayName: 'PrivatePlugin', scopeAgentId: 'coder', source: 'workspace', versions: [{ version: '1.0.0' }] },
+    ],
+  };
+
+  it('插件管理器仓库卡片带删除入口，动作已接线', async () => {
+    await withStore({ fetchStub: makeFetch({ overview: overviewWithPrivate }) }, async (loaded) => {
+      await loaded.store.clawOpenPluginManager();
+      const html = String(loaded.hosts.get('claw-plugin-manager-host').innerHTML);
+      assert.match(html, /data-action="pluginManager\.deletePackage"/);
+      assert.equal(typeof loaded.actions.handlers['pluginManager.deletePackage'], 'function');
+    });
+  });
+
+  it('私有包卡片带删除入口；全局包不带（全局删除入口在插件管理器）', async () => {
+    await withStore({ fetchStub: makeFetch({ overview: overviewWithPrivate }) }, async (loaded) => {
+      await loaded.store.phOpenFeatureStore('coder');
+      const coderHtml = String(loaded.hosts.get('ph-feature-store-host').innerHTML);
+      assert.match(coderHtml, /data-action="featureStore\.deletePackage"/);
+      assert.equal(typeof loaded.actions.handlers['featureStore.deletePackage'], 'function');
+    });
+    await withStore({ fetchStub: makeFetch({ overview: overviewWithPrivate }) }, async (loaded) => {
+      await loaded.store.phOpenFeatureStore('main');
+      const mainHtml = String(loaded.hosts.get('ph-feature-store-host').innerHTML);
+      assert.doesNotMatch(mainHtml, /data-action="featureStore\.deletePackage"/);
     });
   });
 });

@@ -66,7 +66,7 @@ AgentDevClaw 的主界面分三个区域：左侧工作空间与项目列表、�
 
 ### 设置入口
 
-右侧栏底部是齿轮图标（设置按钮），点开的菜单包含：模型配置、访问保护、全局 Feature 设置、工作空间、网络代理、用量信息、MCP 网关、退出程序。模型、代理、MCP 相关的配置入口见对应 reference（references/models.md、references/mcp.md）。
+右侧栏底部是齿轮图标（设置按钮），点开的菜单包含：模型配置、访问保护、插件配置、工作空间、网络代理、用量信息、MCP 网关、退出程序。模型、代理、MCP 相关的配置入口见对应 reference（references/models.md、references/mcp.md）。
 
 ## 配置的作用域
 

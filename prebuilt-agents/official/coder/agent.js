@@ -48,6 +48,7 @@ import {
   readAgentLayer,
 } from '../../../server/shared/feature-config-layers.js';
 import { extractFeatureMounts, stripMountDeclarations } from '../../../server/shared/feature-mount.js';
+import { splitPluginSettingsLayer } from '../../../server/feature-runtime/plugin-settings.js';
 import { collapseAccumulatedFields } from '../../../server/shared/feature-config-accumulate.js';
 import { resolveUserDataDir } from '../../../server/shared/constants.js';
 
@@ -85,7 +86,8 @@ export default class CoderAgent extends BasicAgent {
       { id: 'agent', config: readAgentLayer('coder') },
     ]);
     // 累加型多值字段（skill.extraDirs 等）在进 merge 前跨层叠加
-    const { merged: systemConfig } = resolveFeatureConfig(collapseAccumulatedFields(configLayers));
+    const split = configLayers.map(splitPluginSettingsLayer);
+    const { merged: systemConfig } = resolveFeatureConfig(collapseAccumulatedFields(split.map((layer) => layer.features)));
 
     super({
       ...config,
@@ -98,6 +100,7 @@ export default class CoderAgent extends BasicAgent {
     // 用户装配的 feature（$mount 声明），语义同编程小助手（agent.js）：
     // 宿主挂载钩子在构造完成后动态挂载；coder 与 main 同权装配，无白名单。
     this.pendingFeatureMounts = featureMounts;
+    this.pluginSettingsLayers = split.map((layer) => layer.settings);
 
     // SkillFeature：invoke_skill 工具 + skills 上下文注入，默认扫描 workspaceDir/.agentdev/skills。
     // 配置队列中的 skill 配置（全局层或 coder agent 层）会覆盖默认值。

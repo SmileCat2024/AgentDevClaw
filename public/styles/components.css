@@ -7210,9 +7210,8 @@ body[data-theme="light"] .user-choice-card:focus-within {
 }
 .ph-settings-feature-wrap { overflow: hidden; }
 .ph-settings-feature-mounts .ph-mounts-body { padding: 16px 24px 24px; }
-.ph-mount-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
-.ph-mount-toolbar-title { color: var(--text-primary); font-size: 14px; font-weight: 600; }
-.ph-mount-toolbar-hint { margin-top: 4px; color: var(--text-secondary); font-size: 12px; line-height: 1.45; }
+/* 挂载页工具条：只承载「＋ 添加插件」，右对齐与列表右缘一致 */
+.ph-mount-toolbar { display: flex; align-items: center; justify-content: flex-end; gap: 16px; }
 .ph-mount-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .ph-mount-list > .feature-card { box-sizing: border-box; min-width: 0; min-height: 64px; padding: 14px 16px; }
 .ph-mount-list .feature-card-top { align-items: center; gap: 12px; }
@@ -7222,6 +7221,20 @@ body[data-theme="light"] .user-choice-card:focus-within {
 .ph-mount-list .feature-card-name { overflow-wrap: anywhere; }
 .ph-mount-list .feature-card-badges { flex: 0 0 auto; gap: 6px; }
 .ph-mount-list .ph-mount-empty-cta { grid-column: 1 / -1; }
+/* 多 feature 包的 feature 级开关（ADR-0052）：卡片下方一排 chip，点击切换启用态 */
+.ph-mount-features { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.ph-mount-feature-chip {
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border-color, #d8dbe0);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.6;
+  cursor: pointer;
+}
+.ph-mount-feature-chip:hover { color: var(--text-primary); border-color: var(--text-secondary); }
+.ph-mount-feature-chip.is-disabled { opacity: 0.55; text-decoration: line-through; }
 .fs-editor-body {
   display: grid;
   grid-template-columns: minmax(148px, 172px) minmax(0, 1fr);
@@ -7261,7 +7274,6 @@ body[data-theme="light"] .user-choice-card:focus-within {
   .ph-settings-feature-tabs { padding-inline: 12px; }
   .ph-mounts-body { padding: 12px; }
   .ph-mount-toolbar { align-items: flex-start; }
-  .ph-mount-toolbar-hint { max-width: 28ch; }
   .ph-mount-list { grid-template-columns: minmax(0, 1fr); }
   .fs-editor-body { grid-template-columns: minmax(96px, 34%) minmax(0, 1fr); gap: 8px; padding: 8px 12px 14px; }
   .fs-editor-nav { padding-right: 6px; }

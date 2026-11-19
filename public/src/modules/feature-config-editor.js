@@ -38,6 +38,20 @@ function _fceT(zh, en) {
   return getCurrentLanguage() === 'zh' ? zh : en;
 }
 
+/**
+ * 字段文案：manifest 两种写法并存——字符串，或 { zh, en } 双语对象
+ * （早期包如 agentero 用 label/description 双语）。直接把对象塞进模板会渲染成
+ * "[object Object]"，所以统一在这里取当前语言。
+ */
+function _fcePropText(value) {
+  if (typeof value === 'string') return value;
+  if (value && typeof value === 'object') {
+    const lang = getCurrentLanguage() === 'zh' ? 'zh' : 'en';
+    return value[lang] || value.zh || value.en || '';
+  }
+  return '';
+}
+
 // ── 实例工厂 ──────────────────────────────────────────────────
 
 export function createFeatureConfigEditor(options = {}) {
@@ -146,8 +160,9 @@ export function createFeatureConfigEditor(options = {}) {
         for (const sec of manifestSections) {
           sections.push({
             id: `${featureName}__${sec.id}`,
-            title: sec.title,
+            title: _fcePropText(sec.title) || sec.id,
             featureName,
+            mountName: feature.mountName,
             propKeys: sec.properties,
             props,
           });
@@ -155,7 +170,8 @@ export function createFeatureConfigEditor(options = {}) {
       } else {
         sections.push({
           id: featureName,
-          title: featureName,
+          title: _fcePropText(manifest.name) || featureName,
+          mountName: feature.mountName,
           featureName,
           propKeys: Object.keys(props),
           props,
@@ -314,6 +330,9 @@ export function createFeatureConfigEditor(options = {}) {
 
   function renderRow(prop, fullKey, rowState, disabled) {
     const sw = prop.showWhen ? ` style="display:none;" data-showwhen='${JSON.stringify(prop.showWhen)}'` : '';
+    // 名称优先取 title，其次双语 label，最后退回字段名（不留空白行）
+    const title = _fcePropText(prop.title) || _fcePropText(prop.label) || fullKey.split('.').pop();
+    const desc = _fcePropText(prop.description);
     const status = rowState?.status === 'takeover' ? 'takeover' : 'follow';
     // 累加字段的可编辑输入只承载本层条目：跟随态不把上游值放进输入框
     //（否则直接编辑会把上游条目抄进本层），上游以只读块单独展示
@@ -325,8 +344,8 @@ export function createFeatureConfigEditor(options = {}) {
     return `
       <div class="ph-mc-row fs-row fs-state-${status}"${sw} data-prop-key="${escapeHtml(fullKey)}">
         <div class="ph-mc-role">
-          <div class="ph-mc-role-name">${escapeHtml(prop.title || '')}</div>
-          ${prop.description ? `<div class="ph-mc-role-desc">${escapeHtml(prop.description)}</div>` : ''}
+          <div class="ph-mc-role-name">${escapeHtml(title)}</div>
+          ${desc ? `<div class="ph-mc-role-desc">${escapeHtml(desc)}</div>` : ''}
         </div>
         <div class="fs-row-ctrl">
           ${renderInput(fullKey, prop, value, disabled)}
@@ -441,6 +460,7 @@ export function createFeatureConfigEditor(options = {}) {
         return `<input type="text" class="fs-input" data-config-key="${escapeHtml(fullKey)}" value="${escapeHtml(val)}" placeholder="${escapeHtml(prop.placeholder || '')}"${dis} />`;
       case 'boolean':
         return `<input type="checkbox" class="fs-checkbox" data-config-key="${escapeHtml(fullKey)}" ${val === 'true' ? 'checked' : ''}${dis} />`;
+      case 'integer':
       case 'number':
         return `<input type="number" class="fs-input" data-config-key="${escapeHtml(fullKey)}" value="${escapeHtml(val)}" ${prop.min != null ? `min="${prop.min}"` : ''} ${prop.max != null ? `max="${prop.max}"` : ''} ${prop.step != null ? `step="${prop.step}"` : ''}${dis} />`;
       default:
@@ -826,7 +846,7 @@ export function createFeatureConfigEditor(options = {}) {
       renderNav();
       await reloadResolved();
       const targetSection = initialFeature
-        ? state.sections.find((section) => section.featureName === initialFeature)
+        ? state.sections.find((section) => section.featureName === initialFeature || section.mountName === initialFeature)
         : state.sections[0];
       if (targetSection) {
         selectSection(targetSection.id);

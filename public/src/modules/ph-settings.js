@@ -3,9 +3,10 @@ import { getCurrentLanguage } from './i18n-environment-state.js';
 import { allAgents } from './agent-store-state.js';
 import { getClawModelPresets } from './model-preset-cache.js';
 import { createFeatureConfigEditor } from './feature-config-editor.js';
-import { phOpenFeatureStore, _fsRemoveFor } from './feature-store.js';
+import { phOpenFeatureStore, phCloseFeatureStore, _fsRemoveFor, _fsSetDisabledFeatures } from './feature-store.js';
 import { registerContainerImagesHost, loadContainerImagesPanel } from './container-images.js';
 import { enhanceAll } from './claw-select.js';
+import { ClawToast } from './toast-notify.js';
 import { getThinkingEffortOptions } from './input-model-switcher.js';
 import { getFeatureCreatorProjects } from './project-data.js';
 import {
@@ -232,10 +233,21 @@ async function _phRenderMountsView(identityKey) {
     const mounts = data.mounts?.[identityKey] || {};
     const baseFeatures = data.base?.[identityKey] || [];
     const builtinByName = new Map((data.builtin || []).map((item) => [item.runtimeName, item]));
+    // 仓库包的展示名与描述（货架同源）。身份页 identityKey → agentId：
+    // main 是 programming-helper 的历史兼容键（与商店 _FS_IDENTITY_SCOPES 同口径）
+    const scopeAgentId = PH_FEATURE_PAGES[identityKey]?.scopeAgentId
+      || (identityKey === 'main' ? 'programming-helper' : identityKey);
+    const packageByName = new Map();
+    for (const pkg of (data.packages || [])) {
+      // 空间私有包只对该空间展示；同包全局与私有并存时私有优先（后写覆盖）
+      if (pkg.scopeAgentId && pkg.scopeAgentId !== scopeAgentId) continue;
+      packageByName.set(String(pkg.package || '').replace(/^@[^/]+\//, ''), pkg);
+    }
     const entriesByName = new Map();
     for (const item of baseFeatures) {
       entriesByName.set(item.name, {
         name: item.name,
+        displayName: item.displayName || item.name,
         description: item.description || '',
         surface: item.surface || null,
         origin: 'official',
@@ -244,9 +256,17 @@ async function _phRenderMountsView(identityKey) {
     }
     for (const [name, mount] of Object.entries(mounts)) {
       const builtin = builtinByName.get(name);
+      const pkg = mount.kind === 'repository' ? packageByName.get(name) : null;
+      // 仓库包的描述取 manifest 摘要；缺失（包已不在仓库）时退回包坐标
+      const description = mount.missing
+        ? (mount.package + '@' + mount.version)
+        : (mount.kind === 'builtin' ? (builtin?.description || '') : (pkg?.description || ''));
       entriesByName.set(name, {
         name,
-        description: mount.missing ? (mount.package + '@' + mount.version) : (builtin?.description || ''),
+        displayName: mount.kind === 'builtin'
+          ? (builtin?.title || name)
+          : (pkg?.displayName || name),
+        description,
         surface: mount.kind === 'builtin' ? (builtin?.surface || null) : null,
         origin: mount.kind === 'builtin' ? 'official' : 'installed',
         mount,
@@ -289,25 +309,80 @@ function _phRenderMountsBody(host) {
     const missing = mount?.missing
       ? '<span class="feature-badge status-removed">' + escapeHtml(isZh ? '包已不在仓库' : 'Missing package') + '</span>'
       : '';
-    return _phMountCard(f.name, f.name, missing, provenance, configBtn + removeBtn, null);
+    // 多 feature 包：卡片下方列出各 feature，可逐个启用/禁用（包本身仍装配）
+    const featureList = (() => {
+      const list = Array.isArray(mount?.features) ? mount.features : [];
+      if (!list.length) return '';
+      const chips = list.map((item) => '<button type="button" class="ph-mount-feature-chip'
+        + (item.disabled ? ' is-disabled' : '') + '"'
+        + ' data-action="phSettings.toggleMountFeature"'
+        + ' data-identity="' + escapeHtml(_phMountData.identityKey) + '"'
+        + ' data-mount="' + escapeHtml(f.name) + '"'
+        + ' data-feature="' + escapeHtml(item.name) + '"'
+        + ' title="' + escapeHtml(item.disabled
+          ? (isZh ? '已禁用，点击启用（下次会话生效）' : 'Disabled; click to enable (next session)')
+          : (isZh ? '已启用，点击禁用（下次会话生效）' : 'Enabled; click to disable (next session)')) + '">'
+        + escapeHtml(item.name) + (item.disabled ? (isZh ? ' · 已禁用' : ' · disabled') : '') + '</button>').join('');
+      return '<div class="ph-mount-features">' + chips + '</div>';
+    })();
+    // 参数序：name / displayName / description / 来源徽章 / 动作徽章 / 详情
+    return _phMountCard(f.name, e.displayName || f.name, e.description || '', provenance, missing + configBtn + removeBtn, featureList);
   };
 
-  const cardsHtml = features.map(buildCard).join('');
-  const emptyHtml = '<div class="ph-mount-empty-cta">'
-    + '<div class="ph-mount-empty-title">' + escapeHtml(isZh ? '暂无可配置的 Feature' : 'No configurable features') + '</div>'
-    + '<div class="ph-mount-empty-desc">' + escapeHtml(isZh
-      ? '此身份当前没有已装配的可选插件。'
-      : 'No optional plugins are currently assembled for this identity.') + '</div></div>';
+  // 分层：可处置插件（builtin 可选 + tgz 仓库包）/ 内置能力（agent.js 静态
+  // 装配的产品本体，随宿主升级，不参与插件的装/卸/禁用）。
+  const isPluginEntry = (entry) => Boolean(entry.mount
+    && (entry.mount.kind === 'builtin' || entry.mount.kind === 'repository'));
+  const pluginFeatures = features.filter((feature) => isPluginEntry(feature._entry));
+  const builtinFeatures = features.filter((feature) => !isPluginEntry(feature._entry));
+
+  const renderSection = (dotClass, title, hint, list, emptyText) =>
+    '<section class="fs-status-section"><div class="fs-status-section-head">'
+    + '<span class="fs-status-dot ' + dotClass + '"></span>'
+    + escapeHtml(title) + '<span class="fs-tab-count">' + list.length + '</span>'
+    + '</div>'
+    + '<div style="font-size:12px;color:var(--text-secondary);margin:2px 0 10px;">' + escapeHtml(hint) + '</div>'
+    + (list.length
+      ? '<div class="ph-mount-list">' + list.map(buildCard).join('') + '</div>'
+      : '<div class="ph-mount-empty-cta"><div class="ph-mount-empty-desc">' + escapeHtml(emptyText) + '</div></div>')
+    + '</section>';
 
   host.innerHTML = '<div class="ph-mounts-body">'
     + _phEnvNoticeHtml()
-    + '<div class="ph-mount-toolbar"><div><div class="ph-mount-toolbar-title">'
-    + escapeHtml(isZh ? '已装配能力' : 'Assembled capabilities') + '</div><div class="ph-mount-toolbar-hint">'
-    + escapeHtml(isZh ? '官方内置能力与已添加插件均可直接进入参数设置。' : 'Configure official capabilities and installed plugins here.')
-    + '</div></div>' + addButton + '</div>'
-    + '<div class="ph-mount-list">' + (cardsHtml || emptyHtml) + '</div>'
+    + '<div class="ph-mount-toolbar">' + addButton + '</div>'
+    + renderSection(
+      'fs-status-dot-installed',
+      isZh ? '插件' : 'Plugins',
+      isZh ? '来自插件仓库（全局库存或本空间私有），可按包装配、禁用、卸载。' : 'From the plugin repository (global stock or this workspace\'s private repository); assemble, disable or remove per package.',
+      pluginFeatures,
+      isZh ? '尚未装配插件，点击右上角「+ 添加插件」。' : 'No plugins assembled yet; use “+ Add Plugins”.',
+    )
+    + renderSection(
+      'fs-status-dot-not-installed',
+      isZh ? '内置能力' : 'Built-in Capabilities',
+      isZh ? '随产品提供，不参与插件装配；仍可在会话右侧 Features 面板查看运行时状态。' : 'Ship with the product and are not part of plugin assembly; runtime state is visible in the session Features panel.',
+      builtinFeatures,
+      isZh ? '没有内置能力。' : 'No built-in capabilities.',
+    )
     + '</div>';
 }
+
+/** 多 feature 包的 feature 级启用/禁用：改 $mount.disabledFeatures（包仍装配）。 */
+const _phToggleMountFeature = async function(identity, mountRuntimeName, featureName) {
+  if (!identity || !mountRuntimeName || !featureName) return;
+  const entry = (_phMountData?.entries || []).find((item) => item.name === mountRuntimeName);
+  const features = Array.isArray(entry?.mount?.features) ? entry.mount.features : [];
+  const current = features.filter((item) => item.disabled).map((item) => item.name);
+  const next = current.includes(featureName)
+    ? current.filter((name) => name !== featureName)
+    : [...current, featureName];
+  try {
+    await _fsSetDisabledFeatures(identity, mountRuntimeName, next);
+    await _phRenderMountsView(identity);
+  } catch (err) {
+    window.alert((getCurrentLanguage() === 'zh' ? '切换失败：' : 'Toggle failed: ') + (err?.message || err));
+  }
+};
 
 let _phRebuildBusy = false;
 
@@ -948,9 +1023,17 @@ export function renderPhSettingsOverlay(agent, presets, { initialTab } = {}) {
       + '</div>';
   }).join('');
 
+  // 参数配置是独立子页（整页替换），不是页内分页器的一块显示区：
+  // 这样参数编辑区拿到整个窗口宽度，返回按钮回到本页的「功能配置」。
+  const isConfigSubPage = !!featurePage && _phFeatureSubTab === 'config';
+
   let contentHtml;
   if (_phSettingsTab === 'model') {
     contentHtml = _renderModelConfigContent(agent, presets);
+  } else if (isConfigSubPage) {
+    contentHtml = '<div class="ph-settings-feature-page" data-identity="' + escapeHtml(featurePage.identityKey) + '">'
+      + '<div class="ph-settings-feature-wrap" id="ph-feature-config-host"></div>'
+      + '</div>';
   } else if (featurePage) {
     const identityKey = featurePage.identityKey;
     const featureSubTabs = [
@@ -959,14 +1042,12 @@ export function renderPhSettingsOverlay(agent, presets, { initialTab } = {}) {
       { key: 'config', label: isZh ? '参数配置' : 'Parameters' },
     ].map((item) => '<button type="button" class="ph-session-tab' + (_phFeatureSubTab === item.key ? ' active' : '')
       + '" data-action="phSettings.switchFeatureSubTab" data-sub="' + item.key + '">' + item.label + '</button>').join('');
-    const bodyHtml = _phFeatureSubTab === 'config'
-      ? '<div class="ph-settings-feature-wrap" id="ph-feature-config-host"></div>'
-      : _phFeatureSubTab === 'policy'
-        // 策略分页与装配分页共用滚动容器契约；行式内容仍走 ph-mc-list
-        ? '<div class="ph-settings-feature-mounts" id="ph-coder-policy-host"><div class="ph-settings-empty">'
-          + escapeHtml(isZh ? '正在读取 Coder 策略…' : 'Loading Coder policy…') + '</div></div>'
-        : '<div class="ph-settings-feature-mounts" id="ph-feature-mounts-host"><div class="ph-settings-empty">'
-          + escapeHtml(isZh ? '正在读取装配…' : 'Loading assembly…') + '</div></div>';
+    const bodyHtml = _phFeatureSubTab === 'policy'
+      // 策略分页与装配分页共用滚动容器契约；行式内容仍走 ph-mc-list
+      ? '<div class="ph-settings-feature-mounts" id="ph-coder-policy-host"><div class="ph-settings-empty">'
+        + escapeHtml(isZh ? '正在读取 Coder 策略…' : 'Loading Coder policy…') + '</div></div>'
+      : '<div class="ph-settings-feature-mounts" id="ph-feature-mounts-host"><div class="ph-settings-empty">'
+        + escapeHtml(isZh ? '正在读取装配…' : 'Loading assembly…') + '</div></div>';
     contentHtml = '<div class="ph-settings-feature-page" data-identity="' + escapeHtml(identityKey) + '">'
       + '<div class="ph-settings-feature-tabs">' + featureSubTabs + '</div>'
       + bodyHtml
@@ -1006,20 +1087,35 @@ export function renderPhSettingsOverlay(agent, presets, { initialTab } = {}) {
           ? (isZh ? '编程小助手的系统通知：任务完成、等待选择与 Coder 交付，可按场景选择提醒方式' : 'Programming Helper toasts — finished tasks, choices, and Coder deliveries; pick a style per scenario')
           : (isZh ? '设置会话在本地或容器中的运行方式' : 'Configure how sessions run locally or in containers');
 
+  // 子页头部：返回按钮回到本页「功能配置」（项目既有形态：圆形钮 + 左箭头）
+  const headHtml = isConfigSubPage
+    ? '<div class="feature-detail-head-left">'
+      + '<button class="feature-detail-close feature-skill-back" type="button" title="' + escapeHtml(isZh ? '返回' : 'Back') + '"'
+      + ' data-action="phSettings.switchFeatureSubTab" data-sub="mounts">'
+      + '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 19-7-7 7-7"></path><path d="M19 12H5"></path></svg>'
+      + '</button>'
+      + '<div>'
+      + '<div class="feature-detail-title">' + escapeHtml(isZh ? '参数配置' : 'Parameters') + '</div>'
+      + '<div class="feature-detail-subtitle">' + escapeHtml(isZh
+        ? '改动即时保存；「重置」把该字段恢复为上级配置'
+        : 'Changes save immediately; Reset restores the field to the upstream layer') + '</div>'
+      + '</div>'
+      + '</div>'
+    : '<div>'
+      + '<div class="feature-detail-title">' + (isZh ? '工作空间设置' : 'Workspace Settings') + '</div>'
+      + '<div class="feature-detail-subtitle">' + escapeHtml(subtitle) + '</div>'
+      + '</div>';
+
   host.innerHTML = [
     '<div class="feature-detail-overlay">',
     '<div class="feature-detail-window ph-settings-window">',
     '<div class="feature-detail-head">',
-    '<div>',
-    '<div class="feature-detail-title">' + (isZh ? '工作空间设置' : 'Workspace Settings') + '</div>',
-    '<div class="feature-detail-subtitle">' + escapeHtml(subtitle) + '</div>',
-    '</div>',
+    headHtml,
     '<button class="feature-detail-close" type="button" data-action="phSettings.close">&times;</button>',
     '</div>',
     '<div class="ph-settings-layout">',
-    '<div class="ph-settings-sidebar">',
-    tabItems,
-    '</div>',
+    // 子页不渲染左栏：参数编辑区拿满窗口宽度
+    isConfigSubPage ? '' : '<div class="ph-settings-sidebar">' + tabItems + '</div>',
     '<div class="ph-settings-content">',
     contentHtml,
     '</div>',
@@ -1097,10 +1193,63 @@ const _phSwitchRuntimeSubTab = (sub) => {
   }
 };
 
-const _phOpenFeatureConfig = (el) => {
-  const page = PH_FEATURE_PAGES[_phSettingsTab];
+/**
+ * 打开某能力的参数页。两个入口汇到这里：
+ *   - 工作空间设置 → 功能配置 清单卡片的齿轮（当前页，无 identity）
+ *   - 插件商店卡片 / 功能配置 卡片（带 identity）：先收起商店，再切到该空间的
+ *     「参数配置」并选中该项 —— 同一工作空间的参数只有这一个编辑面。
+ */
+/**
+ * 该身份已装配项里「真正有可配置参数」的名字集合（featureName 与 mountName
+ * 两个键都登记）。判定口径与编辑器一致：顶层 properties 或 sections 任一声明
+ * 了字段才算可配。请求失败返回 null —— 未知时不拦路，交给编辑器自己报空态。
+ */
+async function _phConfigurableNames(page) {
+  const agentId = page.scopeAgentId || (page.identityKey === 'main' ? 'programming-helper' : page.identityKey);
+  try {
+    const res = await fetch(`/protoclaw/system_feature_manifests?agentId=${encodeURIComponent(agentId)}`);
+    if (!res.ok) return null;
+    const data = await res.json();
+    const names = new Set();
+    for (const entry of data.features || []) {
+      const settings = entry?.manifest?.settings || {};
+      const hasProps = Object.keys(settings.properties || {}).length > 0;
+      const hasSections = Array.isArray(settings.sections)
+        && settings.sections.some((section) => (section?.properties || []).length > 0);
+      if (!hasProps && !hasSections) continue;
+      if (entry.featureName) names.add(entry.featureName);
+      if (entry.mountName) names.add(entry.mountName);
+    }
+    return names;
+  } catch {
+    return null;
+  }
+}
+
+const _phOpenFeatureConfig = async (el) => {
+  const storeIdentity = el.dataset.identity || '';
+  const targetTab = storeIdentity ? (storeIdentity === 'coder' ? 'coder' : 'feature') : _phSettingsTab;
+  const page = PH_FEATURE_PAGES[targetTab];
   if (!page) return;
-  _phFeatureConfigTarget = { identityKey: page.identityKey, name: el.dataset.name };
+  const name = String(el.dataset.name || '');
+  // 没有可配置参数就不跳转：否则用户会进到一个空页面，还得自己返回
+  const configurable = await _phConfigurableNames(page);
+  if (configurable && !configurable.has(name)) {
+    const isZh = getCurrentLanguage() === 'zh';
+    ClawToast.show({
+      id: `feature-config-empty-${name}`,
+      status: 'warning',
+      title: isZh ? '没有可配置的参数' : 'No configurable parameters',
+      description: isZh ? `${name} 未声明参数，无需配置` : `${name} declares no settings`,
+      autoDismiss: 3500,
+    });
+    return;
+  }
+  if (storeIdentity) {
+    phCloseFeatureStore();
+    _phSettingsTab = targetTab;
+  }
+  _phFeatureConfigTarget = { identityKey: page.identityKey, name };
   _phSwitchFeatureSubTab('config');
 };
 
@@ -1114,6 +1263,7 @@ window.ClawFW.actions.registerMany({
   'phSettings.switchTab': (el) => _phSwitchSettingsTab(el.dataset.tab),
   'phSettings.openFeatureStore': (el) => phOpenFeatureStore(el.dataset.identity),
   'phSettings.removeMountFeature': (el) => _fsRemoveFor(el.dataset.identity, el.dataset.name),
+  'phSettings.toggleMountFeature': (el) => _phToggleMountFeature(el.dataset.identity, el.dataset.mount, el.dataset.feature),
   'phSettings.rebuildEnv': () => _phRebuildEnv(),
   'phSettings.setProcessMode': (el) => phSetProcessMode(el.dataset.mode),
   'phSettings.setCoderRotationStrategy': (el) => phSetCoderRotationStrategy(el.dataset.mode),

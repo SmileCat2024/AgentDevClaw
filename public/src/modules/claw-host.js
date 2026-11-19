@@ -536,6 +536,16 @@
     panels: {
       register: registerPanel,
       declare: declarePanel,
+      getSettingsBinding: (id) => panelStubs.get(id)?.meta.pluginSettings,
+      updateDeclaration(id, meta) {
+        const stub = panelStubs.get(id);
+        if (!stub) return false;
+        const when = { agentIds: normalizeValues(meta.when?.agentIds), surfaces: normalizeValues(meta.when?.surfaces) };
+        Object.assign(stub.meta, meta, { when });
+        const panel = panels.get(id);
+        if (panel && panel !== stub.meta) Object.assign(panel, meta, { when });
+        return true;
+      },
       undeclare: undeclarePanel,
       unregister: unregisterPanel,
       get: (id) => panels.get(String(id)),

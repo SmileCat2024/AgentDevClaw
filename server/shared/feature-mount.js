@@ -44,6 +44,18 @@ export function validateMountEntry(value, { featureName = '(unknown)' } = {}) {
   if (value.enabled !== undefined && typeof value.enabled !== 'boolean') {
     return `feature '${featureName}' 的 $mount.enabled 必须是布尔值（缺省 true）`;
   }
+  // 多 feature 包（ADR-0052）：disabledFeatures 声明包内被禁用的 feature 名。
+  // 包仍装配（环境、配置、面板与数据面保留），仅对应运行时实例不挂载。
+  if (value.disabledFeatures !== undefined) {
+    if (!Array.isArray(value.disabledFeatures)) {
+      return `feature '${featureName}' 的 $mount.disabledFeatures 必须是字符串数组`;
+    }
+    for (const name of value.disabledFeatures) {
+      if (typeof name !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(name.trim())) {
+        return `feature '${featureName}' 的 $mount.disabledFeatures 含非法 feature 名：${String(name)}`;
+      }
+    }
+  }
   if (value.kind === 'builtin') {
     return null;
   }
@@ -90,6 +102,10 @@ export function extractFeatureMounts(layers) {
         if (error) throw new Error(`层 '${id}' 中 ${error}`);
         // enabled 归一：缺省 true；false = 禁用（装配保留、三面下线）
         const enabled = mount.enabled !== false;
+        // disabledFeatures 去重规范化（包内 feature 级禁用，不影响包级装配事实）
+        const disabledFeatures = Array.isArray(mount.disabledFeatures)
+          ? [...new Set(mount.disabledFeatures.map((name) => String(name).trim()))]
+          : [];
         mounts.set(featureName, mount.kind === 'builtin'
           ? { kind: 'builtin', enabled, layerId: id }
           : {
@@ -98,6 +114,7 @@ export function extractFeatureMounts(layers) {
             version: String(mount.version).trim(),
             enabled,
             layerId: id,
+            ...(disabledFeatures.length ? { disabledFeatures } : {}),
           });
       }
       // 纯配置层剔除 $mount 键（浅拷贝，不污染层对象）

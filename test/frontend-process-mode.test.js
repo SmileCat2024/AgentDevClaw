@@ -619,3 +619,74 @@ describe('programming-helper workspace process mode UI', () => {
     assert.equal(agent.processMode, 'shared-global');
   });
 });
+
+describe('多 feature 包的 feature 级开关（ADR-0052）', () => {
+  const tick = () => new Promise((resolve) => setImmediate(resolve));
+
+  it('渲染 feature chip 与禁用态，点击切换写 $mount.disabledFeatures', async () => {
+    const settingsHost = createHostElement('ph-settings-content');
+    const mountsHost = createHostElement('ph-feature-mounts-host');
+    const puts = [];
+    await withPhSettingsCase({
+      agentId: 'programming-helper',
+      fetch: async (url, options = {}) => {
+        const target = String(url);
+        if (options.method === 'PUT') {
+          puts.push(JSON.parse(options.body));
+          return { ok: true, status: 200, json: async () => ({ ok: true }) };
+        }
+        if (target.includes('/feature_config/resolved')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              layers: [
+                { id: 'global', sparse: {} },
+                { id: 'agent', sparse: { 'multi-demo': { $mount: { package: '@demo/multi', version: '1.0.0', disabledFeatures: ['beta'] } } } },
+              ],
+              merged: {},
+            }),
+          };
+        }
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            base: { main: [] },
+            packages: [{
+              package: '@demo/multi', scopeAgentId: null, displayName: 'Multi', description: '多 feature 示例',
+              versions: [{ version: '1.0.0' }],
+            }],
+            mounts: {
+              main: {
+                'multi-demo': {
+                  kind: 'repository', package: '@demo/multi', version: '1.0.0', missing: false, featureCount: 2,
+                  features: [{ name: 'alpha', disabled: false }, { name: 'beta', disabled: true }],
+                },
+              },
+            },
+            envReady: { main: { hasEnv: true, ready: true } },
+          }),
+        };
+      },
+      document: createSettingsDoc((id) => (id === 'ph-feature-mounts-host' ? mountsHost : settingsHost)),
+    }, async ({ c, settings }) => {
+      settings.renderPhSettingsOverlay({ id: 'programming-helper' }, [], { initialTab: 'feature' });
+      await tick();
+
+      assert.match(mountsHost.innerHTML, /data-action="phSettings\.toggleMountFeature"/);
+      assert.match(mountsHost.innerHTML, /data-feature="alpha"/);
+      assert.match(mountsHost.innerHTML, /beta · 已禁用/);
+
+      invokeSettingsAction(c, 'phSettings.toggleMountFeature', {
+        dataset: { identity: 'main', mount: 'multi-demo', feature: 'alpha' },
+      });
+      await tick();
+
+      const put = puts.find((body) => body?.layerId === 'agent');
+      assert.ok(put, '应写回 agent 层声明');
+      assert.deepEqual(put.content['multi-demo'].$mount.disabledFeatures, ['beta', 'alpha']);
+      assert.equal(put.content['multi-demo'].$mount.package, '@demo/multi');
+    });
+  });
+});

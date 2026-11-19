@@ -96,6 +96,7 @@ import {
 // ── Phase 1: domain route modules ────────────────────────────────
 import { setupSystemFeatureConfigRoutes } from './server/routes/system-feature-config.js';
 import { setupFeatureConfigRoutes } from './server/routes/feature-config.js';
+import { validatePluginSettingsWrite } from './server/feature-runtime/plugin-settings-context.js';
 import { setupPreflightRoutes } from './server/routes/preflight.js';
 import { setupFsOperationsRoutes } from './server/routes/fs-operations.js';
 import { setupGitRoutes } from './server/routes/git.js';
@@ -512,7 +513,7 @@ const { cleanupOrphanedRouting, notifySessionLineage, notifySessionArchived } = 
 setupSystemFeatureConfigRoutes(app, express);
 
 // ── Feature Config Queue API (resolved / layer) → server/routes/feature-config.js ──
-setupFeatureConfigRoutes(app, express);
+setupFeatureConfigRoutes(app, express, { validatePluginSettingsWrite });
 
 // ── Assembly Preflight API → server/routes/preflight.js ──
 setupPreflightRoutes(app, express);

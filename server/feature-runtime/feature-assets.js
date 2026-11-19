@@ -19,17 +19,29 @@
 import path from 'path';
 import { existsSync, promises as fs, readdirSync, createReadStream, realpathSync } from 'fs';
 
-import { USER_FEATURE_REPOSITORY_ROOT } from '../shared/constants.js';
+import { USER_DATA_ROOT, USER_FEATURE_REPOSITORY_ROOT } from '../shared/constants.js';
 import { gunzipFileToBuffer, listTarEntryNames, untarBufferToDir } from '../shared/tgz-archive.js';
 import { scanFeatureCatalog, resolveCatalogPackage } from './catalog.js';
 
-/** UI 资产根：用户 feature 仓库下的 assets/（与 tgz 同区，便于整体备份清理）。 */
-export function clientAssetsRoot(assetsRoot) {
+/**
+ * 空间私有包的解出根：<base>/workspaces/<agentId>/{feature-assets,feature-server}。
+ * 与全局 assets/server-env 分区，同名同版本不同字节可跨来源并存（ADR-0052 §7）。
+ * base 为测试注入口（生产用 USER_DATA_ROOT）。
+ */
+function workspaceScopedRoot(baseRoot, agentId, leaf) {
+  const safeId = String(agentId || '').trim().replace(/[^a-zA-Z0-9_-]+/g, '-') || 'unknown';
+  return path.join(baseRoot || USER_DATA_ROOT, 'workspaces', safeId, leaf);
+}
+
+/** UI 资产根：全局包用 user-features/assets；空间私有包用所属空间的 feature-assets。 */
+export function clientAssetsRoot(assetsRoot, scopeAgentId) {
+  if (scopeAgentId) return workspaceScopedRoot(assetsRoot, scopeAgentId, 'feature-assets');
   return assetsRoot || path.join(USER_FEATURE_REPOSITORY_ROOT, 'assets');
 }
 
-/** server 面解出根：server-env/（供主进程 dynamic import，独立于 assets）。 */
-export function serverEnvRoot(root) {
+/** server 面解出根：全局包 server-env；空间私有包用所属空间的 feature-server。 */
+export function serverEnvRoot(root, scopeAgentId) {
+  if (scopeAgentId) return workspaceScopedRoot(root, scopeAgentId, 'feature-server');
   return root || path.join(USER_FEATURE_REPOSITORY_ROOT, 'server-env');
 }
 
@@ -38,12 +50,12 @@ function packageDirName(packageName) {
   return String(packageName).replace(/^@([^\/]+)\//, '$1!');
 }
 
-export function versionAssetDir({ packageName, version }, assetsRoot) {
-  return path.join(clientAssetsRoot(assetsRoot), packageDirName(packageName), String(version));
+export function versionAssetDir({ packageName, version, scopeAgentId }, assetsRoot) {
+  return path.join(clientAssetsRoot(assetsRoot, scopeAgentId), packageDirName(packageName), String(version));
 }
 
-export function versionServerDir({ packageName, version }, root) {
-  return path.join(serverEnvRoot(root), packageDirName(packageName), String(version));
+export function versionServerDir({ packageName, version, scopeAgentId }, root) {
+  return path.join(serverEnvRoot(root, scopeAgentId), packageDirName(packageName), String(version));
 }
 
 function countFiles(dir) {
@@ -125,7 +137,7 @@ async function extractArchiveFacet(
  * 参数语义见 extractArchiveFacet；assetsRoot 测试隔离注入口。
  */
 export async function extractClientAssets(
-  { archivePath, packageName, version, archiveDigest },
+  { archivePath, packageName, version, archiveDigest, scopeAgentId },
   { expectClient = false, assetsRoot } = {},
 ) {
   return extractArchiveFacet({
@@ -134,7 +146,7 @@ export async function extractClientAssets(
     version,
     archiveDigest,
     facet: 'client',
-    destDir: versionAssetDir({ packageName, version }, assetsRoot),
+    destDir: versionAssetDir({ packageName, version, scopeAgentId }, assetsRoot),
   }, { expect: expectClient });
 }
 
@@ -143,7 +155,7 @@ export async function extractClientAssets(
  * 解出目录自动补 ESM 标记。serverRoot 测试隔离注入口。
  */
 export async function extractServerAssets(
-  { archivePath, packageName, version, archiveDigest },
+  { archivePath, packageName, version, archiveDigest, scopeAgentId },
   { expectServer = false, serverRoot } = {},
 ) {
   return extractArchiveFacet({
@@ -152,7 +164,7 @@ export async function extractServerAssets(
     version,
     archiveDigest,
     facet: 'server',
-    destDir: versionServerDir({ packageName, version }, serverRoot),
+    destDir: versionServerDir({ packageName, version, scopeAgentId }, serverRoot),
   }, { expect: expectServer, writeModuleMarker: true });
 }
 
@@ -182,14 +194,14 @@ export function assetMimeFor(fileName) {
  * 解析资产请求路径（防穿越）。成功返回绝对文件路径；包版本目录不存在、
  * 路径逃逸、指向 .digest、版本号含非法字符一律返回 null（调用方 404）。
  */
-export function resolveClientAsset({ packageName, version, file }, assetsRoot) {
+export function resolveClientAsset({ packageName, version, file, scopeAgentId }, assetsRoot) {
   const raw = String(file || '');
   if (raw.includes('..') || raw.includes('\\') || raw.startsWith('/') || raw.includes('\0')) return null;
   const segments = raw.split('/').filter((segment) => segment !== '' && segment !== '.');
   if (segments.length === 0) return null;
   if (segments.includes('.digest')) return null;
   if (!/^[\w.]+$/.test(String(version))) return null;
-  const base = versionAssetDir({ packageName, version }, assetsRoot);
+  const base = versionAssetDir({ packageName, version, scopeAgentId }, assetsRoot);
   let resolvedBase;
   try { resolvedBase = realpathSync(base); } catch { return null; }
   try {
@@ -261,9 +273,9 @@ function healMissRecent(key) {
  *   catalogRoots 现扫。assetsRoot / serverRoot 测试隔离注入口。
  * @returns {Promise<{healed: boolean, extracted?: boolean, fileCount?: number, reason?: string}>}
  */
-export async function ensureFacetExtracted({ packageName, version, facet }, { catalog, catalogRoots, assetsRoot, serverRoot } = {}) {
+export async function ensureFacetExtracted({ packageName, version, facet, scopeAgentId }, { catalog, catalogRoots, assetsRoot, serverRoot } = {}) {
   const canonicalName = packageNameFromDirName(packageName);
-  const key = `${facet}|${canonicalName}@${version}`;
+  const key = `${facet}|${scopeAgentId || '-'}|${canonicalName}@${version}`;
   if (healMissRecent(key)) return { healed: false, reason: 'recently-failed' };
   const inflight = healInflight.get(key);
   if (inflight) return inflight;
@@ -278,8 +290,8 @@ export async function ensureFacetExtracted({ packageName, version, facet }, { ca
     }
     try {
       const result = facet === 'server'
-        ? await extractServerAssets(archive, { serverRoot })
-        : await extractClientAssets(archive, { assetsRoot });
+        ? await extractServerAssets({ ...archive, scopeAgentId }, { serverRoot })
+        : await extractClientAssets({ ...archive, scopeAgentId }, { assetsRoot });
       return { healed: true, extracted: result.extracted, fileCount: result.fileCount };
     } catch (error) {
       healMissCache.set(key, Date.now());

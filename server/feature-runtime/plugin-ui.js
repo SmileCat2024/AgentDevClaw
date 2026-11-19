@@ -22,8 +22,8 @@
 import { existsSync } from 'fs';
 import path from 'path';
 
-import { scanFeatureCatalog } from './catalog.js';
-import { IDENTITY_SCOPES, readDeclaredMounts, readGlobalDeclaredMounts } from './install-service.js';
+import { catalogRootsWithWorkspaceRepositories, isCatalogEntryVisibleTo, scanFeatureCatalog } from './catalog.js';
+import { IDENTITY_SCOPES, readDeclaredMounts, readGlobalDeclaredMounts, readEffectiveMounts } from './install-service.js';
 import { versionAssetDir, ensureFacetExtracted } from './feature-assets.js';
 
 const SCOPE_VALUES = new Set(['global', 'assembly']);
@@ -130,7 +130,11 @@ export function collectAssemblyFacts(resolvers) {
  *   meta 与 ClawHost.panels.declare(id, meta, loader) 的 meta 同构。
  */
 export async function composePanelDeclarations({ catalogRoots, resolvers, assetsRoot } = {}) {
-  const catalog = await scanFeatureCatalog(catalogRoots);
+  // 装配身份可见 = 全局两仓 + 各空间私有仓（空间私有包只对所属身份可见）
+  const catalog = await scanFeatureCatalog(catalogRootsWithWorkspaceRepositories(
+    catalogRoots,
+    Object.values(IDENTITY_SCOPES).map((scope) => scope.agentId),
+  ));
   const assemblyFacts = collectAssemblyFacts(resolvers);
 
   const warnings = [];
@@ -144,8 +148,17 @@ export async function composePanelDeclarations({ catalogRoots, resolvers, assets
     // 可见性 = 装配事实（ADR-0046 决策 2，2026-11-19 修订）：未装配不下发
     // ——含作者标注 scope=global 的面板（scope 是装配建议，不参与可见性裁决）；
     // 默认装配源已按 opt-in 展开为身份条目，无 opt-in 消费者时等同未装配；
-    // 禁用事实（enabled:false）等同未装配（三态处置：装配保留、面板下线）
-    const mounted = (assemblyFacts.get(packageName) || []).filter((fact) => fact.enabled !== false);
+    // 禁用事实（enabled:false）等同未装配（三态处置：装配保留、面板下线）。
+    // 空间私有包（scopeAgentId）只对所属身份的装配事实施加生效——其他身份
+    // 即使声明了同名包，也按不可见丢弃（私有包不跨空间）。
+    const mounted = (assemblyFacts.get(packageName) || [])
+      .filter((fact) => fact.enabled !== false)
+      .filter((fact) => {
+        const sameVersion = versions.filter((entry) => entry.version === fact.version);
+        // 仓库中根本没有该版本（ghost 装配）：保留事实，由下游给"已不在仓库"警告
+        if (sameVersion.length === 0) return true;
+        return sameVersion.some((entry) => isCatalogEntryVisibleTo(entry, fact.agentId));
+      });
     if (mounted.length === 0) continue;
 
     // 版本钉装配：取装配版本里最高者；catalog 存在更高版本不跟随
@@ -164,8 +177,10 @@ export async function composePanelDeclarations({ catalogRoots, resolvers, assets
     // 资产就绪自愈（#9）：client 面解出物缺失（tgz 手拷入库 / 解出目录丢失）
     // 时从仓库 tgz 现场解出（幂等）。自愈不可达（catalog 查无 / digest 冲突）
     // 不在此报警——面板级 .digest 检查按缺失跳过并给既有 warning。
+    // 资产按包来源定位目录：空间私有包解出到所属空间（ADR-0052 §7）
+    const assetScope = versionChoice.scopeAgentId || '';
     await ensureFacetExtracted(
-      { packageName, version: versionChoice.version, facet: 'client' },
+      { packageName, version: versionChoice.version, facet: 'client', scopeAgentId: assetScope },
       { catalog, catalogRoots, assetsRoot },
     ).catch(() => {});
 
@@ -183,7 +198,7 @@ export async function composePanelDeclarations({ catalogRoots, resolvers, assets
       seenPanelIds.set(panel.id, packageName);
 
       // 资产就绪检查（.digest 由导入链路写入）
-      const assetDir = versionAssetDir({ packageName, version: versionChoice.version }, assetsRoot);
+      const assetDir = versionAssetDir({ packageName, version: versionChoice.version, scopeAgentId: assetScope }, assetsRoot);
       if (!existsSync(path.join(assetDir, '.digest'))) {
         warnings.push(`插件 ${packageName}@${versionChoice.version} 面板 ${panel.id} 的 client 资产未解出（跳过下发；重新导入该 tgz 可解出）`);
         continue;
@@ -192,7 +207,16 @@ export async function composePanelDeclarations({ catalogRoots, resolvers, assets
       const when = {};
       // 装配事实已全部归属到身份（默认装配源按 opt-in 展开），可见范围 =
       // 装配身份集合；此处不再有"处处可见"的无主形态
-      when.agentIds = [...new Set(mounted.map((fact) => fact.agentId).filter(Boolean))];
+      const matchingFacts = versionChoice.pluginSettings ? mounted.filter((fact) => {
+        const scope = Object.values(IDENTITY_SCOPES).find((item) => item.agentId === fact.agentId);
+        if (!scope) return false;
+        const effective = [...readEffectiveMounts(scope, resolvers).mounts.values()];
+        const matches = effective.filter((mount) => mount.package === packageName && mount.enabled !== false);
+        return matches.length === 1 && versions.find((entry) => entry.version === matches[0].version
+          && isCatalogEntryVisibleTo(entry, fact.agentId)) === versionChoice;
+      }) : mounted;
+      when.agentIds = [...new Set(matchingFacts.map((fact) => fact.agentId).filter(Boolean))];
+      if (!when.agentIds.length) continue;
       if (panel.surfaces) when.surfaces = panel.surfaces;
 
       declarations.push({
@@ -200,8 +224,10 @@ export async function composePanelDeclarations({ catalogRoots, resolvers, assets
         pluginId: panel.pluginId,
         package: packageName,
         version: versionChoice.version,
-        url: `/protoclaw/feature-assets/${packageDirName(packageName)}/${versionChoice.version}/${panel.entry}`,
+        url: `/protoclaw/feature-assets/${packageDirName(packageName)}/${versionChoice.version}/${panel.entry}`
+          + (assetScope ? `?ws=${encodeURIComponent(assetScope)}` : ''),
         meta: {
+          ...(versionChoice.pluginSettings ? { pluginSettings: { packageName, digest: versionChoice.archiveDigest } } : {}),
           ...(panel.label ? { label: panel.label } : {}),
           ...(panel.description ? { description: panel.description } : {}),
           ...(panel.icon ? { icon: panel.icon } : {}),

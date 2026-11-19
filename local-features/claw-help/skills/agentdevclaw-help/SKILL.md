@@ -30,7 +30,7 @@ description: AgentDevClaw 使用帮助。当用户询问模型/MCP/技能怎么�
 
 | 事实 | 值 |
 |---|---|
-| 设置入口 | 界面右侧栏底部齿轮图标，弹出菜单：模型配置 / 访问保护 / 全局 Feature 设置 / 工作空间 / 网络代理 / 用量信息 / MCP 网关 / 退出程序 |
+| 设置入口 | 界面右侧栏底部齿轮图标，弹出菜单：模型配置 / 访问保护 / 插件配置 / 工作空间 / 网络代理 / 用量信息 / MCP 网关 / 退出程序 |
 | 模型配置 | 设置 → 模型配置，三类入口：Codex 订阅（登录 OpenAI 账户）/ OpenCode 订阅 / 自定义模型（支持 OpenAI Chat Completions、Responses、Anthropic Messages 三种协议） |
 | 网络代理 | 设置 → 网络代理；保存后全局生效，含连通性测试。Codex / OpenCode 等订阅服务通常需要代理 |
 | MCP 项目级配置 | 会话目录 `.agentdev/mcps/*.json`；stdio 条目必须写 `"type": "stdio"`，缺省会被当 HTTP 连接而静默失败 |

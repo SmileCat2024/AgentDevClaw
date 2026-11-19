@@ -4260,6 +4260,24 @@ body[data-theme="light"] .settings-group-meta {
   gap: 16px;
 }
 
+/* 二级页头部右侧动作组：文字动作与圆形关闭钮同排，作为一组贴右。
+   文字按钮沿用 settings-btn-secondary 配方，只收紧盒高与内距以对齐 32px 关闭钮
+   （文字按钮不得复用圆形关闭钮的固定尺寸）。 */
+.feature-detail-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.feature-detail-head-actions > .settings-btn {
+  flex-shrink: 0;
+  min-height: 32px;
+  padding: 0 14px;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
 /* 头部左侧组：二级页返回按钮与标题同行，与 MCP 网关详情页的头部结构一致。 */
 .feature-detail-head-left {
   display: flex;

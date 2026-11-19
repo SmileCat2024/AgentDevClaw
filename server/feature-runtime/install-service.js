@@ -128,7 +128,7 @@ function resolveScopeFor(identity) {
  * @returns {{ mounts: Map, targetSparse: object }} targetSparse 是写入目标层的 sparse
  *   （global 身份 → global 层；空间身份 → 该身份 agent 层）
  */
-function readEffectiveMounts(scope, resolvers) {
+export function readEffectiveMounts(scope, resolvers) {
   const useDefaultSource = scope.isGlobal || scope.defaultMounts === true;
   const globalPart = useDefaultSource ? readGlobalDeclaredMounts(resolvers) : { sparse: {}, mounts: new Map() };
   if (scope.isGlobal) {

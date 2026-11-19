@@ -133,10 +133,42 @@ function unmountContainerPanel(reason) {
   delete featurePanelBody.dataset.panel;
 }
 
-function mountContainerPanel(panel, panelId) {
-  mountedContainer = { id: panelId, unmount: panel.unmountBody || null };
+function pluginPanelContext(panelId) {
+  const spec = window.ClawHost?.panels.getSettingsBinding?.(panelId);
+  if (!spec) return { panelId };
+  const agentId = window.getCurrentHostAgentRecord?.()?.id || window.focusedAgentId;
+  const view = window.getCurrentSessionViewIdentity?.();
+  const runtimeId = window.currentRuntimeAgentId;
+  const sessionId = runtimeId && view?.agentId === agentId ? view.sessionId : '';
+  const query = new URLSearchParams({ agentId: agentId || '', digest: spec.digest });
+  if (sessionId) query.set('sessionId', sessionId);
+  const ready = !!agentId && (!runtimeId || !!sessionId) && !window.RemoteConnections?.getEntryHostAgentId?.(runtimeId);
+  const bind = (url) => {
+    if (!ready) throw new Error('Plugin settings require a resolved local view');
+    const target = new URL(url, window.location.href);
+    if (target.origin !== window.location.origin) throw new Error('Plugin requests must use the local origin');
+    target.searchParams.delete('sessionId');
+    for (const [key, value] of query) target.searchParams.set(key, value);
+    return target.pathname + target.search;
+  };
+  return {
+    panelId,
+    settingsKey: JSON.stringify([spec.packageName, runtimeId, query.toString(), ready]),
+    async getPluginSettings() {
+      const url = `/protoclaw/plugin_settings?packageName=${encodeURIComponent(spec.packageName)}`;
+      const response = await window.fetch(bind(url));
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.error || `Plugin settings: ${response.status}`);
+      return body.settings;
+    },
+    pluginRequestUrl: bind,
+  };
+}
+
+function mountContainerPanel(panel, panelId, context) {
+  mountedContainer = { id: panelId, settingsKey: context.settingsKey, unmount: panel.unmountBody || null };
   try {
-    panel.mountBody(featurePanelBody, { panelId });
+    panel.mountBody(featurePanelBody, context);
   } catch (err) {
     console.error(`[panel:${panelId}] mountBody failed`, err);
     mountedContainer = null; // 挂载失败视作未挂载，防幽灵 unmount
@@ -244,12 +276,13 @@ export function renderFeaturePanel(options = {}) {
     // 挂载中的容器面板与当前面板不一致时先卸载：覆盖「容器→容器」切换，
     // 也覆盖「容器→字符串」切换（innerHTML 路径会销毁其 DOM，必须先给
     // unmountBody 清理定时器/订阅的机会）。「字符串→容器」无挂载，直挂。
-    if (mountedContainer && mountedContainer.id !== panelId) {
+    const context = pluginPanelContext(panelId);
+    if (mountedContainer && (mountedContainer.id !== panelId || mountedContainer.settingsKey !== context.settingsKey)) {
       unmountContainerPanel('switch');
     }
     if (typeof panel.mountBody === 'function') {
       if (!mountedContainer) {
-        mountContainerPanel(panel, panelId);
+        mountContainerPanel(panel, panelId, context);
       } else {
         // 已挂载的重渲染（轮询触发）：容器面板自管刷新，宿主 no-op
         featurePanel.classList.add('body-ready');

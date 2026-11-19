@@ -69,7 +69,7 @@ export async function mountResolvedFeatures(agent, plan, options = {}) {
     const instance = new FeatureClass(feature.config || {});
     const runtimeName = String(instance?.name || '').trim();
     if (!runtimeName) throw new Error(`Feature ${feature.package} 实例没有 name。`);
-    if (feature.runtimeName && feature.resolvedFrom === 'source' && runtimeName !== feature.runtimeName) {
+    if (feature.runtimeName && (feature.resolvedFrom === 'source' || feature.projectedConfig) && runtimeName !== feature.runtimeName) {
       throw new Error(`Feature ${feature.package} 声明 name=${runtimeName}，但 Studio 注册名是 ${feature.runtimeName}。`);
     }
     if (seen.has(runtimeName) || agent.features?.has(runtimeName)) {
@@ -80,7 +80,7 @@ export async function mountResolvedFeatures(agent, plan, options = {}) {
     // identifies a repository package by package name, which need not equal the
     // Feature instance name, so alias its JSON config to the real runtime name
     // before mount/initialization.
-    if (feature.config && agent.config?.features && !agent.config.features[runtimeName]) {
+    if (feature.config && agent.config?.features && (feature.projectedConfig || !agent.config.features[runtimeName])) {
       agent.config.features[runtimeName] = feature.config;
     }
     entries.push({ feature, FeatureClass, instance, entry });

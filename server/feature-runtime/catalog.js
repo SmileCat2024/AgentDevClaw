@@ -6,9 +6,11 @@ import {
   FEATURE_REPOSITORY_ROOT,
   FEATURE_MANIFEST_NAME,
   USER_FEATURE_REPOSITORY_ROOT,
+  workspaceFeatureRepositoryRoot,
 } from '../shared/constants.js';
 import { compareSemver } from '../shared/feature-utils.js';
 import { gunzipFileToBuffer, readTarEntry } from '../shared/tgz-archive.js';
+import { compilePluginSettings } from './plugin-settings.js';
 
 async function readArchiveJson(archivePath, archiveEntryPath) {
   // 纯 Node 读取（shared/tgz-archive）：Windows 双 tar 并存（GNU 需
@@ -18,6 +20,47 @@ async function readArchiveJson(archivePath, archiveEntryPath) {
   const data = readTarEntry(tarBuffer, archiveEntryPath);
   if (!data || data.length === 0) throw new Error(`Archive entry is empty: ${archiveEntryPath}`);
   return JSON.parse(data.toString('utf8'));
+}
+
+/** feature 名：运行时实例名 + 配置键 + 界面展示键，与 npm 包名段同字符集。 */
+const FEATURE_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+
+/**
+ * manifest.features[] 归一化（ADR-0046 2026-11-19 第三批：一个插件包可携带
+ * 多个 feature）。无该字段 / 空数组 = 单 feature 包，行为与既往完全一致。
+ * 每项 { name（必填）, entry?, export? }，entry/export 缺省沿用 manifest 顶层。
+ * 非法项丢弃并返回 warnings：catalog 层保持宽容（坏声明不让包从仓库消失），
+ * 导入确认面单独展示这些提示。
+ */
+function normalizeManifestFeatures(raw) {
+  if (!Array.isArray(raw) || raw.length === 0) return { features: null, warnings: [] };
+  const warnings = [];
+  const features = [];
+  const seen = new Set();
+  for (const item of raw) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
+      warnings.push('manifest.features 项不是对象，已忽略');
+      continue;
+    }
+    const name = typeof item.name === 'string' ? item.name.trim() : '';
+    if (!name || !FEATURE_NAME_PATTERN.test(name)) {
+      warnings.push(`manifest.features 项 name 非法（${name || '(空)'}）：仅允许字母/数字/点/下划线/连字符`);
+      continue;
+    }
+    if (seen.has(name)) {
+      warnings.push(`manifest.features 中 feature 名重复：${name}`);
+      continue;
+    }
+    const entry = typeof item.entry === 'string' ? item.entry.trim() : '';
+    if (entry && (entry.includes('..') || entry.startsWith('/') || entry.includes('\\'))) {
+      warnings.push(`manifest.features.${name} 的 entry 含非法路径段：${entry}`);
+      continue;
+    }
+    const exportName = typeof item.export === 'string' ? item.export.trim() : '';
+    seen.add(name);
+    features.push({ name, ...(entry ? { entry } : {}), ...(exportName ? { export: exportName } : {}) });
+  }
+  return { features: features.length ? features : null, warnings };
 }
 
 export async function summarizeArchive(archivePath, source) {
@@ -31,6 +74,7 @@ export async function summarizeArchive(archivePath, source) {
     throw new Error(`Feature archive 缺少 package name 或 version：${archivePath}`);
   }
   const archive = await fs.readFile(archivePath);
+  const { features: manifestFeatures, warnings: manifestFeatureWarnings } = normalizeManifestFeatures(manifest?.features);
   return {
     packageName,
     version,
@@ -55,6 +99,19 @@ export async function summarizeArchive(archivePath, source) {
     manifestSettings: manifest?.settings && typeof manifest.settings === 'object'
       && !Array.isArray(manifest.settings)
       ? manifest.settings
+      : null,
+    // 多 feature 声明（ADR-0046 2026-11-19 第三批）：一个包可携带多个 feature，
+    // 每项是独立运行时实例与独立配置键。null = 单 feature 包（既有语义）。
+    manifestFeatures,
+    manifestFeatureWarnings,
+    pluginSettings: compilePluginSettings(manifest, new Set((manifestFeatures || []).map(({ name }) => name))),
+    // 按 feature 分组的配置 schema：settings.features[<name>] = { properties }。
+    // 多 feature 包用此形态；单 feature 包仍用顶层 settings.properties。
+    manifestFeatureSettings: manifest?.settings && typeof manifest.settings === 'object'
+      && !Array.isArray(manifest.settings)
+      && manifest.settings.features && typeof manifest.settings.features === 'object'
+      && !Array.isArray(manifest.settings.features)
+      ? manifest.settings.features
       : null,
     // manifest v3（ADR-0045）：ui 面（panels 声明）与 server 面（entry/prefix）
     // 原样保留；逐项校验与语义合成在 plugin-ui.js 的声明合成处做（catalog
@@ -84,22 +141,43 @@ async function scanRoot(root, source) {
   return archives;
 }
 
-export async function scanFeatureCatalog({ officialRoot = FEATURE_REPOSITORY_ROOT, userRoot = USER_FEATURE_REPOSITORY_ROOT } = {}) {
-  const [official, custom] = await Promise.all([
+/**
+ * 仓库来源优先级：空间私有 > 用户区 > 官方区（同包同版本时高优先级解释）。
+ * 空间私有条目只对所属身份可见（scopeAgentId），全局条目对所有身份可见。
+ */
+const SOURCE_PRIORITY = { workspace: 2, custom: 1, official: 0 };
+
+/**
+ * 扫描插件仓库。
+ * @param {object} options
+ *   - officialRoot / userRoot：全局两仓（测试隔离注入口）
+ *   - workspaceRoots：{ agentId: root } 工作空间私有仓（ADR-0046 空间级仓库），
+ *     条目带 scopeAgentId 标记可见身份；缺省为空（无私有仓的调用方行为不变）
+ * 同版本多来源并存时保留全部条目，按来源优先级 + 版本号降序排列，解析时
+ * 取首个命中——空间私有包因此覆盖同名全局包，仅对所属身份生效。
+ */
+export async function scanFeatureCatalog({ officialRoot = FEATURE_REPOSITORY_ROOT, userRoot = USER_FEATURE_REPOSITORY_ROOT, workspaceRoots = {} } = {}) {
+  const workspaceEntries = Object.entries(workspaceRoots || {})
+    .filter(([agentId, root]) => typeof agentId === 'string' && agentId.trim() && root);
+  const [official, custom, ...workspaces] = await Promise.all([
     scanRoot(officialRoot, 'official'),
     scanRoot(userRoot, 'custom'),
+    ...workspaceEntries.map(([agentId, root]) => scanRoot(root, 'workspace').then(
+      (entries) => entries.map((entry) => ({ ...entry, scopeAgentId: agentId })),
+    )),
   ]);
-  const invalid = [...official, ...custom].filter((entry) => entry.error);
+  const all = [...official, ...custom, ...workspaces.flat()];
+  const invalid = all.filter((entry) => entry.error);
   const packages = new Map();
-  for (const entry of [...official, ...custom]) {
+  for (const entry of all) {
     if (entry.error) continue;
     const versions = packages.get(entry.packageName) || [];
-    versions.push(entry);
+    versions.push({ ...entry, scopeAgentId: entry.scopeAgentId || null });
     packages.set(entry.packageName, versions);
   }
   for (const versions of packages.values()) {
     versions.sort((left, right) => {
-      const sourceScore = Number(right.source === 'custom') - Number(left.source === 'custom');
+      const sourceScore = (SOURCE_PRIORITY[right.source] || 0) - (SOURCE_PRIORITY[left.source] || 0);
       if (sourceScore !== 0) return sourceScore;
       return compareSemver(right.version, left.version);
     });
@@ -107,8 +185,29 @@ export async function scanFeatureCatalog({ officialRoot = FEATURE_REPOSITORY_ROO
   return { packages, invalid };
 }
 
-export function resolveCatalogPackage(catalog, { packageName, version, allowLatest = false }) {
-  const versions = catalog?.packages?.get(packageName) || [];
+/**
+ * 生产扫描根：显式注入 catalogRoots 时原样返回（测试隔离完全控制，不读真实
+ * 用户目录）；未注入时按身份集合补各空间私有仓根。
+ */
+export function catalogRootsWithWorkspaceRepositories(catalogRoots, agentIds) {
+  if (catalogRoots) return catalogRoots;
+  const workspaceRoots = {};
+  for (const agentId of agentIds || []) {
+    if (agentId) workspaceRoots[agentId] = workspaceFeatureRepositoryRoot(agentId);
+  }
+  return { workspaceRoots };
+}
+
+/** 条目对某身份是否可见：全局条目（scopeAgentId=null）对所有身份可见。 */
+export function isCatalogEntryVisibleTo(entry, agentId) {
+  const scopeAgentId = entry?.scopeAgentId;
+  if (!scopeAgentId) return true;
+  return !agentId || scopeAgentId === agentId;
+}
+
+export function resolveCatalogPackage(catalog, { packageName, version, allowLatest = false, agentId = null }) {
+  const versions = (catalog?.packages?.get(packageName) || [])
+    .filter((entry) => isCatalogEntryVisibleTo(entry, agentId));
   if (versions.length === 0) throw new Error(`Feature 仓库中不存在包：${packageName}`);
   if (version) {
     const exact = versions.find((entry) => entry.version === version);

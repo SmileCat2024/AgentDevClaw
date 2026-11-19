@@ -20,6 +20,8 @@ import { execFileSync } from 'child_process';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync, renameSync } from 'fs';
 import { tmpdir } from 'os';
 import { join, relative as pathRelative } from 'path';
+
+const pathJoin = join;
 import { Writable } from 'node:stream';
 import crypto from 'crypto';
 
@@ -689,5 +691,67 @@ describe('资产自愈（ensureFacetExtracted / resolveClientAssetWithHeal）', 
       await resolveClientAssetWithHeal({ packageName: 'damaged-plugin', version: '1.0.0', file: 'extra.css' }, { catalogRoots, assetsRoot }),
       null,
     );
+  });
+});
+
+// ── 空间私有包资产分区（ADR-0052 §7） ───────────────────────────────
+
+describe('空间私有包资产分区', () => {
+  it('带 scopeAgentId 时解出到注入根的 workspaces/<agentId>/feature-assets，全局资产目录不受影响', async () => {
+    const { archivePath, digest } = makePluginTgz();
+    const assetsRoot = join(root, 'assets-base');
+    await extractClientAssets(
+      { archivePath, packageName: 'demo-plugin', version: '1.0.0', archiveDigest: digest, scopeAgentId: 'programming-helper' },
+      { expectClient: true, assetsRoot },
+    );
+
+    const scopedDir = versionAssetDir(
+      { packageName: 'demo-plugin', version: '1.0.0', scopeAgentId: 'programming-helper' },
+      assetsRoot,
+    );
+    assert.ok(scopedDir.includes(pathJoin('workspaces', 'programming-helper', 'feature-assets')));
+    assert.equal(readFileSync(pathJoin(scopedDir, 'index.js'), 'utf8'), 'export default {}');
+
+    // 全局（无 scope）目录未被写入
+    const globalDir = versionAssetDir({ packageName: 'demo-plugin', version: '1.0.0' }, assetsRoot);
+    assert.equal(existsSync(pathJoin(globalDir, 'index.js')), false);
+
+    // 带 scope 解析命中空间目录；不带 scope 解析不到（未解出全局）
+    const scopedHit = resolveClientAsset(
+      { packageName: 'demo-plugin', version: '1.0.0', file: 'index.js', scopeAgentId: 'programming-helper' },
+      assetsRoot,
+    );
+    assert.ok(scopedHit);
+    assert.equal(resolveClientAsset({ packageName: 'demo-plugin', version: '1.0.0', file: 'index.js' }, assetsRoot), null);
+  });
+
+  it('同名同版本不同字节可跨来源并存（空间与全局各自 digest 独立）', async () => {
+    const assetsRoot = join(root, 'assets-base');
+    const globalPkg = makePluginTgz({ clientFiles: { 'index.js': 'global' } });
+    // 同名同版本、不同内容的第二个 tgz（makePluginTgz 输出路径按包名+版本，先搬走）
+    const privateSrc = join(root, 'private-src');
+    mkdirSync(join(privateSrc, 'package', 'client'), { recursive: true });
+    writeFileSync(join(privateSrc, 'package', 'package.json'), JSON.stringify({ name: 'demo-plugin', version: '1.0.0' }));
+    writeFileSync(join(privateSrc, 'package', 'client', 'index.js'), 'private');
+    const privateTgz = join(root, 'private-demo-plugin-1.0.0.tgz');
+    execFileSync('tar', ['-czf', pathRelative(root, privateTgz), '-C', pathRelative(root, privateSrc), 'package'], { cwd: root });
+    const privateDigest = `sha256:${crypto.createHash('sha256').update(readFileSync(privateTgz)).digest('hex')}`;
+
+    await extractClientAssets(
+      { archivePath: globalPkg.archivePath, packageName: 'demo-plugin', version: '1.0.0', archiveDigest: globalPkg.digest },
+      { assetsRoot },
+    );
+    await extractClientAssets(
+      { archivePath: privateTgz, packageName: 'demo-plugin', version: '1.0.0', archiveDigest: privateDigest, scopeAgentId: 'coder' },
+      { expectClient: true, assetsRoot },
+    );
+
+    const globalHit = resolveClientAsset({ packageName: 'demo-plugin', version: '1.0.0', file: 'index.js' }, assetsRoot);
+    const privateHit = resolveClientAsset(
+      { packageName: 'demo-plugin', version: '1.0.0', file: 'index.js', scopeAgentId: 'coder' },
+      assetsRoot,
+    );
+    assert.equal(readFileSync(globalHit, 'utf8'), 'global');
+    assert.equal(readFileSync(privateHit, 'utf8'), 'private');
   });
 });

@@ -56,7 +56,12 @@ function applyDeclarations(declarations) {
   // 新增 / 换版（url 变了先退再声明；打开中的面板走 teardown 清理）
   for (const [id, decl] of next) {
     const prev = lastSnapshot.get(id);
-    if (prev && prev.url === decl.url) continue;
+    if (prev && prev.url === decl.url) {
+      if (prev.meta !== JSON.stringify(decl.meta)) {
+        changed = window.ClawHost.panels.updateDeclaration(id, toHostMeta(decl)) || changed;
+      }
+      continue;
+    }
     if (prev) {
       try {
         changed = window.ClawHost.panels.undeclare(id) || changed;
@@ -70,7 +75,7 @@ function applyDeclarations(declarations) {
     }
   }
 
-  lastSnapshot = new Map(Array.from(next.entries()).map(([id, decl]) => [id, { panelId: id, url: decl.url }]));
+  lastSnapshot = new Map(Array.from(next.entries()).map(([id, decl]) => [id, { panelId: id, url: decl.url, meta: JSON.stringify(decl.meta) }]));
   if (changed) {
     // 桥接期：syncRailButtons / renderCurrentMainView 定义于 classic
     // debug-panel-host / app-ui（渲染入口域收敛时改 import）

@@ -32,14 +32,18 @@ async function responseError(prefix, resp) {
 /**
  * 上传 tgz 并解析，返回 { uploadId, summary }（两个路径同形）。
  * onProgress(0..1) 随分片完成推进（直传路径在完成时回调一次 1）。
+ * agentId：导入归属——缺省/空 = 全局用户仓库；有值 = 该工作空间私有仓库
+ * （ADR-0046 空间级仓库）。
  */
-export async function uploadTgzChunked(file, { onProgress } = {}) {
+export async function uploadTgzChunked(file, { onProgress, agentId } = {}) {
   if (!(file instanceof File) || typeof file.size !== 'number' || file.size < 1) {
     throw new Error('invalid file');
   }
+  const scope = typeof agentId === 'string' && agentId.trim() ? agentId.trim() : '';
   if (file.size <= DIRECT_UPLOAD_MAX_BYTES) {
     const formData = new FormData();
     formData.append('file', file);
+    if (scope) formData.append('agentId', scope);
     const resp = await fetch('/protoclaw/feature_repository/parse_upload', { method: 'POST', body: formData });
     if (!resp.ok) throw await responseError('parse upload failed', resp);
     onProgress?.(1);
@@ -50,7 +54,7 @@ export async function uploadTgzChunked(file, { onProgress } = {}) {
   const initResp = await fetch('/protoclaw/feature_repository/chunk_init', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ fileName: file.name, totalChunks, totalSize: file.size }),
+    body: JSON.stringify({ fileName: file.name, totalChunks, totalSize: file.size, ...(scope ? { agentId: scope } : {}) }),
   });
   if (!initResp.ok) throw await responseError('chunk init failed', initResp);
   const { uploadId } = await initResp.json();

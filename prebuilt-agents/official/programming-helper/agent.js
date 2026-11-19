@@ -44,6 +44,7 @@ import {
   readProjectLayer,
 } from '../../../server/shared/feature-config-layers.js';
 import { extractFeatureMounts, stripMountDeclarations } from '../../../server/shared/feature-mount.js';
+import { splitPluginSettingsLayer } from '../../../server/feature-runtime/plugin-settings.js';
 import { collapseAccumulatedFields } from '../../../server/shared/feature-config-accumulate.js';
 import { resolveUserDataDir } from '../../../server/shared/constants.js';
 
@@ -123,8 +124,10 @@ export function assemblePhFeatureConfig({ projectId, workspaceDir, sessionConfig
     { id: 'session', config: sessionConfig && typeof sessionConfig === 'object' ? sessionConfig : {} },
   ];
   const { mounts, configLayers } = extractFeatureMounts(layers);
-  const { merged, warnings } = resolveFeatureConfig(collapseAccumulatedFields(configLayers));
-  return { mounts, merged, warnings, layerIds: layers.map((layer) => layer.id) };
+  const split = configLayers.map(splitPluginSettingsLayer);
+  const { merged, warnings } = resolveFeatureConfig(collapseAccumulatedFields(split.map((layer) => layer.features)));
+  return { mounts, merged, warnings, layerIds: layers.map((layer) => layer.id),
+    pluginSettingsLayers: split.slice(0, -1).map((layer) => layer.settings) };
 }
 
 /**
@@ -142,7 +145,7 @@ export default class ProgrammingHelperAgent extends BasicAgent {
     // session 可能对应不同归属，禁止进程级缓存）。会话注入（featureOverrides）
     // 不落盘。装配事实挂到 pendingFeatureMounts，由宿主（run-prebuilt-agent）
     // 构造完成后消费。
-    const { mounts: featureMounts, merged } = assemblePhFeatureConfig({
+    const { mounts: featureMounts, merged, pluginSettingsLayers } = assemblePhFeatureConfig({
       projectId: config.projectId,
       workspaceDir,
       sessionConfig: runtime.config && typeof runtime.config === 'object'
@@ -165,6 +168,7 @@ export default class ProgrammingHelperAgent extends BasicAgent {
     // prepareRuntime 前走 catalog→provisioner→loader 链动态挂载（runtime
     // 创建时解析，运行中不热更新）。
     this.pendingFeatureMounts = featureMounts;
+    this.pluginSettingsLayers = pluginSettingsLayers;
 
     // BasicAgent 已纯基类化（框架 a5fe117 / ticket 009），不再内置装配任何 feature。
     // 原由 BasicAgent 挂载的 MCP/Skill/SubAgent/OpencodeBasic 等，现在装配权在宿主：

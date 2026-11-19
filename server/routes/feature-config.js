@@ -257,7 +257,7 @@ function mapScopeError(res, error) {
   return res.status(500).json({ error: message });
 }
 
-export function setupFeatureConfigRoutes(app, express) {
+export function setupFeatureConfigRoutes(app, express, { validatePluginSettingsWrite, resolvers } = {}) {
   app.get('/protoclaw/feature_config/resolved', (req, res) => {
     const agentId = req.query.agentId;
     if (!agentId || typeof agentId !== 'string') {
@@ -267,13 +267,13 @@ export function setupFeatureConfigRoutes(app, express) {
     // 项目会话（ticket 043）以 projectId 查询项目链；dir 与 projectId 互斥
     const projectId = req.query.projectId || undefined;
     try {
-      res.json(resolveScopeConfig({ agentId, dir, projectId }));
+      res.json(resolveScopeConfig({ agentId, dir, projectId }, resolvers));
     } catch (error) {
       mapScopeError(res, error);
     }
   });
 
-  app.put('/protoclaw/feature_config/layer', express.json(), (req, res) => {
+  app.put('/protoclaw/feature_config/layer', express.json(), async (req, res) => {
     const { agentId, layerId, content } = req.body || {};
     if (!agentId || typeof agentId !== 'string') {
       return res.status(400).json({ error: 'agentId required' });
@@ -287,7 +287,7 @@ export function setupFeatureConfigRoutes(app, express) {
     }
     let targetPath;
     try {
-      targetPath = resolveWriteTarget({ agentId, layerId });
+      targetPath = resolveWriteTarget({ agentId, layerId }, resolvers);
     } catch (error) {
       return mapScopeError(res, error);
     }
@@ -295,6 +295,16 @@ export function setupFeatureConfigRoutes(app, express) {
       return res.status(404).json({ error: `未知 layerId: "${layerId}"` });
     }
     try {
+      const previous = readLayerFile(targetPath);
+      const changed = Object.keys(content).filter((key) => key.startsWith('$plugin:')
+        && JSON.stringify(content[key]) !== JSON.stringify(previous[key]));
+      if (changed.length) {
+        if (!validatePluginSettingsWrite) return res.status(400).json({ error: '插件设置写入未启用' });
+        await validatePluginSettingsWrite({ agentId, layerId, content, changed });
+        if (JSON.stringify(readLayerFile(targetPath)) !== JSON.stringify(previous)) {
+          return res.status(409).json({ error: '配置层已变更，请重新加载后保存' });
+        }
+      }
       const dir = pathDirname(targetPath);
       if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
       writeFileSync(targetPath, JSON.stringify(content, null, 2), 'utf8');
@@ -304,7 +314,7 @@ export function setupFeatureConfigRoutes(app, express) {
       notifyPluginServerDirty(`层编辑 ${agentId}/${layerId}`);
       res.json({ ok: true, layerId, path: targetPath });
     } catch (error) {
-      res.status(500).json({ error: error.message });
+      res.status(error.statusCode || 500).json({ error: error.message });
     }
   });
 }

@@ -18,6 +18,9 @@ import http from 'node:http';
 import crypto from 'crypto';
 import express from 'express';
 
+import { setupFeatureStoreRoutes } from '../server/routes/feature-store.js';
+import { setupFeatureConfigRoutes } from '../server/routes/feature-config.js';
+import { validatePluginSettingsWrite } from '../server/feature-runtime/plugin-settings-context.js';
 import { extractServerAssets, versionServerDir } from '../server/feature-runtime/feature-assets.js';
 import {
   buildPluginServerMounts,
@@ -42,6 +45,7 @@ function makeServerPluginTgz({
   version = '1.0.0',
   prefix = 'srv-demo',
   entry = 'index.js',
+  manifest = {},
   serverCode = `
 export default {
   registerRoutes(router, context) {
@@ -61,7 +65,7 @@ export default {
   );
   writeFileSync(
     join(pkgDir, 'agentdev-feature.json'),
-    JSON.stringify({ schemaVersion: 3, id: packageName, entry: 'dist/index.js', server: { entry, prefix } }),
+    JSON.stringify({ schemaVersion: 3, id: packageName, entry: 'dist/index.js', server: { entry, prefix }, ...manifest }),
   );
   writeFileSync(join(pkgDir, 'server', 'index.js'), serverCode);
   const archivePath = join(root, `${packageName.replace(/[/\\]/g, '!')}-${version}.tgz`);
@@ -103,6 +107,75 @@ function makeHttpApp() {
     close: () => new Promise((resolve) => server.close(resolve)),
   };
 }
+
+it('统一设置按当前会话归属读取，拒绝错误制品或未装配空间', async () => {
+  const fixture = makeServerPluginTgz({
+    manifest: { pluginSettings: { fields: {
+      library: { schema: { type: 'string' }, exposeToUi: true },
+      privateValue: { schema: { type: 'string', default: 'server only' } },
+    } } },
+    serverCode: `export function registerRoutes(router, context) {
+      router.get('/status', (req, res) => res.json(context.getConfig(req)));
+    }`,
+  });
+  const key = '$plugin:srv-demo';
+  const resolvers = makeResolvers({ ...mountedLayer('srv-demo', '1.0.0'), [key]: { library: 'workspace' } });
+  const workspace = resolvers.get('programming-helper');
+  const coderFile = join(root, 'coder.json');
+  writeFileSync(coderFile, JSON.stringify({ ...mountedLayer('srv-demo', '1.0.0'), [key]: { library: 'coder' } }));
+  resolvers.set('coder', () => ({ layers: [{ id: 'agent', path: coderFile }] }));
+  resolvers.set('programming-helper', ({ projectId, dir } = {}) => ({ layers: [
+    ...workspace().layers,
+    ...(projectId || dir ? [{ id: projectId ? 'project:p' : 'dir:d', path: join(root, projectId ? 'p.json' : 'd.json') }] : []),
+  ] }));
+  writeFileSync(join(root, 'p.json'), JSON.stringify({ [key]: { library: 'project' } }));
+  writeFileSync(join(root, 'd.json'), JSON.stringify({ [key]: { library: 'directory' } }));
+  const options = {
+    catalogRoots: { userRoot: root, officialRoot: join(root, 'official-empty') },
+    resolvers, serverRoot: join(root, 'server-env'),
+    findSession: async (_agent, id) => ({ p: { projectId: 'p', openDirectory: '/same' }, d: { openDirectory: '/same' } })[id],
+  };
+  const httpApp = makeHttpApp();
+  setupFeatureStoreRoutes(httpApp.app, express, options);
+  setupFeatureConfigRoutes(httpApp.app, express, {
+    resolvers, validatePluginSettingsWrite: (input) => validatePluginSettingsWrite(input, options),
+  });
+  const result = await mountPluginServerRoutes(httpApp.app, options);
+  assert.equal(result.mounted.length, 1);
+  const port = await httpApp.listen();
+  try {
+    const request = (overrides = {}) => fetch(`http://127.0.0.1:${port}/protoclaw/plugin/srv-demo/status?${new URLSearchParams({ agentId: 'programming-helper', digest: fixture.digest, ...overrides })}`);
+    for (const [id, expected] of [['', 'workspace'], ['p', 'project'], ['d', 'directory']]) {
+      const response = await request(id ? { sessionId: id } : {});
+      assert.equal(response.status, 200);
+      assert.deepEqual(await response.json(), { library: expected, privateValue: 'server only' });
+    }
+    const browserQuery = new URLSearchParams({ packageName: 'srv-demo', agentId: 'programming-helper', sessionId: 'p', digest: fixture.digest });
+    const browserResponse = await fetch(`http://127.0.0.1:${port}/protoclaw/plugin_settings?${browserQuery}`);
+    assert.equal(browserResponse.status, 200);
+    assert.deepEqual(await browserResponse.json(), { settings: { library: 'project' } });
+    assert.equal((await request({ digest: 'other' })).status, 409);
+    const coderResponse = await request({ agentId: 'coder' });
+    assert.equal(coderResponse.status, 200);
+    assert.deepEqual(await coderResponse.json(), { library: 'coder', privateValue: 'server only' });
+    assert.equal((await request({ agentId: 'memo' })).status, 404);
+    assert.equal((await request({ sessionId: 'missing' })).status, 404);
+    // A reset removes only the project override, so the request inherits the workspace value.
+    const save = (content) => fetch(`http://127.0.0.1:${port}/protoclaw/feature_config/layer`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agentId: 'programming-helper', layerId: 'project:p', content }),
+    });
+    assert.equal((await save({ [key]: { library: 42 } })).status, 400);
+    assert.equal((await (await request({ sessionId: 'p' })).json()).library, 'project');
+    assert.equal((await save({ [key]: { library: 'new-project' } })).status, 200);
+    assert.equal((await (await request({ sessionId: 'p' })).json()).library, 'new-project');
+    assert.equal((await save({})).status, 200);
+    assert.equal((await (await request({ sessionId: 'p' })).json()).library, 'workspace');
+  } finally {
+    unmountPluginServerRoutes(httpApp.app);
+    await httpApp.close();
+  }
+});
 
 // ── buildPluginServerMounts ────────────────────────────────────────
 

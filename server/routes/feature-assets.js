@@ -19,10 +19,15 @@ export function setupFeatureAssetRoutes(app) {
   // :package 是包目录段形态（@scope/name → @scope!name，由声明合成处的
   // packageDirName 产出，无路径分隔符）。
   app.get('/protoclaw/feature-assets/:package/:version/*', async (req, res) => {
+    // ws = 空间私有包所属身份（ADR-0052 §7）：缺省走全局资产目录；
+    // 只接受简单目录名，其他形态一律按全局处理（不存在则 404）
+    const rawWs = typeof req.query.ws === 'string' ? req.query.ws.trim() : '';
+    const scopeAgentId = /^[A-Za-z0-9_-]+$/.test(rawWs) ? rawWs : '';
     const filePath = await resolveClientAssetWithHeal({
       packageName: req.params.package,
       version: req.params.version,
       file: req.params[0],
+      scopeAgentId,
     });
     if (!filePath) {
       res.status(404).json({ error: 'asset not found' });

@@ -229,6 +229,45 @@ describe('mountUserConfiguredFeatures（真实装配链）', () => {
     }
   }, { timeout: 120000 });
 
+  it('包设置覆盖映射字段，同时保留未映射的原生参数', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'user-plugin-settings-'));
+    try {
+      const projectDir = path.join(root, 'demo');
+      const repositoryDir = path.join(root, 'repository');
+      await mkdir(projectDir);
+      const packageName = '@example/library.demo';
+      await writeFile(path.join(projectDir, 'package.json'), JSON.stringify({ name: packageName, version: '1.0.0', type: 'module', main: 'index.js', scripts: { build: 'node -e ""' } }));
+      await writeFile(path.join(projectDir, 'index.js'), 'export default class { name = "lookup"; constructor(config) { this.input = config; } }');
+      await writeFile(path.join(projectDir, 'agentdev-feature.json'), JSON.stringify({
+        entry: 'index.js', features: [{ name: 'lookup' }],
+        settings: { features: { lookup: { properties: { directory: { type: 'string' }, limit: { type: 'integer', default: 12 } } } } },
+        pluginSettings: { fields: {
+          library: { schema: { type: 'string' }, targets: [{ feature: 'lookup', field: 'directory' }] },
+          limit: { from: { feature: 'lookup', field: 'limit' } },
+          collection: { schema: { type: 'string', default: 'all' }, exposeToUi: true },
+        } },
+      }));
+      await packageFeatureProject({ projectDir, repositoryDir });
+      const agent = {
+        features: new Map(), config: { features: { lookup: { directory: 'old', preserve: true } } },
+        pluginSettingsLayers: [
+          { '$plugin:@example/library%2Edemo': { library: 'workspace' } },
+          { '$plugin:@example/library%2Edemo': { library: 'project' } },
+        ],
+        async mountFeature(feature) { this.features.set(feature.name, feature); },
+      };
+      await mountUserConfiguredFeatures(agent, new Map([['library', { package: packageName, version: '1.0.0' }]]), {
+        agentId: 'test-agent', catalogRoots: { officialRoot: repositoryDir, userRoot: path.join(root, 'empty') },
+        environmentRoot: path.join(root, 'runtime-envs'),
+      });
+      const expected = { directory: 'project', limit: 12, preserve: true };
+      assert.deepEqual(agent.features.get('lookup').input, expected);
+      assert.deepEqual(agent.config.features, { lookup: expected });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('多命名导出入口经 manifest export 声明唯一确定 Feature class', async () => {
     // 真实形态回归：入口除 Feature class 外还有多个辅助导出且无 default 时，
     // loader 猜测链无法唯一确定——manifest 顶层 export 声明是唯一可靠路径
@@ -408,6 +447,9 @@ describe('feature-store 数据面', () => {
     assert.equal(packages.length, 2);
     assert.deepEqual(packages[0], {
       package: '@user/only-user',
+      // 货架项带可见范围：null = 全局可见（空间私有包为所属 agentId）
+      scopeAgentId: null,
+      source: 'custom',
       displayName: '用户插件',
       description: '描述',
       versions: [{ version: '1.0.0', digest: 'sha256:a' }, { version: '0.9.0', digest: 'sha256:b' }],
@@ -440,6 +482,9 @@ describe('feature-store 数据面', () => {
       const mounts = await collectScopeMounts('test-store-scope', catalog);
       assert.deepEqual(mounts['demo-mount'], {
         kind: 'repository', package: '@user/demo', version: '1.0.0', enabled: true, layerId: 'agent', missing: false,
+        // 单 feature 包：featureCount = 1，无 feature 级开关清单
+        featureCount: 1,
+        features: null,
       });
       assert.equal(mounts['gone-mount'].missing, true);
       // builtin 不查 tgz 仓库，永不误报 missing
@@ -640,5 +685,28 @@ describe('装配身份注册表（声明驱动派生）', () => {
     } finally {
       registerIdentityScopes(snapshot);
     }
+  });
+});
+
+describe('$mount.disabledFeatures（feature 级禁用声明）', () => {
+  it('合法声明透传并去重，绑定到对应包的装配事实', () => {
+    const { mounts } = extractFeatureMounts([{
+      id: 'agent',
+      config: {
+        'demo-multi': { [MOUNT_KEY]: { package: '@user/demo-multi', version: '1.0.0', disabledFeatures: ['beta', 'beta', 'gamma'] } },
+      },
+    }]);
+    assert.deepEqual(mounts.get('demo-multi').disabledFeatures, ['beta', 'gamma']);
+  });
+
+  it('非数组 / 非法 feature 名抛错（阻止带坏声明启动）', () => {
+    assert.throws(() => extractFeatureMounts([{
+      id: 'agent',
+      config: { demo: { [MOUNT_KEY]: { package: '@user/demo', version: '1.0.0', disabledFeatures: 'beta' } } },
+    }]), /disabledFeatures 必须是字符串数组/);
+    assert.throws(() => extractFeatureMounts([{
+      id: 'agent',
+      config: { demo: { [MOUNT_KEY]: { package: '@user/demo', version: '1.0.0', disabledFeatures: ['bad name'] } } },
+    }]), /非法 feature 名/);
   });
 });

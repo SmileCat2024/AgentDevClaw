@@ -61,6 +61,16 @@ export const APP_ROKID_CONFIG_PATH = path.join(APP_CONFIG_ROOT, 'rokid.config.js
 export const APP_IM_WORKSPACE_CONFIG_PATH = path.join(APP_CONFIG_ROOT, 'im-workspace.config.json');
 export const FEATURE_REPOSITORY_ROOT = path.join(PROJECT_ROOT, 'resources', 'features');
 export const USER_FEATURE_REPOSITORY_ROOT = path.join(USER_DATA_ROOT, 'user-features');
+/**
+ * 工作空间私有插件仓库（ADR-0046 空间级仓库）：与 feature-config 同址，
+ * 存放只有该工作空间可见、可装配的 tgz。全局两个仓库仍是公共库存。
+ */
+export const workspaceFeatureRepositoryRoot = (agentId) => {
+  // agentId 来自注册表 / metadata，非法字符仍按目录名安全化（与 runtime 环境
+  // 目录同规则），避免拼出 `..` 之类越界路径
+  const safeId = String(agentId || '').trim().replace(/[^a-zA-Z0-9_-]+/g, '-') || 'unknown';
+  return path.join(USER_DATA_ROOT, 'workspaces', safeId, 'features');
+};
 export const AGENT_RUNTIME_ENVS_ROOT = path.join(USER_DATA_ROOT, 'runtime-envs');
 export const USER_AGENT_REGISTRY_PATH = path.join(USER_DATA_ROOT, 'agent-registry.json');
 export const FEATURE_MANIFEST_NAME = 'agentdev-feature.json';
