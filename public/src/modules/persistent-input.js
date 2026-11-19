@@ -128,6 +128,13 @@ import {
   syncPersistentComposerSessionCard,
 } from './input-composer.js';
 import { normalizeAgentIdentity } from './identity.js';
+import {
+  peekTopicReferences,
+  consumeTopicReferences,
+  restoreTopicReferences,
+  topicReferenceChipsHtml,
+  TOPIC_REF_METADATA_KEY,
+} from './topic-reference-picker.js';
 
 window.KernelState.defineKey('input-queue', '_pendingQueuedCount', 0);
 window.KernelState.defineKey('input-queue', '_queuedTexts', []); // 仅用于气泡展示
@@ -420,10 +427,11 @@ export function _renderAttachmentPreview() {
   const previews = _getAttachmentPreviewTargets();
   if (previews.length === 0) return;
   const cards = Array.from(document.querySelectorAll('.user-input-card'));
-  // 引用 pill（session-reference-picker 模块局部状态）与图片缩略图同区渲染
-  const refChipsHtml = (typeof window.SessionReference?.chipsHtml === 'function')
+  // 引用 pill（session-reference-picker / topic-reference-picker 模块局部状态）
+  // 与图片缩略图同区渲染
+  const refChipsHtml = ((typeof window.SessionReference?.chipsHtml === 'function')
     ? window.SessionReference.chipsHtml()
-    : '';
+    : '') + topicReferenceChipsHtml();
   const pendingImages = _imageBucket();
   if (pendingImages.length === 0 && refChipsHtml === '') {
     previews.forEach(function(preview) {
@@ -569,7 +577,8 @@ export function onPersistentBtnClick(submit) {
   const textarea = btn.closest('.user-input-card')?.querySelector('.user-input-textarea');
   const hasText = !!textarea?.value?.trim();
   const hasImages = _imageBucket().length > 0;
-  const hasSessionReferences = (window.SessionReference?.peek?.() || []).length > 0;
+  const hasSessionReferences = (window.SessionReference?.peek?.() || []).length > 0
+    || peekTopicReferences().length > 0;
   if (btn.classList.contains('is-stop') && !hasText && !hasImages && !hasSessionReferences) {
     interruptAgent();
     return;
@@ -763,7 +772,8 @@ export async function submitQueuedInput() {
   const textarea = document.getElementById('input-persistent');
   if (!textarea) return;
   const text = textarea.value.trim();
-  const sessionReferenceCount = (window.SessionReference?.peek?.() || []).length;
+  const sessionReferenceCount = (window.SessionReference?.peek?.() || []).length
+    + peekTopicReferences().length;
   if (!text && _imageBucket().length === 0 && sessionReferenceCount === 0) return;
   const targetRuntimeId = currentRuntimeAgentId;
   // 桥接期：定义于 session-view-state（会话视图状态域收敛时改 import）
@@ -785,9 +795,10 @@ export async function submitQueuedInput() {
   _beginSubmitFeedbackWindow();
 
   let capabilityActivations = null;
-  // 会话引用快照：try 外声明（catch 归还路径可见；try 内 const 会让 catch
+  // 会话/主题引用快照：try 外声明（catch 归还路径可见；try 内 const 会让 catch
   // 拿到 ReferenceError 而不是空数组——B1 审查修复）
   let sessionRefs = [];
+  let topicRefs = [];
   try {
     // paint 门槛：spinner 画出来之后再发请求，杜绝"类设置了但从未绘制"
     // 导致点击无反馈、消息直接蹦出的间歇性空窗
@@ -814,13 +825,20 @@ export async function submitQueuedInput() {
 
     if (activeConversation?.threadId && typeof window.submitThreadInput === 'function') {
       sessionRefs = window.SessionReference?.consume?.() || [];
+      topicRefs = consumeTopicReferences();
       capabilityActivations = window.ClawSlash?.consumeActivations?.() || null;
+      // 两类引用同一条 user-turn 可同时携带：metadata 键各归其消费 feature
+      // （'session-reference' / 'topic-management'，后者键 = feature 注册名）。
+      const threadMetadata = {
+        ...(sessionRefs.length ? { 'session-reference': sessionRefs } : {}),
+        ...(topicRefs.length ? { [TOPIC_REF_METADATA_KEY]: topicRefs } : {}),
+      };
       const result = await window.submitThreadInput(activeConversation.threadId, {
         text: text || ' ',
         images,
         source: 'chat-composer',
         ...(capabilityActivations?.length ? { capabilityActivations } : {}),
-        ...(sessionRefs.length ? { metadata: { 'session-reference': sessionRefs } } : {}),
+        ...(Object.keys(threadMetadata).length ? { metadata: threadMetadata } : {}),
       });
       const liveTextarea = document.getElementById('input-persistent')
         || document.querySelector('.user-input-textarea:not([disabled])');
@@ -876,13 +894,16 @@ export async function submitQueuedInput() {
     }
 
     capabilityActivations = window.ClawSlash?.consumeActivations?.() || null;
-    // 会话引用随消息流动（一次性附件语义）：consume 取走 pill，失败时归还。
+    // 会话/主题引用随消息流动（一次性附件语义）：consume 取走 pill，失败时归还。
     // agent calling 中排队输入由 react-loop call 内注入消费，metadata 经
     // dispatchTurnMetadata 派发（reminder 随注入点落位），无需前端拦截。
     sessionRefs = window.SessionReference?.consume?.() || [];
-    const turnMetadata = sessionRefs.length > 0
-      ? { 'session-reference': sessionRefs }
-      : null;
+    topicRefs = consumeTopicReferences();
+    const turnMetadata = {
+      ...(sessionRefs.length ? { 'session-reference': sessionRefs } : {}),
+      ...(topicRefs.length ? { [TOPIC_REF_METADATA_KEY]: topicRefs } : {}),
+    };
+    const hasTurnMetadata = sessionRefs.length > 0 || topicRefs.length > 0;
     const res = await fetch(`/api/agents/${targetRuntimeId}/user-turn`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-idempotency-key': newIdempotencyKey() },
@@ -891,9 +912,8 @@ export async function submitQueuedInput() {
         images: images.length > 0 ? images : undefined,
         source: 'chat-composer',
         ...(capabilityActivations?.length ? { capabilityActivations } : {}),
-        ...(turnMetadata ? { metadata: turnMetadata } : {}),
-        operationId: `user-turn:${Date.now()}`,
-      })
+        ...(hasTurnMetadata ? { metadata: turnMetadata } : {}),
+        operationId: `user-turn:${Date.now()}`,      })
     });
     if (res.ok) {
       const delivery = await res.json().catch(() => ({}));
@@ -962,9 +982,10 @@ export async function submitQueuedInput() {
         // 空闲直投（lease / 即时消费）：乐观回显先上屏，真实消息经
         // poll 回流后由对账无缝替换；排队路径走上方气泡，不回显。
         // 引用 chips 只随乐观气泡呈现（服务端消息不持久化引用字段，
-        // 引用的持久化产物是随后出现的 session-reference reminder）
+        // 引用的持久化产物是随后出现的 session-reference / topic-management
+        // reminder）
         if (stillOwnsView) {
-          window.ClawFW?.pushOptimisticUserEcho?.({ text, images, sessionReferences: sessionRefs, fromIndex: echoFromIndex });
+          window.ClawFW?.pushOptimisticUserEcho?.({ text, images, sessionReferences: sessionRefs, topicReferences: topicRefs, fromIndex: echoFromIndex });
         }
         clearInterruptSuppression(targetRuntimeId);
         window._markAgentCallStartedForNotify(targetRuntimeId); // 桥接期：desktop-notify
@@ -995,6 +1016,9 @@ export async function submitQueuedInput() {
     }
     if (sessionRefs?.length) {
       window.SessionReference?.restore?.(sessionRefs);
+    }
+    if (topicRefs?.length) {
+      restoreTopicReferences(topicRefs);
     }
     const isChoiceConflict = e?.legacyCode === 'input_mode_conflict' || e?.code === 'input_mode_conflict';
     window.ClawToast?.show({

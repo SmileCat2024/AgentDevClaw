@@ -996,7 +996,7 @@ function _renderProgrammingHelperSessionList(agent, block, ctx) {
     sessionsHtml += '<div class="ph-session-tabs-row">';
     sessionsHtml += '<button class="ph-session-tab active" data-ph-tab="main" data-action="sessions.switchTab">' + escapeHtml(t('workspace_main_conversations')) + ' <span class="ph-tab-count">' + escapeHtml(String(mainTabCount)) + '</span></button>';
     sessionsHtml += '<button class="ph-session-tab" data-ph-tab="archived" data-action="sessions.switchTab">' + escapeHtml(t('workspace_archived_conversations')) + ' <span class="ph-tab-count">' + escapeHtml(String(archivedTabCount)) + '</span></button>';
-    sessionsHtml += '<button class="ph-session-tab" data-ph-tab="topics" data-action="sessions.switchTab">' + escapeHtml(isZh ? '主题' : 'Topics') + '</button>';
+    sessionsHtml += '<button class="ph-session-tab" data-ph-tab="topics" data-action="sessions.switchTab">' + escapeHtml(isZh ? '主题' : 'Topics') + ' <span class="ph-tab-beta">Beta</span></button>';
     sessionsHtml += '</div>';
     sessionsHtml += '<div class="ph-session-toolbar">';
     sessionsHtml += '<div class="ph-session-search-inline">';

@@ -362,6 +362,7 @@ test('会话列表：TODO 置顶与排序模式、线程分区、转义与条目
 
     const html = mod.list.renderWorkspaceSessionList(agent, { title: '记录' });
     assert.match(html, /ph-session-tabs/);
+    assert.match(html, /data-ph-tab="topics"[^>]*>主题 <span class="ph-tab-beta">Beta<\/span>/);
     // 标题转义（TODO 会话标题含 HTML）
     assert.match(html, /todo &lt;b&gt;x&lt;\/b&gt;/);
     assert.doesNotMatch(html, /todo <b>x<\/b>/);

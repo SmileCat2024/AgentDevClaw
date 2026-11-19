@@ -2372,12 +2372,15 @@ body[data-theme="light"] .workspace-docset-row {
 /* ── 分页加载更多（PH 会话列表，服务端项目切片）── */
 /* Topic 看板（PH 会话列表「主题」tab）：卡片主体 = 主题 + 简介，
    对话明细折叠在 details 中，不与主题争夺视觉。规格：列表内卡片档
-   radius 12 / padding 16×18（design-system 节奏表）。 */
+   radius 12 / padding 16×18（design-system 节奏表）。卡片按服务端新旧顺序
+   交错分入两列，各列独立纵向堆叠。 */
 .ph-topic-panel { padding: 14px 0 4px; }
 .ph-topic-status { color: var(--text-muted, #8b92a3); padding: 24px 8px; text-align: center; }
 .ph-topic-error { color: var(--danger, #d66); }
-.ph-topic-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-items: start; }
-.ph-topic-card { border: 1px solid var(--border-subtle, rgba(128, 140, 170, .22)); border-radius: 12px; padding: 15px 18px 13px; background: var(--surface-raised, rgba(255,255,255,.025)); transition: border-color .15s ease, background .15s ease; }
+.ph-topic-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 12px; align-items: start; }
+.ph-topic-column { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.ph-topic-card { border: 1px solid var(--border-subtle, rgba(128, 140, 170, .22)); border-radius: 12px; padding: 15px 18px 13px; background: var(--surface-raised, rgba(255,255,255,.025)); transition: border-color .15s ease, background .15s ease; cursor: grab; }
+.ph-topic-card:active { cursor: grabbing; }
 .ph-topic-card:hover { border-color: var(--border-color, rgba(128, 140, 170, .4)); }
 .ph-topic-card-head { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
 .ph-topic-card-title { flex: 1; min-width: 0; font-weight: 600; font-size: 15px; color: var(--text-primary, inherit); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -2403,7 +2406,7 @@ a.ph-topic-anchor-item:hover { text-decoration: underline; }
 .ph-topic-thread { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 5px 0; }
 .ph-topic-thread-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
 .ph-topic-open { padding: 2px 8px; font-size: 12px; }
-@media (max-width: 720px) { .ph-topic-list { grid-template-columns: 1fr; } }
+@media (max-width: 720px) { .ph-topic-list { grid-template-columns: 1fr; } .ph-topic-column + .ph-topic-column { margin-top: 12px; } }
 @media (max-width: 640px) { .ph-topic-card-head { display: block; } .ph-topic-card-meta { margin-top: 4px; } .ph-topic-thread-time { display: none; } }
 
 .ph-load-more-wrap {
@@ -2778,6 +2781,13 @@ undefined
 
 .ph-session-tab.active .ph-tab-count {
   color: var(--accent-color);
+  opacity: 0.8;
+}
+
+.ph-tab-beta {
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 500;
   opacity: 0.8;
 }
 
@@ -14539,6 +14549,17 @@ body[data-theme="light"] .fs-category-tabs .fs-category-tab.active { color: var(
 body[data-theme="light"] .session-ref-chip {
   --ref-pill-bg: rgba(37, 99, 235, 0.10);
   --ref-pill-text: #2563eb;
+}
+
+/* 主题引用 pill：几何复用 .session-ref-chip 配方，仅换配色（青绿色系，
+   与会话引用的蓝色系区分对象类型） */
+.session-ref-chip.topic-ref-chip {
+  --ref-pill-bg: rgba(45, 190, 150, 0.15);
+  --ref-pill-text: #4fd1ac;
+}
+body[data-theme="light"] .session-ref-chip.topic-ref-chip {
+  --ref-pill-bg: rgba(5, 150, 105, 0.10);
+  --ref-pill-text: #059669;
 }
 .session-ref-chip svg { color: inherit; flex-shrink: 0; opacity: 0.8; }
 .session-ref-chip-label {

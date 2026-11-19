@@ -202,8 +202,9 @@ export default class ProgrammingHelperAgent extends BasicAgent {
     // 文件）后注入读者视角写法标准，每会话一次。状态经框架会话快照持久化。
     this.use(new CraftAwarenessFeature());
     // 主题簇管理（Topic 看板的工具面）：主题由会话引用关系客观形成，agent
-    // 只能列出并逐个更新标题/简介（topic_list / topic_update → server
-    // topic-notes 存储），不创建、删除或重组主题。
+    // 只能列出、读取与逐个更新标注（topic_list / topic_get / topic_update →
+    // server topic-notes 与投影存储），不创建、删除或重组主题；并经 CallStart
+    // 钩子承接输入框主题引用（metadata['topic-management']，指针式元信息注入）。
     this.use(new TopicManagementFeature({
       agentId: runtimeIdentity.agentId,
       serverOrigin: runtimeIdentity.serverOrigin,

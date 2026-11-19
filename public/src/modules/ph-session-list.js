@@ -81,7 +81,13 @@ function _phTopicHtmlByKey(key) {
       + '<div class="ph-topic-field-items">' + anchorItems(items) + '</div></div>'
     : '';
   const textList = (value) => (Array.isArray(value) ? value.map((item) => String(item).trim()).filter(Boolean) : []);
-  return '<div class="ph-topic-list">' + state.groups.map((group) => {
+  const columns = [[], []];
+  state.groups.forEach((group, index) => {
+    // 保留服务端的新旧顺序，同时让相邻主题分居左右两列；每列内部
+    // 独立纵向堆叠，避免 Grid 行高被另一列较高卡片撑开。
+    columns[index % 2].push(group);
+  });
+  return '<div class="ph-topic-list">' + columns.map((groups) => '<div class="ph-topic-column">' + groups.map((group) => {
     // 卡片主体是主题 + 简介（server 已合并自定义标注与会话标题回退）；
     // 参考文档 / 相关提交锚点条带跟在简介后；对话明细折叠在 details 里，
     // 不与主题争夺视觉。
@@ -98,7 +104,9 @@ function _phTopicHtmlByKey(key) {
         + (sessionId ? '<button class="workspace-action secondary ph-topic-open" type="button" data-workspace-action="' + action + '" data-action="sessions.workspaceAction">' + escapeHtml(isZh ? '打开' : 'Open') + '</button>' : '')
         + '</div>';
     }).join('');
-    return '<article class="ph-topic-card" data-topic-id="' + escapeHtml(group.id) + '">'
+    // 卡片可拖拽为对话的主题引用（draggable 属性 + topic-reference-picker
+    // 的委托 dragstart 读 payload：topicId / 标题 / 面板归属 agentId）。
+    return '<article class="ph-topic-card" draggable="true" data-topic-id="' + escapeHtml(group.id) + '">'
       + '<div class="ph-topic-card-head"><div class="ph-topic-card-title">' + escapeHtml(title) + '</div>'
       + '<div class="ph-topic-card-meta">' + escapeHtml(String(group.memberCount || threads.length || 0)) + ' ' + escapeHtml(isZh ? '个对话' : 'conversations') + ' · ' + escapeHtml(formatWorkspaceDate(group.updatedAt)) + '</div></div>'
       + '<p class="ph-topic-summary' + (summary ? '' : ' ph-topic-summary-empty') + '">' + escapeHtml(summary || (isZh ? '暂无简介' : 'No summary yet')) + '</p>'
@@ -107,7 +115,7 @@ function _phTopicHtmlByKey(key) {
       + (threads.length ? '<details class="ph-topic-details"><summary class="ph-topic-details-toggle">' + escapeHtml(isZh ? '对话列表' : 'Conversations') + ' (' + threads.length + ')</summary>'
         + '<div class="ph-topic-thread-list">' + rows + '</div></details>' : '')
       + '</article>';
-  }).join('') + '</div>';
+  }).join('') + '</div>').join('') + '</div>';
 }
 
 /** 把某身份键的状态渲染进「当前挂在 DOM 里」的面板。

@@ -168,11 +168,19 @@ describe('programming-helper Topic board', () => {
           { id: 'relation-older', title: '较早主题', customTitle: false, summary: '', updatedAt: '2026-11-14T10:00:00Z', memberCount: 1, threads: [
             { threadId: 'wt-old', title: '较早主题', updatedAt: '2026-11-14T10:00:00Z', sessionIds: ['s-old'] },
           ] },
+          { id: 'relation-third', title: '第三新主题', summary: '第三条简介', updatedAt: '2026-11-13T10:00:00Z', memberCount: 1, threads: [] },
+          { id: 'relation-fourth', title: '第四新主题', summary: '第四条简介', updatedAt: '2026-11-12T10:00:00Z', memberCount: 1, threads: [] },
         ],
       }) });
       await pending;
       const html = panel.innerHTML;
       assert.ok(html.indexOf('Topic 看板（自定义）') < html.indexOf('较早主题'), 'keeps server order');
+      const columnStarts = [...html.matchAll(/<div class="ph-topic-column">/g)].map((match) => match.index + match[0].length);
+      const columns = columnStarts.map((start, index) => {
+        const end = columnStarts[index + 1] ?? html.length;
+        return [...html.slice(start, end).matchAll(/data-topic-id="([^"]+)"/g)].map((topic) => topic[1]);
+      });
+      assert.deepEqual(columns, [['relation_recent', 'relation-third'], ['relation-older', 'relation-fourth']], 'alternates adjacent topics across columns while preserving each column order');
       assert.match(html, /data-topic-id="relation_recent"/);
       // 卡片主体：主题标题来自 group.title（服务端已合并标注/回退），简介是正文。
       assert.match(html, /class="ph-topic-summary">一句话简介</);

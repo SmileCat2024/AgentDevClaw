@@ -22,6 +22,15 @@ import { currentRuntimeAgentId } from './orchestration-state.js';
 import { escapeHtml } from './markdown-utils.js';
 import { getCurrentLanguage } from './i18n-environment-state.js';
 import { getLogicalAgentId, getRuntimeWorkspaceSessionId } from './identity.js';
+import {
+  activeReferenceKey,
+  notifyReferencePreviewChanged,
+  composerCardFromEvent,
+  sidebarItemFromEvent,
+  sidebarItemIdentity,
+  sidebarItemTitle,
+  clearDropTargetHighlights,
+} from './reference-drop-targets.js';
 
 // ── 引用状态（模块局部） ──────────────────────────────────────────
 
@@ -35,29 +44,9 @@ import { getLogicalAgentId, getRuntimeWorkspaceSessionId } from './identity.js';
 // 两者都会在三个时刻之间漂移，导致 consume 读空桶（metadata 丢失）而
 // chipsHtml 渲染又漂回有引用的桶（pill 残留）。
 const _sessionReferences = new Map(); // key → [{ agentId, sessionId, sessionType, title }]
-let _lastKnownRefKey = null;
-
-function _activeRefKey() {
-  const runtimeId = String(currentRuntimeAgentId || '').trim();
-  // 会话身份来自 identity 域（P4 T1 起具名 import）。
-  const sessionId = runtimeId && typeof getRuntimeWorkspaceSessionId === 'function'
-    ? String(getRuntimeWorkspaceSessionId(runtimeId) || '').trim()
-    : '';
-  if (runtimeId && sessionId) {
-    _lastKnownRefKey = `${runtimeId}::${sessionId}`;
-    return _lastKnownRefKey;
-  }
-  if (runtimeId) {
-    // sessionId 尚未冻结（会话加载窗口期）：暂以 runtime 归档，绑定就位后
-    // 首次读取自然迁移到组合 key。
-    _lastKnownRefKey = runtimeId;
-    return runtimeId;
-  }
-  return _lastKnownRefKey || 'default';
-}
 
 function _refs() {
-  const key = _activeRefKey();
+  const key = activeReferenceKey();
   let refs = _sessionReferences.get(key);
   if (!Array.isArray(refs)) {
     refs = [];
@@ -121,14 +110,14 @@ export function addSessionReference(entry) {
     }
     return false;
   }
-  if (_appendRefToKey(_activeRefKey(), ref)) _notifyPreviewChanged();
+  if (_appendRefToKey(activeReferenceKey(), ref)) notifyReferencePreviewChanged();
   return true;
 }
 
 /**
  * 「会话拖到会话」的投放入口（侧栏条目 / 工作空间会话记录两类源共用）：
  * 把被拖会话的引用挂到「目标会话」的输入框。目标不一定是当前活跃会话
- * ——引用写入目标会话自己的桶（key 与 _activeRefKey 的组合格式一致），
+ * ——引用写入目标会话自己的桶（key 与 activeReferenceKey 的组合格式一致），
  * 切换过去后 pill 自然显示。自引用按目标会话身份判定：被拖会话恰好是
  * 目标条目自身时拦截（dragover 悬停期已先行禁止，这里是兜底）。
  */
@@ -155,7 +144,7 @@ export function addSessionReferenceToTarget(entry, target) {
     return false;
   }
   if (_appendRefToKey(`${runtimeId}::${targetSessionId}`, ref)) {
-    _notifyPreviewChanged(); // 目标恰为活跃会话时 pill 立即出现
+    notifyReferencePreviewChanged(); // 目标恰为活跃会话时 pill 立即出现
     const label = String(target?.title || '').trim() || targetSessionId;
     toast('success', zh ? `已把会话引用挂到「${label}」的输入框` : `Reference attached to "${label}"`);
   }
@@ -166,22 +155,22 @@ export function removeSessionReference(index) {
   const refs = _refs();
   if (index < 0 || index >= refs.length) return;
   refs.splice(index, 1);
-  _notifyPreviewChanged();
+  notifyReferencePreviewChanged();
 }
 
 export function clearSessionReferences() {
-  const key = _activeRefKey();
+  const key = activeReferenceKey();
   const refs = _sessionReferences.get(key);
   if (!Array.isArray(refs) || refs.length === 0) return;
   _sessionReferences.set(key, []);
-  _notifyPreviewChanged();
+  notifyReferencePreviewChanged();
 }
 
 /** 发送时消费：取走当前会话的全部引用（数组浅拷贝）并清空 pill。 */
 export function consumeSessionReferences() {
   const refs = _refs().slice();
-  _sessionReferences.set(_activeRefKey(), []);
-  _notifyPreviewChanged();
+  _sessionReferences.set(activeReferenceKey(), []);
+  notifyReferencePreviewChanged();
   return refs;
 }
 
@@ -194,7 +183,7 @@ export function restoreSessionReferences(refs) {
       current.push(ref);
     }
   }
-  _notifyPreviewChanged();
+  notifyReferencePreviewChanged();
 }
 
 /** 乐观气泡快照（不消费）。 */
@@ -223,14 +212,6 @@ export function sessionReferenceChipsHtml() {
       + '">×</button>'
       + '</div>';
   }).join('');
-}
-
-function _notifyPreviewChanged() {
-  // 引用 key 随会话切换（input-composer 的 syncPersistentComposerSessionCard
-  // 更新 dataset.sessionKey）后，附件预览必须按新 key 重渲染，否则旧会话的
-  // pill 残留显示（DOM 不刷新）。_renderAttachmentPreview 定义于
-  // persistent-input.js（仍 classic，window 属性可达），收敛批次改为 import。
-  if (typeof window._renderAttachmentPreview === 'function') window._renderAttachmentPreview();
 }
 
 // ── 会话选择弹窗 ──────────────────────────────────────────────────
@@ -378,61 +359,21 @@ export function setDragSource(entry) {
     : null;
 }
 
-function _composerCardFromEvent(event) {
-  const target = event.target;
-  if (!(target instanceof Node)) return null;
-  return target.closest && target.closest('.user-input-card');
-}
-
-/**
- * 侧栏运行中会话条目（投放目标）。远程条目（ctx-variant=remote）与
- * 禁用/过渡态条目（data-agent-disabled=true，含正在关闭、交接、删除）
- * 不接收投放。
- */
-function _sidebarItemFromEvent(event) {
-  const target = event.target;
-  if (!(target instanceof Node) || !target.closest) return null;
-  const item = target.closest('.agent-runtime-item');
-  if (!item) return null;
-  if (item.dataset.ctxVariant === 'remote') return null;
-  if (item.dataset.agentDisabled === 'true') return null;
-  return item;
-}
-
-/** 侧栏条目的会话身份（条目 data-agent-id 是 runtimeId，寻址用二元组）。 */
-function _sidebarItemIdentity(item) {
-  return {
-    runtimeId: String(item?.dataset?.agentId || '').trim(),
-    agentId: String(item?.dataset?.ctxNs || '').trim(),
-    sessionId: String(item?.dataset?.ctxSessionId || '').trim(),
-  };
-}
-
-/** 侧栏条目标题（首文本节点，避开「正在关闭」等过渡标签），与 dragstart 读法一致。 */
-function _sidebarItemTitle(item) {
-  const nameEl = item?.querySelector?.('.agent-name');
-  return (nameEl?.childNodes?.[0]?.textContent || '').trim();
-}
-
-function _clearDropTargetHighlights() {
-  document.querySelectorAll('.session-ref-drop-target').forEach(el => el.classList.remove('session-ref-drop-target'));
-}
-
 function bindSessionReferenceDrop() {
   document.addEventListener('dragover', (event) => {
     if (!event.dataTransfer || !Array.from(event.dataTransfer.types || []).includes(SESSION_REF_MIME)) return;
-    const card = _composerCardFromEvent(event);
+    const card = composerCardFromEvent(event);
     if (card) {
       event.preventDefault();
       event.dataTransfer.dropEffect = 'copy';
       card.classList.add('session-ref-drop-target');
       return;
     }
-    const item = _sidebarItemFromEvent(event);
+    const item = sidebarItemFromEvent(event);
     if (!item) return;
     // 拖到自己身上：悬停期即禁止（不高亮、禁止光标，drop 不触发）；
     // 跨会话（左栏 A → 左栏 B）正常投放
-    const identity = _sidebarItemIdentity(item);
+    const identity = sidebarItemIdentity(item);
     if (_dragSourceEntry
       && _dragSourceEntry.agentId === identity.agentId
       && _dragSourceEntry.sessionId === identity.sessionId) return;
@@ -441,20 +382,20 @@ function bindSessionReferenceDrop() {
     item.classList.add('session-ref-drop-target');
   });
   document.addEventListener('dragleave', (event) => {
-    const card = _composerCardFromEvent(event);
+    const card = composerCardFromEvent(event);
     if (card) card.classList.remove('session-ref-drop-target');
-    const item = _sidebarItemFromEvent(event);
+    const item = sidebarItemFromEvent(event);
     if (item) item.classList.remove('session-ref-drop-target');
   });
   // 拖拽收尾（drop 之后 / 取消）统一清高亮与源身份记忆
   document.addEventListener('dragend', () => {
     _dragSourceEntry = null;
-    _clearDropTargetHighlights();
+    clearDropTargetHighlights();
   });
   document.addEventListener('drop', (event) => {
-    const card = _composerCardFromEvent(event);
-    const item = _sidebarItemFromEvent(event);
-    _clearDropTargetHighlights();
+    const card = composerCardFromEvent(event);
+    const item = sidebarItemFromEvent(event);
+    clearDropTargetHighlights();
     if (!event.dataTransfer) return;
     const raw = event.dataTransfer.getData(SESSION_REF_MIME);
     if (!raw) return;
@@ -470,8 +411,8 @@ function bindSessionReferenceDrop() {
     }
     if (item) {
       addSessionReferenceToTarget(entry, {
-        ..._sidebarItemIdentity(item),
-        title: _sidebarItemTitle(item),
+        ...sidebarItemIdentity(item),
+        title: sidebarItemTitle(item),
       });
     }
   });
@@ -494,10 +435,10 @@ window.SessionReference = {
   chipsHtml: sessionReferenceChipsHtml,
   openPicker: openSessionReferencePicker,
   // 会话切换（sessionKey 变更）后按新 key 重渲染附件预览
-  notify: _notifyPreviewChanged,
+  notify: notifyReferencePreviewChanged,
   // 附件类会话态的会话 key 权威实现：图片附件（persistent-input.js 的
   // _imageBucketKey）复用同一 key 源，"哪个会话"的判定只此一份
-  activeKey: _activeRefKey,
+  activeKey: activeReferenceKey,
   MIME: SESSION_REF_MIME,
   // 拖拽源身份登记（侧栏 / 工作空间两类 dragstart 调用，dragend 自动清除）：
   // dragover 据此在悬停期禁止「拖到自己身上」
@@ -505,8 +446,8 @@ window.SessionReference = {
 };
 
 // 命名导出与命名空间成员一一对应（activeKey / notify 沿用命名空间键名，
-// 内部实现名保持不变）。
-export { _activeRefKey as activeKey, _notifyPreviewChanged as notify };
+// 实现下沉 reference-drop-targets，见该模块头注）。
+export { activeReferenceKey as activeKey, notifyReferencePreviewChanged as notify };
 
 // ── 分发器动作（原模板内联事件收编，命名空间 sessionRef.*）────────
 // pill 移除走模块内 removeSessionReference；window.SessionReference.remove

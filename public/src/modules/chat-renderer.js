@@ -716,7 +716,7 @@ function appendNewMessages(newMessages, startIndex) {
 // isConnected 清理兜底。排队路径（queued）已有排队气泡，不走回显。
 let _optimisticEchoes = []; // { text, images, fromIndex, el }
 
-function pushOptimisticUserEcho({ text, images, sessionReferences, fromIndex = currentMessages.length } = {}) {
+function pushOptimisticUserEcho({ text, images, sessionReferences, topicReferences, fromIndex = currentMessages.length } = {}) {
   if (typeof window.isChatSurfaceActive !== 'function' || !window.isChatSurfaceActive() || !container) return;
   const echoText = (typeof text === 'string' && text.length > 0) ? text : ' ';
   const row = document.createElement('div');
@@ -725,7 +725,8 @@ function pushOptimisticUserEcho({ text, images, sessionReferences, fromIndex = c
     '<div class="message-meta"><div class="role-badge">user</div></div>'
     + '<div class="message-content markdown-body">' + renderMarkdown(echoText) + '</div>'
     + renderUserImages(images)
-    + renderSessionReferenceChips(sessionReferences);
+    + renderSessionReferenceChips(sessionReferences)
+    + renderTopicReferenceChips(topicReferences);
   // 时间分隔线预渲染（message-timeline.js）：回显气泡上屏的同时出线，
   // 消除"消息先出现、分隔线随真实消息回流才插入把内容往下搓一下"的滞后
   // 跳动。本地时钟近似 + 保守余量（resolveEchoTimeSeparator），真实行的
@@ -1609,6 +1610,22 @@ function renderSessionReferenceChips(references) {
       + '</div>';
   }).join('');
   return '<div class="message-session-refs">' + chips + '</div>';
+}
+
+/**
+ * 乐观气泡上的主题引用 chips（与会话引用 chips 并列；topic-management
+ * feature 注入的主题 reminder 是引用的持久化呈现，这里同样是瞬时态）。
+ */
+function renderTopicReferenceChips(references) {
+  if (!Array.isArray(references) || references.length === 0) return '';
+  const chips = references.map(function(ref) {
+    const label = ref.title || ref.topicId || '';
+    const meta = 'topic · ' + (ref.agentId || '');
+    return '<div class="session-ref-chip is-echo topic-ref-chip" title="' + escapeHtml(meta + ' · ' + (ref.topicId || '')) + '">'
+      + '<span class="session-ref-chip-label">' + escapeHtml(label) + '</span>'
+      + '</div>';
+  }).join('');
+  return chips ? '<div class="message-session-refs">' + chips + '</div>' : '';
 }
 
 function openImageZoom(src) {
