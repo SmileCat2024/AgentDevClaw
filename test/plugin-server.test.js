@@ -146,7 +146,7 @@ describe('buildPluginServerMounts', () => {
     assert.deepEqual(warnings, [], '禁用是显式处置，静默摘除');
   });
 
-  it('全局级装配（global 层 $mount）同样挂载，identities 标记 agentId=null', async () => {
+  it('默认装配源（global 层 $mount）对 opt-in 身份挂载，identities 归属到身份', async () => {
     const fixture = makeServerPluginTgz();
     await extractServerAssets(fixture, { serverRoot: join(root, 'server-env') });
     const { mounts, warnings } = await buildPluginServerMounts({
@@ -157,8 +157,9 @@ describe('buildPluginServerMounts', () => {
     assert.deepEqual(warnings, []);
     assert.equal(mounts.length, 1);
     assert.equal(mounts[0].identities.length, 1);
-    assert.equal(mounts[0].identities[0].identity, 'global');
-    assert.equal(mounts[0].identities[0].agentId, null);
+    // ADR-0046 2026-11-19 修订：默认装配源展开为 opt-in 身份条目（无 agentId=null 形态）
+    assert.equal(mounts[0].identities[0].identity, 'main');
+    assert.equal(mounts[0].identities[0].agentId, 'programming-helper');
   });
 
   it('版本钉装配：catalog 有更高版本不跟随，按装配版本挂载', async () => {

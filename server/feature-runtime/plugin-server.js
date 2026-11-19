@@ -7,17 +7,20 @@
  *   - 挂载点选择：`/protoclaw/plugin/<prefix>/*`——prefix 是包声明的路由
  *     前缀，全局唯一（冲突时后挂载者拒绝 + 警告）。prefix 即审计面：
  *     listMountedPluginServerPrefixes() 列出当前全部生效前缀与归属包。
- *   - 触发条件：包被装配（global 层或任一工作空间身份，装配事实与 UI 面同源，
- *     collectAssemblyFacts）；未装配的包不挂载。多版本装配取装配版本里最高
- *     者（catalog 更高版本不跟随，与面板下发同款钉版语义）。
+ *   - 触发条件：包被装配（任一工作空间身份装配，或任一 opt-in 身份消费
+ *     默认装配源——装配事实与 UI 面同源，collectAssemblyFacts 已把 global
+ *     层展开为声明 defaultMounts 的身份条目）；未装配的包不挂载。多版本
+ *     装配取装配版本里最高者（catalog 更高版本不跟随，与面板下发同款钉版
+ *     语义）。
  *   - 受控 router：只暴露 get/post/put/delete，注册路径必须是以 / 开头
  *     的相对子路径（无 .. 、无绝对段）；宿主包装 handler 做异常计数
  *     熔断（同一包连续 5 次未捕获异常 → 摘除该包全部路由并显式警告，
  *     remountPluginServerRoutes() 可整体重建）。
  *   - context.getConfig()：每次请求现读该包的四层作用域合成配置
  *     （resolveScopeConfig），配置修改无需重启。身份选择取装配事实中第一个
- *     工作空间身份（agent 层是 $mount 与插件配置的权威层）；纯全局装配时
- *     无空间身份，配置取 global 层值（ADR-0046：数据面读 global + 装配层）。
+ *     身份（agent 层是 $mount 与插件配置的权威层）；默认装配源条目已展开
+ *     归属到 opt-in 身份，配置按该身份合成（ADR-0046：数据面读 global +
+ *     装配层）。
  *
  * 信任与依赖模型（ADR-0045）：server 面在主 server.js 进程内执行，与
  * 工具面同级的信任（本机代码）；依赖约束为 node 内置模块 + 相对导入
@@ -220,8 +223,10 @@ export async function mountPluginServerRoutes(app, options = {}) {
     };
 
     const router = makeRouter();
-    // 配置合成身份：第一个工作空间身份（agent 层是插件配置的权威层）；
-    // 纯全局装配时无空间身份，getConfig 回落 global 层值
+    // 配置合成身份：第一个装配身份。默认装配源条目已按 opt-in 展开、归属
+    // 到具体身份，getConfig 合成 = global 默认层 + 该身份 agent 层（ADR-0046：
+    // 数据面读 global + 装配层，按装配上下文合成）。防御性保留无身份兜底
+    //（未来事实形态变化时回落 global 层值，不抛错）。
     const contextIdentity = mount.identities.find((fact) => fact.agentId) || null;
     const context = {
       // 每次调用现读：配置修改后无需重启（与工具面构造期一次合成不同，

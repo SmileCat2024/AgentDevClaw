@@ -43,7 +43,7 @@ import {
   readDirLayer,
   readProjectLayer,
 } from '../../../server/shared/feature-config-layers.js';
-import { extractFeatureMounts } from '../../../server/shared/feature-mount.js';
+import { extractFeatureMounts, stripMountDeclarations } from '../../../server/shared/feature-mount.js';
 import { collapseAccumulatedFields } from '../../../server/shared/feature-config-accumulate.js';
 import { resolveUserDataDir } from '../../../server/shared/constants.js';
 
@@ -103,14 +103,21 @@ function readProgrammingWorkspaceState() {
  * shared/feature-mount.js），剔除后的纯配置层再进 merge；累加型多值字段
  * （skill.extraDirs 等）进 merge 前跨层叠加。导出供装配测试直接消费，避免
  * 测试复刻队列逻辑漂移。
+ *
+ * defaultMounts（默认装配源 opt-in，ADR-0046 2026-11-19 修订）：宿主按
+ * metadata 声明注入（config.defaultMounts）。声明时 global 层的 $mount
+ * （默认装配源）参与提取；未声明时剥离 $mount 进队列——全局层的 feature
+ * 配置默认值照常参与 merge，默认装配源对 PH 不可见。
  */
-export function assemblePhFeatureConfig({ projectId, workspaceDir, sessionConfig } = {}) {
+export function assemblePhFeatureConfig({ projectId, workspaceDir, sessionConfig, defaultMounts } = {}) {
+  const acceptsDefaultMounts = defaultMounts === true;
+  const globalLayerConfig = readGlobalLayer();
   const normalizedProjectId = cleanValue(projectId);
   const ownershipLayer = normalizedProjectId
     ? { id: 'project', config: readProjectLayer(normalizedProjectId) }
     : { id: 'dir', config: readDirLayer(workspaceDir) };
   const layers = [
-    { id: 'global', config: readGlobalLayer() },
+    { id: 'global', config: acceptsDefaultMounts ? globalLayerConfig : stripMountDeclarations(globalLayerConfig) },
     { id: 'agent', config: readAgentLayer() },
     ownershipLayer,
     { id: 'session', config: sessionConfig && typeof sessionConfig === 'object' ? sessionConfig : {} },
@@ -141,6 +148,7 @@ export default class ProgrammingHelperAgent extends BasicAgent {
       sessionConfig: runtime.config && typeof runtime.config === 'object'
         ? (runtime.config.featureOverrides || {})
         : {},
+      defaultMounts: config.defaultMounts,
     });
 
     const excludeMcpServers = Array.from(new Set([

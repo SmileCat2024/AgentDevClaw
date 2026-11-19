@@ -20,7 +20,7 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { scanFeatureCatalog } from '../feature-runtime/catalog.js';
 import { buildScopeLayers } from './feature-config.js';
-import { extractFeatureMounts } from '../shared/feature-mount.js';
+import { extractFeatureMounts, stripMountDeclarations } from '../shared/feature-mount.js';
 import {
   IDENTITY_SCOPES,
   installFeature,
@@ -213,11 +213,22 @@ export function buildStorePackages(catalog) {
   return packages;
 }
 
-/** 单身份的 $mount 提取（层文件 → mounts Map），装配清单与可选插件过滤共用。 */
+/**
+ * 单身份的 $mount 提取（层文件 → mounts Map），装配清单与可选插件过滤共用。
+ * 默认装配源 opt-in 门（ADR-0046 2026-11-19 修订）：未声明 defaultMounts 的
+ * 身份视 global 层为纯配置层（$mount 剥离，不再并入该身份的装配清单）。
+ * 身份属性实时读注册表（registerIdentityScopes 替换式注册，启动期会刷新）。
+ */
 async function extractScopeMounts(agentId) {
+  const acceptDefaults = Object.values(IDENTITY_SCOPES).some(
+    (scope) => scope.agentId === agentId && scope.defaultMounts === true,
+  );
   const { layers } = buildScopeLayers({ agentId });
   return extractFeatureMounts(
-    layers.map(({ id, sparse }) => ({ id, config: sparse })),
+    layers.map(({ id, sparse }) => ({
+      id,
+      config: id === 'global' && !acceptDefaults ? stripMountDeclarations(sparse) : sparse,
+    })),
   );
 }
 
@@ -241,9 +252,10 @@ export async function collectScopeMounts(agentId, catalog) {
 }
 
 /**
- * 全局级装配清单（ADR-0046）：global 层 $mount，形状与 collectScopeMounts 同构
- * （layerId 恒为 'global'）。全局装配无环境概念（provision 延迟到消费身份），
- * 不参与 envReady。
+ * 默认装配源清单（ADR-0046 2026-11-19 修订）：global 层 $mount，形状与
+ * collectScopeMounts 同构（layerId 恒为 'global'）。默认装配无环境概念
+ * （provision 延迟到消费身份），不参与 envReady；生效范围 = 声明
+ * defaultMounts 的身份集合。
  */
 export async function collectGlobalMounts(catalog, resolvers) {
   const { mounts } = readGlobalDeclaredMounts(resolvers);

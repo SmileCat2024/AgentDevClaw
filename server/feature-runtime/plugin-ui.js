@@ -1,10 +1,10 @@
 /**
  * plugin-ui.js — 插件 UI 面声明合成（ADR-0045 P1 / ADR-0046 可见性合成）
  *
- * 权威链（ADR-0046 决策 2）：装配层级 = 可见性层级，manifest 的 ui.panels
- * scope 只是作者给的装配建议，不参与可见性裁决：
- *   - 全局级装配（global 层 $mount）：面板处处可见，when 不设 agentIds。
- *   - 仅工作空间级装配（agent 层 $mount）：when.agentIds = 装配身份集合。
+ * 权威链（ADR-0046 决策 2，2026-11-19 修订）：装配层级 = 可见性层级，
+ * manifest 的 ui.panels scope 只是作者给的装配建议，不参与可见性裁决：
+ *   - 面板可见范围 = 装配它的身份集合（when.agentIds）；默认装配源
+ *     （global 层 $mount）按 opt-in 展开为声明 defaultMounts 的身份集合。
  *   - 未装配：面板不下发（含作者标注 scope=global 的面板——导入不等于
  *     可用，与 ADR-0045 决策 5 的旧语义相反，经 0046 修订）。
  *
@@ -69,9 +69,12 @@ function normalizePanelDeclaration(raw, packageName, version) {
 }
 
 /**
- * 读取全部装配事实（global 层 + 各身份 agent 层）：Map<packageName,
- * Array<{ identity, agentId, version, layerId }>>。global 层装配的条目
- * agentId 为 null、layerId 为 'global'（消费方据此判定"处处可见"）。
+ * 读取全部装配事实（默认装配源展开 + 各身份 agent 层）：Map<packageName,
+ * Array<{ identity, agentId, version, layerId }>>。
+ *
+ * 默认装配源（global 层 $mount，ADR-0046 2026-11-19 修订）按 opt-in 展开：
+ * 对每个声明 defaultMounts 的身份各记一条（layerId 'global'），不再产出
+ * "处处可见"的无主条目——面板/数据面的生效范围 = 声明 opt-in 的身份集合。
  * builtin 挂载无包坐标，不参与（UI 面只能来自仓库包）。
  * 导出供 plugin-server.js（数据面挂载）复用同一装配事实源。
  */
@@ -83,19 +86,24 @@ export function collectAssemblyFacts(resolvers) {
     facts.set(packageName, list);
   };
 
-  // 全局级装配（ADR-0046）：global 层 $mount，面板处处可见；
-  // enabled:false = 禁用（装配保留、面板不下发），与身份层同口径
-  for (const mount of readGlobalDeclaredMounts(resolvers).mounts.values()) {
-    if (mount.kind === 'builtin' || !mount.package) continue;
-    record(mount.package, { identity: 'global', agentId: null, version: mount.version, layerId: 'global', enabled: mount.enabled !== false });
-  }
-
   // 身份源：显式注入 resolvers（测试隔离）时以注入的 agentId 集合为准——
   // 未注入的身份不是本次合成的数据源，遍历它只会撞上"未注册的 scope"告警；
   // 未注入时遍历全部注册身份（生产路径）。
   const identityEntries = resolvers
     ? Object.entries(IDENTITY_SCOPES).filter(([, scope]) => resolvers.has(scope.agentId))
     : Object.entries(IDENTITY_SCOPES);
+
+  // 默认装配源：仅对 opt-in 身份展开（enabled:false = 禁用，装配保留、
+  // 面板不下发，与身份层同口径）
+  const globalMounts = readGlobalDeclaredMounts(resolvers).mounts;
+  for (const [identity, scope] of identityEntries) {
+    if (scope.defaultMounts !== true) continue;
+    for (const mount of globalMounts.values()) {
+      if (mount.kind === 'builtin' || !mount.package) continue;
+      record(mount.package, { identity, agentId: scope.agentId, version: mount.version, layerId: 'global', enabled: mount.enabled !== false });
+    }
+  }
+
   for (const [identity, scope] of identityEntries) {
     try {
       const { mounts } = readDeclaredMounts(scope, resolvers);
@@ -105,7 +113,7 @@ export function collectAssemblyFacts(resolvers) {
       }
     } catch (err) {
       // 身份层读取失败（层文件损坏等）不阻塞其他身份的声明合成；错误上抛
-      // 会连全局面板一起灭掉，降级为跳过该身份。
+      // 会连默认装配源面板一起灭掉，降级为跳过该身份。
       console.warn(`[plugin-ui] 读取身份 ${identity} 装配声明失败（跳过）：`, err?.message || err);
     }
   }
@@ -133,8 +141,9 @@ export async function composePanelDeclarations({ catalogRoots, resolvers, assets
     const archivesWithUi = versions.filter((entry) => entry.manifestUi && Array.isArray(entry.manifestUi.panels));
     if (archivesWithUi.length === 0) continue;
 
-    // 可见性 = 装配事实（ADR-0046 决策 2）：未装配不下发——含作者标注
-    // scope=global 的面板（scope 是装配建议，不参与可见性裁决）；
+    // 可见性 = 装配事实（ADR-0046 决策 2，2026-11-19 修订）：未装配不下发
+    // ——含作者标注 scope=global 的面板（scope 是装配建议，不参与可见性裁决）；
+    // 默认装配源已按 opt-in 展开为身份条目，无 opt-in 消费者时等同未装配；
     // 禁用事实（enabled:false）等同未装配（三态处置：装配保留、面板下线）
     const mounted = (assemblyFacts.get(packageName) || []).filter((fact) => fact.enabled !== false);
     if (mounted.length === 0) continue;
@@ -160,9 +169,6 @@ export async function composePanelDeclarations({ catalogRoots, resolvers, assets
       { catalog, catalogRoots, assetsRoot },
     ).catch(() => {});
 
-    // 全局级装配在列 → 面板处处可见（when 不设 agentIds 限制）
-    const globalMounted = mounted.some((fact) => fact.agentId === null);
-
     for (const raw of versionChoice.manifestUi.panels) {
       const { panel, error } = normalizePanelDeclaration(raw, packageName, versionChoice.version);
       if (error) {
@@ -184,9 +190,9 @@ export async function composePanelDeclarations({ catalogRoots, resolvers, assets
       }
 
       const when = {};
-      if (!globalMounted) {
-        when.agentIds = [...new Set(mounted.map((fact) => fact.agentId).filter(Boolean))];
-      }
+      // 装配事实已全部归属到身份（默认装配源按 opt-in 展开），可见范围 =
+      // 装配身份集合；此处不再有"处处可见"的无主形态
+      when.agentIds = [...new Set(mounted.map((fact) => fact.agentId).filter(Boolean))];
       if (panel.surfaces) when.surfaces = panel.surfaces;
 
       declarations.push({

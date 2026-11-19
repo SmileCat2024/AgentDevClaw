@@ -2047,19 +2047,23 @@ async function main() {
 
   // 装配身份按 metadata 声明派生注册（ADR-0045：声明 `featureMounts: true`
   // 的 APP 可成为 $mount 装配目标；main/coder 兼容键在 install-service
-  // 缺省注册，此处只补发现的新身份，identity 主键 = agentId）。
+  // 缺省注册，此处按发现补新身份并刷新 defaultMounts 声明，identity 主键
+  // = agentId）。defaultMounts（ADR-0046 2026-11-19 修订）：声明时该身份
+  // 合并默认装配源（global 层 $mount），未声明视其为纯配置层。
   try {
     const mountable = declaredAgents
       .filter((agent) => agent?.featureMounts === true && agent?.enabled !== false && agent?.id);
     if (mountable.length > 0) {
+      const registered = Object.values(IDENTITY_SCOPES);
+      const refreshed = Object.entries(IDENTITY_SCOPES).map(([identity, scope]) => {
+        const meta = mountable.find((agent) => agent.id === scope.agentId);
+        return { identity, ...scope, ...(meta ? { defaultMounts: meta.defaultMounts === true } : {}) };
+      });
       const extra = mountable
-        .filter((agent) => !Object.values(IDENTITY_SCOPES).some((scope) => scope.agentId === agent.id))
-        .map((agent) => ({ identity: agent.id, agentId: agent.id, layerId: 'agent' }));
+        .filter((agent) => !registered.some((scope) => scope.agentId === agent.id))
+        .map((agent) => ({ identity: agent.id, agentId: agent.id, layerId: 'agent', defaultMounts: agent.defaultMounts === true }));
+      registerIdentityScopes([...refreshed, ...extra]);
       if (extra.length > 0) {
-        registerIdentityScopes([
-          ...Object.entries(IDENTITY_SCOPES).map(([identity, scope]) => ({ identity, ...scope })),
-          ...extra,
-        ]);
         console.log(`[install-service] featureMounts identities registered: ${extra.map((e) => e.identity).join(', ')}`);
       }
     }

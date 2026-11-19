@@ -47,7 +47,7 @@ import {
   readGlobalLayer,
   readAgentLayer,
 } from '../../../server/shared/feature-config-layers.js';
-import { extractFeatureMounts } from '../../../server/shared/feature-mount.js';
+import { extractFeatureMounts, stripMountDeclarations } from '../../../server/shared/feature-mount.js';
 import { collapseAccumulatedFields } from '../../../server/shared/feature-config-accumulate.js';
 import { resolveUserDataDir } from '../../../server/shared/constants.js';
 
@@ -73,8 +73,15 @@ export default class CoderAgent extends BasicAgent {
     // 多 session 场景禁止进程级缓存）。$mount 装配声明先于 merge 提取
     // （允许层：global/agent），剔除后的纯配置层再进 merge；装配事实由
     // 宿主（run-prebuilt-agent）消费。
+    //
+    // 默认装配源 opt-in（ADR-0046 2026-11-19 修订）：metadata 声明
+    // defaultMounts（宿主注入 config.defaultMounts）才提取 global 层的
+    // $mount；未声明时 global 层剥离 $mount 进队列（纯配置默认值照常
+    // 参与 merge，默认装配源对 coder 不可见）。
+    const acceptsDefaultMounts = config.defaultMounts === true;
+    const globalLayerConfig = readGlobalLayer();
     const { mounts: featureMounts, configLayers } = extractFeatureMounts([
-      { id: 'global', config: readGlobalLayer() },
+      { id: 'global', config: acceptsDefaultMounts ? globalLayerConfig : stripMountDeclarations(globalLayerConfig) },
       { id: 'agent', config: readAgentLayer('coder') },
     ]);
     // 累加型多值字段（skill.extraDirs 等）在进 merge 前跨层叠加

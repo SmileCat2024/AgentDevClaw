@@ -111,3 +111,23 @@ export function extractFeatureMounts(layers) {
   }
   return { mounts, configLayers };
 }
+
+/**
+ * 剥离一层配置中的全部 $mount 声明键（浅拷贝，不污染原对象）。
+ *
+ * 供默认装配源的 opt-out 消费用（ADR-0046 2026-11-19 修订）：未声明
+ * `defaultMounts: true` 的工作空间把 global 层当纯配置层——feature 配置
+ * 默认值照常参与合并，global 层的 $mount（默认装配源）对其不可见。剥离
+ * 后的层进 extractFeatureMounts 时无 $mount 可提取，配置键原样保留。
+ */
+export function stripMountDeclarations(config) {
+  if (!isPlainObject(config)) return {};
+  const stripped = { ...config };
+  for (const [featureName, featureConfig] of Object.entries(stripped)) {
+    if (isPlainObject(featureConfig) && MOUNT_KEY in featureConfig) {
+      const { [MOUNT_KEY]: _removed, ...rest } = featureConfig;
+      stripped[featureName] = rest;
+    }
+  }
+  return stripped;
+}

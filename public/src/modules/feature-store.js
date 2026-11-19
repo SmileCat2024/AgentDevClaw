@@ -3,23 +3,24 @@
  *
  * 两个入口（同一数据面 GET /api/feature-store/overview）：
  * - 身份商店 phOpenFeatureStore('main' | 'coder')：按身份装配，面板内不切换身份。
- * - 插件管理器 window.clawOpenPluginManager()：Claw 级插件仓库与全局装配
- *   （设置菜单 → 插件仓库与全局装配）。负责 tgz 导入及全局装配/卸载；
+ * - 插件管理器 window.clawOpenPluginManager()：Claw 级插件仓库与默认装配
+ *   （设置菜单 → 插件仓库与默认装配）。负责 tgz 导入及默认装配/卸载；
  *   插件参数统一从工作空间插件卡片的「设置」进入，再选择全局默认或本空间覆盖。
  *
  * 数据面：
  *   GET /api/feature-store/overview —— 包列表 + 各装配层清单（含 missing）+
- *   mounts.global（全局装配清单）+ envReady（工作空间级环境就绪）+ installing
+ *   mounts.global（默认装配清单）+ envReady（工作空间级环境就绪）+ installing
  *   （服务端进行中的安装，关弹窗后台继续时的可见性来源）
  * 安装（repository 包）：
  *   POST /api/feature-store/install —— provision + 成功才写声明；同步等待并
  *   即时反馈（按钮三态：添加 → 安装中…Ns → 成功/失败原因）。builtin 扩展
- *   是静态装配开关、无环境概念，走纯声明瞬时写回（PUT layer）。全局装配
+ *   是静态装配开关、无环境概念，走纯声明瞬时写回（PUT layer）。默认装配
  *   （identity 'global'）同样瞬时：仅校验 plan 不 provision，环境由各消费
  *   身份启动链自愈。
  * 移除：纯声明操作，前端直写配置层（PUT layer，无服务端状态变更）。
- * 全局层装配的条目（layerId 'global'）在身份商店只读展示：移除入口在插件
- * 管理器。
+ * 默认装配源的条目（layerId 'global'）在身份商店只读展示：移除入口在插件
+ * 管理器；默认装配仅对声明 defaultMounts 的工作空间生效（ADR-0046
+ * 2026-11-19 修订）。
  *
  * 外部依赖：
  *   - escapeHtml（markdown-utils.js 命名导出）
@@ -276,15 +277,15 @@ function _fsCard(item, control, extraAttr) {
     + '</div>';
 }
 
-/** 已装配区段卡片：徽章与动作沿用旧清单语义（全局只读、missing、设置、移除）。 */
+/** 已装配区段卡片：徽章与动作沿用旧清单语义（默认装配只读、missing、设置、移除）。 */
 function _fsMountedCard(feature, builtinItems, packageNames) {
   const runtimeName = feature._mountRuntimeName;
   const mount = feature._mount;
-  // 全局层装配（ADR-0046）：声明在 global 层，本身份层的移除动作对它无效，
-  // 移除入口在插件管理器（设置菜单 → 插件管理）
+  // 默认装配源条目（ADR-0046 2026-11-19 修订）：声明在 global 层，本身份层
+  // 的移除动作对它无效，移除入口在插件管理器（设置菜单 → 插件管理）
   const isGlobal = mount.layerId === 'global';
   const globalBadge = isGlobal
-    ? '<span class="feature-prov-badge">' + escapeHtml(_fsT('全局', 'global')) + '</span>'
+    ? '<span class="feature-prov-badge">' + escapeHtml(_fsT('默认', 'default')) + '</span>'
     : '';
   // builtin 装配无 package/version（不走 tgz 仓库），徽章显示来源而非包坐标
   const status = mount.missing
@@ -293,7 +294,7 @@ function _fsMountedCard(feature, builtinItems, packageNames) {
       ? '<span class="feature-prov-badge">' + escapeHtml(_fsT('扩展', 'extension')) + '</span>'
       : '<span class="feature-prov-badge">' + escapeHtml(`${mount.package}@${mount.version}`) + '</span>');
   const btn = isGlobal
-    ? '<button type="button" class="fs-list-remove" disabled style="opacity:0.35;" title="' + escapeHtml(_fsT('来自全局装配，在 设置 → 插件管理 中移除', 'From global assembly; remove via Settings → Plugin Manager')) + '">&#215;</button>'
+    ? '<button type="button" class="fs-list-remove" disabled style="opacity:0.35;" title="' + escapeHtml(_fsT('来自默认装配，在 设置 → 插件管理 中移除', 'From default assembly; remove via Settings → Plugin Manager')) + '">&#215;</button>'
     : '<button type="button" class="fs-list-remove" title="' + escapeHtml(_fsT('移除', 'Remove')) + '" data-action="featureStore.removeMount" data-identity="' + escapeHtml(_fsState.identity) + '" data-name="' + escapeHtml(runtimeName) + '">&#215;</button>';
   // tgz 装配项的配置参数入口（ADR-0046 落地第 1 步）：就地打开设置弹窗，
   // 层 tab 提供「全局默认 | 本空间」两级编辑。builtin 的配置家在 Feature
@@ -575,7 +576,7 @@ let _pmState = {
   open: false,
   overview: null,
   error: '',
-  busy: false,          // 单飞：装配/卸载进行中禁用其他写操作（全局装配瞬时，无计时器）
+  busy: false,          // 单飞：装配/卸载进行中禁用其他写操作（默认装配瞬时，无计时器）
   lastFailed: null,     // 最近一次装配失败的包（错误横幅重试入口）
   // tgz 上传导入的待确认状态（parse_upload / 分片上传的 { uploadId, summary }）。
   // 导入只入仓库，装配仍走货架卡片——与 ADR-0045「导入与装配分离」一致
@@ -684,7 +685,7 @@ const _pmRemoveGlobal = async function(runtimeName) {
   }
 };
 
-/** 全局装配：identity='global' 瞬时（仅校验 plan），无计时态 */
+/** 默认装配：identity='global' 瞬时（仅校验 plan），无计时态 */
 const _pmInstallGlobal = async function(packageName, version) {
   if (_pmState.busy) return;
   _pmState.busy = true;
@@ -846,14 +847,14 @@ function _pmGlobalMountedMap() {
   return mounts && typeof mounts === 'object' ? mounts : {};
 }
 
-/** 已装配（全局级）区：mounts.global 卡片 */
+/** 默认装配区：mounts.global 卡片（生效范围 = 声明 defaultMounts 的工作空间） */
 function _pmRenderGlobalSection(mountedMap) {
   const entries = Object.entries(mountedMap);
   if (!entries.length) {
-    return '<div class="fs-section-title">' + escapeHtml(_fsT('全局装配', 'Global Assembly')) + '</div>'
+    return '<div class="fs-section-title">' + escapeHtml(_fsT('默认装配', 'Default Assembly')) + '</div>'
       + '<div class="ph-settings-empty" style="padding:16px 0;">' + escapeHtml(_fsT(
-        '暂无全局装配的插件。全局装配对所有插件化工作空间生效。',
-        'No globally installed plugins. Global assembly applies to all plugin-enabled workspaces.'
+        '暂无默认装配的插件。默认装配对声明接受默认装配的工作空间生效。',
+        'No default plugins yet. Default assembly applies to workspaces that opted in (defaultMounts).'
       )) + '</div>';
   }
   const packageNames = new Map(
@@ -863,7 +864,7 @@ function _pmRenderGlobalSection(mountedMap) {
     const status = mount.missing
       ? '<span class="feature-badge status-removed">' + escapeHtml(_fsT('包已不在仓库', 'missing')) + '</span>'
       : '<span class="feature-prov-badge">' + escapeHtml(`${mount.package}@${mount.version}`) + '</span>';
-    const btn = '<button type="button" class="fs-list-remove" title="' + escapeHtml(_fsT('移除全局装配', 'Remove global assembly')) + '" data-action="pluginManager.removeGlobal" data-name="' + escapeHtml(runtimeName) + '">&#215;</button>';
+    const btn = '<button type="button" class="fs-list-remove" title="' + escapeHtml(_fsT('移除默认装配', 'Remove default assembly')) + '" data-action="pluginManager.removeGlobal" data-name="' + escapeHtml(runtimeName) + '">&#215;</button>';
     const pkg = packageNames.get(runtimeName);
     return _fsCard({
       name: runtimeName,
@@ -871,11 +872,11 @@ function _pmRenderGlobalSection(mountedMap) {
       description: pkg?.description || '',
     }, status + btn);
   }).join('');
-  return '<div class="fs-mounted-section"><div class="fs-section-title">' + escapeHtml(_fsT('全局装配', 'Global Assembly')) + '</div>'
+  return '<div class="fs-mounted-section"><div class="fs-section-title">' + escapeHtml(_fsT('默认装配', 'Default Assembly')) + '</div>'
     + '<div class="feature-grid ph-mount-grid">' + items + '</div></div>';
 }
 
-/** 仓库货架：用户仓库包（已全局装配的不重复列出），版本选择 + 全局装配按钮 */
+/** 仓库货架：用户仓库包（已默认装配的不重复列出），版本选择 + 设为默认装配按钮 */
 function _pmRenderPackageSections(mountedMap) {
   const mountedByPackage = new Set(
     Object.values(mountedMap).map((mount) => mount.package).filter(Boolean),
@@ -891,7 +892,7 @@ function _pmRenderPackageSections(mountedMap) {
     const addButton = _pmState.busy
       ? '<button type="button" class="fs-list-add" disabled style="opacity:0.7;">' + escapeHtml(_fsT('装配中…', 'Installing…')) + '</button>'
       : '<button type="button" class="fs-list-add" data-action="pluginManager.installGlobal" data-package="' + escapeHtml(pkg.package) + '" data-version="' + escapeHtml(latest) + '">'
-        + escapeHtml(_fsT('+ 全局装配', '+ Add Global')) + '</button>';
+        + escapeHtml(_fsT('+ 设为默认', '+ Set as Default')) + '</button>';
     const control = (pkg.versions?.length > 1
       ? '<select class="fs-select"' + (_pmState.busy ? ' disabled' : '') + ' data-action="pluginManager.selectVersion" data-event="change" data-package="' + escapeHtml(pkg.package) + '">' + versionOptions + '</select>'
       : '<span style="font-size:12px;color:var(--text-secondary);">' + escapeHtml(latest) + '</span>')
@@ -907,8 +908,8 @@ function _pmRenderPackageSections(mountedMap) {
   if (!items.length) {
     return '<div class="fs-section-title">' + escapeHtml(_fsT('仓库插件', 'Repository Plugins')) + '</div>'
       + '<div class="ph-settings-empty" style="padding:16px 0;">' + escapeHtml(_fsT(
-        '仓库暂无可全局装配的插件，可上传 tgz 导入。',
-        'No plugins available for global assembly; upload a tgz to import one.'
+        '仓库暂无可设为默认装配的插件，可上传 tgz 导入。',
+        'No plugins available as defaults; upload a tgz to import one.'
       )) + '</div>';
   }
   return '<div class="fs-section-title">' + escapeHtml(_fsT('仓库插件', 'Repository Plugins')) + '</div>'
@@ -948,8 +949,8 @@ function _pmRender() {
     '<div>',
     '<div class="feature-detail-title">' + escapeHtml(_fsT('插件管理', 'Plugin Manager')) + '</div>',
     '<div class="feature-detail-subtitle">' + escapeHtml(_fsT(
-      '管理插件仓库与全局装配：全局装配对所有插件化工作空间生效；工作空间级装配在各工作空间的设置内操作。',
-      'Manage the plugin repository and global assembly: global assembly applies to all plugin-enabled workspaces; per-workspace assembly lives in each workspace\'s settings.'
+      '管理插件仓库与默认装配：默认装配对声明接受默认装配的工作空间生效；工作空间级装配在各工作空间的设置内操作。',
+      'Manage the plugin repository and default assembly: default assembly applies to workspaces that opted in (defaultMounts); per-workspace assembly lives in each workspace\'s settings.'
     )) + '</div>',
     '</div>',
     '<button class="feature-detail-close" type="button" style="font-size:13px;padding:6px 12px;border-radius:6px;border:1px solid var(--border-color,#3a3a3a);" title="' + _fsT('从本地 tgz 文件导入插件包到仓库', 'Import a plugin package (.tgz) from local file into the repository') + '" data-action="pluginManager.openUpload">' + _fsT('上传 tgz', 'Upload tgz') + '</button>',
@@ -1004,7 +1005,7 @@ window.ClawFW.actions.registerMany({
 /**
  * 打开设置弹窗。runtimeName 为 $mount 声明键；identityContext 传身份键
  * （'main' | 'coder'）时提供「全局默认 | 本空间」两层 tab，插件管理器的
- * 全局装配卡片无身份上下文（不传），只编辑全局默认层。
+ * 默认装配卡片无身份上下文（不传），只编辑全局默认层。
  */
 async function _fsOpenSettings(runtimeName, identityContext, options = {}) {
   const scope = identityContext && _FS_IDENTITY_SCOPES[identityContext];

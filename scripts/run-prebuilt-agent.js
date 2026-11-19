@@ -850,6 +850,9 @@ SessionLifecycle.prototype.start = async function () {
     // 会话身份由宿主一次性注入（ADR-0022）：feature 据此向 server 回写会话级绑定
     agentId,
     sessionId: this.sessionId || undefined,
+    // 默认装配源 opt-in（ADR-0046 2026-11-19 修订）：metadata 声明
+    // defaultMounts 的 APP 才合并 global 层 $mount，未声明视其为纯配置层
+    defaultMounts: metadata.defaultMounts === true,
     runtimeInputIdentity: {
       runtimeInstanceId,
       ...(this.sessionId ? { sessionId: this.sessionId } : {}),

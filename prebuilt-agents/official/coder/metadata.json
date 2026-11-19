@@ -79,5 +79,6 @@
       ]
     }
   },
-  "featureMounts": true
+  "featureMounts": true,
+  "defaultMounts": true
 }

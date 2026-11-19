@@ -282,6 +282,41 @@ describe('043 $mount 项目层拒绝', () => {
   });
 });
 
+// ── 4b. 默认装配源 opt-in 门（defaultMounts，ADR-0046 2026-11-19 修订） ───
+
+describe('043 默认装配源 opt-in 门', () => {
+  function writeGlobalLayerWithMount() {
+    // global 层同时带 $mount 与纯配置键（skill），用于断言两类内容的分流
+    writeLayer(GLOBAL_LAYER_PATH, {
+      skill: { extraDirs: ['/global-skills'] },
+      'default-mounted-feature': { $mount: { kind: 'builtin' } },
+    });
+  }
+
+  test('未声明 defaultMounts：global 层 $mount 不进 mounts，纯配置键照常合并', () => {
+    writeGlobalLayerWithMount();
+    const { mounts, merged } = assemblePhFeatureConfig({ projectId: projectA.id, workspaceDir: dirD });
+    assert.equal(mounts.has('default-mounted-feature'), false);
+    // global 层退化为纯配置层：skill 配置默认值仍参与 merge（项目层基线自带
+    // '/a-skills'，累加字段跨层并集，global 前置）
+    assert.deepEqual(merged.skill.extraDirs, ['/global-skills', '/a-skills']);
+    resetLayers();
+  });
+
+  test('声明 defaultMounts: true：global 层 $mount（默认装配源）进 mounts', () => {
+    writeGlobalLayerWithMount();
+    const { mounts, merged } = assemblePhFeatureConfig({
+      projectId: projectA.id,
+      workspaceDir: dirD,
+      defaultMounts: true,
+    });
+    assert.equal(mounts.get('default-mounted-feature')?.layerId, 'global');
+    assert.equal(mounts.get('default-mounted-feature')?.kind, 'builtin');
+    assert.deepEqual(merged.skill.extraDirs, ['/global-skills', '/a-skills']);
+    resetLayers();
+  });
+});
+
 // ── 5. 路由层错误映射 ────────────────────────────────────────────────────
 
 describe('043 路由错误映射', () => {

@@ -561,7 +561,7 @@ describe('插件设置弹窗 — 打开与即时保存', () => {
     });
   });
 
-  it('插件管理器只显示仓库与全局装配，不再另造全局 Feature 参数入口', async () => {
+  it('插件管理器只显示仓库与默认装配，不再另造全局 Feature 参数入口', async () => {
     const fetchStub = makeFetch({
       overview: {
         packages: [{ package: 'agentero', displayName: 'Agentero', description: 'Library', versions: [{ version: '1.0.0' }] }],
@@ -572,8 +572,9 @@ describe('插件设置弹窗 — 打开与即时保存', () => {
       await loaded.store.clawOpenPluginManager();
       const managerHtml = String(loaded.hosts.get('claw-plugin-manager-host').innerHTML);
       assert.match(managerHtml, /仓库插件/);
-      assert.match(managerHtml, /全局装配/);
-      assert.doesNotMatch(managerHtml, /打开全局配置|Global Defaults/);
+      // ADR-0046 2026-11-19 修订：全局级装配 → 默认装配（仅对声明 defaultMounts 的工作空间生效）
+      assert.match(managerHtml, /默认装配/);
+      assert.doesNotMatch(managerHtml, /打开全局配置|Global Defaults|全局装配/);
       assert.equal(loaded.actions.handlers['pluginManager.openGlobalConfig'], undefined);
     });
   });

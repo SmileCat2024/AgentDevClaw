@@ -286,7 +286,7 @@ describe('composePanelDeclarations', async () => {
     assert.equal(mountedPanel.pluginId, 'mounted-panel');
   });
 
-  it('全局级装配（global 层 $mount）→ 面板处处可见，when 不设 agentIds', async () => {
+  it('默认装配源（global 层 $mount）→ 面板可见范围 = opt-in 身份集合（ADR-0046 2026-11-19 修订）', async () => {
     const fixture = makePluginTgz({
       packageName: 'global-mounted-plugin',
       version: '1.0.0',
@@ -304,10 +304,42 @@ describe('composePanelDeclarations', async () => {
     });
     assert.deepEqual(warnings, []);
     const panel = declarations.find((d) => d.panelId === 'anywhere-panel');
-    assert.deepEqual(panel?.meta.when, {});
+    // 缺省注册身份（main/coder）均声明 defaultMounts → 默认装配源展开为其 agentId 集合
+    assert.deepEqual(panel?.meta.when, { agentIds: ['programming-helper', 'coder'] });
   });
 
-  it('混合装配：global + 空间身份并存 → 按全局级处理（处处可见）', async () => {
+  it('默认装配源 opt-out：未声明 defaultMounts 的身份不展开 global 条目', async () => {
+    const { registerIdentityScopes, IDENTITY_SCOPES } = await import('../server/feature-runtime/install-service.js');
+    const snapshot = Object.entries(IDENTITY_SCOPES).map(([identity, scope]) => ({ identity, ...scope }));
+    try {
+      registerIdentityScopes([
+        { identity: 'main', agentId: 'programming-helper', layerId: 'agent' },
+        { identity: 'coder', agentId: 'coder', layerId: 'agent', defaultMounts: true },
+      ]);
+      const fixture = makePluginTgz({
+        packageName: 'optout-plugin',
+        version: '1.0.0',
+        manifest: uiManifest([{ id: 'optout-panel', entry: 'index.js' }]),
+      });
+      const assetsRoot = join(root, 'assets');
+      await extractClientAssets(
+        { archivePath: fixture.archivePath, packageName: 'optout-plugin', version: '1.0.0', archiveDigest: fixture.digest },
+        { expectClient: true, assetsRoot },
+      );
+      const { declarations, warnings } = await composePanelDeclarations({
+        catalogRoots: { userRoot: join(root), officialRoot: join(root, 'official-empty') },
+        resolvers: makeLayerTable({}, { 'optout-plugin': { $mount: { package: 'optout-plugin', version: '1.0.0' } } }),
+        assetsRoot,
+      });
+      assert.deepEqual(warnings, []);
+      const panel = declarations.find((d) => d.panelId === 'optout-panel');
+      assert.deepEqual(panel?.meta.when, { agentIds: ['coder'] });
+    } finally {
+      registerIdentityScopes(snapshot); // 替换式全局注册，恢复缺省不泄漏
+    }
+  });
+
+  it('混合装配：默认装配源 + 空间身份并存 → 可见范围 = 身份并集', async () => {
     const fixture = makePluginTgz({
       packageName: 'mixed-plugin',
       version: '1.0.0',
@@ -326,7 +358,7 @@ describe('composePanelDeclarations', async () => {
       ),
       assetsRoot,
     });
-    assert.deepEqual(declarations.find((d) => d.panelId === 'mixed-panel')?.meta.when, {});
+    assert.deepEqual(declarations.find((d) => d.panelId === 'mixed-panel')?.meta.when, { agentIds: ['programming-helper', 'coder'] });
   });
 
   it('禁用装配（enabled:false）→ 面板不下发；启用装配并存时仍下发', async () => {

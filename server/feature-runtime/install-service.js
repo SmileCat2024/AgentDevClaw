@@ -27,17 +27,20 @@ import { computeRuntimeDependencyHash, getRuntimeEnvironmentRoot, provisionRunti
 export const GLOBAL_IDENTITY = 'global';
 
 /**
- * 装配身份注册表（替换式）：identity 键 → 配置层寻址 {agentId, layerId}。
+ * 装配身份注册表（替换式）：identity 键 → 配置层寻址 {agentId, layerId,
+ * defaultMounts}。
  *
  * 声明驱动派生（ADR-0045：公共代码不按 APP ID 硬编码）：APP 在 metadata.json
  * 声明 `featureMounts: true`（runtime 消费 $mount 装配），宿主启动发现后经
  * registerIdentityScopes 注册；identity 主键用 agentId，历史键 main 是
- * programming-helper 的兼容别名（前端商店 API 已用）。测试可直接注册构造
- * 场景。消费方经 Object.entries(IDENTITY_SCOPES) 读当前注册集。
+ * programming-helper 的兼容别名（前端商店 API 已用）。defaultMounts 同为
+ * metadata 声明（ADR-0046 2026-11-19 修订：global 层 $mount 是默认装配源，
+ * 仅对声明 `defaultMounts: true` 的身份生效）。测试可直接注册构造场景。
+ * 消费方经 Object.entries(IDENTITY_SCOPES) 读当前注册集。
  */
 export const IDENTITY_SCOPES = {
-  main: { agentId: 'programming-helper', layerId: 'agent' },
-  coder: { agentId: 'coder', layerId: 'agent' },
+  main: { agentId: 'programming-helper', layerId: 'agent', defaultMounts: true },
+  coder: { agentId: 'coder', layerId: 'agent', defaultMounts: true },
 };
 
 export function registerIdentityScopes(entries) {
@@ -47,7 +50,11 @@ export function registerIdentityScopes(entries) {
     const identity = String(entry.identity || '').trim();
     const agentId = String(entry.agentId || '').trim();
     if (!identity || !agentId) continue;
-    IDENTITY_SCOPES[identity] = { agentId, layerId: String(entry.layerId || 'agent').trim() };
+    IDENTITY_SCOPES[identity] = {
+      agentId,
+      layerId: String(entry.layerId || 'agent').trim(),
+      defaultMounts: entry.defaultMounts === true,
+    };
   }
 }
 
@@ -109,22 +116,27 @@ function resolveScopeFor(identity) {
 }
 
 /**
- * 读身份的有效装配 = global 层 + 身份层按层序合并（后层覆盖、null 卸载），
- * 与启动链 agent 构造期 [global, agent] 层序完全同权威（extractFeatureMounts
- * 是唯一合并实现）。install/rebuild/readiness 的 plan 输入必须是这个口径——
- * 启动链的环境 hash 按合并依赖集计算，单层口径会让 install/rebuild 产出
- * 启动链认不出的环境（hash 失配，装两遍）。
+ * 读身份的有效装配 = 默认装配源（global 层）+ 身份层按层序合并（后层覆盖、
+ * null 卸载），与启动链 agent 构造期 [global, agent] 层序完全同权威
+ * （extractFeatureMounts 是唯一合并实现）。install/rebuild/readiness 的 plan
+ * 输入必须是这个口径——启动链的环境 hash 按合并依赖集计算，单层口径会让
+ * install/rebuild 产出启动链认不出的环境（hash 失配，装两遍）。
+ *
+ * 默认装配源 opt-in 门（ADR-0046 2026-11-19 修订）：仅声明 defaultMounts
+ * 的身份合并 global 层 $mount；未声明身份视 global 层为纯配置层（$mount
+ * 不可见）。global 身份自身管理默认源，恒读 global 层。
  * @returns {{ mounts: Map, targetSparse: object }} targetSparse 是写入目标层的 sparse
  *   （global 身份 → global 层；空间身份 → 该身份 agent 层）
  */
 function readEffectiveMounts(scope, resolvers) {
-  const globalPart = readGlobalDeclaredMounts(resolvers);
+  const useDefaultSource = scope.isGlobal || scope.defaultMounts === true;
+  const globalPart = useDefaultSource ? readGlobalDeclaredMounts(resolvers) : { sparse: {}, mounts: new Map() };
   if (scope.isGlobal) {
     return { mounts: globalPart.mounts, targetSparse: globalPart.sparse };
   }
   const identityPart = readDeclaredMounts(scope, resolvers);
   const { mounts } = extractFeatureMounts([
-    { id: 'global', config: globalPart.sparse },
+    { id: 'global', config: useDefaultSource ? globalPart.sparse : {} },
     { id: scope.layerId, config: identityPart.sparse },
   ]);
   return { mounts, targetSparse: identityPart.sparse };
