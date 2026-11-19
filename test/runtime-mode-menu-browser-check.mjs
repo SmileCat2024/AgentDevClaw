@@ -85,7 +85,7 @@ try {
   assert.equal(await items.count(), 2);
   assert.deepEqual(await items.evaluateAll(els => els.map(el => el.dataset.runtimeMode)), ['standard', 'container']);
   assert.equal(await items.nth(0).textContent(), '普通模式直接在当前主机运行');
-  assert.equal(await items.nth(1).textContent(), '容器模式在隔离容器中运行');
+  assert.equal(await items.nth(1).textContent(), '容器模式（Beta）在隔离容器中运行');
   const menuBox = await menu.boundingBox();
   assert.ok(menuBox && menuBox.width > 100 && menuBox.height > 30, 'menu must render with real CSS size');
 
@@ -183,7 +183,7 @@ try {
   await page.waitForTimeout(OPEN + 80);
   assert.equal(await menuCount(), 1, 'menu opens after the language switch');
   assert.equal(await items.nth(0).textContent(), 'StandardRun directly on this host');
-  assert.equal(await items.nth(1).textContent(), 'ContainerRun in an isolated container');
+  assert.equal(await items.nth(1).textContent(), 'Container (Beta)Run in an isolated container');
   assert.equal(await menu.getAttribute('aria-label'), 'Choose runtime mode');
   await page.keyboard.press('Escape');
   console.log('PASS language bridge drives the menu copy (zh → en)');

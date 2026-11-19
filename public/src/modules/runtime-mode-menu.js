@@ -96,7 +96,7 @@ function openMenu(button) {
     },
     {
       mode: 'container',
-      title: zh ? '容器模式' : 'Container',
+      title: zh ? '容器模式（Beta）' : 'Container (Beta)',
       desc: zh ? '在隔离容器中运行' : 'Run in an isolated container',
       icon: '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 8v8a2 2 0 0 1-1 1.73l-7 4a2 2 0 0 1-2 0l-7-4A2 2 0 0 1 3 16V8a2 2 0 0 1 1-1.73l7-4a2 2 0 0 1 2 0l7 4A2 2 0 0 1 21 8z"/><path d="M3.3 7 12 12l8.7-5M12 22V12"/></svg>',
     },
