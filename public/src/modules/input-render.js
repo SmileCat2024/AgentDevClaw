@@ -47,7 +47,7 @@
  *   window.syncPersistentComposerSessionCard / detachTransientInputContent /
  *   window.hidePersistentComposerCard / insertTransientInputCard
  *   window.runWithSuppressedChatViewportObservers / notifyChatViewportMutation
- *   window._getSessionInputCacheKey / _sessionInputCache（桥键）
+ *   window._getSessionInputCacheKey / _sessionInputCache / _hasSessionInputDraft（桥键）
  *   window._voiceRecording / _voiceStopping / _voicePendingSend（桥键）/
  *     window.stopVoiceRecording / _cancelVoiceRecording / _shouldPreserveVoiceInputForRender /
  *     window._injectPendingVoiceResult
@@ -90,8 +90,10 @@ function _applyLeaseInitialDraft(lease) {
   const ta = document.getElementById('input-persistent');
   // choice/frozen/readonly/compacting 面没有可编辑的普通发言 composer；
   // 不消费草稿，待 composer 恢复后由后续渲染声明再应用。
+  // hasDraft 判别名槽位（input-composer-api 桥键）：键迁移窗口内草稿可能仍
+  // 在别名槽位，只看主键会把用户草稿误判为不存在、让 lease 回填覆盖它。
   const hasDraft = (typeof ta?.value === 'string' && ta.value.length > 0)
-    || (typeof window._sessionInputCache[cacheKey] === 'string' && window._sessionInputCache[cacheKey].length > 0);
+    || window._hasSessionInputDraft(cacheKey);
   if (!ta || ta.closest('[data-persistent-composer]')?.style.display === 'none') return;
   _lastLeaseDraftAppliedId = lease.requestId;
   if (hasDraft) return;

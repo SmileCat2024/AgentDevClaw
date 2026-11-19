@@ -16,8 +16,8 @@
  *
  * 命名导出（跨文件消费方一律 import；桥键见文件末尾）：
  *   resolveInputSurfaceMode, readInputSurfaceModeState,
- *   _cacheSessionInput, _restoreSessionInputDraft, _storeSessionInputDraft,
- *   _storeVisibleSessionInputDraft,
+ *   _cacheSessionInput, _restoreSessionInputDraft, _hasSessionInputDraft,
+ *   _storeSessionInputDraft, _storeVisibleSessionInputDraft,
  *   ensurePersistentComposerCard, applyComposerMode, syncPersistentComposerSessionCard,
  *   hidePersistentComposerCard, showPersistentComposerCard, getPersistentComposerCard,
  *   insertTransientInputCard, detachTransientInputContent
@@ -55,7 +55,8 @@
  *
  * 外来键的三选一结论（配方步 3）：
  *   - import：已迁态 owner 与轻量宿主域——i18n `t`、getCurrentLanguage、
- *     currentRuntimeAgentId / readOnlyMode、sessionInputCache、排队投影四键 +
+ *     currentRuntimeAgentId / readOnlyMode、sessionInputCache、getRuntimeContextKey
+ *     （identity 域，草稿别名解析）、排队投影四键 +
  *     setLastQueueBubbleSignature、回退压缩四键 + setCompactTimerInterval、
  *     `autoResize`；本批兄弟 persistent-input（function 声明，静态循环安全）。
  *   - `window.` 晚绑定：目标模块自身仍以桥键服务其他消费方，走 window 与迁移前
@@ -75,6 +76,7 @@ import { t } from '../i18n.js';
 import { getCurrentLanguage } from './i18n-environment-state.js';
 import { currentRuntimeAgentId } from './orchestration-state.js';
 import { readOnlyMode } from './agent-store-state.js';
+import { getRuntimeContextKey } from './identity.js';
 import { sessionInputCache } from './p2-w2-3a-composer-state.js';
 import {
   localQueuedInputPending,
@@ -114,14 +116,76 @@ export function _cacheSessionInput(textarea) {
   sessionInputCache[key] = textarea.value || '';
 }
 
+/**
+ * 同一会话身份的草稿双编码别名（根治：切回会话后文本"暂时性丢失"）。
+ *
+ * `_getSessionInputCacheKey`（app-main）在线程目标解析前后分别产出两种编码：
+ * 未就位时是 `getRuntimeContextKey()` 的 session 编码（host:…|session:… /
+ * runtime:…），就位后是 `thread:wt-…`。切换窗口期内外同一会话会先后落在两个
+ * 槽位上；旧实现恢复 miss 即清空输入框，等于同会话的两把钥匙互不相认。
+ *
+ * 别名解析把「当前视图同一身份的另一编码」显式化，两个方向都覆盖：
+ * - 主键是 thread 编码（线程就位）：别名 = 当前视图的 session 编码（实时可算），
+ *   并记入配对记忆；
+ * - 主键是 session 编码（线程未就位的切换窗口）：别名 = 配对记忆里该 session
+ *   最近已知的 thread 编码——两种编码在线程就位时刻共存过，窗口期反查即可。
+ *
+ * 主键 miss 时经别名槽位迁移合并（拷入主键并删别名），单槽不变量由此保持。
+ * 配对记忆是页内 Map（不持久化）：session→thread 在线程化模型里稳定（会话
+ * 归属单线程，换代是新 session id），残留旧配对最坏指向本会话自己上一次
+ * 访问的草稿槽位，语义仍正确。
+ *
+ * 权威链对齐：线程编码与输入投递同链（submitThreadInput 按 threadId 投递），
+ * 是草稿的主键；session 编码只是切换窗口期的别名。
+ */
+const _lastKnownSessionThreadPair = new Map(); // sessionKey → threadKey（页内）
+
+function _resolveSessionDraftAliasKey(primaryKey) {
+  const threadId = String(window.getActiveThreadInputTarget?.()?.threadId || '').trim();
+  if (threadId) {
+    const sessionKey = getRuntimeContextKey();
+    if (sessionKey && sessionKey !== `thread:${threadId}`) {
+      _lastKnownSessionThreadPair.set(sessionKey, `thread:${threadId}`);
+      return sessionKey;
+    }
+    return null;
+  }
+  // 线程目标未就位：主键是 session 编码，别名经配对记忆反查 thread 编码。
+  return _lastKnownSessionThreadPair.get(primaryKey) || null;
+}
+
 export function _restoreSessionInputDraft(textarea, key = textarea?.dataset?.sessionKey || window._getSessionInputCacheKey()) {
   if (!textarea || !key) return false;
-  if (!Object.prototype.hasOwnProperty.call(sessionInputCache, key)) return false;
+  if (!Object.prototype.hasOwnProperty.call(sessionInputCache, key)) {
+    // 主键 miss：同一身份的别名槽位迁移（两个方向见
+    // `_resolveSessionDraftAliasKey` 头注），命中即合并到主键并删别名，
+    // 两编码互认、不再清空。
+    const aliasKey = _resolveSessionDraftAliasKey(key);
+    if (aliasKey && aliasKey !== key && typeof sessionInputCache[aliasKey] === 'string') {
+      sessionInputCache[key] = sessionInputCache[aliasKey];
+      delete sessionInputCache[aliasKey];
+    } else {
+      return false;
+    }
+  }
   const cached = sessionInputCache[key];
   if (typeof cached !== 'string') return false;
   textarea.value = cached;
   autoResize(textarea);
   return true;
+}
+
+/**
+ * 会话草稿存在性判定（含别名槽位）：lease 伴生反馈（回退草稿回填）在覆盖
+ * 用户草稿前必须先确认「当前会话已有输入」，该判定发生在键迁移之前的窗口
+ * 时，草稿可能仍躺在别名槽位里——只看主键会把用户草稿误判为不存在。
+ */
+export function _hasSessionInputDraft(key = window._getSessionInputCacheKey()) {
+  if (!key) return false;
+  if (typeof sessionInputCache[key] === 'string' && sessionInputCache[key].length > 0) return true;
+  const aliasKey = _resolveSessionDraftAliasKey(key);
+  return !!aliasKey && aliasKey !== key
+    && typeof sessionInputCache[aliasKey] === 'string' && sessionInputCache[aliasKey].length > 0;
 }
 
 export function _storeSessionInputDraft(textarea) {
@@ -418,7 +482,8 @@ export function applyComposerMode(card) {
 
 /**
  * 会话身份重绑（容器级）：旧 key 抢救草稿 → 更新 dataset.sessionKey →
- * 恢复新 key 草稿。同 key 调用是幂等 no-op（同会话重渲染不触碰草稿）。
+ * 恢复新 key 草稿（miss 时经 `_resolveSessionDraftAliasKey` 的别名槽位迁移，
+ * 见其头注）。同 key 调用是幂等 no-op（同会话重渲染不触碰草稿）。
  * 返回是否发生了会话切换。
  */
 export function syncPersistentComposerSessionCard(container) {
@@ -493,6 +558,7 @@ const BRIDGE_FUNCTIONS = {
   resolveInputSurfaceMode,
   readInputSurfaceModeState,
   _cacheSessionInput,
+  _hasSessionInputDraft,
   _storeVisibleSessionInputDraft,
   syncPersistentComposerSessionCard,
   hidePersistentComposerCard,
@@ -504,6 +570,7 @@ const BRIDGE_FUNCTIONS = {
 //   resolveInputSurfaceMode          ← app-main（getInputSurfaceMode，裸调用）
 //   readInputSurfaceModeState        ← app-main（同上）
 //   _cacheSessionInput               ← app-chat-input / slash-menu / voice-input（window.）
+//   _hasSessionInputDraft            ← input-render（lease 草稿回填的 hasDraft 判定，window.）
 //   _storeVisibleSessionInputDraft   ← app-main（宿主 storeDraft）/ session-readonly-view
 //                                      （window.）/ thread-store（裸调用）/ workspace-actions（window.）
 //   syncPersistentComposerSessionCard← input-render（window.）
@@ -514,6 +581,7 @@ const BRIDGE_FUNCTIONS = {
 window.KernelState.defineKey('input-composer-api', 'resolveInputSurfaceMode', resolveInputSurfaceMode);
 window.KernelState.defineKey('input-composer-api', 'readInputSurfaceModeState', readInputSurfaceModeState);
 window.KernelState.defineKey('input-composer-api', '_cacheSessionInput', _cacheSessionInput);
+window.KernelState.defineKey('input-composer-api', '_hasSessionInputDraft', _hasSessionInputDraft);
 window.KernelState.defineKey('input-composer-api', '_storeVisibleSessionInputDraft', _storeVisibleSessionInputDraft);
 window.KernelState.defineKey('input-composer-api', 'syncPersistentComposerSessionCard', syncPersistentComposerSessionCard);
 window.KernelState.defineKey('input-composer-api', 'hidePersistentComposerCard', hidePersistentComposerCard);

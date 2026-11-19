@@ -1023,6 +1023,142 @@ describe('slash prompt pill session isolation (attachment buckets per session)',
   });
 });
 
+// ── 草稿槽位别名迁移（根治：切回会话后文本"暂时性丢失"）────────────────────
+// _getSessionInputCacheKey 在线程目标解析前后产出 thread / session 两种编码，
+// 同一会话的草稿会先后落在两个槽位。以下用例镜像 app-main 的键函数形状
+// （线程就位 → thread 编码；未就位 → getRuntimeContextKey()），用真实渲染
+// 管线（renderInputRequests → syncPersistentComposerSessionCard）驱动。
+describe('draft slot alias migration (thread-resolved key flip)', () => {
+  // 与 pill describe 同形的两个驱动帮助（作用域内自备，不跨 describe 共享）
+  function mountComposer(c) {
+    c.read('renderInputRequests([])');
+    return c.read("document.getElementById('input-persistent')");
+  }
+
+  function switchSession(c, state, liveKey, runtimeId) {
+    state.liveKey = liveKey;
+    c.window.currentRuntimeAgentId = runtimeId;
+    c.window.__syncInputIdentity();
+    c.read('currentInputRequests = []; renderInputRequests([])');
+  }
+
+  // 生产形状的会话键与线程目标（覆盖 baseGlobals 的扁平桩，两个状态由
+  // state.threadResolved / state.threadId 驱动，与切换窗口的真实时序同构）。
+  function mountThreadAwareKeyStub(c, state) {
+    c.window.focusedAgentId = 'host-1'; // 让 getRuntimeContextKey 产出 host:…|session:… 格式（会话间可区分）
+    c.window.getActiveThreadInputTarget = () => (state.threadResolved
+      ? { threadId: state.threadId, sessionId: state.liveKey }
+      : null);
+    c.window._getSessionInputCacheKey = () => (state.threadResolved
+      ? `thread:${state.threadId}`
+      : c.window.getRuntimeContextKey());
+  }
+
+  it('keeps the draft through the thread-resolved key migration and merges to a single slot', async () => {
+    await withInputEsmCase({}, async ({ c, state }) => {
+      state.threadId = 'wt-a';
+      mountThreadAwareKeyStub(c, state);
+      const ta = mountComposer(c);
+      // 切换窗口期（线程未就位）：草稿落在 session 编码槽位
+      assert.equal(ta.dataset.sessionKey, 'host:host-1|session:session-a');
+      ta.value = 'DRAFT-MARK';
+      c.window._cacheSessionInput(ta);
+
+      // 线程目标就位后，任一签名变化（如只读态翻转）触发输入面重渲染 →
+      // 键迁移。回归点：旧实现恢复 miss 即清空输入框（用户可感知为
+      // "药丸还在、文本没了"）；修复后经别名槽位迁移恢复。
+      state.threadResolved = true;
+      c.read('readOnlyMode = true; renderInputRequests([])');
+      assert.equal(ta.dataset.sessionKey, 'thread:wt-a');
+      assert.equal(ta.value, 'DRAFT-MARK', '键迁移窗口不得清空草稿');
+      assert.equal(c.read("_sessionInputCache['thread:wt-a']"), 'DRAFT-MARK', '草稿迁移到主键槽位');
+      assert.equal(c.read("_sessionInputCache['host:host-1|session:session-a']"), undefined,
+        '别名槽位合并后删除（单槽不变量）');
+
+      // 线程就位后的同视图重渲染：同 key 幂等 no-op，草稿不动
+      c.read('readOnlyMode = false; renderInputRequests([])');
+      assert.equal(ta.value, 'DRAFT-MARK');
+      assert.equal(c.read("_sessionInputCache['thread:wt-a']"), 'DRAFT-MARK');
+    });
+  });
+
+  it('restores the draft via the pair memory when returning before the thread target resolves', async () => {
+    await withInputEsmCase({}, async ({ c, state }) => {
+      state.threadId = 'wt-a';
+      mountThreadAwareKeyStub(c, state);
+      const ta = mountComposer(c);
+      ta.value = 'DRAFT-MARK';
+      c.window._cacheSessionInput(ta);
+
+      // 会话 A 停留期线程就位 → 键迁移到 thread 编码（配对记忆在此建立）
+      state.threadResolved = true;
+      c.read('readOnlyMode = true; renderInputRequests([])');
+      assert.equal(ta.dataset.sessionKey, 'thread:wt-a');
+
+      // 切到会话 B（独立会话，无线程目标）再切回 A：切回瞬间线程目标未就位，
+      // 草稿在 thread 槽位——配对记忆反查别名，不得清空
+      state.threadResolved = false;
+      switchSession(c, state, 'session-b', 'agent-2');
+      const taB = mountComposer(c);
+      assert.equal(taB.value, '', '会话 B 无草稿：切换后从空开始（会话隔离）');
+      taB.value = 'B draft';
+      c.window._cacheSessionInput(taB);
+
+      switchSession(c, state, 'session-a', 'agent-1');
+      const taA = c.read("document.getElementById('input-persistent')");
+      assert.equal(taA.dataset.sessionKey, 'host:host-1|session:session-a');
+      assert.equal(taA.value, 'DRAFT-MARK', '回程窗口（线程未就位）经配对记忆恢复，不得清空');
+      assert.equal(c.read("_sessionInputCache['host:host-1|session:session-a']"), 'DRAFT-MARK',
+        '迁移后单槽在 session 主键');
+      assert.equal(c.read("_sessionInputCache['thread:wt-a']"), undefined, 'thread 槽位合并后删除');
+      assert.equal(c.read("_sessionInputCache['host:host-1|session:session-b']"), 'B draft',
+        '会话 B 的草稿不受 A 的别名迁移影响');
+    });
+  });
+
+  it('keeps miss semantics: empty alias slot fabricates no draft', async () => {
+    await withInputEsmCase({}, async ({ c, state }) => {
+      state.threadId = 'wt-x';
+      state.threadResolved = true;
+      mountThreadAwareKeyStub(c, state);
+      const composer = await c.load('public/src/modules/input-composer.js');
+      const ta = mountComposer(c); // 挂载时线程已就位：dataset 即 thread 主键
+      assert.equal(ta.dataset.sessionKey, 'thread:wt-x');
+      assert.equal(composer._hasSessionInputDraft('thread:wt-x'), false, '两槽皆空：hasDraft 为假');
+      assert.equal(composer._restoreSessionInputDraft(ta, 'thread:wt-x'), false, '两槽皆空：恢复仍 miss');
+
+      // 别名槽位持有空字符串：可迁移（string 契约），但语义等价于无草稿
+      c.read("_sessionInputCache['host:host-1|session:session-a'] = ''");
+      assert.equal(composer._hasSessionInputDraft('thread:wt-x'), false, '空串别名不算草稿');
+      assert.equal(composer._restoreSessionInputDraft(ta, 'thread:wt-x'), true, '空串是合法槽位值：迁移成立');
+      assert.equal(ta.value, '', '恢复出的内容为空（与清空等价，不伪造内容）');
+    });
+  });
+
+  it('hasSessionInputDraft recognizes a draft sitting in the alias slot (both directions)', async () => {
+    await withInputEsmCase({}, async ({ c, state }) => {
+      state.threadId = 'wt-a';
+      state.threadResolved = true;
+      mountThreadAwareKeyStub(c, state);
+      const composer = await c.load('public/src/modules/input-composer.js');
+      mountComposer(c);
+      // 桥键就位（input-render 的 lease 回填 hasDraft 判定经它取别名）
+      assert.equal(typeof c.window._hasSessionInputDraft, 'function');
+
+      // 正向：主键 thread 编码空，session 别名槽位有草稿（键迁移前的窗口）
+      c.read("_sessionInputCache['host:host-1|session:session-a'] = 'DRAFT'");
+      assert.equal(composer._hasSessionInputDraft('thread:wt-a'), true);
+      // 反向：主键 session 编码空，草稿在配对记忆指向的 thread 槽位
+      c.read("delete _sessionInputCache['host:host-1|session:session-a']");
+      c.read("_sessionInputCache['thread:wt-a'] = 'DRAFT'");
+      state.threadResolved = false;
+      assert.equal(composer._hasSessionInputDraft('host:host-1|session:session-a'), true);
+      // 无配对记忆的 session（会话 B）不误报
+      assert.equal(composer._hasSessionInputDraft('host:host-1|session:session-b'), false);
+    });
+  });
+});
+
 // ── 用例 3：草稿迁移后 voice-input.js 的 re-export 与既有引用零行为变化 ─────
 
 describe('draft cache migration compatibility (ticket 036)', () => {
