@@ -176,6 +176,9 @@ test('session-reference-picker：命名导出与 window.SessionReference 成员�
   assert.equal(api.openPicker, module.openSessionReferencePicker);
   assert.equal(api.buildTurnMetadata, module.buildTurnMetadata);
   assert.equal(api.setDragSource, module.setDragSource);
+  // 拖拽影像换离屏 pill：实现共享于 reference-drop-targets（真实 import 同实例）
+  const dropTargets = await import('../public/src/modules/reference-drop-targets.js');
+  assert.equal(api.setDragImage, dropTargets.setReferenceDragImage);
   assert.equal(api.activeKey, module.activeKey);
   assert.equal(api.notify, module.notify);
   assert.equal(api.MIME, module.SESSION_REF_MIME);

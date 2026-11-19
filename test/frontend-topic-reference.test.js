@@ -187,6 +187,70 @@ describe('topic-reference-picker', () => {
     });
   });
 
+  it('dragstart swaps the drag image for an off-screen pill (not the whole card snapshot)', async () => {
+    const document = makeDocumentStub();
+    const appended = [];
+    document.body.appendChild = (child) => { appended.push(child); return child; };
+    document.createElement = () => {
+      const el = new FakeElement();
+      el._removed = false;
+      el.remove = () => { el._removed = true; };
+      return el;
+    };
+    await withP2EsmCase({
+      classic: (sandbox) => {
+        sandbox.loadSource('public/src/modules/action-dispatcher.js');
+        prepareEsmModules(sandbox, APP_CORE_DOMAIN);
+      },
+      globals: { document, Node: FakeNode },
+    }, async (c) => {
+      await c.load(PICKER);
+      const dropTargets = await c.load('public/src/modules/reference-drop-targets.js');
+
+      // 主题卡片源：dragstart 后 setDragImage 收到挂在 body 的透明 frame，
+      // 内层是主题 pill。不显式设置时浏览器退回整卡半透明快照——正是本
+      // helper 要消除的形态；透明缓冲的意图见 helper 注释（对抗 drag image
+      // 位图边缘的 alpha 渐隐）。
+      const { inner } = makeTopicCardSource({ topicId: 'relation_a', title: '前端 ESM 迁移', agentId: 'programming-helper' });
+      const topicTransfer = makeDataTransfer([]);
+      const imageCalls = [];
+      topicTransfer.setDragImage = (...args) => imageCalls.push(args);
+      dispatch(document, 'dragstart', { target: inner, dataTransfer: topicTransfer, preventDefault() {} });
+      assert.equal(imageCalls.length, 1, 'drag image 必须被显式设置');
+      const [ghost, x, y] = imageCalls[0];
+      assert.equal(appended[appended.length - 1], ghost, 'ghost 必须挂到 document.body 才能被截取');
+      assert.match(ghost.className, /(^| )reference-drag-ghost( |$)/);
+      assert.match(ghost.innerHTML, /session-ref-chip reference-drag-ghost-chip topic-ref-chip/);
+      assert.match(ghost.innerHTML, /前端 ESM 迁移/);
+      assert.ok(Number.isInteger(x) && Number.isInteger(y), '指针偏移为整数（pill 居中）');
+
+      // dragend 清理：ghost 从 DOM 移除，离屏节点不残留
+      dispatch(document, 'dragend', {});
+      assert.equal(ghost._removed, true);
+
+      // 会话 kind（PH 会话记录 / 侧栏条目两类源转发同一实现）：不带主题
+      // 配色，空标题回退到 kind 通用标签
+      const sessionTransfer = makeDataTransfer([]);
+      const sessionCalls = [];
+      sessionTransfer.setDragImage = (...args) => sessionCalls.push(args);
+      dropTargets.setReferenceDragImage({ dataTransfer: sessionTransfer }, { kind: 'session', title: '' });
+      assert.equal(sessionCalls.length, 1);
+      const [sessionGhost] = sessionCalls[0];
+      assert.equal(sessionGhost.innerHTML.includes('topic-ref-chip'), false);
+      assert.match(sessionGhost.innerHTML, /会话引用|Session/);
+      dispatch(document, 'dragend', {});
+      assert.equal(sessionGhost._removed, true);
+
+      // 降级容错：dataTransfer 无 setDragImage（合成事件桩 / 老 API）时，
+      // 拖拽链路其余行为不受影响
+      const appendedBefore = appended.length;
+      const bare = makeDataTransfer([]);
+      dispatch(document, 'dragstart', { target: inner, dataTransfer: bare, preventDefault() {} });
+      assert.equal(bare.getData('application/x-claw-topic-ref').length > 0, true, 'MIME 照写');
+      assert.equal(appended.length, appendedBefore, '不创建 ghost 元素');
+    });
+  });
+
   it('drop onto the active composer card attaches the reference and focuses the textarea', async () => {
     const document = makeDocumentStub();
     await withP2EsmCase({

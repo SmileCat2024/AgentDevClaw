@@ -11,6 +11,7 @@
  *   consume() / restore(refs) / peek()
  *   chipsHtml() — 引用 pill 的 HTML（_renderAttachmentPreview 拼接）
  *   openPicker() — + 菜单「会话」入口打开选择弹窗
+ *   setDragImage(event, opts) — 拖拽影像换离屏 pill（转发 reference-drop-targets）
  *
  * 依赖：已迁 ESM 的 i18n 语言、orchestration 的当前 runtime、markdown 的
  * escapeHtml、toast 均由 import 提供；仍 classic 的身份解析与附件预览函数
@@ -30,6 +31,7 @@ import {
   sidebarItemIdentity,
   sidebarItemTitle,
   clearDropTargetHighlights,
+  setReferenceDragImage,
 } from './reference-drop-targets.js';
 
 // ── 引用状态（模块局部） ──────────────────────────────────────────
@@ -443,6 +445,9 @@ window.SessionReference = {
   // 拖拽源身份登记（侧栏 / 工作空间两类 dragstart 调用，dragend 自动清除）：
   // dragover 据此在悬停期禁止「拖到自己身上」
   setDragSource,
+  // 拖拽影像换成离屏引用 pill（实现与两类引用共享于 reference-drop-targets；
+  // sidebar-render 的 dragstart 经本命名空间晚绑定调用）
+  setDragImage: setReferenceDragImage,
 };
 
 // 命名导出与命名空间成员一一对应（activeKey / notify 沿用命名空间键名，

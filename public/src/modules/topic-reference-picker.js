@@ -32,6 +32,7 @@ import {
   sidebarItemIdentity,
   sidebarItemTitle,
   clearDropTargetHighlights,
+  setReferenceDragImage,
 } from './reference-drop-targets.js';
 
 /** 拖拽专用 MIME（与 SESSION_REF_MIME 平行；两类引用可同时挂载、互不覆盖）。 */
@@ -190,6 +191,8 @@ function _bindTopicReferenceDrag() {
     };
     event.dataTransfer.setData(TOPIC_REF_MIME, JSON.stringify(payload));
     event.dataTransfer.effectAllowed = 'copy';
+    // 拖拽影像换成离屏主题 pill（默认整卡快照既重又遮挡投放目标）
+    setReferenceDragImage(event, { kind: 'topic', title: payload.title });
   });
 
   document.addEventListener('dragover', (event) => {

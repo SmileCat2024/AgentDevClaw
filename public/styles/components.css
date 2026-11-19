@@ -14605,6 +14605,36 @@ body[data-theme="light"] .session-ref-chip.topic-ref-chip {
 .message-session-refs { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
 .session-ref-chip.is-echo { padding-right: 11px; }
 
+/* 拖拽影像（drag ghost）：三处引用拖拽源 setDragImage 截取的离屏 pill。
+   结构分两层（见 setReferenceDragImage）：透明 frame 负责离屏定位与
+   透明缓冲——Chromium/Windows 对 drag image 位图边缘做 alpha 渐隐，
+   影像越小渐隐占比越大，透明 padding 让渐隐消耗在缓冲区上，pill 本体
+   离位图边缘足够远。pill 配方对齐浮层（session-ref-picker 弹窗）的
+   中性视觉：面板底色 + 主文字色 + 标准描边，图标保留蓝/青绿标识
+   两类引用；必须真实渲染（display:none 会让截取退回默认整卡快照）。 */
+.reference-drag-ghost {
+  position: fixed;
+  top: -9999px;
+  left: 0;
+  padding: 28px;
+  pointer-events: none;
+}
+.session-ref-chip.reference-drag-ghost-chip {
+  --ref-pill-bg: var(--bg-primary, #1e1e24);
+  --ref-pill-text: var(--text-primary, #e6e9f0);
+  max-width: 240px;
+  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.12));
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
+}
+.session-ref-chip.reference-drag-ghost-chip svg { color: #7cb8ff; }
+.session-ref-chip.reference-drag-ghost-chip.topic-ref-chip svg { color: #4fd1ac; }
+body[data-theme="light"] .session-ref-chip.reference-drag-ghost-chip {
+  --ref-pill-bg: #ffffff;
+  box-shadow: 0 2px 10px rgba(15, 23, 42, 0.12);
+}
+body[data-theme="light"] .session-ref-chip.reference-drag-ghost-chip svg { color: #2563eb; }
+body[data-theme="light"] .session-ref-chip.reference-drag-ghost-chip.topic-ref-chip svg { color: #059669; }
+
 /* 会话选择弹窗 */
 .session-ref-picker-overlay {
   position: fixed;

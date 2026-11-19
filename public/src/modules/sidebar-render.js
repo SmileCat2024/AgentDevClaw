@@ -126,6 +126,9 @@ window.onSidebarSessionDragStart = function(event, el) {
   // 登记拖拽源身份：dragover 据此禁止「拖到自己身上」（跨会话投放不受
   // 影响）。dragend 由 session-reference-picker 自动清除。
   if (ref.setDragSource) ref.setDragSource(payload);
+  // 拖拽影像换成离屏会话 pill（默认整条目快照既重又遮挡投放目标）；
+  // 实现共享于 reference-drop-targets，经本命名空间晚绑定取用
+  if (ref.setDragImage) ref.setDragImage(event, { title: payload.title });
   event.dataTransfer.effectAllowed = 'copy';
 };
 

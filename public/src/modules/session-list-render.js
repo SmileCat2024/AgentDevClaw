@@ -13,6 +13,7 @@
  *   - model-preset-cache：getClawModelPresets；assembly-data：isAssemblySession
  *   - render-entry-state：setLastRenderedWorkspaceHtml（宿主渲染缓存失效）
  *   - session-reference-picker：SESSION_REF_MIME / setDragSource（拖拽引用源）
+ *   - reference-drop-targets：setReferenceDragImage（拖拽影像换离屏 pill）
  *   - p2-bootstrap-ph-session：phSessionSortMode / phSearchQuery（owner 仍是
  *     app-core 的词法状态，经 classic 工厂适配）
  *
@@ -55,6 +56,7 @@ import { getClawModelPresets } from './model-preset-cache.js';
 import { isAssemblySession } from './assembly-data.js';
 import { setLastRenderedWorkspaceHtml } from './render-entry-state.js';
 import { SESSION_REF_MIME, setDragSource } from './session-reference-picker.js';
+import { setReferenceDragImage } from './reference-drop-targets.js';
 import { openThreadHistory } from './ph-thread-history.js';
 import { phSessionUi } from './p2-bootstrap-ph-session.js';
 import {
@@ -157,6 +159,8 @@ function onPhSessionDragStart(event, el) {
   };
   event.dataTransfer.setData(SESSION_REF_MIME, JSON.stringify(payload));
   event.dataTransfer.effectAllowed = 'copy';
+  // 拖拽影像换成离屏会话 pill（默认整条目快照既重又遮挡投放目标）
+  setReferenceDragImage(event, { kind: 'session', title: payload.title });
   // 登记源身份：dragover 据此禁止把会话拖回它自己的侧栏条目
   setDragSource(payload);
 }
