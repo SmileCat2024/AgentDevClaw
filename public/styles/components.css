@@ -7210,8 +7210,10 @@ body[data-theme="light"] .user-choice-card:focus-within {
 }
 .ph-settings-feature-wrap { overflow: hidden; }
 .ph-settings-feature-mounts .ph-mounts-body { padding: 16px 24px 24px; }
-/* 挂载页工具条：只承载「＋ 添加插件」，右对齐与列表右缘一致 */
-.ph-mount-toolbar { display: flex; align-items: center; justify-content: flex-end; gap: 16px; }
+/* 挂载页顶部 banner：复用连接卡配方（settings-connection-card），
+   侧距 24px 与分页器/列表内容缘对齐；width 压回 auto——连接卡的
+   width:100% 会与侧 margin 叠加导致右缘溢出（双类特异度压过单类） */
+.settings-connection-card.ph-feature-banner { width: auto; margin: 16px 24px 14px; }
 .ph-mount-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .ph-mount-list > .feature-card { box-sizing: border-box; min-width: 0; min-height: 64px; padding: 14px 16px; }
 .ph-mount-list .feature-card-top { align-items: center; gap: 12px; }
@@ -7235,15 +7237,17 @@ body[data-theme="light"] .user-choice-card:focus-within {
 }
 .ph-mount-feature-chip:hover { color: var(--text-primary); border-color: var(--text-secondary); }
 .ph-mount-feature-chip.is-disabled { opacity: 0.55; text-decoration: line-through; }
+/* 布局配方对齐主设置页（ph-settings-layout + ph-settings-sidebar）：
+   左栏固定 190px 贴窗口左缘、分隔线全高；容器不提供侧距，
+   右侧 24px 内容缘由行级（ph-mc-row / ph-settings-content-header）自持 */
 .fs-editor-body {
   display: grid;
-  grid-template-columns: minmax(148px, 172px) minmax(0, 1fr);
+  grid-template-columns: 190px minmax(0, 1fr);
   flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  padding: 12px 24px 20px;
-  gap: 20px;
+  gap: 0;
 }
 .fs-editor-nav {
   display: flex;
@@ -7252,7 +7256,9 @@ body[data-theme="light"] .user-choice-card:focus-within {
   min-height: 0;
   overflow-y: auto;
   border-right: 1px solid var(--border-color);
-  padding: 8px 12px 8px 0;
+  padding: 8px 4px 8px 0;
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
 }
 .fs-editor-nav .ph-settings-tab { flex: 0 0 auto; }
 .fs-editor-main {
@@ -7263,19 +7269,20 @@ body[data-theme="light"] .user-choice-card:focus-within {
 @media (max-width: 760px) {
   .ph-settings-window { width: min(100%, 680px) !important; }
   .ph-settings-feature-tabs { padding-inline: 16px; }
+  .ph-feature-banner { margin: 14px 16px 12px; }
   .ph-mounts-body { padding: 14px 16px 20px; }
   .ph-mount-list { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
   .ph-mount-list > .feature-card { padding: 12px; }
-  .fs-editor-body { grid-template-columns: minmax(124px, 28%) minmax(0, 1fr); gap: 12px; padding: 10px 16px 16px; }
+  .fs-editor-body { grid-template-columns: 148px minmax(0, 1fr); }
   .fs-store-panel { padding: 14px 16px 16px; }
   .fs-category-tabs { padding-inline: 16px; }
 }
 @media (max-width: 520px) {
   .ph-settings-feature-tabs { padding-inline: 12px; }
+  .ph-feature-banner { margin: 12px 12px 10px; }
   .ph-mounts-body { padding: 12px; }
-  .ph-mount-toolbar { align-items: flex-start; }
   .ph-mount-list { grid-template-columns: minmax(0, 1fr); }
-  .fs-editor-body { grid-template-columns: minmax(96px, 34%) minmax(0, 1fr); gap: 8px; padding: 8px 12px 14px; }
+  .fs-editor-body { grid-template-columns: 120px minmax(0, 1fr); }
   .fs-editor-nav { padding-right: 6px; }
   .fs-editor-nav .ph-settings-tab { padding: 8px 6px; font-size: 12px; }
   .fs-store-panel { padding: 12px; }
@@ -11183,7 +11190,8 @@ body[data-theme="light"] .ph-model-switch.has-secondary:hover {
   flex-direction: column;
   gap: 4px;
   padding: 10px 14px;
-  margin-bottom: 16px;
+  /* 容器无侧距后，横幅与行级 24px 内容缘对齐 */
+  margin: 12px 24px 16px;
   border: 1px solid rgba(211,158,0,0.35);
   border-radius: 8px;
   background: rgba(211,158,0,0.08);
@@ -11197,7 +11205,7 @@ body[data-theme="light"] .ph-model-switch.has-secondary:hover {
 
 .fs-error-banner {
   padding: 10px 14px;
-  margin-bottom: 16px;
+  margin: 12px 24px 16px;
   border: 1px solid rgba(229,85,85,0.4);
   border-radius: 8px;
   background: rgba(229,85,85,0.08);
@@ -14425,19 +14433,6 @@ body[data-theme="light"] .fs-category-tabs .fs-category-tab.active { color: var(
 .hooks-section-header .fs-list-add { align-self: center; }
 
 /* 挂载管理页工具栏添加按钮（accent 蓝描边 + 蓝字 + 浅蓝 hover） */
-.ph-mount-add {
-  flex-shrink: 0;
-  padding: 6px 16px;
-  border: 1px solid var(--accent, #5b8def);
-  border-radius: 6px;
-  background: transparent;
-  color: var(--accent, #5b8def);
-  font-size: 13px;
-  cursor: pointer;
-  transition: border-color 0.15s, background 0.15s;
-}
-
-.ph-mount-add:hover { background: rgba(91, 141, 239, 0.08); }
 
 /* 挂载管理"已安装"空态卡片：取「交互页面」空态（.gen-ui-empty）同款
    视觉配方（虚线卡片 + 图标块 + 标题 + 描述）；垂直居中于剩余空间

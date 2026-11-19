@@ -281,6 +281,41 @@ async function _phRenderMountsView(identityKey) {
   }
 }
 
+/** 功能配置分页 banner：复用模型设置连接卡配方（settings-connection-card），
+ *  承载「+ 添加插件」入口与页面说明。banner 是分页器上方的页面级元素，
+ *  与策略分页同位置渲染（见 _phCoderPolicyBannerHtml）。 */
+function _phMountBannerHtml(identityKey) {
+  const isZh = getCurrentLanguage() === 'zh';
+  return '<div class="settings-connection-card ph-feature-banner">'
+    + '<div class="settings-connection-row">'
+    + '<div>'
+    + '<div class="settings-connection-title">' + (isZh ? '插件与内置能力' : 'Plugins & Built-in Capabilities') + '</div>'
+    + '<div class="settings-connection-description">' + escapeHtml(isZh
+      ? '插件来自全局库存或本空间私有仓库，可按包装配、禁用、卸载；内置能力随产品提供。'
+      : 'Plugins come from the global stock or this workspace\'s private repository — assemble, disable or remove per package; built-in capabilities ship with the product.') + '</div>'
+    + '</div>'
+    + '<button type="button" class="settings-btn settings-btn-secondary" data-action="phSettings.openFeatureStore" data-identity="' + escapeHtml(identityKey) + '">'
+    + escapeHtml(isZh ? '+ 添加插件' : '+ Add Plugins') + '</button>'
+    + '</div>'
+    + '</div>';
+}
+
+/** 策略分页 banner：与功能配置分页同位置同形态的页头说明（无操作按钮），
+ *  分页切换时 banner 不跳出/消失。 */
+function _phCoderPolicyBannerHtml() {
+  const isZh = getCurrentLanguage() === 'zh';
+  return '<div class="settings-connection-card ph-feature-banner">'
+    + '<div class="settings-connection-row">'
+    + '<div>'
+    + '<div class="settings-connection-title">' + (isZh ? 'Coder 运行策略' : 'Coder Runtime Policy') + '</div>'
+    + '<div class="settings-connection-description">' + escapeHtml(isZh
+      ? '配置 Coder 智能体的线程并发上限、任务运行模式与上下文接续策略。'
+      : 'Configure Coder\'s thread concurrency limit, task execution mode, and context rotation strategy.') + '</div>'
+    + '</div>'
+    + '</div>'
+    + '</div>';
+}
+
 /** 纯渲染（数据取 _phMountData 缓存）：筛选切换与 catalog 就绪后的重渲染入口。 */
 function _phRenderMountsBody(host) {
   const isZh = getCurrentLanguage() === 'zh';
@@ -288,9 +323,6 @@ function _phRenderMountsBody(host) {
   const features = entries.map(function(e) {
     return { name: e.name, description: e.description, _entry: e };
   });
-
-  const addButton = '<button type="button" class="ph-mount-add" style="margin-left:auto;" data-action="phSettings.openFeatureStore" data-identity="' + escapeHtml(_phMountData.identityKey) + '">'
-    + escapeHtml(isZh ? '+ 添加插件' : '+ Add Plugins') + '</button>';
 
   const buildCard = function(f) {
     const e = f._entry;
@@ -336,12 +368,11 @@ function _phRenderMountsBody(host) {
   const pluginFeatures = features.filter((feature) => isPluginEntry(feature._entry));
   const builtinFeatures = features.filter((feature) => !isPluginEntry(feature._entry));
 
-  const renderSection = (dotClass, title, hint, list, emptyText) =>
+  const renderSection = (dotClass, title, list, emptyText) =>
     '<section class="fs-status-section"><div class="fs-status-section-head">'
     + '<span class="fs-status-dot ' + dotClass + '"></span>'
     + escapeHtml(title) + '<span class="fs-tab-count">' + list.length + '</span>'
     + '</div>'
-    + '<div style="font-size:12px;color:var(--text-secondary);margin:2px 0 10px;">' + escapeHtml(hint) + '</div>'
     + (list.length
       ? '<div class="ph-mount-list">' + list.map(buildCard).join('') + '</div>'
       : '<div class="ph-mount-empty-cta"><div class="ph-mount-empty-desc">' + escapeHtml(emptyText) + '</div></div>')
@@ -349,18 +380,15 @@ function _phRenderMountsBody(host) {
 
   host.innerHTML = '<div class="ph-mounts-body">'
     + _phEnvNoticeHtml()
-    + '<div class="ph-mount-toolbar">' + addButton + '</div>'
     + renderSection(
       'fs-status-dot-installed',
       isZh ? '插件' : 'Plugins',
-      isZh ? '来自插件仓库（全局库存或本空间私有），可按包装配、禁用、卸载。' : 'From the plugin repository (global stock or this workspace\'s private repository); assemble, disable or remove per package.',
       pluginFeatures,
-      isZh ? '尚未装配插件，点击右上角「+ 添加插件」。' : 'No plugins assembled yet; use “+ Add Plugins”.',
+      isZh ? '尚未装配插件，点击上方「+ 添加插件」。' : 'No plugins assembled yet; use “+ Add Plugins” above.',
     )
     + renderSection(
       'fs-status-dot-not-installed',
       isZh ? '内置能力' : 'Built-in Capabilities',
-      isZh ? '随产品提供，不参与插件装配；仍可在会话右侧 Features 面板查看运行时状态。' : 'Ship with the product and are not part of plugin assembly; runtime state is visible in the session Features panel.',
       builtinFeatures,
       isZh ? '没有内置能力。' : 'No built-in capabilities.',
     )
@@ -1049,6 +1077,9 @@ export function renderPhSettingsOverlay(agent, presets, { initialTab } = {}) {
       : '<div class="ph-settings-feature-mounts" id="ph-feature-mounts-host"><div class="ph-settings-empty">'
         + escapeHtml(isZh ? '正在读取装配…' : 'Loading assembly…') + '</div></div>';
     contentHtml = '<div class="ph-settings-feature-page" data-identity="' + escapeHtml(identityKey) + '">'
+      // banner 是分页器上方的页面级元素：策略/功能配置两分页同位置渲染，
+      // 切页不跳出；功能配置承载「+ 添加插件」，策略为页头说明
+      + (_phFeatureSubTab === 'policy' ? _phCoderPolicyBannerHtml() : _phMountBannerHtml(identityKey))
       + '<div class="ph-settings-feature-tabs">' + featureSubTabs + '</div>'
       + bodyHtml
       + '</div>';
