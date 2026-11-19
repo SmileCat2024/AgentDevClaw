@@ -60,6 +60,8 @@
 
 开发态硬约束：`node_modules/@agentdevjs/*` 必须是链接而非实体拷贝。发布态硬约束：反向成立，必须是 registry 实体目录。`check-agentdev-local`（prestart / build / `check:agentdev` 共用）按声明形态校验安装形态——开发态校验链接（含失效与错向目标），相邻框架仓库可用时自动重建；发布态发现本地链接 / 缺失 / dist 过期只报错并给出修复命令，**绝不自动改链**。形态不一致若不拦截，服务会静默跑在与声明脱节的框架版本上，只在运行期以 "framework too old" 一类错误暴露（历史事故：模型热切换、陈旧本地链接）。
 
+junction 穿透删除危险（历史事故：2026-11-19，AgentDev\packages 内容被清空）：开发态 `@agentdevjs/*` junction 直接指向真实框架仓库；任何紧邻 AgentDev 的 worktree / clone 里跑 npm ci / install，同样会把 `file:../AgentDev/packages/*` 物化成指向真实仓库的 junction。Windows 上不停在重解析点的递归删除会顺着链接删掉 `AgentDev/packages` 的真实内容，目录骨架残留、ignored 构建产物一并丢失，只能 git restore + 重建（实测穿越：`git worktree remove --force`；`git clean -fdx`、`rm -rf` 扫含 junction 的 node_modules 同属危险）。安全做法：删除含这些 junction 的目录树前，先逐条摘除 junction 条目（cmd `rmdir <junction名>` 只删链接本身）；干净的对照验证改用发布态跑。
+
 features/ 下被预制 agent 源码引用的子包（清单在 `scripts/prebuilt-feature-dirs.mjs`，build:features 与 prestart 过时检测共用）对 core 的声明固定为 semver；构建时若相邻框架 core 可用（`dist/index.d.ts` 存在，缺失会自动编译）则按版本守卫分流——根声明为开发态时直接替换为本地 junction（使用未发布框架 API 的子包因此可构建）；发布态下仅当相邻 core 版本高于子包声明版本时才替换（本地落后或持平则保持 registry，避免陈旧本地副本劫持子包的 core 解析、与根安装分叉成两份副本）。不要手动改子包声明来切换形态。
 
 预制 agent 一旦以源码路径静态导入 `features/<name>/dist/index.js`，必须同步把 `<name>` 登记进 [scripts/prebuilt-feature-dirs.mjs](scripts/prebuilt-feature-dirs.mjs)——该清单同时驱动 build:features、prestart 过时检测、`pack:desktop` 与 `agentdev:published`，桌面包只构建清单内的包。漏登记在开发机无感（本地已构建过 dist），打出的桌面包里 runtime 加载 agent.js 即崩、新旧会话全灭（历史事故：stylized-output）。`local-features/` 整树构建、生态包走 vendor/registry 链路，均无需登记。
@@ -95,6 +97,7 @@ feature 三类来源（严格区分，改错层 = 白改）：
 - 把框架或生态包修复只留在 Claw 侧 `node_modules/@agentdevjs/*`（会被安装冲掉，不回流源码）
 - 混淆三类 feature 来源；开发流程中手工 pack / 拷贝 tgz
 - 用 `npm link` 做本地链接（会触发依赖树 prune）；需要的是文件系统 junction，用 `agentdev:local`
+- 对含开发态 junction 的目录树跑不停在重解析点的递归删除（`git worktree remove --force`、`git clean -fdx`、`rm -rf` 扫 node_modules）——junction 穿透会清空真实 `AgentDev/packages` 内容（机制见「启动与依赖模式」junction 危险段）
 
 历史注：ADR-0003 四包拆分后，框架内 `src/features/*` 生态副本已删除，生态 feature 唯一权威源码在 `AgentDev/packages/<name>/`。若见从 `@agentdevjs/core` 导入生态 feature 符号，属待清理残留。
 
