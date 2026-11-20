@@ -76,13 +76,17 @@ function ensureSettingsHost() {
 // 设置覆盖层的会话级状态（唯一持有方）：
 //   settingsData      最近一次 GET /protoclaw/model_config 的载荷（config / presets / connections）
 //   settingsEditing   文本预设编辑索引（null = 未编辑）
-//   codexConnectionView Codex 账号列表子页开关
-// 三者只被 OAuth 子面板读取（经下方 configureOAuthFlowHost 的宿主面 getter），
-// 不再借宿 window.ClawFW；settingsOpen / settingsTab 仍留在 ClawFW，因为
-// classic app-ui 读写它们（P3 收敛）。
+//   codexConnectionView Codex 账号配置页开关
+//   codexLoginTarget  账号配置页内的登录子页目标（null = 账号列表页；
+//                     { providerName, displayName } = 登录子页，providerName
+//                     空 = 添加新账号（服务端生成槽位），非空 = 该槽位重新登录）
+//   前者只被 OAuth 子面板读取（经下方 configureOAuthFlowHost 的宿主面 getter），
+//   不再借宿 window.ClawFW；settingsOpen / settingsTab 仍留在 ClawFW，因为
+//   classic app-ui 读写它们（P3 收敛）。
 let settingsData = null;
 let settingsEditing = null;
 let codexConnectionView = false;
+let codexLoginTarget = null;
 
 // 目录页的会话级状态（零外部消费方：只有本模块的渲染、多选与行索引动作使用）：
 //   modelCatalogs          provider → { models, loaded, loading, error }，惰性建表
@@ -99,6 +103,7 @@ async function openSettings() {
   if (!['overview', 'custom', 'codex', 'opencode', 'speech'].includes(window.ClawFW.settingsTab)) window.ClawFW.settingsTab = 'overview';
   settingsEditing = null;
   codexConnectionView = false;
+  codexLoginTarget = null;
   settingsData = null;
   setClawSpeechModelConfig(null);
   setClawSpeechPresets([]);
@@ -136,6 +141,7 @@ function closeSettings() {
   window.ClawFW.settingsOpen = false;
   settingsEditing = null;
   codexConnectionView = false;
+  codexLoginTarget = null;
   settingsData = null;
   setSpeechEditing(null);
   setClawSpeechPresets([]);
@@ -299,27 +305,55 @@ function renderModelCatalogSettingsOverlay(host, data) {
       ? '<div class="settings-catalog-status error">' + escapeHtml(catalog.error) + '</div>'
       : catalog.loading ? '<div class="settings-catalog-status">' + (isZh ? '正在刷新模型目录…' : 'Refreshing model catalog…') + '</div>'
       : catalog.loaded ? '<div class="settings-catalog-status">' + (isZh ? '目录已更新' : 'Catalog refreshed') + '</div>' : '';
-    let connectionCard;
+    let connectionArea;
     if (isCodex) {
       // Codex 连接：列表页只保留入口卡片，账号管理（多账号登录/切换/登出）进入专门配置页
-      const cardIntro = '<div><div class="settings-connection-title">OpenAI Auth</div><div class="settings-connection-description">' + (isZh ? '通过 OpenAI 账户连接 Codex 模型目录，支持多账号切换' : 'Connect OpenAI accounts to discover Codex models; multiple accounts supported') + '</div></div>';
-      if (codexConnectionView) {
-        // 专门配置页：账号列表（refreshCodexAccounts 渲染）+ 登录入口；登录流程
-        // 反馈仍由 #oauth-status-display 承载（轮询期间独占）
-        connectionCard = '<div class="settings-section settings-connection-card settings-codex-auth">'
+      const cardIntro = '<div><div class="settings-connection-title">OpenAI OAuth</div><div class="settings-connection-description">' + (isZh ? '通过 OpenAI 账户连接 Codex 模型目录，支持多账号切换' : 'Connect OpenAI accounts to discover Codex models; multiple accounts supported') + '</div></div>';
+      if (codexConnectionView && codexLoginTarget) {
+        // 登录子页（添加账号 / 重新登录共用）：banner 只承载标题与说明；登录
+        // 方式选择与状态面板是下方独立区块——登录过程信息不堆进 banner 卡片
+        const isRelogin = !!codexLoginTarget.providerName;
+        const loginTitle = isRelogin
+          ? (isZh ? '重新登录 · ' : 'Re-login · ') + escapeHtml(codexLoginTarget.displayName || codexLoginTarget.providerName)
+          : (isZh ? '添加账号' : 'Add account');
+        connectionArea = '<div class="settings-section settings-connection-card settings-codex-auth">'
+          + '<div class="settings-connection-row"><div>'
+          + '<div class="settings-connection-title">' + loginTitle + '</div>'
+          + '<div class="settings-connection-description">' + (isRelogin
+            ? (isZh ? '重新授权将刷新该账号的凭证，账号名称与设置保持不变' : 'Re-authorize to refresh this account\'s credentials; its name and settings stay unchanged')
+            : (isZh ? '使用 OpenAI 账户授权登录，登录后可在账号列表中切换' : 'Sign in with an OpenAI account, then switch between accounts in the list')) + '</div>'
+          + '</div></div></div>'
+          + '<div class="settings-section"><div class="settings-section-title">' + (isZh ? '登录方式' : 'Login method') + '</div>'
+          + '<div class="codex-login-mode-row">'
+          + '<select class="settings-input" id="codex-login-mode" data-claw-select data-claw-compact="true">'
+          + '<option value="browser" selected>' + (isZh ? '浏览器授权（推荐）' : 'Browser authorization (recommended)') + '</option>'
+          + '<option value="device">' + (isZh ? '设备码' : 'Device code') + '</option>'
+          + '</select>'
+          + '<button class="settings-btn settings-btn-primary" type="button" data-action="modelSettings.startCodexLogin">' + (isZh ? '开始登录' : 'Start login') + '</button>'
+          + '</div>'
+          + '<div class="settings-codex-login-hint">' + (isZh
+            ? '浏览器授权：在本机打开系统默认浏览器完成授权。设备码：在任意设备的浏览器打开链接并输入代码完成授权。'
+            : 'Browser: opens the system default browser on this machine. Device code: open the link in a browser on any device and enter the code.') + '</div>'
+          + '</div>'
+          + '<div class="settings-section"><div class="settings-section-title">' + (isZh ? '登录状态' : 'Login status') + '</div>'
+          + '<div id="oauth-status-display" class="oauth-status-text settings-codex-auth-status">' + (isZh ? '尚未开始。选择登录方式后点击「开始登录」。' : 'Not started yet — pick a method and hit "Start login".') + '</div></div>';
+      } else if (codexConnectionView) {
+        // 账号列表页：banner 只保留重要操作（添加账号入口进登录子页）；
+        // 账号项目作为独立区块列在下方，不塞进 banner 卡片（卡片套卡片）
+        connectionArea = '<div class="settings-section settings-connection-card settings-codex-auth">'
           + '<div class="settings-connection-row">' + cardIntro
-          + '<div class="oauth-action-row"><button class="settings-btn settings-btn-primary" type="button" data-action="modelSettings.startOAuth" data-mode="browser">' + (isZh ? '添加账号 · 浏览器授权' : 'Add · Browser') + '</button><button class="settings-btn settings-btn-secondary" type="button" data-action="modelSettings.startOAuth" data-mode="device">' + (isZh ? '添加账号 · 设备码' : 'Add · Device Code') + '</button></div></div>'
-          + '<div id="codex-accounts-list" class="oauth-accounts-list"></div>'
-          + '<div id="oauth-status-display" class="oauth-status-text settings-codex-auth-status"></div></div>';
+          + '<div class="oauth-action-row"><button class="settings-btn settings-btn-secondary" type="button" data-action="modelSettings.openCodexAddAccount">' + (isZh ? '添加账号' : 'Add account') + '</button></div></div></div>'
+          + '<div class="settings-section"><div class="settings-section-title">' + (isZh ? '账号' : 'Accounts') + '<span class="settings-section-hint">' + (isZh ? '切换全局生效' : 'switching applies globally') + '</span></div>'
+          + '<div id="codex-accounts-list" class="oauth-accounts-list"></div></div>';
       } else {
-        connectionCard = '<div class="settings-section settings-connection-card settings-connection-entry" role="button" tabindex="0" data-action="modelSettings.openCodexConnections">'
+        connectionArea = '<div class="settings-section settings-connection-card settings-connection-entry" role="button" tabindex="0" data-action="modelSettings.openCodexConnections">'
           + '<div class="settings-connection-row">' + cardIntro
           + '<button class="settings-btn settings-btn-secondary" type="button" data-action="modelSettings.openCodexConnections">' + (isZh ? '管理账号' : 'Manage Accounts') + '</button>'
           + '</div></div>';
       }
     } else {
       // OpenCode 连接：标题与 API Key 输入同行，输入即自动保存；不做状态徽章提升，保存失败反馈走目录状态区
-      connectionCard = '<div class="settings-section settings-connection-card"><div class="settings-connection-row"><div><div class="settings-connection-title">OpenCode</div><div class="settings-connection-description">' + (isZh ? '配置 API Key 连接以发现可用模型，输入后自动保存' : 'Configure an API key to discover models; it saves as you type') + '</div></div><div class="settings-field settings-connection-inline"><label>API Key</label><div class="settings-key-field"><input class="settings-input" id="settings-opencode-key" type="password" autocomplete="new-password" value="' + escapeHtml(connections.opencode?.apiKey || '') + '" placeholder="' + (connections.opencode?.hasApiKey ? (isZh ? '已保存，留空保持不变' : 'Saved; leave blank to keep') : 'sk-…') + '" data-action="modelSettings.openCodeKeyField"><button class="settings-key-visibility" type="button" aria-label="' + (isZh ? '显示或隐藏 API Key' : 'Show or hide API key') + '" title="' + (isZh ? '显示或隐藏' : 'Show or hide') + '" data-action="modelSettings.toggleOpenCodeKeyVisibility"><svg id="opencode-eye-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg><svg id="opencode-eye-off-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none;"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button></div></div></div></div>';
+      connectionArea = '<div class="settings-section settings-connection-card"><div class="settings-connection-row"><div><div class="settings-connection-title">OpenCode</div><div class="settings-connection-description">' + (isZh ? '配置 API Key 连接以发现可用模型，输入后自动保存' : 'Configure an API key to discover models; it saves as you type') + '</div></div><div class="settings-field settings-connection-inline"><label>API Key</label><div class="settings-key-field"><input class="settings-input" id="settings-opencode-key" type="password" autocomplete="new-password" value="' + escapeHtml(connections.opencode?.apiKey || '') + '" placeholder="' + (connections.opencode?.hasApiKey ? (isZh ? '已保存，留空保持不变' : 'Saved; leave blank to keep') : 'sk-…') + '" data-action="modelSettings.openCodeKeyField"><button class="settings-key-visibility" type="button" aria-label="' + (isZh ? '显示或隐藏 API Key' : 'Show or hide API key') + '" title="' + (isZh ? '显示或隐藏' : 'Show or hide') + '" data-action="modelSettings.toggleOpenCodeKeyVisibility"><svg id="opencode-eye-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg><svg id="opencode-eye-off-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none;"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg></button></div></div></div></div>';
     }
     const addedGrid = providerPresets.length
       ? '<div class="settings-presets-grid">' + providerPresets.map(({ p, idx }) => modelCatalogPresetCard(p, idx, isZh, catalog.loaded && !catalog.models.some((m) => m.id === p.model), modelConfigMatchesPreset(dm, p))).join('') + '</div>'
@@ -341,7 +375,7 @@ function renderModelCatalogSettingsOverlay(host, data) {
       + (multi ? '<button class="settings-btn settings-btn-primary" type="button" id="settings-catalog-add-selected" data-action="modelSettings.addSelectedCatalogModels" data-provider="' + escapeHtml(tab) + '">' + (isZh ? '添加所选' + (selectedCount ? '（' + selectedCount + '）' : '') : 'Add selected' + (selectedCount ? ' (' + selectedCount + ')' : '')) + '</button>' : '')
       + '<button class="settings-btn settings-btn-secondary" type="button" data-action="modelSettings.refreshCatalog" data-provider="' + escapeHtml(tab) + '">' + (isZh ? '刷新' : 'Refresh') + '</button>';
     // 间距节奏由 .settings-catalog-page 统一控制：区块间 16px，标题到内容 12px
-    content = connectionCard
+    content = connectionArea
       + (isCodex && codexConnectionView ? '' : ''
         + '<div class="settings-section"><div class="settings-section-title">' + (isZh ? '已添加' : 'Added') + '</div>' + addedGrid + '</div>'
         + '<div class="settings-section"><div class="settings-catalog-toolbar"><div class="settings-section-title">' + (isZh ? '可添加' : 'Available') + '</div><div class="settings-catalog-status">' + statusHtml + '</div><div class="settings-actions">' + toolbarActions + '</div></div>' + availableHtml + '</div>');
@@ -369,12 +403,17 @@ function renderModelCatalogSettingsOverlay(host, data) {
     selStart: opencodeKeyEl.selectionStart,
     selEnd: opencodeKeyEl.selectionEnd,
   } : null;
-  // 配置子页：head 左侧返回按钮（项目既有形态：feature-detail-close + 左箭头，同 ph-settings / feature-store）
+  // 配置子页：head 左侧返回按钮（项目既有形态：feature-detail-close + 左箭头，同 ph-settings / feature-store）；
+  // 登录子页返回账号列表页，账号列表页返回 Codex 主视图（动作按当前层级分发）
   const isCodexAuthPage = tab === 'codex' && codexConnectionView;
+  const codexAuthHeadTitle = !isCodexAuthPage ? '' : codexLoginTarget
+    ? (codexLoginTarget.providerName ? (isZh ? '设置 · 重新登录' : 'Settings · Re-login') : (isZh ? '设置 · 添加账号' : 'Settings · Add account'))
+    : (isZh ? '设置 · Codex 账号' : 'Settings · Codex Accounts');
+  const codexBackAction = codexLoginTarget ? 'modelSettings.backFromCodexLoginPage' : 'modelSettings.closeCodexConnections';
   const headLeftHtml = isCodexAuthPage
     ? '<div style="display:flex;align-items:center;gap:4px;">'
-      + '<button class="feature-detail-close" type="button" title="' + (isZh ? '返回' : 'Back') + '" data-action="modelSettings.closeCodexConnections" style="margin-right:8px;font-size:16px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 19-7-7 7-7"></path><path d="M19 12H5"></path></svg></button>'
-      + '<div><div class="feature-detail-title">' + (isZh ? '设置 · Codex 登录' : 'Settings · Codex Login') + '</div><div class="feature-detail-subtitle">' + (isZh ? '连接 OpenAI 账户以使用 Codex 模型' : 'Connect your OpenAI account to use Codex models') + '</div></div></div>'
+      + '<button class="feature-detail-close" type="button" title="' + (isZh ? '返回' : 'Back') + '" data-action="' + codexBackAction + '" style="margin-right:8px;font-size:16px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 19-7-7 7-7"></path><path d="M19 12H5"></path></svg></button>'
+      + '<div><div class="feature-detail-title">' + codexAuthHeadTitle + '</div><div class="feature-detail-subtitle">' + (isZh ? '连接 OpenAI 账户以使用 Codex 模型' : 'Connect your OpenAI account to use Codex models') + '</div></div></div>'
     : '<div><div class="feature-detail-title">' + (isZh ? '设置' : 'Settings') + '</div><div class="feature-detail-subtitle">' + (isZh ? '管理模型连接与模型' : 'Manage model connections and models') + '</div></div>';
   host.innerHTML = '<div class="feature-detail-overlay"><div class="feature-detail-window ph-settings-window">'
     + '<div class="feature-detail-head">' + headLeftHtml + '<button class="feature-detail-close" type="button" data-action="modelSettings.close">×</button></div>'
@@ -423,8 +462,9 @@ function renderModelCatalogSettingsOverlay(host, data) {
   }
   // 账号页统一回填：本函数整体重建 DOM，#codex-accounts-list 随之变为空容器；
   // 目录刷新（refreshModelCatalog 前后各一次）、保存配置等任何路径触发的重渲染
-  // 都必须重新拉取账号列表，否则列表悬空（表现为账号"莫名消失"）
-  if (codexConnectionView && tab === 'codex') {
+  // 都必须重新拉取账号列表，否则列表悬空（表现为账号"莫名消失"）。登录子页
+  // 无列表容器，不发起请求
+  if (codexConnectionView && !codexLoginTarget && tab === 'codex') {
     renderCodexAccountsList();
   }
 }
@@ -521,7 +561,7 @@ async function addCatalogModels(provider, ids) {
       customHeaders: [],
     } : newPresetGenerationDefaults();
     data.presets.push({
-      name, providerName: isCodex ? 'OpenAI Auth' : 'OpenCode ' + ((data.connections?.opencode?.tier === 'go') ? 'Go' : 'Zen'),
+      name, providerName: isCodex ? 'OpenAI OAuth' : 'OpenCode ' + ((data.connections?.opencode?.tier === 'go') ? 'Go' : 'Zen'),
       catalogProvider: provider, provider: protocolInfo.protocol, apiSurface: protocolInfo.apiSurface,
       authType: isCodex ? 'oauth-codex' : '', clientId: isCodex ? 'app_EMoamEEZ73f0CkXaXp7hrann' : '',
       model: model.id, baseUrl: isCodex ? 'https://chatgpt.com/backend-api/codex' : (data.connections?.opencode?.tier === 'go' ? OPENCODE_GO_BASE_URL : OPENCODE_ZEN_BASE_URL),
@@ -599,19 +639,51 @@ async function saveModelConnection(opts) {
 
 function openCodexConnectionView() {
   codexConnectionView = true;
+  codexLoginTarget = null;
   // 账号列表回填由 renderSettingsOverlay 统一负责（见其尾部），无需再经
   // refreshOAuthStatus 转发一次（避免双 fetch）
   renderSettingsOverlay();
-  // 进入配置页时检查代理环境（未配置代理时 OpenAI 登录请求可能被地区限制拦截）
-  checkOAuthProxy(getCurrentLanguage() === 'zh');
 }
 
 function closeCodexConnectionView() {
   // 返回列表页时终止未完成的登录轮询（服务端流程继续，状态以再次进入时的刷新为准）
   stopOAuthPolling();
   codexConnectionView = false;
+  codexLoginTarget = null;
   renderSettingsOverlay();
   refreshOAuthStatus();
+}
+
+// 进入登录子页：providerName 空 = 添加新账号；非空 = 该槽位重新登录
+// （token 覆盖写入原槽位，displayName 与 active 指针不变）
+function openCodexLoginPage(providerName, displayName) {
+  codexLoginTarget = { providerName: providerName || '', displayName: displayName || '' };
+  renderSettingsOverlay();
+  // 登录子页进入时检查代理环境（未配置代理时 OpenAI 登录请求可能被地区限制拦截）；
+  // 警告写入登录状态面板
+  checkOAuthProxy(getCurrentLanguage() === 'zh');
+}
+
+// 登录子页返回账号列表页：终止未完成的登录轮询（服务端流程继续）
+function backFromCodexLoginPage() {
+  stopOAuthPolling();
+  codexLoginTarget = null;
+  renderSettingsOverlay();
+}
+
+// 登录成功后由 oauth-flow 回调：回到账号列表页。面板可能已关闭（定时器
+// 滞后触发），此时只重置状态不重渲染；不在登录子页时是 no-op（编辑表单
+// 路径的登录不走本函数）
+function exitCodexLoginPage() {
+  if (!codexLoginTarget) return;
+  codexLoginTarget = null;
+  if (window.ClawFW.settingsOpen) renderSettingsOverlay();
+}
+
+// 登录子页「开始登录」：读取方式选择（浏览器授权 / 设备码）发起 OAuth 流程
+function startCodexLoginFromPage() {
+  const select = document.getElementById('codex-login-mode');
+  startOAuthLogin(select?.value === 'device' ? 'device' : 'browser');
 }
 
 function modelCatalogPresetCard(preset, idx, isZh, missing, isActive) {
@@ -877,7 +949,7 @@ function renderSettingsEditForm(editIdx, presets, isZh) {
     '<div class="settings-row">',
     '<div class="settings-field">',
     '<label>' + (isZh ? '来源' : 'Source') + '</label>',
-    '<div class="settings-static-value">' + escapeHtml(preset.catalogProvider === 'codex' || preset.authType === 'oauth-codex' ? 'Codex · OpenAI Auth' : 'OpenCode · ' + (openCodeTier === 'go' ? 'Go' : 'Zen')) + '</div>',
+    '<div class="settings-static-value">' + escapeHtml(preset.catalogProvider === 'codex' || preset.authType === 'oauth-codex' ? 'Codex · OpenAI OAuth' : 'OpenCode · ' + (openCodeTier === 'go' ? 'Go' : 'Zen')) + '</div>',
     '</div>',
     '<div class="settings-field">',
     '<label>Model</label>',
@@ -910,8 +982,8 @@ function renderSettingsEditForm(editIdx, presets, isZh) {
     '<div class="settings-row">',
     '<div class="settings-field">',
     '<label>' + (isZh ? '接口协议' : 'Protocol') + '</label>',
-    // 自定义模型仅提供 OpenAI / Anthropic 两族协议；OpenCode 与 OpenAI Auth
-    // (OAuth) 各有专门配置页，不在此提供（目录类预设编辑走静态"来源"分支）
+    // 自定义模型仅提供 OpenAI / Anthropic 两族协议；OpenCode 与 OpenAI OAuth
+    // 各有专门配置页，不在此提供（目录类预设编辑走静态"来源"分支）
     '<select class="settings-input" data-claw-select id="settings-preset-provider" data-action="modelSettings.onProtocolChange">',
     '<option value="anthropic"' + (dropdownVal === 'anthropic' ? ' selected' : '') + '>Anthropic</option>',
     '<option value="openai"' + (dropdownVal === 'openai' ? ' selected' : '') + '>OpenAI Chat</option>',
@@ -1501,6 +1573,7 @@ const switchSettingsTab = function(tab) {
   window.ClawFW.settingsTab = ['overview', 'custom', 'codex', 'opencode', 'speech'].includes(tab) ? tab : 'overview';
   settingsEditing = null;
   codexConnectionView = false;
+  codexLoginTarget = null;
   if (tab === 'speech') setSpeechEditing(null);
   renderSettingsOverlay();
   if (tab === 'codex') {
@@ -1517,7 +1590,9 @@ window.ClawFW.actions.registerMany({
   'modelSettings.editPreset': (el, event, idx) => editSettingsPreset(idx),
   'modelSettings.deletePreset': (el, event, idx) => deleteSettingsPreset(idx),
   'modelSettings.switchTab': (el) => switchSettingsTab(el.dataset.tab),
-  'modelSettings.startOAuth': (el) => startOAuthLogin(el.dataset.mode),
+  'modelSettings.openCodexAddAccount': () => openCodexLoginPage('', ''),
+  'modelSettings.backFromCodexLoginPage': () => backFromCodexLoginPage(),
+  'modelSettings.startCodexLogin': () => startCodexLoginFromPage(),
   'modelSettings.openCodexConnections': (el, event) => {
     // 原 click + keydown 双挂：键盘路径限 Enter 且目标为卡片本身（内部按钮的 Enter 不触发）
     if (event.type === 'keydown') {
@@ -1568,6 +1643,11 @@ configureOAuthFlowHost({
   getSettingsEditing: () => settingsEditing,
   getSettingsData: () => settingsData,
   isCodexConnectionView: () => codexConnectionView,
+  // 登录子页：oauth-flow 读目标（区分添加新账号与指定槽位重登）、成功后
+  // 回列表页，账号行的「重新登录」入口经 openCodexLoginPage 进子页
+  getCodexLoginTarget: () => codexLoginTarget,
+  openCodexLoginPage,
+  exitCodexLoginPage,
   openCodeZenBaseUrl: OPENCODE_ZEN_BASE_URL,
   openCodeGoBaseUrl: OPENCODE_GO_BASE_URL,
 });

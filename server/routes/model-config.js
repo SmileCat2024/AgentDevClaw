@@ -838,7 +838,6 @@ export function setupModelConfigRoutes(app, express) {
         // 当前账号（codex-accounts.js 账号簿）优先；无账号簿数据时退回存量链
         const tokenProviders = [...new Set([
           resolveActiveCodexProviderName(),
-          'OpenAI Auth',
           ...oauthPresets.map((preset) => preset.providerName),
         ])].filter(Boolean);
         let accessToken = null;
@@ -846,7 +845,7 @@ export function setupModelConfigRoutes(app, express) {
           accessToken = resolveAccessTokenSync(providerName, DEFAULT_CLIENT_ID);
           if (accessToken) break;
         }
-        if (!accessToken) return res.status(401).json({ error: 'OpenAI Auth is not logged in' });
+        if (!accessToken) return res.status(401).json({ error: 'No Codex account is logged in' });
         const result = await fetchCodexModelCatalog(accessToken);
         if (result.error) return res.status(result.status).json({ error: result.error });
         return res.json({ models: result.models });
@@ -1104,13 +1103,13 @@ export function setupModelConfigRoutes(app, express) {
   //  的 feature-comms 请求面 /protoclaw/feature-comms/request；远程会话随通道
   //  无声明自然降级，不再保持远程转发。）
 
-  // ── OpenAI Auth: list models from the Codex catalog using the stored OAuth token ──
+  // ── OpenAI OAuth: list models from the Codex catalog using the stored OAuth token ──
   app.post('/protoclaw/openai-auth/models', express.json(), async (req, res, next) => {
     try {
       const providerName = cleanSessionText(req.body?.providerName);
       if (!providerName) return res.status(400).json({ error: 'providerName is required' });
       const accessToken = resolveAccessTokenSync(providerName, DEFAULT_CLIENT_ID);
-      if (!accessToken) return res.status(401).json({ error: 'OpenAI Auth is not logged in' });
+      if (!accessToken) return res.status(401).json({ error: 'OpenAI OAuth account is not logged in' });
 
       const result = await fetchCodexModelCatalog(accessToken);
       if (result.error) return res.status(result.status).json({ error: result.error });

@@ -36,6 +36,8 @@ function oauthFlowHost() {
 }
 
 function checkOAuthProxy(isZh) {
+  // 登录轮询进行中由 pollOAuthLogin 独占状态区（慢返回的代理检查不覆盖设备码/授权链接）
+  if (_oauthPollTimer) return;
   fetch('/protoclaw/oauth/codex/defaults')
     .then(function(r) { return r.json(); })
     .then(function(data) {
@@ -128,7 +130,9 @@ function getEditingProviderName() {
   let editing = oauthFlowHost().getSettingsEditing();
   let presets = oauthFlowHost().getSettingsData()?.presets || [];
   if (editing === null) {
-    return presets.find((preset) => preset.authType === 'oauth-codex' && preset.providerName)?.providerName || 'OpenAI Auth';
+    // 连接视图兜底：找第一个带 providerName 的 codex OAuth 预设；都没有时
+    // 落到归类名 'OpenAI OAuth'（编辑表单路径正常都会先保存预设再登录）
+    return presets.find((preset) => preset.authType === 'oauth-codex' && preset.providerName)?.providerName || 'OpenAI OAuth';
   }
   return presets[editing]?.providerName || '';
 }
@@ -246,12 +250,16 @@ export async function startOAuthLogin(mode) {
   let idx = oauthFlowHost().getSettingsEditing();
 
   if (idx === null) {
-    // 连接视图（账号列表页）：每次添加账号都让服务端生成新槽位（'__new__'），
-    // 不再复用既有 preset 的 providerName —— 那会把新账号 token 写进旧槽位。
+    // 登录子页（账号配置页）：添加新账号让服务端生成槽位（'__new__'），不再
+    // 复用既有 preset 的 providerName —— 那会把新账号 token 写进旧槽位；
+    // 重新登录显式传既有槽位名，token 覆盖写入原槽位，displayName 与
+    // active 指针不变（服务端 registerCodexAccount 幂等跳过）。
+    const target = oauthFlowHost().getCodexLoginTarget?.() || {};
+    const providerName = target.providerName || '__new__';
     fetch('/protoclaw/oauth/codex/defaults').then((response) => response.json()).then((defaults) => {
       const launchLogin = () => fetch('/protoclaw/oauth/codex/start', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ providerName: '__new__', clientId: defaults.defaultClientId, mode: loginMode }),
+        body: JSON.stringify({ providerName: providerName, clientId: defaults.defaultClientId, mode: loginMode }),
       }).then((response) => response.json()).then((data) => {
         // Browser mode: the server opens the system default browser itself
         // (the desktop webview cannot pop one); just poll for completion.
@@ -367,9 +375,15 @@ function pollOAuthLogin(sessionId) {
         } else if (sess.status === 'approved') {
           if (_oauthPollTimer) { clearInterval(_oauthPollTimer); _oauthPollTimer = null; }
           let el = display();
-          if (el) el.innerHTML = '<span class="oauth-status-text" style="color:#81c784;">✓ ' + (isZh ? '登录成功！令牌已保存' : 'Login successful! Token saved.') + '</span>';
-          oauthFlowHost().refreshModelCatalog('codex');
-          renderCodexAccountsList();
+          if (el) el.innerHTML = '<span class="oauth-status-text" style="color:#81c784;">✓ ' + (isZh ? '登录成功！令牌已保存，即将返回账号列表…' : 'Login successful! Token saved. Returning to the account list…') + '</span>';
+          // 短暂展示成功反馈后回到账号列表页；目录刷新放在返回之后 —— 它触发
+          // 的整体重渲染会重建状态面板，先刷会清掉成功文案。编辑表单路径
+          // （无登录子页）exitCodexLoginPage 是 no-op，行为与原先一致
+          setTimeout(function() {
+            const host = oauthFlowHost();
+            if (host.exitCodexLoginPage) host.exitCodexLoginPage();
+            host.refreshModelCatalog('codex');
+          }, 900);
         } else if (sess.status === 'expired') {
           if (_oauthPollTimer) { clearInterval(_oauthPollTimer); _oauthPollTimer = null; }
           let el = display();
@@ -468,9 +482,12 @@ function refreshOAuthStatus() {
 
 // ── Codex multi-account list (connection view) ─────────────────────
 //
-// 账号行复用 settings-preset-card 配方；行操作（设为当前/重命名/登出）经
-// data-provider 寻址，全局切换由服务端 activate 端点 + refresh-credentials
-// 广播完成（无客户端热重载逻辑）。
+// 账号行复用 settings-preset-card 配方，整卡即主操作：有凭证且非当前 →
+// 点击设为当前；无凭证 → 点击进重新登录子页；当前账号无整卡动作。行内
+// 操作（重新登录/重命名/登出）经 data-provider 寻址，悬停才显现（与会话
+// 列表项同一节奏，见 components.css 的 .oauth-accounts-list 注释）；全局
+// 切换由服务端 activate 端点 + refresh-credentials 广播完成（无客户端
+// 热重载逻辑）。
 
 function renderCodexAccountsList() {
   let container = document.getElementById('codex-accounts-list');
@@ -508,13 +525,21 @@ function codexAccountRowHtml(a, isZh) {
   }
   let expiry = a.status && a.status.expiresAt ? new Date(a.status.expiresAt).toLocaleString() : '';
   let providerAttr = escapeHtml(a.providerName);
+  let nameAttr = escapeHtml(a.displayName || '');
+  // 整卡主操作：非当前账号可点——有凭证 = 设为当前，无凭证 = 进重新登录
+  // 子页；当前账号无整卡动作（操作走行内按钮）。data-key-activate 让聚焦
+  // 卡片的 Enter/Space 走同一动作；行内按钮的按键由分发器按 target 归属
+  // 判定，不会被卡片 keydown 吞掉。
+  let cardAction = a.active ? '' : (a.hasToken ? 'oauthFlow.activateAccount' : 'oauthFlow.reloginAccount');
+  let cardAttrs = cardAction
+    ? ' role="button" tabindex="0" data-event="click keydown" data-key-activate'
+      + ' data-provider="' + providerAttr + '" data-name="' + nameAttr + '" data-action="' + cardAction + '"'
+    : '';
   let actions = ''
-    + (a.hasToken && !a.active
-      ? '<button class="settings-btn settings-btn-secondary" type="button" data-provider="' + providerAttr + '" data-action="oauthFlow.activateAccount">' + (isZh ? '设为当前' : 'Set Active') + '</button>'
-      : '')
-    + '<button class="settings-btn settings-btn-secondary" type="button" data-provider="' + providerAttr + '" data-name="' + escapeHtml(a.displayName || '') + '" data-action="oauthFlow.renameAccount">' + (isZh ? '重命名' : 'Rename') + '</button>'
+    + '<button class="settings-btn settings-btn-secondary" type="button" data-provider="' + providerAttr + '" data-name="' + nameAttr + '" data-action="oauthFlow.reloginAccount">' + (isZh ? '重新登录' : 'Re-login') + '</button>'
+    + '<button class="settings-btn settings-btn-secondary" type="button" data-provider="' + providerAttr + '" data-name="' + nameAttr + '" data-action="oauthFlow.renameAccount">' + (isZh ? '重命名' : 'Rename') + '</button>'
     + '<button class="settings-btn settings-btn-secondary settings-btn-quiet" type="button" data-provider="' + providerAttr + '" data-action="oauthFlow.logoutAccount">' + (isZh ? '登出' : 'Logout') + '</button>';
-  return '<div class="settings-preset-card oauth-account-row' + (a.active ? ' active' : '') + '">'
+  return '<div class="settings-preset-card oauth-account-row' + (a.active ? ' active' : '') + '"' + cardAttrs + '">'
     + '<div class="settings-preset-dot"></div>'
     + '<div class="settings-preset-info">'
     + '<div class="settings-preset-name">' + escapeHtml(a.displayName || a.providerName)
@@ -603,6 +628,7 @@ window.ClawFW.actions.registerMany({
   'oauthFlow.logout': () => logoutOAuth(),
   'oauthFlow.copyUserCode': (el) => copyOAuthUserCode(el),
   'oauthFlow.activateAccount': (el) => activateCodexAccountBtn(el),
+  'oauthFlow.reloginAccount': (el) => oauthFlowHost().openCodexLoginPage(el.dataset.provider, el.dataset.name),
   'oauthFlow.renameAccount': (el) => renameCodexAccountBtn(el),
   'oauthFlow.logoutAccount': (el) => logoutCodexAccountBtn(el),
 });

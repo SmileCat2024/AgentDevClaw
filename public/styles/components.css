@@ -7341,21 +7341,37 @@ body[data-theme="light"] .user-choice-card:focus-within {
 .settings-connection-title { color: var(--text-primary); font-size: 16px; font-weight: 700; letter-spacing: -0.01em; }
 .settings-connection-description { margin-top: 4px; color: var(--text-secondary); font-size: 12px; }
 .settings-connection-inline { flex: 0 1 260px; min-width: 180px; }
-.settings-connection-card .oauth-action-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.settings-connection-card .oauth-action-row .settings-btn { width: auto; min-height: 38px; }
+.settings-connection-card .oauth-action-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 0; }
+.settings-connection-card .oauth-action-row .settings-btn { width: auto; min-height: 34px; padding: 7px 14px; font-size: 12px; }
 .settings-connection-card .oauth-status-text { margin-top: 10px; }
 /* Codex 连接入口卡片：整卡可点 + 显式配置按钮，进入专门配置页 */
 .settings-connection-entry { position: relative; cursor: pointer; transition: border-color 0.12s, box-shadow 0.12s; }
 .settings-connection-entry:hover, .settings-connection-entry:focus-visible { border-color: color-mix(in srgb, var(--accent-text) 45%, transparent); outline: none; }
 .settings-connection-entry .settings-btn { width: auto; min-height: 34px; padding: 7px 14px; font-size: 12px; }
-/* Codex 连接配置页：登录状态面板（承载设备码 / 授权链接 / 状态文案） */
-.settings-connection-card .settings-codex-auth-status { box-sizing: border-box; min-height: 48px; margin-top: 14px; padding: 12px 14px; border: 1px solid var(--border-color); border-radius: 10px; background: color-mix(in srgb, var(--panel-bg) 55%, transparent); }
-/* Codex 账号列表（多账号）：行卡片复用 settings-preset-card 配方，容器控制堆叠节奏；整卡无点击行为（操作走行内按钮） */
-.settings-codex-auth .oauth-accounts-list { display: flex; flex-direction: column; gap: 8px; margin-top: 14px; }
-.settings-codex-auth .oauth-accounts-list .settings-preset-card { cursor: default; }
-.settings-codex-auth .oauth-accounts-list .settings-preset-card:hover { box-shadow: 0 2px 10px rgba(0, 0, 0, 0.12); }
-.settings-codex-auth .oauth-accounts-list .settings-preset-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
-.settings-codex-auth .oauth-accounts-list .settings-preset-actions .settings-btn { width: auto; min-height: 30px; padding: 5px 10px; font-size: 11px; }
+/* Codex 登录子页：登录状态面板（独立区块，承载设备码 / 授权链接 / 状态文案） */
+.settings-codex-auth-status { box-sizing: border-box; min-height: 48px; padding: 12px 14px; border: 1px solid var(--border-color); border-radius: 10px; background: color-mix(in srgb, var(--panel-bg) 55%, transparent); }
+/* Codex 登录子页：方式选择行（下拉 + 开始按钮同区块，同 settings-catalog-toolbar 形态） */
+.codex-login-mode-row { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.codex-login-mode-row .claw-select { width: auto; min-width: 200px; flex: 0 0 auto; }
+.codex-login-mode-row .settings-btn { width: auto; min-height: 34px; padding: 7px 14px; font-size: 12px; }
+.settings-codex-login-hint { font-size: 11px; line-height: 1.6; color: var(--text-secondary); }
+/* Codex 账号列表（多账号）：独立区块（banner 之下，不在连接卡片内），
+   行卡片复用 settings-preset-card 配方，容器控制堆叠节奏。整卡是主操作
+   （有凭证非当前 = 设为当前 / 无凭证 = 重新登录，见 oauth-flow.js）；行内
+   操作按钮悬停才显现，节奏对齐智能编码空间会话列表项
+   （.feature-project-session-item 的 .workspace-actions.stacked） */
+.oauth-accounts-list { display: flex; flex-direction: column; gap: 8px; }
+.oauth-accounts-list .settings-preset-card { cursor: default; }
+.oauth-accounts-list .settings-preset-card[data-action] { cursor: pointer; }
+.oauth-accounts-list .settings-preset-card[data-action]:hover,
+.oauth-accounts-list .settings-preset-card[data-action]:focus-visible { border-color: color-mix(in srgb, var(--accent-text) 45%, transparent); outline: none; }
+.oauth-accounts-list .settings-preset-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; opacity: 0; transition: opacity 0.15s ease; }
+.oauth-accounts-list .settings-preset-card:hover .settings-preset-actions,
+.oauth-accounts-list .settings-preset-card:focus-within .settings-preset-actions { opacity: 1; }
+.oauth-accounts-list .settings-preset-actions .settings-btn { width: auto; min-height: 28px; padding: 5px 12px; font-size: 11px; border-radius: 999px; }
+/* 当前账号整卡无动作：信息区不显可点指针（全局 .settings-preset-info 的
+   pointer 只对可点卡片成立） */
+.oauth-accounts-list .settings-preset-card:not([data-action]) .settings-preset-info { cursor: default; }
 /* 空态：对齐右侧面板 feature-panel-empty 的「标题 + 说明」形态 */
 .settings-catalog-empty { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 40px 24px; text-align: center; color: var(--text-secondary); }
 .settings-catalog-empty strong { color: var(--text-primary); font-size: 13px; font-weight: 600; }
@@ -10790,29 +10806,8 @@ body[data-theme="light"] .ph-model-switch.has-secondary:hover {
   background: rgba(229,85,85,0.08);
 }
 
-/* 插件设置弹窗（feature-store.js 设置入口，ADR-0046 落地第 1 步） */
-.fs-settings-btn {
-  flex-shrink: 0;
-  width: 28px;
-  height: 28px;
-  border: 1px solid var(--border-color, rgba(255,255,255,0.12));
-  border-radius: 6px;
-  background: var(--input-bg, rgba(255,255,255,0.06));
-  color: var(--text-secondary, #9aa3b2);
-  font-size: 14px;
-  line-height: 1;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  transition: border-color 0.15s, color 0.15s, background 0.15s;
-}
-
-.fs-settings-btn:hover {
-  border-color: var(--accent-text, var(--accent, #5b8def));
-  color: var(--accent-text, var(--accent, #5b8def));
-}
-
+/* 插件设置弹窗（feature-store.js 设置入口，ADR-0046 落地第 1 步）；
+   卡片上的设置/移除动作已换模型配置页 settings-icon-btn 图标按钮配方 */
 .fs-settings-tabs {
   display: flex;
   gap: 4px;
@@ -14431,6 +14426,9 @@ body[data-theme="light"] .fs-category-tabs .fs-category-tab.active { color: var(
    借用到徽章行与标题行时纠正其 align-self，保持垂直居中 */
 .feature-card-badges .fs-list-add,
 .hooks-section-header .fs-list-add { align-self: center; }
+/* 卡片徽章行内的图标动作按钮（settings-icon-btn，模型配置页配方）：
+   flex 收缩保护 + 与相邻徽章/下拉的垂直对齐 */
+.feature-card-badges .settings-icon-btn { flex-shrink: 0; }
 
 /* 挂载管理页工具栏添加按钮（accent 蓝描边 + 蓝字 + 浅蓝 hover） */
 

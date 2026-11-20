@@ -47,6 +47,11 @@ import { uploadTgzChunked } from './tgz-chunked-upload.js';
 // 的商店入口；两侧相互引用都只发生在函数体 / 动作回调内（顶层不读对方绑定）。
 import { _phRefreshMountsView } from './ph-settings.js';
 
+// 卡片动作图标（settings-icon-btn 内 14×14 线性图标，与模型配置页 preset
+// 卡片同款；齿轮 path 与 feature-config-editor 的 _FCE_GEAR_SVG 同形）
+export const _FS_GEAR_ICON_SVG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>';
+export const _FS_REMOVE_ICON_SVG = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>';
+
 const _FS_IDENTITY_SCOPES = {
   main: { agentId: 'programming-helper', layerId: 'agent', labelZh: '编程小助手', labelEn: 'Programming Helper' },
   coder: { agentId: 'coder', layerId: 'agent', labelZh: 'Coder', labelEn: 'Coder' },
@@ -343,13 +348,13 @@ function _fsMountedCard(feature, builtinItems, packageNames) {
       ? '<span class="feature-prov-badge">' + escapeHtml(_fsT('扩展', 'extension')) + '</span>'
       : '<span class="feature-prov-badge">' + escapeHtml(`${mount.package}@${mount.version}`) + '</span>');
   const btn = isGlobal
-    ? '<button type="button" class="fs-list-remove" disabled style="opacity:0.35;" title="' + escapeHtml(_fsT('来自默认装配，在 设置 → 插件管理 中移除', 'From default assembly; remove via Settings → Plugin Manager')) + '">&#215;</button>'
-    : '<button type="button" class="fs-list-remove" title="' + escapeHtml(_fsT('移除', 'Remove')) + '" data-action="featureStore.removeMount" data-identity="' + escapeHtml(_fsState.identity) + '" data-name="' + escapeHtml(runtimeName) + '">&#215;</button>';
+    ? '<button type="button" class="settings-icon-btn danger" disabled style="opacity:0.35;" title="' + escapeHtml(_fsT('来自默认装配，在 设置 → 插件管理 中移除', 'From default assembly; remove via Settings → Plugin Manager')) + '">' + _FS_REMOVE_ICON_SVG + '</button>'
+    : '<button type="button" class="settings-icon-btn danger" title="' + escapeHtml(_fsT('移除', 'Remove')) + '" data-action="featureStore.removeMount" data-identity="' + escapeHtml(_fsState.identity) + '" data-name="' + escapeHtml(runtimeName) + '">' + _FS_REMOVE_ICON_SVG + '</button>';
   // 参数入口只跳转到本空间设置页的「参数配置」（工作空间层唯一编辑面），
   // 不在这里另开配置弹窗：同一层不应有两个编辑入口。builtin 的配置家在
   // 同一个「参数配置」列表里，无需区分。
   const settingsBtn = !mount.missing
-    ? '<button type="button" class="fs-settings-btn" title="' + escapeHtml(_fsT('在本空间参数配置中编辑', 'Edit in this workspace\'s parameters')) + '" data-action="phSettings.openFeatureConfig" data-identity="' + escapeHtml(_fsState.identity) + '" data-name="' + escapeHtml(runtimeName) + '">&#9881;</button>'
+    ? '<button type="button" class="settings-icon-btn" title="' + escapeHtml(_fsT('在本空间参数配置中编辑', 'Edit in this workspace\'s parameters')) + '" data-action="phSettings.openFeatureConfig" data-identity="' + escapeHtml(_fsState.identity) + '" data-name="' + escapeHtml(runtimeName) + '">' + _FS_GEAR_ICON_SVG + '</button>'
     : '';
   // displayName 与可安装区同源（builtin title / 包 displayName），查不到落回 runtime 名
   const pkg = packageNames.get(runtimeName);
@@ -409,8 +414,8 @@ function _fsBuildTypeGroups(mountedMap, mountedByPackage) {
       : '';
     // 私有包可删除（只删本空间仓库；全局库存包的删除入口在插件管理器）
     const deleteButton = pkg.scopeAgentId
-      ? '<button type="button" class="fs-list-remove" title="' + escapeHtml(_fsT('从本空间仓库删除该版本', 'Delete this version from the workspace repository')) + '"'
-        + ' data-action="featureStore.deletePackage" data-package="' + escapeHtml(pkg.package) + '" data-version="' + escapeHtml(latest) + '">&#215;</button>'
+      ? '<button type="button" class="settings-icon-btn danger" title="' + escapeHtml(_fsT('从本空间仓库删除该版本', 'Delete this version from the workspace repository')) + '"'
+        + ' data-action="featureStore.deletePackage" data-package="' + escapeHtml(pkg.package) + '" data-version="' + escapeHtml(latest) + '">' + _FS_REMOVE_ICON_SVG + '</button>'
       : '';
     const control = scopeBadge + (pkg.versions?.length > 1
       ? '<select class="fs-select"' + (busyPkg ? ' disabled' : '') + ' data-action="featureStore.selectVersion" data-event="change" data-package="' + escapeHtml(pkg.package) + '">' + versionOptions + '</select>'
@@ -1104,14 +1109,14 @@ function _pmRenderGlobalSection(mountedMap) {
     const status = mount.missing
       ? '<span class="feature-badge status-removed">' + escapeHtml(_fsT('包已不在仓库', 'missing')) + '</span>'
       : '<span class="feature-prov-badge">' + escapeHtml(`${mount.package}@${mount.version}`) + '</span>';
-    const btn = '<button type="button" class="fs-list-remove" title="' + escapeHtml(_fsT('移除默认装配', 'Remove default assembly')) + '" data-action="pluginManager.removeGlobal" data-name="' + escapeHtml(runtimeName) + '">&#215;</button>';
+    const btn = '<button type="button" class="settings-icon-btn danger" title="' + escapeHtml(_fsT('移除默认装配', 'Remove default assembly')) + '" data-action="pluginManager.removeGlobal" data-name="' + escapeHtml(runtimeName) + '">' + _FS_REMOVE_ICON_SVG + '</button>';
     // 全局默认参数入口：与这条默认装配声明同层（global 层）；空间层覆盖在各
     // 工作空间设置 → 参数配置里编辑，管理器不提供第二处空间编辑入口。
     const identityKey = Object.keys(_pmState.overview?.mounts || {})
       .find((key) => _pmState.overview.mounts[key]?.[runtimeName]) || 'main';
     const settingsBtn = mount.missing
       ? ''
-      : '<button type="button" class="fs-settings-btn" title="' + escapeHtml(_fsT('编辑全局默认参数', 'Edit global default parameters')) + '" data-action="featureStore.openSettings" data-identity="' + escapeHtml(identityKey) + '" data-name="' + escapeHtml(runtimeName) + '">&#9881;</button>';
+      : '<button type="button" class="settings-icon-btn" title="' + escapeHtml(_fsT('编辑全局默认参数', 'Edit global default parameters')) + '" data-action="featureStore.openSettings" data-identity="' + escapeHtml(identityKey) + '" data-name="' + escapeHtml(runtimeName) + '">' + _FS_GEAR_ICON_SVG + '</button>';
     const pkg = packageNames.get(runtimeName);
     return _fsCard({
       name: runtimeName,
@@ -1140,8 +1145,8 @@ function _pmRenderPackageSections(mountedMap) {
       ? '<button type="button" class="fs-list-add" disabled style="opacity:0.7;">' + escapeHtml(_fsT('装配中…', 'Installing…')) + '</button>'
       : '<button type="button" class="fs-list-add" data-action="pluginManager.installGlobal" data-package="' + escapeHtml(pkg.package) + '" data-version="' + escapeHtml(latest) + '">'
         + escapeHtml(_fsT('+ 设为默认', '+ Set as Default')) + '</button>';
-    const deleteButton = '<button type="button" class="fs-list-remove" title="' + escapeHtml(_fsT('从仓库删除该版本（装配中的包需先移除装配）', 'Delete this version from the repository (remove assembly first)')) + '"'
-      + ' data-action="pluginManager.deletePackage" data-package="' + escapeHtml(pkg.package) + '" data-version="' + escapeHtml(latest) + '">&#215;</button>';
+    const deleteButton = '<button type="button" class="settings-icon-btn danger" title="' + escapeHtml(_fsT('从仓库删除该版本（装配中的包需先移除装配）', 'Delete this version from the repository (remove assembly first)')) + '"'
+      + ' data-action="pluginManager.deletePackage" data-package="' + escapeHtml(pkg.package) + '" data-version="' + escapeHtml(latest) + '">' + _FS_REMOVE_ICON_SVG + '</button>';
     const control = (pkg.versions?.length > 1
       ? '<select class="fs-select"' + (_pmState.busy ? ' disabled' : '') + ' data-action="pluginManager.selectVersion" data-event="change" data-package="' + escapeHtml(pkg.package) + '">' + versionOptions + '</select>'
       : '<span style="font-size:12px;color:var(--text-secondary);">' + escapeHtml(latest) + '</span>')

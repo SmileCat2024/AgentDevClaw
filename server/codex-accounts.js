@@ -3,25 +3,28 @@
  *
  * 账号 = token 槽位（oauth-tokens/<sanitized>.json，由 oauth-codex.js 管理）
  *      + 列表元数据（displayName）。元数据与当前账号指针落在 Claw user data
- * model-connections.json 的 codex 段：
+ *      model-connections.json 的 codex 段：
  *
  *   { "codex": { "accounts": [{ "providerName", "displayName" }],
  *                "activeProvider": "<providerName>" } }
  *
- * 读路径懒合并：token 目录里存在文件但不在列表的槽位（存量 'OpenAI Auth'、
- * 手工放置）自动纳入账号列表，默认名按合并位置编号；activeProvider 缺省或
- * 指向无 token 的槽位时，回退到列表中第一个有 token 的账号。合并结果不强制
- * 写盘——任何写操作（登记 / 重命名 / activate / 登出）才会规范化落盘。
+ * 读路径懒合并：token 目录里存在文件但不在列表的槽位（手工放置等）自动纳入
+ * 账号列表，默认名按合并位置编号；activeProvider 缺省或指向无 token 的槽位时，
+ * 回退到列表中第一个有 token 的账号。合并结果不强制写盘——任何写操作（登记 /
+ * 重命名 / activate / 登出）才会规范化落盘。
  *
- * 槽位名以 token 文件名为准做归一比较（sanitize 后同名视为同一槽位），
- * 因此存量 'OpenAI Auth'（文件名 OpenAI_Auth）经任何写操作登记后，列表里
- * 记录的是文件名形态；displayName 才是面向用户的标识。
+ * 槽位名以 token 文件名为准做归一比较（sanitize 后同名视为同一槽位）。
+ * 历史默认槽位名 LEGACY_DEFAULT_CODEX_SLOT_NAME（'OpenAI Auth'）由启动迁移
+ * （codex-account-migration.js）统一换算为 codex-account-N 形态。
  */
 
 import path from 'path';
 import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync } from 'fs';
 import { MODEL_CONNECTIONS_PATH } from './shared/constants.js';
 import { OAUTH_TOKENS_DIR, sanitizeProviderSlotKey } from './oauth-codex.js';
+
+/** 旧单账号时代的默认登录槽位名（迁移源，勿再用于新写入） */
+export const LEGACY_DEFAULT_CODEX_SLOT_NAME = 'OpenAI Auth';
 
 function readCodexSection(connectionsPath) {
   try {
@@ -138,6 +141,22 @@ export function activateCodexAccount(providerName, connectionsPath = MODEL_CONNE
     return { accounts, activeProvider: providerName };
   }, connectionsPath);
   return { ok: true, previous };
+}
+
+/**
+ * 槽位改名（迁移用）：providerName 换新、displayName 保留；activeProvider
+ * 指向旧槽时同步指向新名。条目不在列表（纯孤儿 token 槽位）时只改 active，
+ * 列表条目由后续登记补齐。不触碰 token 文件（由迁移器负责 rename）。
+ */
+export function renameCodexSlot(fromName, toName, connectionsPath = MODEL_CONNECTIONS_PATH) {
+  const from = sanitizeProviderSlotKey(fromName);
+  const to = sanitizeProviderSlotKey(toName);
+  if (!from || !to || from === to) return { ok: false, error: 'invalid_slot' };
+  writeCodexSection((section) => ({
+    accounts: section.accounts.map((a) => (sanitizeProviderSlotKey(a.providerName) === from ? { ...a, providerName: toName } : a)),
+    activeProvider: sanitizeProviderSlotKey(section.activeProvider) === from ? toName : section.activeProvider,
+  }), connectionsPath);
+  return { ok: true };
 }
 
 export function renameCodexAccount(providerName, displayName, connectionsPath = MODEL_CONNECTIONS_PATH) {

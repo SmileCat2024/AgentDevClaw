@@ -3,7 +3,7 @@ import { getCurrentLanguage } from './i18n-environment-state.js';
 import { allAgents } from './agent-store-state.js';
 import { getClawModelPresets } from './model-preset-cache.js';
 import { createFeatureConfigEditor } from './feature-config-editor.js';
-import { phOpenFeatureStore, phCloseFeatureStore, _fsRemoveFor, _fsSetDisabledFeatures } from './feature-store.js';
+import { phOpenFeatureStore, phCloseFeatureStore, _fsRemoveFor, _fsSetDisabledFeatures, _FS_GEAR_ICON_SVG, _FS_REMOVE_ICON_SVG } from './feature-store.js';
 import { registerContainerImagesHost, loadContainerImagesPanel } from './container-images.js';
 import { enhanceAll } from './claw-select.js';
 import { ClawToast } from './toast-notify.js';
@@ -332,11 +332,11 @@ function _phRenderMountsBody(host) {
       ? '<span class="feature-prov-badge">' + escapeHtml(isZh ? '官方' : 'Official') + '</span>'
       : '<span class="feature-prov-badge" title="' + escapeHtml((mount?.package || '') + '@' + (mount?.version || '')) + '">'
         + escapeHtml(isZh ? '扩展' : 'Extension') + '</span>';
-    const configBtn = '<button type="button" class="fs-settings-btn" title="' + escapeHtml(isZh ? '配置参数' : 'Configure') + '"'
-      + ' data-action="phSettings.openFeatureConfig" data-name="' + escapeHtml(f.name) + '">&#9881;</button>';
+    const configBtn = '<button type="button" class="settings-icon-btn" title="' + escapeHtml(isZh ? '配置参数' : 'Configure') + '"'
+      + ' data-action="phSettings.openFeatureConfig" data-name="' + escapeHtml(f.name) + '">' + _FS_GEAR_ICON_SVG + '</button>';
     const removeBtn = mount
-      ? '<button type="button" class="fs-list-remove" title="' + escapeHtml(isZh ? '移除插件' : 'Remove plugin') + '"'
-        + ' data-action="phSettings.removeMountFeature" data-identity="' + escapeHtml(_phMountData.identityKey) + '" data-name="' + escapeHtml(f.name) + '">&#215;</button>'
+      ? '<button type="button" class="settings-icon-btn danger" title="' + escapeHtml(isZh ? '移除插件' : 'Remove plugin') + '"'
+        + ' data-action="phSettings.removeMountFeature" data-identity="' + escapeHtml(_phMountData.identityKey) + '" data-name="' + escapeHtml(f.name) + '">' + _FS_REMOVE_ICON_SVG + '</button>'
       : '';
     const missing = mount?.missing
       ? '<span class="feature-badge status-removed">' + escapeHtml(isZh ? '包已不在仓库' : 'Missing package') + '</span>'

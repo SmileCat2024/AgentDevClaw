@@ -36,6 +36,7 @@ import { createServiceLifecycle } from './server/service-lifecycle.js';
 import { ensureAppPortAvailable } from './server/boot/port-recovery.js';
 import { migrateLegacyAppConfig } from './server/app-config-migration.js';
 import { runStudioFeatureMigration } from './server/routes/studio-feature-migration.js';
+import { migrateLegacyCodexSlotName } from './server/codex-account-migration.js';
 import { runCoderIdentityRetirement } from './server/routes/coder-identity-retirement.js';
 import { runPhLegacyThreadMigration, runPhThreadArchiveBackfill } from './server/thread-control/ph-legacy-migration.js';
 import { ensureCoderFeaturePresets } from './server/routes/coder-feature-presets.js';
@@ -1978,6 +1979,17 @@ async function main() {
     await runStudioFeatureMigration();
   } catch (err) {
     console.warn('[studio-migration] startup migration failed:', err.message);
+  }
+
+  // Codex OAuth 存量槽位名迁移（'OpenAI Auth' → codex-account-N，幂等）：
+  // token 文件 + 账号簿 + model-config 引用一致换名。失败只告警，下次启动重试。
+  try {
+    const result = await migrateLegacyCodexSlotName();
+    if (!result.skipped) {
+      log('server', `codex slot migrated: OpenAI Auth -> ${result.newName}${result.tokenRenamed === false ? ' (book only)' : ''}`);
+    }
+  } catch (err) {
+    console.warn('[codex-slot-migration] startup migration failed:', err.message);
   }
 
   // 编程小助手旧 Session 血缘迁移（ADR-0032）：干净链自动建线，歧义分量
