@@ -2319,11 +2319,17 @@ domRefs.featurePanelResizer.addEventListener('mousedown', (event) => {
   window.addEventListener('mouseup', handleMouseUp);
 });
 
-/* ── 面板宽度变化时切换 .narrow class，驱动 feature-grid 列数 ── */
-const _fpNarrowObserver = new ResizeObserver(entries => {
-  for (const entry of entries) {
-    domRefs.featurePanelBody.classList.toggle('narrow', entry.contentRect.width < 380);
-  }
+/* ── 面板宽度变化时切换 .narrow class，驱动 feature-grid 列数 ──
+   判定量用 body 的 border-box 宽度：body 的 min-width 即
+   --feature-panel-width，gBCR 宽度等于面板宽度，与拖拽下限（400 /
+   窄屏 300）、默认 460、上限 750 同量纲可比。不能用 contentRect——
+   它会被滚动条出现/消失挤压 ~17px，同一面板宽度下列数随内容多少
+   翻转。阈值 450：默认 460 保持两列，面板收到 450 以下（覆盖整个
+   拖拽下限区间）切单列。原阈值 380 在 contentRect 量纲下低于桌面
+   拖拽下限 400，单列形态在稳定态不可达，只在濒临收起时一闪而过。 */
+const _fpNarrowObserver = new ResizeObserver(() => {
+  domRefs.featurePanelBody.classList.toggle('narrow',
+    domRefs.featurePanelBody.getBoundingClientRect().width < 450);
 });
 _fpNarrowObserver.observe(domRefs.featurePanelBody);
 
