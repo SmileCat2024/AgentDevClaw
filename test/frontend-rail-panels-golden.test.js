@@ -30,7 +30,7 @@ const REGISTRATION_HOMES = [
   {
     id: 'app-ui 中央注册',
     file: 'public/src/app-ui.js',
-    start: "registerFeaturePanel('workspace'",
+    start: "registerFeaturePanel('files'",
     end: '// Sidebar Toggle + narrow-width drawer backdrop',
     prefix: 'registerFeaturePanel = window.registerFeaturePanel = (id, panel) => window.ClawPanels.register(id, panel);',
     suffix: '',
@@ -153,6 +153,7 @@ test('every rail button in index.html maps to a registered panel', () => {
 });
 
 const GOLDEN_SNAPSHOT = [
+  { id: 'files', when: { agentIds: ['programming-helper'], surfaces: ['chat'] }, label: { zh: '文件', en: 'Files' }, description: { zh: '浏览当前会话工作目录', en: 'Browse the current session directory' }, preserveOnReRender: false, renderIsFunction: false, mountBodyHas: true, unmountBodyHas: true, iconHas: true, order: 5, onOpenHas: false, onCloseHas: false, titleZh: '文件', titleEn: '文件' },
   { id: 'workspace', when: { agentIds: null, surfaces: ['chat'] }, label: { zh: '文件结构', en: 'Structure' }, description: { zh: '项目文件树', en: 'Project file tree' }, preserveOnReRender: false, renderIsFunction: true, mountBodyHas: false, unmountBodyHas: false, iconHas: true, order: null, onOpenHas: false, onCloseHas: false, titleZh: 't:panel_structure', titleEn: 't:panel_structure' },
   { id: 'plan', when: { agentIds: null, surfaces: ['chat'] }, label: { zh: '计划', en: 'Plan' }, description: { zh: '任务与计划列表', en: 'Tasks and plan list' }, preserveOnReRender: false, renderIsFunction: true, mountBodyHas: false, unmountBodyHas: false, iconHas: true, order: 10, onOpenHas: false, onCloseHas: false, titleZh: 't:panel_plan', titleEn: 't:panel_plan' },
   { id: 'git', when: { agentIds: null, surfaces: ['chat'] }, label: { zh: '源代码管理', en: 'Source Control' }, description: { zh: 'Git 状态与操作', en: 'Git status and actions' }, preserveOnReRender: false, renderIsFunction: true, mountBodyHas: false, unmountBodyHas: false, iconHas: true, order: 30, onOpenHas: true, onCloseHas: false, titleZh: '源代码管理', titleEn: 'Source Control' },

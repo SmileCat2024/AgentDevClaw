@@ -57,3 +57,30 @@ test('ESM commit host rejects stale visits without effects while preserving newe
     assert.throws(() => module.commitSessionViewPatch(token, {}, null), /afterCommit must be a function/);
   });
 });
+
+test('applySessionViewPatch broadcasts claw:session-view-changed only when the effective identity changes', async () => {
+  const events = [];
+  await withP2EsmCase({
+    label: 'session-view-changed-event',
+    globals: {
+      CustomEvent: class { constructor(type, init) { this.type = type; this.detail = init?.detail; } },
+      dispatchEvent(event) { events.push(event); return true; },
+    },
+    classic: (sandbox) => {
+      prepareEsmModules(sandbox, APP_CORE_DOMAIN);
+      sandbox.run("currentRuntimeAgentId = 'runtime'; focusedAgentId = 'host';");
+      prepareEsmModules(sandbox, SESSION_VIEW_DOMAIN);
+    },
+  }, async (c) => {
+    const ctx = c.sandbox;
+    ctx.applySessionViewPatch({ identity: { agentId: 'host', sessionId: 'a' } });
+    ctx.applySessionViewPatch({ messages: [] });
+    ctx.applySessionViewPatch({ identity: { agentId: 'host', sessionId: 'b' } });
+    const changed = events.filter(event => event.type === 'claw:session-view-changed');
+    assert.equal(changed.length, 2, 'identity transitions broadcast once each; same-identity content updates stay silent');
+    assert.deepEqual(
+      changed.map(event => ({ agentId: event.detail.identity?.agentId, sessionId: event.detail.identity?.sessionId })),
+      [{ agentId: 'host', sessionId: 'a' }, { agentId: 'host', sessionId: 'b' }],
+    );
+  });
+});

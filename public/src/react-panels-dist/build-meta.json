@@ -1,0 +1,14 @@
+{
+  "reactVersion": "^19.3.1",
+  "sharedOutputs": [
+    "shared/react.js",
+    "shared/react-jsx-runtime.js",
+    "shared/react-dom-client.js",
+    "shared/react-dom.js",
+    "shared/chunks/chunk-3MKOWRKI.js",
+    "shared/chunks/chunk-DOEV2W73.js"
+  ],
+  "panels": [
+    "workspace-files"
+  ]
+}

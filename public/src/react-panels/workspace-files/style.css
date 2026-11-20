@@ -1,0 +1,554 @@
+/* 文件面板样式（DSH 式）。
+   页签条本体复用全局 gen-ui-surface-tabs 体系，此处只做 wf 域内的覆盖与补充：
+   非激活页签给可见轮廓（用户反馈：默认态太"无界"）、divider 带可视分隔线、
+   文件类型图标配色取自 DSH design-platform 的静态 token 值。 */
+
+.wf-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.wf-pane-row {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.wf-pane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* ── 页签条覆盖：非激活态给轮廓 ─────────────────────────── */
+
+/* 分行布局：computeTabRows 确定性分行（容量 = ceil(容器宽/104)），外层纵向堆叠。
+   行是横向滚动容器（滚动条隐藏）：被裁切的页签仍可访问——选中时 JS 自动
+   滚动让它完整露出（含关闭按钮），点左侧部分隐藏项则往回滚动。 */
+.wf-tabstrip {
+  display: flex;
+  flex-direction: column;
+  flex-wrap: nowrap;
+  /* 覆盖全局 .gen-ui-surface-tabs 的 align-items: flex-end：
+     列方向下它会让行收缩到内容宽并水平右对齐，左侧出现莫名空档 */
+  align-items: stretch;
+}
+
+/* 占满：剥掉复用 .settings-tab-bar 的胶囊容器样式（4px padding + 半透明底
+   + 12px 圆角）——页签与内容区顶满分区边缘（用户反馈分区两侧有内边距）。 */
+.wf-tabstrip.settings-tab-bar {
+  padding: 0;
+  background: transparent;
+  border-radius: 0;
+}
+
+/* 右缘占满：壳层 .feature-panel-body 统一 margin-right: 6px 是滚动条预留，
+   本面板内部自管滚动、body 永不滚动，6px 是纯损耗。挂载类由 app-ui.js
+   mountBody 添加/移除。 */
+.feature-panel-body.wf-full-bleed {
+  margin-right: 0;
+}
+
+.wf-tab-row {
+  display: flex;
+  flex-wrap: nowrap;
+  min-width: 0;
+  width: 100%;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.wf-tab-row::-webkit-scrollbar {
+  display: none;
+}
+
+/* 多行模式：页签以压缩档（104 = 全局 tab-item min-width）为基准；
+   非末行禁止拉伸（flex-grow 0）——拉伸会把行尾页签完全推出行外，
+   违反「只有完全隐藏才换行」的分行判定；末行（行尾）允许拉伸铺满。 */
+.wf-tabstrip.is-multi .wf-tab-row .gen-ui-surface-tab-item {
+  flex: 1 1 104px;
+  min-width: 104px;
+  max-width: 176px;
+}
+
+.wf-tabstrip.is-multi .wf-tab-row:not(:last-child) .gen-ui-surface-tab-item {
+  flex-grow: 0;
+}
+
+.wf-panel .gen-ui-surface-tab-item.is-active {
+  /* 沿用共享页签的原有形态，只增强原有底色、边框与文字的明暗对比。 */
+  border-color: #56565f;
+  background: #303036;
+  color: #ffffff;
+}
+
+.wf-panel .gen-ui-surface-tab-item.is-active .gen-ui-surface-tab {
+  color: #ffffff;
+}
+
+body[data-theme="light"] .wf-panel .gen-ui-surface-tab-item.is-active {
+  border-color: #aeb9d3;
+  background: #e3e8f2;
+  color: #172033;
+}
+
+body[data-theme="light"] .wf-panel .gen-ui-surface-tab-item.is-active .gen-ui-surface-tab {
+  color: #172033;
+}
+
+.wf-panel .gen-ui-surface-tab-item:not(.is-active) {
+  border-color: #2b2b30;
+  background: #141416;
+}
+
+.wf-panel .gen-ui-surface-tab-item:not(.is-active):hover {
+  background: #1d1d21;
+}
+
+body[data-theme="light"] .wf-panel .gen-ui-surface-tab-item:not(.is-active) {
+  border-color: #d9d9de;
+  background: #ececee;
+}
+
+body[data-theme="light"] .wf-panel .gen-ui-surface-tab-item:not(.is-active):hover {
+  background: #e3e3e6;
+}
+
+.wf-tab-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  margin-right: 6px;
+}
+
+.wf-tab-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── divider：可视分隔线 + 拖拽热区 ─────────────────────── */
+
+.wf-divider {
+  position: relative;
+  z-index: 1;
+  flex: 0 0 1px;
+  cursor: col-resize;
+  touch-action: none;
+}
+
+/* 可见分隔线占据 pane 边界本身，不留两侧视觉空隙；透明伪元素向两侧扩展
+   拖拽热区，保持易于抓取的 9px 命中范围。 */
+.wf-divider::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -4px;
+  width: 9px;
+  cursor: col-resize;
+}
+
+.wf-divider::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 1px;
+  background: var(--border-color, rgba(255, 255, 255, 0.1));
+  transition: background 120ms ease, box-shadow 120ms ease;
+}
+
+.wf-divider:hover::after,
+.wf-divider:active::after {
+  background: var(--accent, #4f6bed);
+  box-shadow: 0 0 0 0.5px var(--accent, #4f6bed);
+}
+
+/* ── pane 内容区 ────────────────────────────────────────── */
+
+.wf-pane-body {
+  position: relative;
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.wf-tab-page {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.wf-empty {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 12px;
+  color: var(--text-muted, #98a2b3);
+  font-size: 12px;
+}
+
+/* 树中的加载/空目录/错误状态是一条子项，不是占满视口的空态面板。 */
+.wf-tree-state {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  color: var(--text-muted, #98a2b3);
+  font-size: 12px;
+  line-height: 20px;
+  text-align: left;
+}
+
+.wf-error { color: #e5484d; }
+
+/* ── 面板滚动区统一细滚动条 ───────────────────────────────
+   项目既有 thin 配方（layout.css 同款标准属性）：全局 ::-webkit 8px 滚动条
+   在窄栏面板里显得粗笨（用户反馈），细条 + 半透明 thumb 更协调。
+   Chrome 121+ 标准属性优先于全局 ::-webkit 规则，无需私有覆盖。 */
+.wf-tree,
+.wf-code-wrap,
+.wf-md,
+.wf-csv-wrap,
+.wf-docx-scroll,
+.wf-image-stage {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.16) transparent;
+}
+
+body[data-theme="light"] .wf-tree,
+body[data-theme="light"] .wf-code-wrap,
+body[data-theme="light"] .wf-md,
+body[data-theme="light"] .wf-csv-wrap,
+body[data-theme="light"] .wf-docx-scroll,
+body[data-theme="light"] .wf-image-stage {
+  scrollbar-color: rgba(0, 0, 0, 0.22) transparent;
+}
+
+/* ── 文件树 ─────────────────────────────────────────────── */
+
+.wf-tree {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  overflow: auto;
+  padding: 4px 0 12px 6px;
+}
+
+.wf-tree-state.wf-retry {
+  border: 0;
+  background: transparent;
+  color: var(--accent, #4f6bed);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+}
+
+.wf-entry {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border: 0;
+  background: transparent;
+  color: var(--text-primary, #1f2329);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  line-height: 20px;
+  text-align: left;
+}
+
+.wf-entry:hover { background: rgba(128, 128, 140, 0.12); }
+
+.wf-entry.wf-unsupported {
+  color: var(--text-muted, #98a2b3);
+  cursor: default;
+}
+
+.wf-entry.wf-unsupported:hover { background: transparent; }
+
+.wf-entry-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  /* 目录图标三级墨色：DSH design-platform 静态值（深色主题 neutral-bluish-400 /
+     浅色 neutral-bluish-600）。不取 --text-muted：其运行时值过浅，
+     图标在两主题下都发虚（用户反馈），静态值保证两主题下都与 DSH 同对比度。 */
+  color: rgb(173, 178, 184);
+}
+
+body[data-theme="light"] .wf-entry-icon {
+  color: rgb(129, 133, 140);
+}
+
+.wf-entry-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 文件类型配色（DSH design-platform 静态 token 值） */
+.wf-ft { display: inline-flex; line-height: 0; }
+.wf-ft-code, .wf-ft-html, .wf-ft-markdown { color: rgb(65, 118, 230); }
+.wf-ft-excel { color: rgb(34, 197, 94); }
+.wf-ft-image, .wf-ft-video { color: rgb(139, 118, 246); }
+.wf-ft-other { color: rgb(207, 211, 214); }
+.wf-ft-pdf { color: rgb(236, 19, 19); }
+.wf-ft-ppt { color: rgb(245, 158, 11); }
+.wf-ft-word { color: rgb(86, 134, 254); }
+.wf-ft-code-brand { color: inherit; }
+
+/* ── 代码视图 ───────────────────────────────────────────── */
+
+.wf-code-wrap {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  /* 无独立底色：融入面板背景（用户反馈底板颜色不好看） */
+}
+
+.wf-gutter {
+  flex: 0 0 auto;
+  padding: 10px 8px 10px 12px;
+  border-right: 1px solid var(--border-color, rgba(255, 255, 255, 0.08));
+  color: var(--text-muted, #98a2b3);
+  /* Fira Code 在当前 Windows 环境未安装；以系统已安装的 Cascadia Code 为首选，
+     并用稍强字重保证行号与代码正文的笔画密度一致。 */
+  font-family: "Cascadia Code", "Cascadia Mono", "Fira Code", "Source Code Pro", "JetBrains Mono", ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, monospace;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.55;
+  text-align: right;
+  user-select: none;
+  white-space: pre;
+}
+
+.wf-code {
+  flex: 1 1 auto;
+  margin: 0;
+  padding: 10px 16px;
+  font-family: "Cascadia Code", "Cascadia Mono", "Fira Code", "Source Code Pro", "JetBrains Mono", ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, monospace;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.55;
+  white-space: pre;
+}
+
+/* 全局 highlight.js 主题会给 code.hljs 加独立背景和 padding，导致代码区出现
+   与面板底色不同的色块；在本预览中明确继承代码区字重并保持透明。 */
+.wf-code > code,
+.wf-code > code.hljs {
+  padding: 0 !important;
+  background: transparent !important;
+  font: inherit;
+}
+
+/* ── markdown / csv / 富媒体 ─────────────────────────────── */
+
+.wf-md {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: auto;
+  padding: 14px 18px;
+}
+
+.wf-csv-wrap {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+}
+
+/* docx-preview 输出文档流容器：独立滚动 + 底色衬托分页 */
+.wf-docx-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  background: var(--panel-bg, #111114);
+}
+
+.wf-docx-scroll .docx-wrapper {
+  padding: 16px 24px 32px;
+  background: transparent;
+}
+
+.wf-docx-scroll .docx-wrapper > section.docx {
+  background: #ffffff;
+  color: #1f2329;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.25);
+  margin-bottom: 16px;
+}
+
+.wf-csv-table {
+  border-collapse: collapse;
+  min-width: 100%;
+  font-size: 12px;
+}
+
+.wf-csv-table td {
+  max-width: 320px;
+  overflow: hidden;
+  padding: 4px 10px;
+  border-bottom: 1px solid var(--border-color, rgba(255, 255, 255, 0.06));
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wf-csv-table tr.wf-csv-head td {
+  position: sticky;
+  top: 0;
+  background: var(--panel-bg, #141416);
+  color: var(--text-primary, #1f2329);
+  font-weight: 600;
+}
+
+.wf-csv-note {
+  padding: 8px 12px;
+  color: var(--text-muted, #98a2b3);
+  font-size: 11px;
+  text-align: center;
+}
+
+.wf-binary-frame {
+  flex: 1 1 auto;
+  width: 100%;
+  border: 0;
+  background: #ffffff;
+}
+
+.wf-media-stage {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  justify-content: center;
+  min-height: 0;
+  padding: 16px;
+}
+
+.wf-media-stage video {
+  max-width: 100%;
+  max-height: 100%;
+}
+
+.wf-media-audio audio { width: min(420px, 100%); }
+
+/* ── 图片视图 ───────────────────────────────────────────── */
+
+.wf-image-bar {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border-color, rgba(255, 255, 255, 0.08));
+}
+
+.wf-image-toggle {
+  padding: 2px 10px;
+  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.16));
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary, #667085);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+}
+
+.wf-image-toggle:hover { color: var(--text-primary, #1f2329); }
+
+.wf-image-meta {
+  color: var(--text-muted, #98a2b3);
+  font-size: 11px;
+}
+
+.wf-image-stage {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  justify-content: center;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px;
+}
+
+.wf-image-stage img { max-width: 100%; max-height: 100%; }
+
+.wf-image-stage.is-full {
+  align-items: flex-start;
+  justify-content: flex-start;
+}
+
+.wf-image-stage.is-full img { max-width: none; max-height: none; }
+
+/* ── 拖拽停靠 ───────────────────────────────────────────── */
+
+.wf-panel.is-dragging .gen-ui-surface-tab-item.is-drag-source { opacity: 0.45; }
+
+.wf-draggable-tab { cursor: grab; }
+
+.wf-tab-row { position: relative; }
+
+.wf-panel .wf-tab-row-drop-indicator {
+  position: absolute;
+  z-index: 3;
+  top: 4px;
+  bottom: 4px;
+  width: 3px;
+  transform: translateX(-50%);
+  border-radius: 3px;
+  background: #6b91ff;
+  pointer-events: none;
+  box-shadow: 0 0 6px rgba(93, 133, 255, 0.72);
+}
+
+.wf-pane-body { position: relative; }
+
+.wf-dock-hint {
+  position: absolute;
+  top: 8px;
+  bottom: 8px;
+  left: 50%;
+  width: 50%;
+  transform: translateX(-100%);
+  z-index: 2;
+  border: 1px dashed var(--accent, #4f6bed);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent, #4f6bed) 10%, transparent);
+  color: var(--accent, #4f6bed);
+  align-items: center;
+  display: flex;
+  justify-content: center;
+  font-size: 12px;
+  pointer-events: none;
+}
+
+.wf-dock-hint.wf-dock-right { transform: none; }
+
+/* 双 pane 时的落区提示：整个对方 pane 高亮（按既有分区分，不左右半拆） */
+.wf-dock-hint.wf-dock-center {
+  left: 0;
+  width: 100%;
+  transform: none;
+}

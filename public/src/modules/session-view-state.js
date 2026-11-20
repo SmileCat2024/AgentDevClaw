@@ -315,6 +315,13 @@ export function applySessionViewPatch(patch) {
     || identityBefore?.sessionId !== identityAfter?.sessionId;
   if (identityFieldsChanged || (!identityBefore && identityAfter)) {
     setSessionViewGeneration(_sessionViewGeneration + 1);
+    // 会话视图变更事件：生效身份落地即同步广播，供右侧面板（文件面板等）
+    // 订阅刷新，替代各面板自建轮询（vm 沙箱无 DOM 宿主时静默跳过）。
+    if (typeof window.dispatchEvent === 'function' && typeof window.CustomEvent === 'function') {
+      window.dispatchEvent(new window.CustomEvent('claw:session-view-changed', {
+        detail: { identity: identityAfter },
+      }));
+    }
   }
 }
 

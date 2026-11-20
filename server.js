@@ -100,6 +100,7 @@ import { setupFeatureConfigRoutes } from './server/routes/feature-config.js';
 import { validatePluginSettingsWrite } from './server/feature-runtime/plugin-settings-context.js';
 import { setupPreflightRoutes } from './server/routes/preflight.js';
 import { setupFsOperationsRoutes } from './server/routes/fs-operations.js';
+import { setupWorkspaceFileRoutes } from './server/routes/workspace-files.js';
 import { setupGitRoutes } from './server/routes/git.js';
 import {
   setupModelConfigRoutes,
@@ -1283,6 +1284,7 @@ app.post('/protoclaw/prebuilt_project/delete', express.json(), async (req, res, 
 
 
 setupFsOperationsRoutes(app);
+setupWorkspaceFileRoutes(app, { requireAgentLight });
 
 setupGitRoutes(app, express);
 
