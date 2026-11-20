@@ -144,29 +144,70 @@ export function summarizeInstanceSurface(instance) {
 }
 
 /**
- * 某身份官方底座清单：无参实例化该身份 Agent 类，读静态装配的
- * features Map（name / description 自加载自实例，装配代码即唯一权威）。
- * 只做展示读取，实例即弃（构造无外部副作用；onInitiate 才有附加逻辑）。
- * surface 为声明面计数（见 summarizeInstanceSurface）。
+ * 某身份官方底座清单：读 agent.js 的 staticFeatureManifest 导出（ADR-0054），
+ * 零 Agent 构造。清单是进程内常量；description / surface 声明面计数经中性
+ * ctx 一次性实例化各条目工厂提取并按进程缓存（"feature 定义即唯一权威"保持
+ * ——展示元数据来自实例自声明；中性 ctx 使展示面成为静态声明面，不随用户
+ * 配置层漂移）。单条提取失败降级为空描述/缺计数，不阻断清单。
  */
+const baseManifestCache = new Map();
+
 export async function collectBaseFeatures(identity) {
+  if (baseManifestCache.has(identity)) return baseManifestCache.get(identity);
   const mod = await loadAgentModule(identity);
-  const AgentClass = mod.default;
-  // BasicAgent 构造要求 llm 必传；总览只读静态装配的 features Map，
-  // 不跑会话，占位模型名即可。
-  const agent = new AgentClass({
-    llm: { modelName: 'overview' },
-    runtime: { mode: 'overview', agentId: identity, sessionId: '__feature-store-overview__' },
-  });
-  const list = [];
-  for (const [name, instance] of agent.features) {
-    list.push({
-      name,
-      description: typeof instance?.description === 'string' ? instance.description : '',
-      surface: summarizeInstanceSurface(instance),
-    });
+  const manifest = mod.staticFeatureManifest;
+  if (!Array.isArray(manifest)) {
+    throw new Error(`agent 模块未导出 staticFeatureManifest：${identity}`);
   }
+  const agentId = IDENTITY_SCOPES[identity]?.agentId || identity;
+  const displayCtx = {
+    workspaceDir: process.cwd(),
+    runtimeIdentity: { agentId, sessionId: '', serverOrigin: '' },
+    merged: {},
+    config: {},
+  };
+  const list = manifest.map((entry) => {
+    let description = '';
+    let surface = null;
+    try {
+      const instance = entry.create(displayCtx);
+      description = typeof instance?.description === 'string' ? instance.description : '';
+      surface = summarizeInstanceSurface(instance);
+    } catch (error) {
+      log.warn('overview: base 条目展示元数据提取失败', {
+        identity,
+        name: entry?.name,
+        message: error?.message,
+      });
+    }
+    return { name: entry?.name, description, surface };
+  });
+  baseManifestCache.set(identity, list);
   return list;
+}
+
+/**
+ * builtin 货架（含声明面计数）：builtinOptionalFeatures 工厂表是进程内
+ * 常量，整段合成 + surface 提取按进程缓存一次（原实现每请求对每个工厂
+ * 实例化两次）。buildBuiltinShowcase 返回形状被测试锁定，surface 在此层
+ * 附加。
+ */
+let builtinShowcaseCache = null;
+
+async function loadBuiltinShowcase() {
+  if (builtinShowcaseCache) return builtinShowcaseCache;
+  const tables = await loadBuiltinTables();
+  const showcase = buildBuiltinShowcase(tables);
+  for (const entry of showcase) {
+    const spec = tables?.[entry.identities[0]]?.[entry.runtimeName];
+    if (spec?.create) {
+      try {
+        entry.surface = summarizeInstanceSurface(spec.create());
+      } catch { /* 展示兜底：计数不可用时省略数量行 */ }
+    }
+  }
+  builtinShowcaseCache = showcase;
+  return showcase;
 }
 
 /**
@@ -403,18 +444,7 @@ export function setupFeatureStoreRoutes(app, express, pluginSettingsOptions) {
       let builtin = [];
       const base = {};
       try {
-        const tables = await loadBuiltinTables();
-        builtin = buildBuiltinShowcase(tables);
-        // builtin 货架卡片同样带声明面计数（工厂为本地 local-feature，二次
-        // 实例化无副作用；buildBuiltinShowcase 返回形状被测试锁定，不在此扩展）
-        for (const entry of builtin) {
-          const spec = tables?.[entry.identities[0]]?.[entry.runtimeName];
-          if (spec?.create) {
-            try {
-              entry.surface = summarizeInstanceSurface(spec.create());
-            } catch { /* 展示兜底：计数不可用时省略数量行 */ }
-          }
-        }
+        builtin = await loadBuiltinShowcase();
         for (const scope of STORE_SCOPES) {
           base[scope.identity] = await collectBaseFeatures(scope.identity);
         }

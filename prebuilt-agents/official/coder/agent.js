@@ -51,6 +51,7 @@ import { extractFeatureMounts, stripMountDeclarations } from '../../../server/sh
 import { splitPluginSettingsLayer } from '../../../server/feature-runtime/plugin-settings.js';
 import { collapseAccumulatedFields } from '../../../server/shared/feature-config-accumulate.js';
 import { resolveUserDataDir } from '../../../server/shared/constants.js';
+import { mountStaticFeatureManifest } from '../../../server/shared/static-assembly.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -63,6 +64,8 @@ const IMAGE_STORAGE_DIR = join(USER_DATA_ROOT, 'images');
 
 /**
  * 自动化编码智能体（coder）Agent
+ *
+ * 静态装配由 staticFeatureManifest 清单驱动（ADR-0054），构造即完整装配。
  */
 export default class CoderAgent extends BasicAgent {
   constructor(config = {}) {
@@ -102,83 +105,20 @@ export default class CoderAgent extends BasicAgent {
     this.pendingFeatureMounts = featureMounts;
     this.pluginSettingsLayers = split.map((layer) => layer.settings);
 
-    // SkillFeature：invoke_skill 工具 + skills 上下文注入，默认扫描 workspaceDir/.agentdev/skills。
-    // 配置队列中的 skill 配置（全局层或 coder agent 层）会覆盖默认值。
-    const skillInput = systemConfig.skill && typeof systemConfig.skill === 'object' ? systemConfig.skill : undefined;
-    this.use(new SkillFeature(skillInput));
-
-    // 替换 BasicAgent 默认挂载的 OpencodeBasicFeature 为带 Claw continuity 声明的包装版。
-    // 这样包装类会让 readFiles 状态在 trim/summary 时随 continuity 协议转移到新 runtime，
-    // 避免精简后会话内"先读后写"保护重置导致 write 工具被错误拦截。
-    this.use(new ContinuityAwareOpencodeBasic({ workspaceDir }));
-
     const runtimeIdentity = {
       agentId: runtime.agentId || process.env.PROTOCLAW_PREBUILT_AGENT_ID || 'coder',
       sessionId: runtime.sessionId ?? process.env.PROTOCLAW_PREBUILT_SESSION_ID ?? '',
       serverOrigin: runtime.serverOrigin || process.env.PROTOCLAW_SERVER_ORIGIN || 'http://127.0.0.1:14200',
     };
-    // 会话级模型选择（ADR-0034）：链级当前状态随线程接续流转，
-    // 输入框切换控件的后端（feature-comms selection 通道）。
-    this.use(new ModelSelectionFeature(runtimeIdentity));
-    // 上下文过界 → 自动线程接力：过界时打断并上报，由服务端 thread-rotation
-    // 执行 trim+摘要接力。装配即确定、零配置——线程宿主的上下文管理方式
-    // （自动接力）不依赖 Runtime 配置面板的交互式拦截开关。
-    this.use(new ContextRotationTriggerFeature({
-      ...(config.contextGuard && typeof config.contextGuard === 'object'
-        ? config.contextGuard : {}),
-      agentId: runtimeIdentity.agentId,
-      sessionId: runtimeIdentity.sessionId,
-      serverOrigin: runtimeIdentity.serverOrigin,
-    }));
 
-    // 工具输出安全网：截断超限的工具结果，防止上下文溢出。
-    this.use(new OutputGuardFeature({ workdir: workspaceDir }));
-
-    this.use(new ControlledTodoFeature({
-      reminderTemplate: TODO_REMINDER_PROMPT_PATH,
-      reminderThresholdWithTasks: config.reminderThresholdWithTasks,
-      reminderThresholdWithoutTasks: config.reminderThresholdWithoutTasks,
-    }));
-    this.use(new ForceContinuation({
-      ...(systemConfig['force-continuation'] && typeof systemConfig['force-continuation'] === 'object'
-        ? systemConfig['force-continuation'] : {}),
-      ...(config.features?.['force-continuation'] && typeof config.features['force-continuation'] === 'object'
-        ? config.features['force-continuation'] : {}),
-    }));
-
-    // 「拿到指令之后」的构建流程规范：implement / tdd / code-review 三个
-    // 自带 skill（经 SkillFeature 自动发现注入）+ 便携读取工具。
-    this.use(new TicketsBuildFlow());
-
-    this.use(new WebSearchFeature());
-    this.use(new MemoryFeature({ workspaceDir }));
-    this.use(new ShellFeature({ workspaceDir }));
-    this.use(new ImageReaderFeature({ workspaceDir, storageDir: IMAGE_STORAGE_DIR }));
-
-    this.use(new GitHubShellFeature());
-
-    // 会话内容分级读取（发现 → trim 概览 → 某轮全量）：coder 可参考其他
-    // 会话（如主线会话的任务上下文）；纯视图不落盘。
-    this.use(new SessionReferenceFeature({
-      agentId: runtimeIdentity.agentId,
-      serverOrigin: runtimeIdentity.serverOrigin,
-    }));
-
-    // 会话标题策略（ADR-0041）：coder 是无人值守 APP，标题同样由本应用
-    // 决定触发时机与规则，Claw 只提供生成能力与轮次事件面。coder 的会话
-    // 由调度面创建，用户看不到创建过程，标题是它在侧栏里被识别的唯一线索。
-    this.use(new AutoTitlePolicyFeature({
-      serverOrigin: runtimeIdentity.serverOrigin,
-      agentId: runtimeIdentity.agentId,
-      // 无人值守场景的补充规则：coder 的会话围绕工单任务展开，标题需要
-      // 让用户在工作线程列表里分辨不同任务，而不是区分"在聊什么"。
-      instructions: [
-        '这是无人值守编码任务（工单）的会话，标题应体现具体交付目标：',
-        '要修的具体缺陷、要实现的具体能力、要改的模块或文件。',
-        '避免「执行任务」「处理工单」「开始工作」这类无法区分并行线程的表述。',
-        '如果任务尚未聚焦，用用户给出的原始诉求命名，不要臆测。',
-      ].join('\n'),
-    }));
+    // 静态装配清单（ADR-0054）：数组序即挂载序，清单即装配的执行来源；
+    // 商店枚举底座直接读清单导出，不构造 Agent。
+    mountStaticFeatureManifest(this, staticFeatureManifest, {
+      workspaceDir,
+      runtimeIdentity,
+      merged: systemConfig,
+      config,
+    });
   }
 
   /**
@@ -208,6 +148,125 @@ export default class CoderAgent extends BasicAgent {
     this.setSystemPrompt(composer);
   }
 }
+
+/**
+ * 静态装配清单（ADR-0054）：数组序即挂载序；create(ctx) 工厂内聚该条目的
+ * 配置编织（ctx = { workspaceDir, runtimeIdentity, merged, config }）。清单即
+ * 装配的执行来源——改装配就是改清单，不存在第二份需要同步的事实。
+ */
+export const staticFeatureManifest = [
+  {
+    // SkillFeature：invoke_skill 工具 + skills 上下文注入，默认扫描
+    // workspaceDir/.agentdev/skills。配置队列中的 skill 配置（全局层或
+    // coder agent 层）会覆盖默认值。
+    name: 'skill',
+    create: ({ merged }) => new SkillFeature(
+      merged.skill && typeof merged.skill === 'object' ? merged.skill : undefined,
+    ),
+  },
+  {
+    // 带 Claw continuity 声明的包装版 OpencodeBasic（BasicAgent 纯基类化后
+    // 显式补装）。包装类让 readFiles 状态在 trim/summary 时随 continuity
+    // 协议转移到新 runtime，避免精简后会话内"先读后写"保护重置导致
+    // write 工具被错误拦截。
+    name: 'opencode-basic',
+    create: ({ workspaceDir }) => new ContinuityAwareOpencodeBasic({ workspaceDir }),
+  },
+  {
+    // 会话级模型选择（ADR-0034）：链级当前状态随线程接续流转，
+    // 输入框切换控件的后端（feature-comms selection 通道）。
+    name: 'model-selection',
+    create: ({ runtimeIdentity }) => new ModelSelectionFeature(runtimeIdentity),
+  },
+  {
+    // 上下文过界 → 自动线程接力：过界时打断并上报，由服务端 thread-rotation
+    // 执行 trim+摘要接力。装配即确定、零配置——线程宿主的上下文管理方式
+    // （自动接力）不依赖 Runtime 配置面板的交互式拦截开关。
+    name: 'context-rotation-trigger',
+    create: ({ runtimeIdentity, config }) => new ContextRotationTriggerFeature({
+      ...(config.contextGuard && typeof config.contextGuard === 'object'
+        ? config.contextGuard : {}),
+      agentId: runtimeIdentity.agentId,
+      sessionId: runtimeIdentity.sessionId,
+      serverOrigin: runtimeIdentity.serverOrigin,
+    }),
+  },
+  {
+    // 工具输出安全网：截断超限的工具结果，防止上下文溢出。
+    name: 'output-guard',
+    create: ({ workspaceDir }) => new OutputGuardFeature({ workdir: workspaceDir }),
+  },
+  {
+    name: 'todo',
+    create: ({ config }) => new ControlledTodoFeature({
+      reminderTemplate: TODO_REMINDER_PROMPT_PATH,
+      reminderThresholdWithTasks: config.reminderThresholdWithTasks,
+      reminderThresholdWithoutTasks: config.reminderThresholdWithoutTasks,
+    }),
+  },
+  {
+    name: 'force-continuation',
+    create: ({ merged, config }) => new ForceContinuation({
+      ...(merged['force-continuation'] && typeof merged['force-continuation'] === 'object'
+        ? merged['force-continuation'] : {}),
+      ...(config.features?.['force-continuation'] && typeof config.features['force-continuation'] === 'object'
+        ? config.features['force-continuation'] : {}),
+    }),
+  },
+  {
+    // 「拿到指令之后」的构建流程规范：implement / tdd / code-review 三个
+    // 自带 skill（经 SkillFeature 自动发现注入）+ 便携读取工具。
+    name: 'tickets-build-flow',
+    create: () => new TicketsBuildFlow(),
+  },
+  {
+    name: 'websearch',
+    create: () => new WebSearchFeature(),
+  },
+  {
+    name: 'memory',
+    create: ({ workspaceDir }) => new MemoryFeature({ workspaceDir }),
+  },
+  {
+    name: 'shell',
+    create: ({ workspaceDir }) => new ShellFeature({ workspaceDir }),
+  },
+  {
+    name: 'image-reader',
+    create: ({ workspaceDir }) => new ImageReaderFeature({ workspaceDir, storageDir: IMAGE_STORAGE_DIR }),
+  },
+  {
+    name: 'github',
+    create: () => new GitHubShellFeature(),
+  },
+  {
+    // 会话内容分级读取（发现 → trim 概览 → 某轮全量）：coder 可参考其他
+    // 会话（如主线会话的任务上下文）；纯视图不落盘。
+    name: 'session-reference',
+    create: ({ runtimeIdentity }) => new SessionReferenceFeature({
+      agentId: runtimeIdentity.agentId,
+      serverOrigin: runtimeIdentity.serverOrigin,
+    }),
+  },
+  {
+    // 会话标题策略（ADR-0041）：coder 是无人值守 APP，标题同样由本应用
+    // 决定触发时机与规则，Claw 只提供生成能力与轮次事件面。coder 的会话
+    // 由调度面创建，用户看不到创建过程，标题是它在侧栏里被识别的唯一线索。
+    name: 'auto-title-policy',
+    create: ({ runtimeIdentity }) => new AutoTitlePolicyFeature({
+      serverOrigin: runtimeIdentity.serverOrigin,
+      agentId: runtimeIdentity.agentId,
+      // 无人值守场景的补充规则：coder 的会话围绕工单任务展开，标题需要
+      // 让用户在工作线程列表里分辨不同任务，而不是区分"在聊什么"。
+      instructions: [
+        '这是无人值守编码任务（工单）的会话，标题应体现具体交付目标：',
+        '要修的具体缺陷、要实现的具体能力、要改的模块或文件。',
+        '避免「执行任务」「处理工单」「开始工作」这类无法区分并行线程的表述。',
+        '如果任务尚未聚焦，用用户给出的原始诉求命名，不要臆测。',
+      ].join('\n'),
+    }),
+  },
+];
 
 /** LSP 插件工厂（二进制缓存按数据根分区，见 ADR-0015）。 */
 function createLspPlugin() {

@@ -10,7 +10,7 @@ import { MCPFeature } from '@agentdevjs/mcp';
 import { ControlledTodoFeature, ContinuityAwareOpencodeBasic, PanelShellFeature } from '../../../local-features/dist/feature-wrappers/src/index.js';
 import { ForceContinuation } from '../../../features/force-continuation/dist/index.js';
 // 模型轮转（step-rotating-model）已从编程小助手卸载：导入与装配注释保留，
-// 恢复时取消本行与构造函数中的装配注释即可（会话控制面板的轮转 section
+// 恢复时取消本行与清单中的装配注释即可（会话控制面板的轮转 section
 // 屏蔽开关在 public/src/modules/session-controls-panel.js）。
 // import { StepRotatingModel } from '../../../features/step-rotating-model/dist/index.js';
 import { StylizedOutput } from '../../../features/stylized-output/dist/index.js';
@@ -47,6 +47,7 @@ import { extractFeatureMounts, stripMountDeclarations } from '../../../server/sh
 import { splitPluginSettingsLayer } from '../../../server/feature-runtime/plugin-settings.js';
 import { collapseAccumulatedFields } from '../../../server/shared/feature-config-accumulate.js';
 import { resolveUserDataDir } from '../../../server/shared/constants.js';
+import { mountStaticFeatureManifest } from '../../../server/shared/static-assembly.js';
 
 const DEFAULT_EXCLUDED_MCP_SERVERS = ['crawl4ai-official'];
 const __filename = fileURLToPath(import.meta.url);
@@ -134,7 +135,8 @@ export function assemblePhFeatureConfig({ projectId, workspaceDir, sessionConfig
  * 编程小助手 Agent
  *
  * 专业的编程助手，擅长代码编写、调试和优化
- * 继承 BasicAgent 获得所有基础设施能力
+ * 继承 BasicAgent 获得所有基础设施能力；静态装配由 staticFeatureManifest
+ * 清单驱动（ADR-0054），构造即完整装配。
  */
 export default class ProgrammingHelperAgent extends BasicAgent {
   constructor(config = {}) {
@@ -154,11 +156,6 @@ export default class ProgrammingHelperAgent extends BasicAgent {
       defaultMounts: config.defaultMounts,
     });
 
-    const excludeMcpServers = Array.from(new Set([
-      ...(config.excludeMcpServers ?? []),
-      ...DEFAULT_EXCLUDED_MCP_SERVERS,
-    ]));
-
     super({
       ...config,
       features: merged,
@@ -170,159 +167,22 @@ export default class ProgrammingHelperAgent extends BasicAgent {
     this.pendingFeatureMounts = featureMounts;
     this.pluginSettingsLayers = pluginSettingsLayers;
 
-    // BasicAgent 已纯基类化（框架 a5fe117 / ticket 009），不再内置装配任何 feature。
-    // 原由 BasicAgent 挂载的 MCP/Skill/SubAgent/OpencodeBasic 等，现在装配权在宿主：
-    // - SubAgentFeature 本 agent 明确不启用，不再挂载；
-    // - MCP / Skill / OpencodeBasic 在此显式补装，恢复被框架移除的能力。
-
-    // MCPFeature：连接 Claw 共享 MCP 网关 + 扫描 .agentdev/mcps，排除 crawl4ai 等系统 server。
-    this.use(new MCPFeature(undefined, { excludeServers: excludeMcpServers, storageDir: IMAGE_STORAGE_DIR }));
-
-    // SkillFeature：invoke_skill 工具 + skills 上下文注入，默认扫描 workspaceDir/.agentdev/skills。
-    // feature-setup.json 中的 skill 配置（scanAgentdevDir/scanClaudeDir/extraDirs 等）会覆盖默认值。
-    const skillConfig = merged.skill && typeof merged.skill === 'object' ? merged.skill : undefined;
-    this.use(new SkillFeature(skillConfig));
-
-    // 替换原 BasicAgent 默认挂载的 OpencodeBasicFeature 为带 Claw continuity 声明的包装版。
-    // OpencodeBasicFeature 尚未 onInitiate，也未注册工具/钩子/注入器（其工具注册发生在首次
-    // onCall 的 ensureFeatureTools），因此直接 use 覆盖同名 feature 即可，无需 removeFeature。
-    // 这样包装类会让 readFiles 状态在 trim/summary 时随 continuity 协议转移到新 runtime，
-    // 避免精简后会话内"先读后写"保护重置导致 write 工具被错误拦截。
-    this.use(new ContinuityAwareOpencodeBasic({ workspaceDir }));
-
     const runtimeIdentity = {
       agentId: runtime.agentId || process.env.PROTOCLAW_PREBUILT_AGENT_ID || 'programming-helper',
       sessionId: runtime.sessionId ?? process.env.PROTOCLAW_PREBUILT_SESSION_ID ?? '',
       serverOrigin: runtime.serverOrigin || process.env.PROTOCLAW_SERVER_ORIGIN || 'http://127.0.0.1:14200',
     };
-    this.use(new ClawDispatchFeature(runtimeIdentity));
-    this.use(new GroupChatBridgeFeature(runtimeIdentity));
-    // 时间感知：CallStart 按节奏注入系统时间（>4h 未汇报才汇报），距上一轮
-    // call >24h 时额外提示长间隔。状态经框架会话快照（captureState）持久化。
-    this.use(new TimeAwarenessFeature());
-    // 会话标题策略（ADR-0041）：订阅轮次事件，在首次成功交付后自动起名。
-    // 触发时机、提示词、模型都由本应用决定；Claw 只提供生成能力与事件面。
-    // 标题文本不再由前端轮询推断（旧 auto-title.js 触发路径已移除）。
-    this.use(new AutoTitlePolicyFeature({
-      serverOrigin: runtimeIdentity.serverOrigin,
-      agentId: runtimeIdentity.agentId,
-    }));
-    // 会话级模型选择（ADR-0034）：链级当前状态（快照 + continuity 流转），
-    // 输入框切换控件的后端（feature-comms selection 通道）。
-    this.use(new ModelSelectionFeature(runtimeIdentity));
-    // 工程素养提醒：首次写出成规模文档（write ≥30 行 / edit 的 markdown/txt
-    // 文件）后注入读者视角写法标准，每会话一次。状态经框架会话快照持久化。
-    this.use(new CraftAwarenessFeature());
-    // 主题簇管理（Topic 看板的工具面）：主题由会话引用关系客观形成，agent
-    // 只能列出、读取与逐个更新标注（topic_list / topic_get / topic_update →
-    // server topic-notes 与投影存储），不创建、删除或重组主题；并经 CallStart
-    // 钩子承接输入框主题引用（metadata['topic-management']，指针式元信息注入）。
-    this.use(new TopicManagementFeature({
-      agentId: runtimeIdentity.agentId,
-      serverOrigin: runtimeIdentity.serverOrigin,
-    }));
-    // Agentero 文献库（ADR-0045 三面单包）已出仓为外部插件包：工具面经
-    // $mount 装配（feature-store install / 商店），UI 面与数据面随包走，
-    // 不再静态装配。vault 路径仍走 feature 配置 agentero.vaultPath。
-    // 过界守卫（三态 badge：关闭 / 自动打断 / 自动接续）：manifest（Runtime
-    // 配置面板）决定会话启动初值，上边栏 badge 循环点击实时切换（触发不
-    // 翻转它）。interrupt = 按越界事件的一次性保险丝：触发后拦截机器唤醒
-    // 直到人工输入——那条输入即视为批准继续，本次越界期间维持放行；rotate
-    // = coder 同构的自动接续：过界打断后经服务端 thread-rotation 执行线程
-    // 接力（策略经会话控制面板选择，随事件载荷送达）。allowRotation 是
-    // 装配能力声明（编程小助手是线程宿主），显式放末位防配置覆盖；缺省档
-    // 随能力取 rotate（新对话无快照无配置时默认自动接续，ADR-0040 修订）。
-    // runtimeIdentity（rotate 上报必需）：缺失时 feature 在上报处静默跳过，
-    // 表现为「过界打断但不轮转」——身份与 allowRotation 同样放末位防覆盖。
-    this.use(new ContextGuardFeature({
-      ...(merged['context-guard'] && typeof merged['context-guard'] === 'object'
-        ? merged['context-guard'] : {}),
-      ...(config.contextGuard && typeof config.contextGuard === 'object'
-        ? config.contextGuard : {}),
-      ...runtimeIdentity,
-      allowRotation: true,
-    }));
 
-    // 工具输出安全网：截断超限的工具结果，防止上下文溢出。
-    // 放在所有业务 feature 之前挂载，确保 ToolResultTransform 钩子
-    // 在 feature 注册顺序中靠前（但执行顺序由 hooks registry 决定）。
-    this.use(new OutputGuardFeature({ workdir: workspaceDir }));
-
-    this.use(new ControlledTodoFeature({
-      reminderTemplate: TODO_REMINDER_PROMPT_PATH,
-      reminderThresholdWithTasks: config.reminderThresholdWithTasks,
-      reminderThresholdWithoutTasks: config.reminderThresholdWithoutTasks,
-    }));
-    this.use(new ForceContinuation({
-      ...(merged['force-continuation'] && typeof merged['force-continuation'] === 'object'
-        ? merged['force-continuation'] : {}),
-      ...(config.features?.['force-continuation'] && typeof config.features['force-continuation'] === 'object'
-        ? config.features['force-continuation'] : {}),
-    }));
-
-    // 模型轮转（step-rotating-model）已卸载，装配注释保留待恢复（见文件头部说明）。
-    // this.use(new StepRotatingModel({
-    //   ...(merged['step-rotating-model'] && typeof merged['step-rotating-model'] === 'object'
-    //     ? merged['step-rotating-model'] : {}),
-    //   ...(config.features?.['step-rotating-model'] && typeof config.features['step-rotating-model'] === 'object'
-    //     ? config.features['step-rotating-model'] : {}),
-    // }));
-    // 输出风格（stylized-output）：风格发现自 feature 内置目录与工作区
-    // .agentdev/output-style/（重名时工作区优先）；默认风格经配置层
-    // defaultStyle 声明（workspaces/programming-helper/feature-config/agent.json），
-    // 会话未选择且未显式清除时自动启用。选中后每次最终回复须通过确认签名
-    // 门禁（StepFinish guard），未选择时完全旁路。
-    this.use(new StylizedOutput({
+    // 静态装配清单（ADR-0054）：数组序即挂载序（钩子注册序与上下文注入器序
+    // 有语义），清单即装配的执行来源；商店枚举底座直接读清单导出，不构造
+    // Agent。BasicAgent 已纯基类化（框架 a5fe117 / ticket 009），零内置装配，
+    // 全部产品能力都在清单里显式声明。
+    mountStaticFeatureManifest(this, staticFeatureManifest, {
       workspaceDir,
-      ...(merged['stylized-output'] && typeof merged['stylized-output'] === 'object'
-        ? merged['stylized-output'] : {}),
-      ...(config.features?.['stylized-output'] && typeof config.features['stylized-output'] === 'object'
-        ? config.features['stylized-output'] : {}),
-    }));
-    this.use(new NonBlockingAudioFeedbackFeature());
-    this.use(new WebSearchFeature());
-    this.use(new MemoryFeature({ workspaceDir }));
-    // 后台任务实时面板（feature-comms 通道首个接入）：PanelShellFeature
-    // 继承 ShellFeature 内建 shell-bg 通道镜像（继承替换，同 ControlledTodoFeature
-    // 模式），面板经 /protoclaw/feature-comms 订阅 + onHostRequest 请求。
-    this.use(new PanelShellFeature({ workspaceDir, ...runtimeIdentity }));
-    this.use(new ImageReaderFeature({ workspaceDir, storageDir: IMAGE_STORAGE_DIR }));
-
-    this.use(new UserInputFeature());
-    this.use(new GenerativeUISurfaceFeature());
-    this.use(new GitHubShellFeature());
-    // 使用帮助技能载具（agentdevclaw-help）：无工具无钩子，唯一职责是
-    // 经框架 collectFeatureSkills 投递技能文档（终端用户使用问答）。
-    this.use(new ClawHelpFeature());
-
-    // 会话内容分级读取（发现 → trim 概览 → 某轮全量）：话题接续的读取面，
-    // 纯视图不落盘，agentId 可选参数支持跨 agent 会话参考。
-    this.use(new SessionReferenceFeature({
-      agentId: runtimeIdentity.agentId,
-      serverOrigin: runtimeIdentity.serverOrigin,
-    }));
-
-    // 会话标注（用户选中文本的高亮标注）：内存态经框架快照契约持久化
-    // （captureState/restoreState，rollback 按消息边界合并），前端经
-    // feature-comms annotations 通道读写（annotations.js）。
-    this.use(new ConversationAnnotationsFeature(runtimeIdentity));
-
-    // coder 领域 shell（ticket 034）：线程调度收编为受管线约束的 feature 工具。
-    // 仅 main 身份挂载；CoderAgent 不挂（不自派工单，避免递归调度）。
-    // runtimeIdentity 模式同 ClawDispatchFeature（serverOrigin 三级解析）。
-    // 商店概览仅实例化静态装配清单，不应声明运行时 feature-comms 面板。
-    // 无会话宿主 runtime（例如点击工作空间入口时的启动占位）没有稳定的
-    // feature-comms 寻址，不能创建要求 agentId/sessionId 的面板投影；明确会话
-    // 仍保持原有实时面板行为。概览模式同样不创建运行时面板。
-    this.use(new CapabilityShellFeature({
-      ...runtimeIdentity,
-      panel: runtime.mode !== 'overview' && Boolean(runtimeIdentity.sessionId),
-    }));
-
-    // playwright 领域 shell（ticket 036）已改为官方可选插件：不再静态装配，
-    // 经 $mount kind:'builtin' 声明后由宿主钩子按 builtinOptionalFeatures
-    // 工厂挂载（见文件尾部导出）。浏览器资产与登录档案仍按 ADR-0016 经装配
-    // 注入数据根分区。
+      runtimeIdentity,
+      merged,
+      config,
+    });
   }
 
   /**
@@ -358,6 +218,237 @@ export default class ProgrammingHelperAgent extends BasicAgent {
     this.setSystemPrompt(composer);
   }
 }
+
+/**
+ * 静态装配清单（ADR-0054）：数组序即挂载序；create(ctx) 工厂内聚该条目的
+ * 配置编织（ctx = { workspaceDir, runtimeIdentity, merged, config }）。清单即
+ * 装配的执行来源——改装配就是改清单，不存在第二份需要同步的事实。
+ */
+export const staticFeatureManifest = [
+  {
+    // MCPFeature：连接 Claw 共享 MCP 网关 + 扫描 .agentdev/mcps，排除 crawl4ai
+    // 等系统 server。
+    name: 'mcp',
+    create: ({ config }) => new MCPFeature(undefined, {
+      excludeServers: Array.from(new Set([
+        ...(config.excludeMcpServers ?? []),
+        ...DEFAULT_EXCLUDED_MCP_SERVERS,
+      ])),
+      storageDir: IMAGE_STORAGE_DIR,
+    }),
+  },
+  {
+    // SkillFeature：invoke_skill 工具 + skills 上下文注入，默认扫描
+    // workspaceDir/.agentdev/skills。feature-setup.json 中的 skill 配置
+    // （scanAgentdevDir/scanClaudeDir/extraDirs 等）会覆盖默认值。
+    name: 'skill',
+    create: ({ merged }) => new SkillFeature(
+      merged.skill && typeof merged.skill === 'object' ? merged.skill : undefined,
+    ),
+  },
+  {
+    // 带 Claw continuity 声明的包装版 OpencodeBasic（BasicAgent 纯基类化后
+    // 显式补装，恢复被框架移除的基础读写能力）。包装类让 readFiles 状态在
+    // trim/summary 时随 continuity 协议转移到新 runtime，避免精简后会话内
+    // "先读后写"保护重置导致 write 工具被错误拦截。
+    name: 'opencode-basic',
+    create: ({ workspaceDir }) => new ContinuityAwareOpencodeBasic({ workspaceDir }),
+  },
+  {
+    name: 'claw-dispatch',
+    create: ({ runtimeIdentity }) => new ClawDispatchFeature(runtimeIdentity),
+  },
+  {
+    name: 'group-chat-bridge',
+    create: ({ runtimeIdentity }) => new GroupChatBridgeFeature(runtimeIdentity),
+  },
+  {
+    // 时间感知：CallStart 按节奏注入系统时间（>4h 未汇报才汇报），距上一轮
+    // call >24h 时额外提示长间隔。状态经框架会话快照（captureState）持久化。
+    name: 'time-awareness',
+    create: () => new TimeAwarenessFeature(),
+  },
+  {
+    // 会话标题策略（ADR-0041）：订阅轮次事件，在首次成功交付后自动起名。
+    // 触发时机、提示词、模型都由本应用决定；Claw 只提供生成能力与事件面。
+    // 标题文本不再由前端轮询推断（旧 auto-title.js 触发路径已移除）。
+    name: 'auto-title-policy',
+    create: ({ runtimeIdentity }) => new AutoTitlePolicyFeature({
+      serverOrigin: runtimeIdentity.serverOrigin,
+      agentId: runtimeIdentity.agentId,
+    }),
+  },
+  {
+    // 会话级模型选择（ADR-0034）：链级当前状态（快照 + continuity 流转），
+    // 输入框切换控件的后端（feature-comms selection 通道）。
+    name: 'model-selection',
+    create: ({ runtimeIdentity }) => new ModelSelectionFeature(runtimeIdentity),
+  },
+  {
+    // 工程素养提醒：首次写出成规模文档（write ≥30 行 / edit 的 markdown/txt
+    // 文件）后注入读者视角写法标准，每会话一次。状态经框架会话快照持久化。
+    name: 'craft-awareness',
+    create: () => new CraftAwarenessFeature(),
+  },
+  {
+    // 主题簇管理（Topic 看板的工具面）：主题由会话引用关系客观形成，agent
+    // 只能列出、读取与逐个更新标注（topic_list / topic_get / topic_update →
+    // server topic-notes 与投影存储），不创建、删除或重组主题；并经 CallStart
+    // 钩子承接输入框主题引用（metadata['topic-management']，指针式元信息注入）。
+    name: 'topic-management',
+    create: ({ runtimeIdentity }) => new TopicManagementFeature({
+      agentId: runtimeIdentity.agentId,
+      serverOrigin: runtimeIdentity.serverOrigin,
+    }),
+  },
+  {
+    // 过界守卫（三态 badge：关闭 / 自动打断 / 自动接续）：manifest（Runtime
+    // 配置面板）决定会话启动初值，上边栏 badge 循环点击实时切换（触发不
+    // 翻转它）。interrupt = 按越界事件的一次性保险丝：触发后拦截机器唤醒
+    // 直到人工输入——那条输入即视为批准继续，本次越界期间维持放行；rotate
+    // = coder 同构的自动接续：过界打断后经服务端 thread-rotation 执行线程
+    // 接力（策略经会话控制面板选择，随事件载荷送达）。allowRotation 是
+    // 装配能力声明（编程小助手是线程宿主），显式放末位防配置覆盖；缺省档
+    // 随能力取 rotate（新对话无快照无配置时默认自动接续，ADR-0040 修订）。
+    // runtimeIdentity（rotate 上报必需）：缺失时 feature 在上报处静默跳过，
+    // 表现为「过界打断但不轮转」——身份与 allowRotation 同样放末位防覆盖。
+    name: 'context-guard',
+    create: ({ runtimeIdentity, merged, config }) => new ContextGuardFeature({
+      ...(merged['context-guard'] && typeof merged['context-guard'] === 'object'
+        ? merged['context-guard'] : {}),
+      ...(config.contextGuard && typeof config.contextGuard === 'object'
+        ? config.contextGuard : {}),
+      ...runtimeIdentity,
+      allowRotation: true,
+    }),
+  },
+  {
+    // 工具输出安全网：截断超限的工具结果，防止上下文溢出。
+    // 放在业务 feature 之前挂载，确保 ToolResultTransform 钩子在 feature
+    // 注册顺序中靠前（但执行顺序由 hooks registry 决定）。
+    name: 'output-guard',
+    create: ({ workspaceDir }) => new OutputGuardFeature({ workdir: workspaceDir }),
+  },
+  {
+    name: 'todo',
+    create: ({ config }) => new ControlledTodoFeature({
+      reminderTemplate: TODO_REMINDER_PROMPT_PATH,
+      reminderThresholdWithTasks: config.reminderThresholdWithTasks,
+      reminderThresholdWithoutTasks: config.reminderThresholdWithoutTasks,
+    }),
+  },
+  {
+    name: 'force-continuation',
+    create: ({ merged, config }) => new ForceContinuation({
+      ...(merged['force-continuation'] && typeof merged['force-continuation'] === 'object'
+        ? merged['force-continuation'] : {}),
+      ...(config.features?.['force-continuation'] && typeof config.features['force-continuation'] === 'object'
+        ? config.features['force-continuation'] : {}),
+    }),
+  },
+  // 模型轮转（step-rotating-model）已卸载，装配注释保留待恢复（见文件头部说明）。
+  // {
+  //   name: 'step-rotating-model',
+  //   create: ({ merged, config }) => new StepRotatingModel({
+  //     ...(merged['step-rotating-model'] && typeof merged['step-rotating-model'] === 'object'
+  //       ? merged['step-rotating-model'] : {}),
+  //     ...(config.features?.['step-rotating-model'] && typeof config.features['step-rotating-model'] === 'object'
+  //       ? config.features['step-rotating-model'] : {}),
+  //   }),
+  // },
+  {
+    // 输出风格（stylized-output）：风格发现自 feature 内置目录与工作区
+    // .agentdev/output-style/（重名时工作区优先）；默认风格经配置层
+    // defaultStyle 声明（workspaces/programming-helper/feature-config/agent.json），
+    // 会话未选择且未显式清除时自动启用。选中后每次最终回复须通过确认签名
+    // 门禁（StepFinish guard），未选择时完全旁路。
+    name: 'stylized-output',
+    create: ({ workspaceDir, merged, config }) => new StylizedOutput({
+      workspaceDir,
+      ...(merged['stylized-output'] && typeof merged['stylized-output'] === 'object'
+        ? merged['stylized-output'] : {}),
+      ...(config.features?.['stylized-output'] && typeof config.features['stylized-output'] === 'object'
+        ? config.features['stylized-output'] : {}),
+    }),
+  },
+  {
+    name: 'audio-feedback',
+    create: () => new NonBlockingAudioFeedbackFeature(),
+  },
+  {
+    name: 'websearch',
+    create: () => new WebSearchFeature(),
+  },
+  {
+    name: 'memory',
+    create: ({ workspaceDir }) => new MemoryFeature({ workspaceDir }),
+  },
+  {
+    // 后台任务实时面板（feature-comms 通道首个接入）：PanelShellFeature
+    // 继承 ShellFeature 内建 shell-bg 通道镜像（继承替换，同 ControlledTodoFeature
+    // 模式），面板经 /protoclaw/feature-comms 订阅 + onHostRequest 请求。
+    name: 'shell',
+    create: ({ workspaceDir, runtimeIdentity }) => new PanelShellFeature({
+      workspaceDir,
+      ...runtimeIdentity,
+    }),
+  },
+  {
+    name: 'image-reader',
+    create: ({ workspaceDir }) => new ImageReaderFeature({ workspaceDir, storageDir: IMAGE_STORAGE_DIR }),
+  },
+  {
+    name: 'user-input',
+    create: () => new UserInputFeature(),
+  },
+  {
+    name: 'generative-ui-surface',
+    create: () => new GenerativeUISurfaceFeature(),
+  },
+  {
+    name: 'github',
+    create: () => new GitHubShellFeature(),
+  },
+  {
+    // 使用帮助技能载具（agentdevclaw-help）：无工具无钩子，唯一职责是
+    // 经框架 collectFeatureSkills 投递技能文档（终端用户使用问答）。
+    name: 'claw-help',
+    create: () => new ClawHelpFeature(),
+  },
+  {
+    // 会话内容分级读取（发现 → trim 概览 → 某轮全量）：话题接续的读取面，
+    // 纯视图不落盘，agentId 可选参数支持跨 agent 会话参考。
+    name: 'session-reference',
+    create: ({ runtimeIdentity }) => new SessionReferenceFeature({
+      agentId: runtimeIdentity.agentId,
+      serverOrigin: runtimeIdentity.serverOrigin,
+    }),
+  },
+  {
+    // 会话标注（用户选中文本的高亮标注）：内存态经框架快照契约持久化
+    // （captureState/restoreState，rollback 按消息边界合并），前端经
+    // feature-comms annotations 通道读写（annotations.js）。
+    name: 'conversation-annotations',
+    create: ({ runtimeIdentity }) => new ConversationAnnotationsFeature(runtimeIdentity),
+  },
+  {
+    // coder 领域 shell（ticket 034）：线程调度收编为受管线约束的 feature 工具。
+    // 仅 main 身份挂载；CoderAgent 不挂（不自派工单，避免递归调度）。
+    // runtimeIdentity 模式同 ClawDispatchFeature（serverOrigin 三级解析）。
+    // 无会话宿主 runtime（例如点击工作空间入口时的启动占位）没有稳定的
+    // feature-comms 寻址，不能创建要求 agentId/sessionId 的面板投影；明确会话
+    // 仍保持原有实时面板行为。
+    name: 'claw-coder-dispatch',
+    create: ({ runtimeIdentity }) => new CapabilityShellFeature({
+      ...runtimeIdentity,
+      panel: Boolean(runtimeIdentity.sessionId),
+    }),
+  },
+  // playwright 领域 shell（ticket 036）已改为官方可选插件：不进静态清单，
+  // 经 $mount kind:'builtin' 声明后由宿主钩子按 builtinOptionalFeatures
+  // 工厂挂载（见文件尾部导出）。浏览器资产与登录档案仍按 ADR-0016 经装配
+  // 注入数据根分区。
+];
 
 /** LSP 插件工厂（二进制缓存按数据根分区，见 LSP_BIN_DIR）。 */
 function createLspPlugin() {

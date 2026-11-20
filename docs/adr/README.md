@@ -48,6 +48,7 @@
 - [0046 插件管理产品体系](0046-plugin-management-product-system.md) — 两级装配（工作空间/对话）+ 默认装配源（global 层 $mount 经 `defaultMounts: true` opt-in 声明生效，2026-11-19 修订退役全局级装配）、配置三层（插件参数/面板偏好 panelPrefs/呈现配置，按面寻址）、版本钉精确版、面板协议 minor 冻结承诺、保守优先通用原则、Studio 过渡与插件化工作空间愿景
 - [0052 插件体系的管理模型与用户心智模型](0052-plugin-model-and-mental-model.md) — 对象模型（包/feature/面板/数据面/内置能力）、仓库三层（官方/用户/空间私有）、一包多 feature 契约（features[] + settings.features + $mount.disabledFeatures）、配置与状态全景（包声明/配置层/$mount/ui-prefs/解出物/运行时）、生命周期矩阵、内置能力边界、资产与 URL 空间维度、三个入口的信息架构与不变量（Accepted，实现推进中）
 - [0053 结构性优势即架构承诺](0053-structural-advantage-as-architecture-commitments.md) — 结构性优势的判据（能力正确性依赖不可搬运的宿主承诺）、五类承诺（状态所有权/生命周期所有权/契约冻结/治理不变量/数据关系资产）、维护规则、移植与绕过检验（Proposed）
+- [0054 静态装配清单化](0054-static-assembly-as-manifest.md) — 装配全面清单驱动：静态 `use()` 装配转 `staticFeatureManifest` 导出、构造函数侧 helper 消费、fail-fast 取代静默覆盖、商店 base 改清单直读（Accepted，main/coder 先行、其余 agent 增量迁移）
 - [0049 会话操作事实与会话菜单的应用声明面](0049-session-ops-fact-and-menu-declaration.md) — sessionOps 升 metadata 事实、菜单=事实选族+ui.sessionMenu 贡献项、claw:/plugin: 动作绑定、ui.appPlugins 第一面（Accepted，P1+P2 已实施）
 
 ## 远程与外部协议
