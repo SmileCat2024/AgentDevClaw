@@ -378,7 +378,10 @@ function parseCommitResult(stdOut) {
 // ═══════════════════════════════════════════════════════════════
 
 async function runGit(args, cwd) {
-  const { stdout } = await runCommand('git', args, { cwd });
+  // core.quotepath=false：中文等非 ASCII 路径原样输出。git 默认把这类路径
+  // 转成 "\345\201\232..." 八进制转义并加引号，面板会显示乱码（status 走
+  // --null 不受影响，此处统一兜底覆盖所有输出路径的命令）
+  const { stdout } = await runCommand('git', ['-c', 'core.quotepath=false', ...args], { cwd });
   return stdout;
 }
 
@@ -952,16 +955,21 @@ export function setupGitRoutes(app, express) {
         res.status(400).json({ error: 'hash is required' });
         return;
       }
-      const text = await runGit(['show', '--stat', '--pretty=format:', '--no-color', ref], root);
-      // --stat 行形如： path | 12 ++++++----
+      // --stat=300：放宽默认 80 列宽度，长路径/改名路径（old => new 展开
+      // 后很长）不再被 "..." 截断；面板行有 title tooltip，完整路径才有意义
+      const text = await runGit(['show', '--stat=300', '--pretty=format:', '--no-color', ref], root);
+      // --stat 行形如：path | 12 ++++++----（计数列为改动总行数，+/- 图符
+      // 按个数还原增删）；二进制：path | Bin [123 -> 456 bytes]（无行计数）
       const files = [];
       for (const line of text.split('\n')) {
-        const m = line.match(/^(.+?)\s*\|\s*(\d+)\s*([+-]*)\s*$/);
+        const m = line.match(/^(.+?)\s*\|\s*(?:(\d+)\s*([+-]*)|Bin(?:\s+\d+\s*->\s*\d+\s*bytes)?)\s*$/);
         if (!m) continue;
         const name = m[1].trim();
-        if (name === 'Bin' || name.startsWith('/')) continue;
-        const added = (m[3].match(/\+/g) || []).length;
-        const removed = (m[3].match(/-/g) || []).length;
+        if (!name || name.startsWith('/')) continue;
+        // 二进制行无 +/- 图符：以 0/0 计入（前端对 0 值不渲染数字，仅列名）
+        const isBinary = m[2] === undefined;
+        const added = isBinary ? 0 : (m[3].match(/\+/g) || []).length;
+        const removed = isBinary ? 0 : (m[3].match(/-/g) || []).length;
         files.push({ path: name, added, removed });
       }
       res.json({ ok: true, hash: ref, files });

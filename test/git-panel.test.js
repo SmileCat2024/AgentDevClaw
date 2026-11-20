@@ -364,6 +364,36 @@ describe('git graph / commit_files', () => {
       await fs.rm(dir, { recursive: true, force: true });
     }
   });
+
+  it('commit_files shows non-ASCII paths verbatim and includes binary files', async () => {
+    const { dir, git } = await makeRepo();
+    try {
+      // 中文路径 + 二进制内容：core.quotepath 默认会把路径转成 "\345\..." 八进制
+      // 转义，二进制行（| Bin）不匹配计数正则——两者都曾从面板文件清单丢失/乱码
+      await fs.mkdir(path.join(dir, '指南'), { recursive: true });
+      await fs.writeFile(path.join(dir, '指南', '会话管理.md'), '# 中文内容\n');
+      await fs.writeFile(path.join(dir, '指南', '演示.mp4'), Buffer.from([0, 0, 1, 0xB7, 0xFF]));
+      git('add -A');
+      git('commit -q -m init');
+
+      const { code, data } = await api('/protoclaw/git/commit_files', { dir, hash: 'HEAD' });
+      assert.equal(code, 200);
+      const byPath = new Map(data.files.map((f) => [f.path, f]));
+      const md = byPath.get('指南/会话管理.md');
+      assert.ok(md, '中文路径应原样出现在文件清单');
+      assert.equal(md.added, 1);
+      assert.equal(md.removed, 0);
+      const mp4 = byPath.get('指南/演示.mp4');
+      assert.ok(mp4, '二进制文件不应被静默丢弃');
+      assert.equal(mp4.added, 0);
+      assert.equal(mp4.removed, 0);
+      for (const f of data.files) {
+        assert.ok(!/\\\d{3}/.test(f.path), `路径不应含八进制转义: ${f.path}`);
+      }
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('git branch operations', () => {
