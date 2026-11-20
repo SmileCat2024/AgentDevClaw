@@ -10,6 +10,12 @@
 }
 
 /* ── Empty state ── */
+/* 空态时垂直 padding 归零：位置由 .feature-panel-content 的 24px 契约留白
+   统一提供，与后台任务等容器型面板的空态卡对齐（正常态间距见上方规则）。 */
+.gen-ui-mount.is-empty {
+  padding: 0;
+}
+
 .gen-ui-empty {
   display: flex;
   min-height: 176px;

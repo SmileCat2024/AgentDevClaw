@@ -346,6 +346,11 @@ function _populateMount() {
   // Clear and rebuild
   mount.innerHTML = '';
 
+  // 空态修饰：mount 的 6px/16px 垂直间距是页签 + 页面内容的节奏，空态卡
+  // 叠加它会在 .feature-panel-content 的 24px 契约留白之外再偏移（后台任务
+  // 等容器型面板只有 24px），两面板空态位置错位。空态时归零，对齐契约基准。
+  mount.classList.toggle('is-empty', _registry.size === 0);
+
   if (_registry.size === 0) {
     const empty = document.createElement('div');
     empty.className = 'gen-ui-empty';

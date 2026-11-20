@@ -233,6 +233,37 @@ describe('Generative UI panel submit adapter', () => {
     });
   });
 
+  it('marks the mount empty so the empty card aligns with the panel padding contract', async () => {
+    const dom = createDomHarness();
+    dom.createMount('gen-ui-mount');
+    await withGenUICase({
+      dom,
+      globals: {
+        createGenUIViewState: () => ({}),
+        renderGenUISpec: (spec) => {
+          const rendered = dom.document.createElement('div');
+          rendered.className = 'rendered-spec';
+          rendered.textContent = spec.title;
+          return rendered;
+        },
+      },
+    }, ({ ctx }) => {
+      ctx.run(`window.GenUIPanel._internal._applyRegistryUpdate({ surfaces: [
+        { surfaceId: 'profile', revision: 1, title: 'Profile', spec: { title: 'Profile' }, closed: false }
+      ] })`);
+
+      let mount = dom.document.getElementById('gen-ui-mount');
+      assert.equal(mount.classList.contains('is-empty'), false, '非空态不吃 is-empty 修饰');
+
+      ctx.run(`window.GenUIPanel._internal._applyRegistryUpdate({ surfaces: [] })`);
+
+      mount = dom.document.getElementById('gen-ui-mount');
+      assert.equal(mount.classList.contains('is-empty'), true, '空态挂 is-empty（垂直 padding 归零，对齐后台任务面板的 24px 契约留白）');
+      assert.equal(dom.findAll(mount, '.gen-ui-empty').length, 1, '空态卡照常渲染');
+      assert.equal(dom.findAll(mount, '.gen-ui-empty-title')[0].textContent, '暂时没有交互页面');
+    });
+  });
+
   it('keeps the GenUIPanel namespace on the kernel bridge for classic consumers', async () => {
     await withGenUICase({}, ({ ctx, module }) => {
       // classic 消费方（agent-data-loader 的 `window.GenUIPanel.forceRefresh()`）
