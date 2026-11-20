@@ -401,8 +401,8 @@ describe('META_VERSION', () => {
     assert.ok(META_VERSION > 0);
   });
 
-  it('should equal 1 (current schema version)', () => {
-    assert.strictEqual(META_VERSION, 1);
+  it('should equal 2 (current schema version, v2: unified preview selection)', () => {
+    assert.strictEqual(META_VERSION, 2);
   });
 });
 

@@ -17,8 +17,13 @@ import {
 /**
  * Session index metadata version. Bump when the cached fields schema changes;
  * old index records will auto-heal via the slow path on first access.
+ *
+ * v2: preview selection unified with the runtime callFinished writeback
+ * (extractLastMessagePreview: last assistant text, falling back to user).
+ * v1 index records may carry tool-result previews; bump invalidates them
+ * so the slow path recomputes from the session file.
  */
-export const META_VERSION = 1;
+export const META_VERSION = 2;
 
 /**
  * Clean a list of studio feature ids (session ↔ feature binding, ADR-0022).

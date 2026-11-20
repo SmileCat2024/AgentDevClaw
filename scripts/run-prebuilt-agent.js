@@ -38,6 +38,7 @@ import { internalAuthHeaders } from '../server/shared/internal-auth.js';
 import { resolveWorkspaceAgent, resolveWorkspaceAgentClass, workspaceAgentDisplayName } from '../server/shared/workspace-agents.js';
 import { resolveSessionRuntimeDirectory } from '../server/shared/session-project.js';
 import { readSessionIndexSync } from '../server/shared/session-access.js';
+import { extractLastMessagePreview } from '../server/routes/session-helpers-pure.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -239,6 +240,41 @@ const sessionStoreDir = resolveSessionStoreDir(agentId);
 mkdirSync(sessionStoreDir, { recursive: true });
 
 const sessionStore = new FileSessionStore(sessionStoreDir);
+
+// ── 索引元数据实时同步 ──
+// 会话索引（messageCount/preview/updatedAt）此前只在 callFinished 轮末上报，
+// 首轮运行中的会话在线程代际导航（session_read_overview wt- 输入）、会话
+// 列表与侧栏投影里都停留在创建时的 0 条——被引用时表现为「空会话」，尽管
+// 磁盘快照已随 step 保存推进。这里在每次快照落盘成功后（step 保存 / 用户
+// 输入预保存 / 轮末保存），把基础元数据经串行链推给 server 索引：链内保序
+// 防止乱序覆盖，失败只告警不阻断保存；callFinished 的全量上报（含 usage/
+// model 字段）保持不动，后到幂等覆盖。
+let liveMetaSyncChain = Promise.resolve();
+{
+  const rawSave = sessionStore.save.bind(sessionStore);
+  sessionStore.save = async (savedSessionId, snapshot) => {
+    const result = await rawSave(savedSessionId, snapshot);
+    const messages = Array.isArray(snapshot?.runtime?.context?.messages)
+      ? snapshot.runtime.context.messages
+      : [];
+    liveMetaSyncChain = liveMetaSyncChain
+      .then(() => fetch(`${SERVER_ORIGIN}/protoclaw/session_meta_sync`, {
+        method: 'POST',
+        headers: internalAuthHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({
+          agentId,
+          sessionId: savedSessionId,
+          messageCount: messages.length,
+          preview: extractLastMessagePreview(messages),
+          savedAt: Date.now(),
+        }),
+      }))
+      .catch((error) => {
+        console.warn('[ProtoClaw Runtime] live meta sync failed:', error?.message || error);
+      });
+    return result;
+  };
+}
 const sessionId = sessionIdArg && sessionIdArg !== NO_SESSION_TOKEN
   ? sanitizeSessionFragment(sessionIdArg)
   : null;
@@ -1201,8 +1237,10 @@ SessionLifecycle.prototype.start = async function () {
     // Capture the completed call's data before the next call mutates context.
     const context = typeof self.agent.getContext === 'function' ? self.agent.getContext() : null;
     const messages = Array.isArray(context?.getAll?.()) ? context.getAll() : [];
-    const lastMessage = [...messages].reverse().find((m) => m && typeof m.content === 'string' && m.role !== 'system') || null;
-    const preview = lastMessage?.content ? String(lastMessage.content).replace(/\s+/g, ' ').slice(0, 140) : '';
+    // 与服务端索引重算共用同一条预览规则（优先末条 assistant 文本、回退
+    // user）：手写挑选只排除 system，轮末是工具结果时会把工具输出写进索引
+    // preview，且被索引快速路径沿用不自愈。
+    const preview = extractLastMessagePreview(messages);
     const usageStats = typeof self.agent.getUsage === 'function' ? self.agent.getUsage().toSnapshot() : null;
     const totalUsage = usageStats?.totalUsage;
     const callIndex = typeof self.agent?._callIndex === 'number' ? self.agent._callIndex : null;
