@@ -30,6 +30,18 @@ export async function gunzipFileToBuffer(file) {
 }
 
 /**
+ * 原始 gzip Buffer → tar Buffer（与 gunzipFileToBuffer 同语义，省一次读盘：
+ * 调用方已持有原始字节（如 digest 计算与解压共用一次 readFile）时用本函数，
+ * 避免同一 tgz 读两遍文件）。
+ */
+export async function gunzipBufferToBuffer(buffer) {
+  const { gunzip } = await import('zlib');
+  return await new Promise((resolvePromise, reject) => {
+    gunzip(buffer, (error, result) => (error ? reject(error) : resolvePromise(result)));
+  });
+}
+
+/**
  * tar Buffer → 条目数组。每个条目 { name, type, size, data }；
  * data 是条目内容（目录条目 data 为空 Buffer）。
  */

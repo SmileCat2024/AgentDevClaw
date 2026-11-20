@@ -9,17 +9,19 @@ import {
   workspaceFeatureRepositoryRoot,
 } from '../shared/constants.js';
 import { compareSemver } from '../shared/feature-utils.js';
-import { gunzipFileToBuffer, readTarEntry } from '../shared/tgz-archive.js';
+import { gunzipBufferToBuffer, parseTarBuffer } from '../shared/tgz-archive.js';
 import { compilePluginSettings } from './plugin-settings.js';
 
-async function readArchiveJson(archivePath, archiveEntryPath) {
-  // 纯 Node 读取（shared/tgz-archive）：Windows 双 tar 并存（GNU 需
-  // --force-local 而 bsdtar 不支持），spawn tar CLI 因 PATH 解析因人而异，
-  // 历史事故：开发机测试全绿、用户环境导入全炸。
-  const tarBuffer = await gunzipFileToBuffer(archivePath);
-  const data = readTarEntry(tarBuffer, archiveEntryPath);
-  if (!data || data.length === 0) throw new Error(`Archive entry is empty: ${archiveEntryPath}`);
-  return JSON.parse(data.toString('utf8'));
+/**
+ * 单 tgz 摘要提取：一次 readFile、一次 gunzip、一次 tar parse——
+ * package.json / manifest / digest 共用同一次读盘（历史形态是对
+ * archivePath 做两次独立 gunzip + 一次额外 readFile 算 digest，同一
+ * tgz 读三遍盘）。
+ */
+function readJsonFromEntries(entries, entryPath) {
+  const entry = entries.find((e) => e.name === entryPath);
+  if (!entry || entry.data.length === 0) throw new Error(`Archive entry is empty: ${entryPath}`);
+  return JSON.parse(entry.data.toString('utf8'));
 }
 
 /** feature 名：运行时实例名 + 配置键 + 界面展示键，与 npm 包名段同字符集。 */
@@ -64,22 +66,28 @@ function normalizeManifestFeatures(raw) {
 }
 
 export async function summarizeArchive(archivePath, source) {
-  const [pkg, manifest] = await Promise.all([
-    readArchiveJson(archivePath, 'package/package.json'),
-    readArchiveJson(archivePath, `package/${FEATURE_MANIFEST_NAME}`).catch(() => null),
-  ]);
+  // 纯 Node 读取（shared/tgz-archive）：Windows 双 tar 并存（GNU 需
+  // --force-local 而 bsdtar 不支持），spawn tar CLI 因 PATH 解析因人而异，
+  // 历史事故：开发机测试全绿、用户环境导入全炸。
+  const raw = await fs.readFile(archivePath);
+  const tarBuffer = await gunzipBufferToBuffer(raw);
+  const entries = parseTarBuffer(tarBuffer);
+  const pkg = readJsonFromEntries(entries, 'package/package.json');
+  let manifest = null;
+  try {
+    manifest = readJsonFromEntries(entries, `package/${FEATURE_MANIFEST_NAME}`);
+  } catch { /* manifest 可选：无 agentdev.json 的包按 null 处理 */ }
   const packageName = typeof pkg?.name === 'string' ? pkg.name.trim() : '';
   const version = typeof pkg?.version === 'string' ? pkg.version.trim() : '';
   if (!packageName || !version) {
     throw new Error(`Feature archive 缺少 package name 或 version：${archivePath}`);
   }
-  const archive = await fs.readFile(archivePath);
   const { features: manifestFeatures, warnings: manifestFeatureWarnings } = normalizeManifestFeatures(manifest?.features);
   return {
     packageName,
     version,
     archivePath,
-    archiveDigest: `sha256:${crypto.createHash('sha256').update(archive).digest('hex')}`,
+    archiveDigest: `sha256:${crypto.createHash('sha256').update(raw).digest('hex')}`,
     source,
     entry: typeof manifest?.entry === 'string' && manifest.entry.trim()
       ? manifest.entry.trim()
@@ -141,6 +149,54 @@ async function scanRoot(root, source) {
   return archives;
 }
 
+// ── catalog 缓存（mtime+size 键控）──────────────────────────────────
+//
+// scanFeatureCatalog 的调用密度（面板声明 30s 轮询、商店 overview 每请求
+// 3 次全扫、带统一设置的插件数据面每请求）远高于仓库变化频率，而每次全扫
+// 对每个 tgz 做完整读盘 + gunzip + tar parse。缓存按 roots 形态键控，命中
+// 条件 = 各根目录 readdir 结果与每个 tgz 的 mtime+size 全部一致——任何
+// 写入方（导入链路、删除、外部直拷 tgz）落盘后 stat 摘要必然变化，无需
+// 手动失效。并发调用共享 inflight promise，避免同 key 双扫。
+//
+// 返回共享快照对象：调用方按契约只读遍历（packages/invalid），不得原地
+// 修改；需要派生数据时复制后改。
+
+const CATALOG_CACHE_LIMIT = 64;
+const catalogCache = new Map(); // rootsKey → { stamp, value }
+const catalogInflight = new Map(); // rootsKey → Promise<catalog>
+
+function catalogRootsKey({ officialRoot, userRoot, workspaceRoots }) {
+  const ws = Object.keys(workspaceRoots).sort()
+    .map((id) => `${id}=>${path.resolve(String(workspaceRoots[id]))}`);
+  return JSON.stringify([path.resolve(officialRoot), path.resolve(userRoot), ws]);
+}
+
+/** 单根 stat 摘要：tgz 文件名|mtimeMs|size 排序列表；目录缺失为 null。 */
+async function statRootStamp(root) {
+  const entries = await fs.readdir(root, { withFileTypes: true }).catch((error) => {
+    if (error?.code === 'ENOENT') return null;
+    throw error;
+  });
+  if (entries === null) return null;
+  const stamps = await Promise.all(entries
+    .filter((entry) => entry.isFile() && entry.name.toLowerCase().endsWith('.tgz'))
+    .map(async (entry) => {
+      const stat = await fs.stat(path.join(root, entry.name));
+      return `${entry.name}|${stat.mtimeMs}|${stat.size}`;
+    }));
+  return stamps.sort();
+}
+
+function stampEquals(left, right) {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+/** 测试隔离：清空 catalog 缓存与 inflight（生产不调用；stat 摘要自动失效）。 */
+export function resetFeatureCatalogCacheForTest() {
+  catalogCache.clear();
+  catalogInflight.clear();
+}
+
 /**
  * 仓库来源优先级：空间私有 > 用户区 > 官方区（同包同版本时高优先级解释）。
  * 空间私有条目只对所属身份可见（scopeAgentId），全局条目对所有身份可见。
@@ -157,32 +213,59 @@ const SOURCE_PRIORITY = { workspace: 2, custom: 1, official: 0 };
  * 取首个命中——空间私有包因此覆盖同名全局包，仅对所属身份生效。
  */
 export async function scanFeatureCatalog({ officialRoot = FEATURE_REPOSITORY_ROOT, userRoot = USER_FEATURE_REPOSITORY_ROOT, workspaceRoots = {} } = {}) {
-  const workspaceEntries = Object.entries(workspaceRoots || {})
+  const roots = { officialRoot, userRoot, workspaceRoots: workspaceRoots || {} };
+  const key = catalogRootsKey(roots);
+
+  const workspaceEntries = Object.entries(roots.workspaceRoots)
     .filter(([agentId, root]) => typeof agentId === 'string' && agentId.trim() && root);
-  const [official, custom, ...workspaces] = await Promise.all([
-    scanRoot(officialRoot, 'official'),
-    scanRoot(userRoot, 'custom'),
-    ...workspaceEntries.map(([agentId, root]) => scanRoot(root, 'workspace').then(
-      (entries) => entries.map((entry) => ({ ...entry, scopeAgentId: agentId })),
-    )),
-  ]);
-  const all = [...official, ...custom, ...workspaces.flat()];
-  const invalid = all.filter((entry) => entry.error);
-  const packages = new Map();
-  for (const entry of all) {
-    if (entry.error) continue;
-    const versions = packages.get(entry.packageName) || [];
-    versions.push({ ...entry, scopeAgentId: entry.scopeAgentId || null });
-    packages.set(entry.packageName, versions);
-  }
-  for (const versions of packages.values()) {
-    versions.sort((left, right) => {
-      const sourceScore = (SOURCE_PRIORITY[right.source] || 0) - (SOURCE_PRIORITY[left.source] || 0);
-      if (sourceScore !== 0) return sourceScore;
-      return compareSemver(right.version, left.version);
-    });
-  }
-  return { packages, invalid };
+
+  // stat 摘要先行：全部根一致时直接复用快照（见缓存头注的失效纪律）
+  const stamp = {
+    official: await statRootStamp(roots.officialRoot),
+    custom: await statRootStamp(roots.userRoot),
+    workspace: await Promise.all(workspaceEntries.map(async ([agentId, root]) => ({
+      agentId,
+      stamp: await statRootStamp(root),
+    }))),
+  };
+  const cached = catalogCache.get(key);
+  if (cached && stampEquals(cached.stamp, stamp)) return cached.value;
+  const inflight = catalogInflight.get(key);
+  if (inflight) return inflight;
+
+  const task = (async () => {
+    const [official, custom, ...workspaces] = await Promise.all([
+      scanRoot(roots.officialRoot, 'official'),
+      scanRoot(roots.userRoot, 'custom'),
+      ...workspaceEntries.map(([agentId, root]) => scanRoot(root, 'workspace').then(
+        (entries) => entries.map((entry) => ({ ...entry, scopeAgentId: agentId })),
+      )),
+    ]);
+    const all = [...official, ...custom, ...workspaces.flat()];
+    const invalid = all.filter((entry) => entry.error);
+    const packages = new Map();
+    for (const entry of all) {
+      if (entry.error) continue;
+      const versions = packages.get(entry.packageName) || [];
+      versions.push({ ...entry, scopeAgentId: entry.scopeAgentId || null });
+      packages.set(entry.packageName, versions);
+    }
+    for (const versions of packages.values()) {
+      versions.sort((left, right) => {
+        const sourceScore = (SOURCE_PRIORITY[right.source] || 0) - (SOURCE_PRIORITY[left.source] || 0);
+        if (sourceScore !== 0) return sourceScore;
+        return compareSemver(right.version, left.version);
+      });
+    }
+    const value = { packages, invalid };
+    if (catalogCache.size >= CATALOG_CACHE_LIMIT) {
+      catalogCache.delete(catalogCache.keys().next().value);
+    }
+    catalogCache.set(key, { stamp, value });
+    return value;
+  })().finally(() => catalogInflight.delete(key));
+  catalogInflight.set(key, task);
+  return task;
 }
 
 /**

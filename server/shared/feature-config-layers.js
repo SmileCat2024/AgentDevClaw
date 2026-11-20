@@ -8,7 +8,7 @@
 
 import { createHash } from 'crypto';
 import { basename, join, resolve } from 'path';
-import { existsSync, readFileSync } from 'fs';
+import { readFileSync, statSync } from 'fs';
 
 import { USER_DATA_ROOT } from './constants.js';
 import { isValidPhProjectId } from '../routes/ph-projects.js';
@@ -75,16 +75,46 @@ function toSparseConfig(parsed) {
 }
 
 /**
+ * 层文件读取缓存（mtime+size 键控）：装配事实链（readEffectiveMounts /
+ * 面板合成 / 数据面 guard）会反复读同一批层文件，缓存后命中路径只需一次
+ * statSync（走 OS 目录缓存，微秒级），代替读盘 + JSON.parse。任何写入方
+ * （PUT layer、writeDeclaration、外部工具）落盘后 mtime/size 必然变化，
+ * 自动失效，无需手动失效。返回深拷贝：调用方有原地修改行为
+ * （writeDeclaration 改 sparse、readGlobalLayer 的 runtimes 迁移），
+ * 共享缓存对象会被污染。
+ */
+const LAYER_CACHE_LIMIT = 256;
+const layerFileCache = new Map(); // 绝对路径 → { mtimeMs, size, value }
+
+/**
  * 读取一个层文件并规范为对象。文件不存在 = 该层无内容（正常态），返回 {}。
  * JSON 损坏或非对象同样返回 {}（与 agent 侧现状行为一致，不抛错）。
  */
 export function readLayerFile(filePath) {
-  if (!existsSync(filePath)) return {};
-  try {
-    return toSparseConfig(JSON.parse(readFileSync(filePath, 'utf8')));
-  } catch {
+  let stat = null;
+  try { stat = statSync(filePath); } catch { /* 不存在/不可访问 = 空层 */ }
+  if (!stat) {
+    layerFileCache.delete(filePath);
     return {};
   }
+  const cached = layerFileCache.get(filePath);
+  if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
+    return structuredClone(cached.value);
+  }
+  let parsed = {};
+  try {
+    parsed = toSparseConfig(JSON.parse(readFileSync(filePath, 'utf8')));
+  } catch { /* JSON 损坏/非对象 = 空层，保持初始值 */ }
+  layerFileCache.set(filePath, { mtimeMs: stat.mtimeMs, size: stat.size, value: parsed });
+  if (layerFileCache.size > LAYER_CACHE_LIMIT) {
+    layerFileCache.delete(layerFileCache.keys().next().value);
+  }
+  return structuredClone(parsed);
+}
+
+/** 测试隔离：清层读取缓存（生产不调用；mtime+size 校验自动失效）。 */
+export function resetLayerFileCacheForTest() {
+  layerFileCache.clear();
 }
 
 /** 全局层读取（含顶层 runtimes → lsp.runtimes 的向后兼容迁移）。 */
