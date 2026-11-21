@@ -991,11 +991,28 @@ function WorkspaceFiles() {
                     {renderTabContent(tabId)}
                   </div>
                 ))}
+                {dockHint?.paneId === pane.id && <div className="wf-dock-scrim" aria-hidden="true" />}
                 {dockHint?.paneId === pane.id && (
-                  <div className={`wf-dock-hint wf-dock-${dockHint.side}`}>
-                    {dockHint.side === 'center'
-                      ? '松开移动到此分栏'
-                      : `松开停靠到${dockHint.side === 'left' ? '左侧' : '右侧'}`}
+                  <div className={`wf-dock-hint wf-dock-${dockHint.side}`} role="status" data-drop-active>
+                    <div className="wf-dock-card">
+                      <svg className="wf-dock-glyph" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                        <rect x="3" y="3" width="18" height="18" rx="2" stroke="currentColor" strokeWidth="1.5" />
+                        <rect
+                          x={dockHint.side === 'right' ? 12.5 : 4.5}
+                          y="4.5"
+                          width={dockHint.side === 'center' ? 15 : 7}
+                          height="15"
+                          rx="1"
+                          fill="currentColor"
+                          fillOpacity="0.45"
+                        />
+                      </svg>
+                      <span className="wf-dock-label">
+                        {dockHint.side === 'center'
+                          ? '移动到此分栏'
+                          : `停靠到${dockHint.side === 'left' ? '左侧' : '右侧'}`}
+                      </span>
+                    </div>
                   </div>
                 )}
               </div>

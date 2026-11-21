@@ -40,7 +40,7 @@ var __copyProps = (to, from, except, desc) => {
 var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__getProtoOf(mod)) : {}, __copyProps(
   // If the importer is in node compatibility mode or this is not an ESM
   // file that has been converted to a CommonJS file using a Babel-
-  // compatible transform (i.e. "__esModule" has not been set), then se
+  // compatible transform (i.e. "__esModule" has not been set), then set
   // "default" to the CommonJS "module.exports" for node compatibility.
   isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target,
   mod
@@ -2420,7 +2420,7 @@ __export(docx_preview_exports, {
   defaultOptions: () => defaultOptions,
   parseAsync: () => parseAsync,
   renderAsync: () => renderAsync,
-  renderDocument: () => renderDocumen
+  renderDocument: () => renderDocument
 });
 function parseRelationships(root, xml) {
   return xml.elements(root).map((e) => ({
@@ -3092,7 +3092,7 @@ function parseCustomProps(root, xml) {
       formatId: xml.attr(e, "fmtid"),
       name: xml.attr(e, "name"),
       type: firstChild.nodeName,
-      value: firstChild.textConten
+      value: firstChild.textContent
     };
   });
 }
@@ -4406,13 +4406,13 @@ var init_docx_preview = __esm({
             case "t":
               result.children.push({
                 type: DomType.Text,
-                text: c.textConten
+                text: c.textContent
               });
               break;
             case "delText":
               result.children.push({
                 type: DomType.DeletedText,
-                text: c.textConten
+                text: c.textContent
               });
               break;
             case "commentReference":
@@ -4430,7 +4430,7 @@ var init_docx_preview = __esm({
               result.fieldRun = true;
               result.children.push({
                 type: DomType.Instruction,
-                text: c.textConten
+                text: c.textContent
               });
               break;
             case "fldChar":
@@ -5785,7 +5785,7 @@ section.${c}>footer { z-index: 1; }
             const counterReset = counter + " " + (num.start - 1);
             if (num.level > 0) {
               styleText += this.styleToString(`p.${this.numberingClass(num.id, num.level - 1)}`, {
-                "counter-set": counterRese
+                "counter-set": counterReset
               });
             }
             resetCounters.push(counterReset);
@@ -9657,7 +9657,7 @@ function write_ext_props(cp) {
   o[o.length] = XML_HEADER;
   o[o.length] = writextag("Properties", null, {
     "xmlns": XMLNS.EXT_PROPS,
-    "xmlns:vt": XMLNS.v
+    "xmlns:vt": XMLNS.vt
   });
   EXT_PROPS.forEach(function(f) {
     if (cp[f[1]] === void 0) return;
@@ -9745,7 +9745,7 @@ function parse_cust_props(data, opts) {
 function write_cust_props(cp) {
   var o = [XML_HEADER, writextag("Properties", null, {
     "xmlns": XMLNS.CUST_PROPS,
-    "xmlns:vt": XMLNS.v
+    "xmlns:vt": XMLNS.vt
   })];
   if (!cp) return o.join("");
   var pid = 1;
@@ -9959,7 +9959,7 @@ function parse_TypedPropertyValue(blob, type, _opts) {
     case 81:
       return parse_VtUnalignedString(
         blob,
-
+        t
         /*, 4*/
       ).replace(chr0, "");
     case 4108:
@@ -12650,7 +12650,7 @@ function write_cellXfs(cellXfs) {
 function write_sty_xml(wb, opts) {
   var o = [XML_HEADER, writextag("styleSheet", null, {
     "xmlns": XMLNS_main[0],
-    "xmlns:vt": XMLNS.v
+    "xmlns:vt": XMLNS.vt
   })], w;
   if (wb.SSF && (w = write_numFmts(wb.SSF)) != null) o[o.length] = w;
   o[o.length] = '<fonts count="1"><font><sz val="12"/><color theme="1"/><name val="Calibri"/><family val="2"/><scheme val="minor"/></font></fonts>';
@@ -16202,7 +16202,7 @@ function write_BrtSheetProtection(sp, o) {
     ["selectLockedCells", false],
     // fSelLockedCells
     ["sort", true],
-    // fSor
+    // fSort
     ["autoFilter", true],
     // fAutoFilter
     ["pivotTables", true],
@@ -17098,7 +17098,7 @@ function parse_wb_xml(data, opts) {
       case "<sheets>":
       case "</sheets>":
         break;
-      // aggregate shee
+      // aggregate sheet
       /* 18.2.19   sheet CT_Sheet + */
       case "<sheet":
         switch (y.state) {
@@ -19391,7 +19391,7 @@ function parse_workbook(blob, options) {
     codepage: 0,
     // CP from CodePage record
     winlocked: 0,
-    // fLockWn from WinProtec
+    // fLockWn from WinProtect
     cellStyles: !!options && !!options.cellStyles,
     WTF: !!options && !!options.wtf
   };
@@ -21606,7 +21606,7 @@ function write_ods(wb, opts) {
   manifest.push([f, "application/rdf+xml"]);
   f = "META-INF/manifest.xml";
   zip_add_file(zip, f, write_manifest(
-    manifes
+    manifest
     /*, opts*/
   ));
   return zip;
@@ -23555,7 +23555,7 @@ function write_zip_denouement(z, o) {
   if (o.type === "file") return write_dl(o.file, out);
   return o.type == "string" ? utf8read(
     /*::(*/
-    ou
+    out
     /*:: :any)*/
   ) : out;
 }
@@ -26765,7 +26765,7 @@ var init_xlsx = __esm({
       // Russia
       /*::[*/
       20: "EG",
-      // Egyp
+      // Egypt
       /*::[*/
       30: "GR",
       // Greece
@@ -26882,7 +26882,7 @@ var init_xlsx = __esm({
       // Iraq
       /*::[*/
       965: "KW",
-      // Kuwai
+      // Kuwait
       /*::[*/
       966: "SA",
       // Saudi Arabia
@@ -27693,7 +27693,7 @@ var init_xlsx = __esm({
             vfp = true;
             memo = true;
             break;
-          // VFP with autoincremen
+          // VFP with autoincrement
           // 0x43 dBASE IV SQL table files
           // 0x63 dBASE IV SQL system files
           case 131:
@@ -28208,7 +28208,7 @@ var init_xlsx = __esm({
               for (rj = 1; rj < record.length; ++rj) switch (record[rj].charAt(0)) {
                 case "A":
                   break;
-                // TODO: commen
+                // TODO: comment
                 case "X":
                   C = parseInt(record[rj].slice(1)) - 1;
                   C_seen_X = true;
@@ -32130,12 +32130,12 @@ var init_xlsx = __esm({
       /*::[*/
       6: {
         /* n:"BrtCellSt", */
-        f: parse_BrtCellS
+        f: parse_BrtCellSt
       },
       /*::[*/
       7: {
         /* n:"BrtCellIsst", */
-        f: parse_BrtCellIss
+        f: parse_BrtCellIsst
       },
       /*::[*/
       8: {
@@ -32185,12 +32185,12 @@ var init_xlsx = __esm({
       /*::[*/
       17: {
         /* n:"BrtShortSt", */
-        f: parse_BrtShortS
+        f: parse_BrtShortSt
       },
       /*::[*/
       18: {
         /* n:"BrtShortIsst", */
-        f: parse_BrtShortIss
+        f: parse_BrtShortIsst
       },
       /*::[*/
       19: {
@@ -32293,12 +32293,12 @@ var init_xlsx = __esm({
       /*::[*/
       43: {
         /* n:"BrtFont", */
-        f: parse_BrtFon
+        f: parse_BrtFont
       },
       /*::[*/
       44: {
         /* n:"BrtFmt", */
-        f: parse_BrtFm
+        f: parse_BrtFmt
       },
       /*::[*/
       45: {
@@ -32562,7 +32562,7 @@ var init_xlsx = __esm({
       159: {
         /* n:"BrtBeginSst", */
         T: 1,
-        f: parse_BrtBeginSs
+        f: parse_BrtBeginSst
       },
       /*::[*/
       160: {
@@ -33560,7 +33560,7 @@ var init_xlsx = __esm({
       /*::[*/
       362: {
         /* n:"BrtExternSheet", */
-        f: parse_ExternShee
+        f: parse_ExternSheet
       },
       /*::[*/
       363: {
@@ -34764,7 +34764,7 @@ var init_xlsx = __esm({
       635: {
         /* n:"BrtBeginComment", */
         T: 1,
-        f: parse_BrtBeginCommen
+        f: parse_BrtBeginComment
       },
       /*::[*/
       636: {
@@ -34774,7 +34774,7 @@ var init_xlsx = __esm({
       /*::[*/
       637: {
         /* n:"BrtCommentText", */
-        f: parse_BrtCommentTex
+        f: parse_BrtCommentText
       },
       /*::[*/
       638: {
@@ -36249,7 +36249,7 @@ var init_xlsx = __esm({
       /*::[*/
       23: {
         /* n:"ExternSheet", */
-        f: parse_ExternShee
+        f: parse_ExternSheet
       },
       /*::[*/
       24: {
@@ -36330,7 +36330,7 @@ var init_xlsx = __esm({
       /*::[*/
       49: {
         /* n:"Font", */
-        f: parse_Fon
+        f: parse_Font
       },
       /*::[*/
       51: {
@@ -36770,7 +36770,7 @@ var init_xlsx = __esm({
       /*::[*/
       253: {
         /* n:"LabelSst", */
-        f: parse_LabelSs
+        f: parse_LabelSst
       },
       /*::[*/
       255: {
@@ -37055,7 +37055,7 @@ var init_xlsx = __esm({
       /*::[*/
       549: {
         /* n:"DefaultRowHeight", */
-        f: parse_DefaultRowHeigh
+        f: parse_DefaultRowHeight
       },
       /*::[*/
       566: {
@@ -37082,7 +37082,7 @@ var init_xlsx = __esm({
       /*::[*/
       1054: {
         /* n:"Format", */
-        f: parse_Forma
+        f: parse_Format
       },
       /*::[*/
       1084: {
@@ -37669,7 +37669,7 @@ var init_xlsx = __esm({
       /*::[*/
       4188: {
         /* n:"ClrtClient", */
-        f: parse_ClrtClien
+        f: parse_ClrtClient
       },
       /*::[*/
       4189: {
@@ -37770,7 +37770,7 @@ var init_xlsx = __esm({
       /*::[*/
       30: {
         /* n:"BIFF2FORMAT", */
-        f: parse_BIFF2Forma
+        f: parse_BIFF2Format
       },
       /*::[*/
       31: {
@@ -37793,7 +37793,7 @@ var init_xlsx = __esm({
       /*::[*/
       37: {
         /* n:"DefaultRowHeight", */
-        f: parse_DefaultRowHeigh
+        f: parse_DefaultRowHeight
       },
       // 0x2c ??
       // 0x2d ??
@@ -38363,7 +38363,7 @@ import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, use
 import { createRoot } from "/src/react-panels-dist/shared/react-dom-client.js?v=^19.3.1";
 
 // public/src/react-panels/workspace-files/style.css
-var style_default = '/* \u6587\u4EF6\u9762\u677F\u6837\u5F0F\uFF08DSH \u5F0F\uFF09\u3002\n   \u9875\u7B7E\u6761\u672C\u4F53\u590D\u7528\u5168\u5C40 gen-ui-surface-tabs \u4F53\u7CFB\uFF0C\u6B64\u5904\u53EA\u505A wf \u57DF\u5185\u7684\u8986\u76D6\u4E0E\u8865\u5145\uFF1A\n   \u975E\u6FC0\u6D3B\u9875\u7B7E\u7ED9\u53EF\u89C1\u8F6E\u5ED3\uFF08\u7528\u6237\u53CD\u9988\uFF1A\u9ED8\u8BA4\u6001\u592A"\u65E0\u754C"\uFF09\u3001divider \u5E26\u53EF\u89C6\u5206\u9694\u7EBF\u3001\n   \u6587\u4EF6\u7C7B\u578B\u56FE\u6807\u914D\u8272\u53D6\u81EA DSH design-platform \u7684\u9759\u6001 token \u503C\u3002 */\n\n.wf-panel {\n  display: flex;\n  flex-direction: column;\n  height: 100%;\n  min-height: 0;\n  overflow: hidden;\n}\n\n.wf-pane-row {\n  display: flex;\n  flex: 1 1 auto;\n  min-height: 0;\n}\n\n.wf-pane {\n  display: flex;\n  flex-direction: column;\n  min-width: 0;\n  min-height: 0;\n  overflow: hidden;\n}\n\n/* \u2500\u2500 \u9875\u7B7E\u6761\u8986\u76D6\uFF1A\u975E\u6FC0\u6D3B\u6001\u7ED9\u8F6E\u5ED3 \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 */\n\n/* \u5206\u884C\u5E03\u5C40\uFF1AcomputeTabRows \u786E\u5B9A\u6027\u5206\u884C\uFF08\u5BB9\u91CF = ceil(\u5BB9\u5668\u5BBD/104)\uFF09\uFF0C\u5916\u5C42\u7EB5\u5411\u5806\u53E0\u3002\n   \u884C\u662F\u6A2A\u5411\u6EDA\u52A8\u5BB9\u5668\uFF08\u6EDA\u52A8\u6761\u9690\u85CF\uFF09\uFF1A\u88AB\u88C1\u5207\u7684\u9875\u7B7E\u4ECD\u53EF\u8BBF\u95EE\u2014\u2014\u9009\u4E2D\u65F6 JS \u81EA\u52A8\n   \u6EDA\u52A8\u8BA9\u5B83\u5B8C\u6574\u9732\u51FA\uFF08\u542B\u5173\u95ED\u6309\u94AE\uFF09\uFF0C\u70B9\u5DE6\u4FA7\u90E8\u5206\u9690\u85CF\u9879\u5219\u5F80\u56DE\u6EDA\u52A8\u3002 */\n.wf-tabstrip {\n  display: flex;\n  flex-direction: column;\n  flex-wrap: nowrap;\n  /* \u8986\u76D6\u5168\u5C40 .gen-ui-surface-tabs \u7684 align-items: flex-end\uFF1A\n     \u5217\u65B9\u5411\u4E0B\u5B83\u4F1A\u8BA9\u884C\u6536\u7F29\u5230\u5185\u5BB9\u5BBD\u5E76\u6C34\u5E73\u53F3\u5BF9\u9F50\uFF0C\u5DE6\u4FA7\u51FA\u73B0\u83AB\u540D\u7A7A\u6863 */\n  align-items: stretch;\n}\n\n/* \u5360\u6EE1\uFF1A\u5265\u6389\u590D\u7528 .settings-tab-bar \u7684\u80F6\u56CA\u5BB9\u5668\u6837\u5F0F\uFF084px padding + \u534A\u900F\u660E\u5E95\n   + 12px \u5706\u89D2\uFF09\u2014\u2014\u9875\u7B7E\u4E0E\u5185\u5BB9\u533A\u9876\u6EE1\u5206\u533A\u8FB9\u7F18\uFF08\u7528\u6237\u53CD\u9988\u5206\u533A\u4E24\u4FA7\u6709\u5185\u8FB9\u8DDD\uFF09\u3002 */\n.wf-tabstrip.settings-tab-bar {\n  padding: 0;\n  background: transparent;\n  border-radius: 0;\n}\n\n/* \u53F3\u7F18\u5360\u6EE1\uFF1A\u58F3\u5C42 .feature-panel-body \u7EDF\u4E00 margin-right: 6px \u662F\u6EDA\u52A8\u6761\u9884\u7559\uFF0C\n   \u672C\u9762\u677F\u5185\u90E8\u81EA\u7BA1\u6EDA\u52A8\u3001body \u6C38\u4E0D\u6EDA\u52A8\uFF0C6px \u662F\u7EAF\u635F\u8017\u3002\u6302\u8F7D\u7C7B\u7531 app-ui.js\n   mountBody \u6DFB\u52A0/\u79FB\u9664\u3002 */\n.feature-panel-body.wf-full-bleed {\n  margin-right: 0;\n}\n\n.wf-tab-row {\n  display: flex;\n  flex-wrap: nowrap;\n  min-width: 0;\n  width: 100%;\n  overflow-x: auto;\n  scrollbar-width: none;\n}\n\n.wf-tab-row::-webkit-scrollbar {\n  display: none;\n}\n\n/* \u591A\u884C\u6A21\u5F0F\uFF1A\u9875\u7B7E\u4EE5\u538B\u7F29\u6863\uFF08104 = \u5168\u5C40 tab-item min-width\uFF09\u4E3A\u57FA\u51C6\uFF1B\n   \u975E\u672B\u884C\u7981\u6B62\u62C9\u4F38\uFF08flex-grow 0\uFF09\u2014\u2014\u62C9\u4F38\u4F1A\u628A\u884C\u5C3E\u9875\u7B7E\u5B8C\u5168\u63A8\u51FA\u884C\u5916\uFF0C\n   \u8FDD\u53CD\u300C\u53EA\u6709\u5B8C\u5168\u9690\u85CF\u624D\u6362\u884C\u300D\u7684\u5206\u884C\u5224\u5B9A\uFF1B\u672B\u884C\uFF08\u884C\u5C3E\uFF09\u5141\u8BB8\u62C9\u4F38\u94FA\u6EE1\u3002 */\n.wf-tabstrip.is-multi .wf-tab-row .gen-ui-surface-tab-item {\n  flex: 1 1 104px;\n  min-width: 104px;\n  max-width: 176px;\n}\n\n.wf-tabstrip.is-multi .wf-tab-row:not(:last-child) .gen-ui-surface-tab-item {\n  flex-grow: 0;\n}\n\n.wf-panel .gen-ui-surface-tab-item.is-active {\n  /* \u6CBF\u7528\u5171\u4EAB\u9875\u7B7E\u7684\u539F\u6709\u5F62\u6001\uFF0C\u53EA\u589E\u5F3A\u539F\u6709\u5E95\u8272\u3001\u8FB9\u6846\u4E0E\u6587\u5B57\u7684\u660E\u6697\u5BF9\u6BD4\u3002 */\n  border-color: #56565f;\n  background: #303036;\n  color: #ffffff;\n}\n\n.wf-panel .gen-ui-surface-tab-item.is-active .gen-ui-surface-tab {\n  color: #ffffff;\n}\n\nbody[data-theme="light"] .wf-panel .gen-ui-surface-tab-item.is-active {\n  border-color: #aeb9d3;\n  background: #e3e8f2;\n  color: #172033;\n}\n\nbody[data-theme="light"] .wf-panel .gen-ui-surface-tab-item.is-active .gen-ui-surface-tab {\n  color: #172033;\n}\n\n.wf-panel .gen-ui-surface-tab-item:not(.is-active) {\n  border-color: #2b2b30;\n  background: #141416;\n}\n\n.wf-panel .gen-ui-surface-tab-item:not(.is-active):hover {\n  background: #1d1d21;\n}\n\nbody[data-theme="light"] .wf-panel .gen-ui-surface-tab-item:not(.is-active) {\n  border-color: #d9d9de;\n  background: #ececee;\n}\n\nbody[data-theme="light"] .wf-panel .gen-ui-surface-tab-item:not(.is-active):hover {\n  background: #e3e3e6;\n}\n\n.wf-tab-icon {\n  display: inline-flex;\n  flex: 0 0 auto;\n  align-items: center;\n  margin-right: 6px;\n}\n\n.wf-tab-label {\n  min-width: 0;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n\n/* \u2500\u2500 divider\uFF1A\u53EF\u89C6\u5206\u9694\u7EBF + \u62D6\u62FD\u70ED\u533A \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 */\n\n.wf-divider {\n  position: relative;\n  z-index: 1;\n  flex: 0 0 1px;\n  cursor: col-resize;\n  touch-action: none;\n}\n\n/* \u53EF\u89C1\u5206\u9694\u7EBF\u5360\u636E pane \u8FB9\u754C\u672C\u8EAB\uFF0C\u4E0D\u7559\u4E24\u4FA7\u89C6\u89C9\u7A7A\u9699\uFF1B\u900F\u660E\u4F2A\u5143\u7D20\u5411\u4E24\u4FA7\u6269\u5C55\n   \u62D6\u62FD\u70ED\u533A\uFF0C\u4FDD\u6301\u6613\u4E8E\u6293\u53D6\u7684 9px \u547D\u4E2D\u8303\u56F4\u3002 */\n.wf-divider::before {\n  content: "";\n  position: absolute;\n  top: 0;\n  bottom: 0;\n  left: -4px;\n  width: 9px;\n  cursor: col-resize;\n}\n\n.wf-divider::after {\n  content: "";\n  position: absolute;\n  top: 0;\n  bottom: 0;\n  left: 0;\n  width: 1px;\n  background: var(--border-color, rgba(255, 255, 255, 0.1));\n  transition: background 120ms ease, box-shadow 120ms ease;\n}\n\n.wf-divider:hover::after,\n.wf-divider:active::after {\n  background: var(--accent, #4f6bed);\n  box-shadow: 0 0 0 0.5px var(--accent, #4f6bed);\n}\n\n/* \u2500\u2500 pane \u5185\u5BB9\u533A \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 */\n\n.wf-pane-body {\n  position: relative;\n  display: flex;\n  flex: 1 1 auto;\n  min-height: 0;\n  overflow: hidden;\n}\n\n.wf-tab-page {\n  display: flex;\n  flex: 1 1 auto;\n  min-width: 0;\n  min-height: 0;\n  overflow: hidden;\n}\n\n.wf-empty {\n  display: flex;\n  flex: 1 1 auto;\n  align-items: center;\n  justify-content: center;\n  padding: 24px 12px;\n  color: var(--text-muted, #98a2b3);\n  font-size: 12px;\n}\n\n/* \u6811\u4E2D\u7684\u52A0\u8F7D/\u7A7A\u76EE\u5F55/\u9519\u8BEF\u72B6\u6001\u662F\u4E00\u6761\u5B50\u9879\uFF0C\u4E0D\u662F\u5360\u6EE1\u89C6\u53E3\u7684\u7A7A\u6001\u9762\u677F\u3002 */\n.wf-tree-state {\n  display: flex;\n  width: 100%;\n  align-items: center;\n  gap: 6px;\n  padding: 4px 8px;\n  color: var(--text-muted, #98a2b3);\n  font-size: 12px;\n  line-height: 20px;\n  text-align: left;\n}\n\n.wf-error { color: #e5484d; }\n\n/* \u2500\u2500 \u9762\u677F\u6EDA\u52A8\u533A\u7EDF\u4E00\u7EC6\u6EDA\u52A8\u6761 \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n   \u9879\u76EE\u65E2\u6709 thin \u914D\u65B9\uFF08layout.css \u540C\u6B3E\u6807\u51C6\u5C5E\u6027\uFF09\uFF1A\u5168\u5C40 ::-webkit 8px \u6EDA\u52A8\u6761\n   \u5728\u7A84\u680F\u9762\u677F\u91CC\u663E\u5F97\u7C97\u7B28\uFF08\u7528\u6237\u53CD\u9988\uFF09\uFF0C\u7EC6\u6761 + \u534A\u900F\u660E thumb \u66F4\u534F\u8C03\u3002\n   Chrome 121+ \u6807\u51C6\u5C5E\u6027\u4F18\u5148\u4E8E\u5168\u5C40 ::-webkit \u89C4\u5219\uFF0C\u65E0\u9700\u79C1\u6709\u8986\u76D6\u3002 */\n.wf-tree,\n.wf-code-wrap,\n.wf-md,\n.wf-csv-wrap,\n.wf-docx-scroll,\n.wf-image-stage {\n  scrollbar-width: thin;\n  scrollbar-color: rgba(255, 255, 255, 0.16) transparent;\n}\n\nbody[data-theme="light"] .wf-tree,\nbody[data-theme="light"] .wf-code-wrap,\nbody[data-theme="light"] .wf-md,\nbody[data-theme="light"] .wf-csv-wrap,\nbody[data-theme="light"] .wf-docx-scroll,\nbody[data-theme="light"] .wf-image-stage {\n  scrollbar-color: rgba(0, 0, 0, 0.22) transparent;\n}\n\n/* \u2500\u2500 \u6587\u4EF6\u6811 \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 */\n\n.wf-tree {\n  display: flex;\n  flex: 1 1 auto;\n  flex-direction: column;\n  min-height: 0;\n  overflow: auto;\n  padding: 4px 0 12px 6px;\n}\n\n.wf-tree-state.wf-retry {\n  border: 0;\n  background: transparent;\n  color: var(--accent, #4f6bed);\n  cursor: pointer;\n  font: inherit;\n  font-size: 12px;\n}\n\n.wf-entry {\n  display: flex;\n  width: 100%;\n  align-items: center;\n  gap: 6px;\n  padding: 4px 8px;\n  border: 0;\n  background: transparent;\n  color: var(--text-primary, #1f2329);\n  cursor: pointer;\n  font: inherit;\n  font-size: 12px;\n  line-height: 20px;\n  text-align: left;\n}\n\n.wf-entry:hover { background: rgba(128, 128, 140, 0.12); }\n\n.wf-entry.wf-unsupported {\n  color: var(--text-muted, #98a2b3);\n  cursor: default;\n}\n\n.wf-entry.wf-unsupported:hover { background: transparent; }\n\n.wf-entry-icon {\n  display: inline-flex;\n  flex: 0 0 auto;\n  align-items: center;\n  justify-content: center;\n  width: 18px;\n  /* \u76EE\u5F55\u56FE\u6807\u4E09\u7EA7\u58A8\u8272\uFF1ADSH design-platform \u9759\u6001\u503C\uFF08\u6DF1\u8272\u4E3B\u9898 neutral-bluish-400 /\n     \u6D45\u8272 neutral-bluish-600\uFF09\u3002\u4E0D\u53D6 --text-muted\uFF1A\u5176\u8FD0\u884C\u65F6\u503C\u8FC7\u6D45\uFF0C\n     \u56FE\u6807\u5728\u4E24\u4E3B\u9898\u4E0B\u90FD\u53D1\u865A\uFF08\u7528\u6237\u53CD\u9988\uFF09\uFF0C\u9759\u6001\u503C\u4FDD\u8BC1\u4E24\u4E3B\u9898\u4E0B\u90FD\u4E0E DSH \u540C\u5BF9\u6BD4\u5EA6\u3002 */\n  color: rgb(173, 178, 184);\n}\n\nbody[data-theme="light"] .wf-entry-icon {\n  color: rgb(129, 133, 140);\n}\n\n.wf-entry-name {\n  min-width: 0;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n\n/* \u6587\u4EF6\u7C7B\u578B\u914D\u8272\uFF08DSH design-platform \u9759\u6001 token \u503C\uFF09 */\n.wf-ft { display: inline-flex; line-height: 0; }\n.wf-ft-code, .wf-ft-html, .wf-ft-markdown { color: rgb(65, 118, 230); }\n.wf-ft-excel { color: rgb(34, 197, 94); }\n.wf-ft-image, .wf-ft-video { color: rgb(139, 118, 246); }\n.wf-ft-other { color: rgb(207, 211, 214); }\n.wf-ft-pdf { color: rgb(236, 19, 19); }\n.wf-ft-ppt { color: rgb(245, 158, 11); }\n.wf-ft-word { color: rgb(86, 134, 254); }\n.wf-ft-code-brand { color: inherit; }\n\n/* \u2500\u2500 \u4EE3\u7801\u89C6\u56FE \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 */\n\n.wf-code-wrap {\n  display: flex;\n  flex: 1 1 auto;\n  min-width: 0;\n  min-height: 0;\n  overflow: auto;\n  /* \u65E0\u72EC\u7ACB\u5E95\u8272\uFF1A\u878D\u5165\u9762\u677F\u80CC\u666F\uFF08\u7528\u6237\u53CD\u9988\u5E95\u677F\u989C\u8272\u4E0D\u597D\u770B\uFF09 */\n}\n\n.wf-gutter {\n  flex: 0 0 auto;\n  padding: 10px 8px 10px 12px;\n  border-right: 1px solid var(--border-color, rgba(255, 255, 255, 0.08));\n  color: var(--text-muted, #98a2b3);\n  /* Fira Code \u5728\u5F53\u524D Windows \u73AF\u5883\u672A\u5B89\u88C5\uFF1B\u4EE5\u7CFB\u7EDF\u5DF2\u5B89\u88C5\u7684 Cascadia Code \u4E3A\u9996\u9009\uFF0C\n     \u5E76\u7528\u7A0D\u5F3A\u5B57\u91CD\u4FDD\u8BC1\u884C\u53F7\u4E0E\u4EE3\u7801\u6B63\u6587\u7684\u7B14\u753B\u5BC6\u5EA6\u4E00\u81F4\u3002 */\n  font-family: "Cascadia Code", "Cascadia Mono", "Fira Code", "Source Code Pro", "JetBrains Mono", ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, monospace;\n  font-size: 12px;\n  font-weight: 600;\n  line-height: 1.55;\n  text-align: right;\n  user-select: none;\n  white-space: pre;\n}\n\n.wf-code {\n  flex: 1 1 auto;\n  margin: 0;\n  padding: 10px 16px;\n  font-family: "Cascadia Code", "Cascadia Mono", "Fira Code", "Source Code Pro", "JetBrains Mono", ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, monospace;\n  font-size: 12px;\n  font-weight: 600;\n  line-height: 1.55;\n  white-space: pre;\n}\n\n/* \u5168\u5C40 highlight.js \u4E3B\u9898\u4F1A\u7ED9 code.hljs \u52A0\u72EC\u7ACB\u80CC\u666F\u548C padding\uFF0C\u5BFC\u81F4\u4EE3\u7801\u533A\u51FA\u73B0\n   \u4E0E\u9762\u677F\u5E95\u8272\u4E0D\u540C\u7684\u8272\u5757\uFF1B\u5728\u672C\u9884\u89C8\u4E2D\u660E\u786E\u7EE7\u627F\u4EE3\u7801\u533A\u5B57\u91CD\u5E76\u4FDD\u6301\u900F\u660E\u3002 */\n.wf-code > code,\n.wf-code > code.hljs {\n  padding: 0 !important;\n  background: transparent !important;\n  font: inherit;\n}\n\n/* \u2500\u2500 markdown / csv / \u5BCC\u5A92\u4F53 \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 */\n\n.wf-md {\n  flex: 1 1 auto;\n  min-width: 0;\n  overflow: auto;\n  padding: 14px 18px;\n}\n\n.wf-csv-wrap {\n  display: flex;\n  flex-direction: column;\n  flex: 1 1 auto;\n  min-height: 0;\n  overflow: auto;\n}\n\n/* docx-preview \u8F93\u51FA\u6587\u6863\u6D41\u5BB9\u5668\uFF1A\u72EC\u7ACB\u6EDA\u52A8 + \u5E95\u8272\u886C\u6258\u5206\u9875 */\n.wf-docx-scroll {\n  flex: 1 1 auto;\n  min-height: 0;\n  overflow: auto;\n  background: var(--panel-bg, #111114);\n}\n\n.wf-docx-scroll .docx-wrapper {\n  padding: 16px 24px 32px;\n  background: transparent;\n}\n\n.wf-docx-scroll .docx-wrapper > section.docx {\n  background: #ffffff;\n  color: #1f2329;\n  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.25);\n  margin-bottom: 16px;\n}\n\n.wf-csv-table {\n  border-collapse: collapse;\n  min-width: 100%;\n  font-size: 12px;\n}\n\n.wf-csv-table td {\n  max-width: 320px;\n  overflow: hidden;\n  padding: 4px 10px;\n  border-bottom: 1px solid var(--border-color, rgba(255, 255, 255, 0.06));\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n\n.wf-csv-table tr.wf-csv-head td {\n  position: sticky;\n  top: 0;\n  background: var(--panel-bg, #141416);\n  color: var(--text-primary, #1f2329);\n  font-weight: 600;\n}\n\n.wf-csv-note {\n  padding: 8px 12px;\n  color: var(--text-muted, #98a2b3);\n  font-size: 11px;\n  text-align: center;\n}\n\n.wf-binary-frame {\n  flex: 1 1 auto;\n  width: 100%;\n  border: 0;\n  background: #ffffff;\n}\n\n.wf-media-stage {\n  display: flex;\n  flex: 1 1 auto;\n  align-items: center;\n  justify-content: center;\n  min-height: 0;\n  padding: 16px;\n}\n\n.wf-media-stage video {\n  max-width: 100%;\n  max-height: 100%;\n}\n\n.wf-media-audio audio { width: min(420px, 100%); }\n\n/* \u2500\u2500 \u56FE\u7247\u89C6\u56FE \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 */\n\n.wf-image-bar {\n  display: flex;\n  flex: 0 0 auto;\n  align-items: center;\n  gap: 8px;\n  padding: 6px 10px;\n  border-bottom: 1px solid var(--border-color, rgba(255, 255, 255, 0.08));\n}\n\n.wf-image-toggle {\n  padding: 2px 10px;\n  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.16));\n  border-radius: 6px;\n  background: transparent;\n  color: var(--text-secondary, #667085);\n  cursor: pointer;\n  font: inherit;\n  font-size: 11px;\n}\n\n.wf-image-toggle:hover { color: var(--text-primary, #1f2329); }\n\n.wf-image-meta {\n  color: var(--text-muted, #98a2b3);\n  font-size: 11px;\n}\n\n.wf-image-stage {\n  display: flex;\n  flex: 1 1 auto;\n  align-items: center;\n  justify-content: center;\n  min-height: 0;\n  overflow: auto;\n  padding: 12px;\n}\n\n.wf-image-stage img { max-width: 100%; max-height: 100%; }\n\n.wf-image-stage.is-full {\n  align-items: flex-start;\n  justify-content: flex-start;\n}\n\n.wf-image-stage.is-full img { max-width: none; max-height: none; }\n\n/* \u2500\u2500 \u62D6\u62FD\u505C\u9760 \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 */\n\n.wf-panel.is-dragging .gen-ui-surface-tab-item.is-drag-source { opacity: 0.45; }\n\n.wf-draggable-tab { cursor: grab; }\n\n.wf-tab-row { position: relative; }\n\n.wf-panel .wf-tab-row-drop-indicator {\n  position: absolute;\n  z-index: 3;\n  top: 4px;\n  bottom: 4px;\n  width: 3px;\n  transform: translateX(-50%);\n  border-radius: 3px;\n  background: #6b91ff;\n  pointer-events: none;\n  box-shadow: 0 0 6px rgba(93, 133, 255, 0.72);\n}\n\n.wf-pane-body { position: relative; }\n\n.wf-dock-hint {\n  position: absolute;\n  top: 8px;\n  bottom: 8px;\n  left: 50%;\n  width: 50%;\n  transform: translateX(-100%);\n  z-index: 2;\n  border: 1px dashed var(--accent, #4f6bed);\n  border-radius: 8px;\n  background: color-mix(in srgb, var(--accent, #4f6bed) 10%, transparent);\n  color: var(--accent, #4f6bed);\n  align-items: center;\n  display: flex;\n  justify-content: center;\n  font-size: 12px;\n  pointer-events: none;\n}\n\n.wf-dock-hint.wf-dock-right { transform: none; }\n\n/* \u53CC pane \u65F6\u7684\u843D\u533A\u63D0\u793A\uFF1A\u6574\u4E2A\u5BF9\u65B9 pane \u9AD8\u4EAE\uFF08\u6309\u65E2\u6709\u5206\u533A\u5206\uFF0C\u4E0D\u5DE6\u53F3\u534A\u62C6\uFF09 */\n.wf-dock-hint.wf-dock-center {\n  left: 0;\n  width: 100%;\n  transform: none;\n}\n';
+var style_default = '/* \u6587\u4EF6\u9762\u677F\u6837\u5F0F\uFF08DSH \u5F0F\uFF09\u3002\n   \u9875\u7B7E\u6761\u672C\u4F53\u590D\u7528\u5168\u5C40 gen-ui-surface-tabs \u4F53\u7CFB\uFF0C\u6B64\u5904\u53EA\u505A wf \u57DF\u5185\u7684\u8986\u76D6\u4E0E\u8865\u5145\uFF1A\n   \u975E\u6FC0\u6D3B\u9875\u7B7E\u7ED9\u53EF\u89C1\u8F6E\u5ED3\uFF08\u7528\u6237\u53CD\u9988\uFF1A\u9ED8\u8BA4\u6001\u592A"\u65E0\u754C"\uFF09\u3001divider \u5E26\u53EF\u89C6\u5206\u9694\u7EBF\u3001\n   \u6587\u4EF6\u7C7B\u578B\u56FE\u6807\u914D\u8272\u53D6\u81EA DSH design-platform \u7684\u9759\u6001 token \u503C\u3002 */\n\n.wf-panel {\n  display: flex;\n  flex-direction: column;\n  height: 100%;\n  min-height: 0;\n  overflow: hidden;\n}\n\n.wf-pane-row {\n  display: flex;\n  flex: 1 1 auto;\n  min-height: 0;\n}\n\n.wf-pane {\n  display: flex;\n  flex-direction: column;\n  min-width: 0;\n  min-height: 0;\n  overflow: hidden;\n}\n\n/* \u2500\u2500 \u9875\u7B7E\u6761\u8986\u76D6\uFF1A\u975E\u6FC0\u6D3B\u6001\u7ED9\u8F6E\u5ED3 \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 */\n\n/* \u5206\u884C\u5E03\u5C40\uFF1AcomputeTabRows \u786E\u5B9A\u6027\u5206\u884C\uFF08\u5BB9\u91CF = ceil(\u5BB9\u5668\u5BBD/104)\uFF09\uFF0C\u5916\u5C42\u7EB5\u5411\u5806\u53E0\u3002\n   \u884C\u662F\u6A2A\u5411\u6EDA\u52A8\u5BB9\u5668\uFF08\u6EDA\u52A8\u6761\u9690\u85CF\uFF09\uFF1A\u88AB\u88C1\u5207\u7684\u9875\u7B7E\u4ECD\u53EF\u8BBF\u95EE\u2014\u2014\u9009\u4E2D\u65F6 JS \u81EA\u52A8\n   \u6EDA\u52A8\u8BA9\u5B83\u5B8C\u6574\u9732\u51FA\uFF08\u542B\u5173\u95ED\u6309\u94AE\uFF09\uFF0C\u70B9\u5DE6\u4FA7\u90E8\u5206\u9690\u85CF\u9879\u5219\u5F80\u56DE\u6EDA\u52A8\u3002 */\n.wf-tabstrip {\n  display: flex;\n  flex-direction: column;\n  flex-wrap: nowrap;\n  /* \u8986\u76D6\u5168\u5C40 .gen-ui-surface-tabs \u7684 align-items: flex-end\uFF1A\n     \u5217\u65B9\u5411\u4E0B\u5B83\u4F1A\u8BA9\u884C\u6536\u7F29\u5230\u5185\u5BB9\u5BBD\u5E76\u6C34\u5E73\u53F3\u5BF9\u9F50\uFF0C\u5DE6\u4FA7\u51FA\u73B0\u83AB\u540D\u7A7A\u6863 */\n  align-items: stretch;\n}\n\n/* \u5360\u6EE1\uFF1A\u5265\u6389\u590D\u7528 .settings-tab-bar \u7684\u80F6\u56CA\u5BB9\u5668\u6837\u5F0F\uFF084px padding + \u534A\u900F\u660E\u5E95\n   + 12px \u5706\u89D2\uFF09\u2014\u2014\u9875\u7B7E\u4E0E\u5185\u5BB9\u533A\u9876\u6EE1\u5206\u533A\u8FB9\u7F18\uFF08\u7528\u6237\u53CD\u9988\u5206\u533A\u4E24\u4FA7\u6709\u5185\u8FB9\u8DDD\uFF09\u3002 */\n.wf-tabstrip.settings-tab-bar {\n  padding: 0;\n  background: transparent;\n  border-radius: 0;\n}\n\n/* \u53F3\u7F18\u5360\u6EE1\uFF1A\u58F3\u5C42 .feature-panel-body \u7EDF\u4E00 margin-right: 6px \u662F\u6EDA\u52A8\u6761\u9884\u7559\uFF0C\n   \u672C\u9762\u677F\u5185\u90E8\u81EA\u7BA1\u6EDA\u52A8\u3001body \u6C38\u4E0D\u6EDA\u52A8\uFF0C6px \u662F\u7EAF\u635F\u8017\u3002\u6302\u8F7D\u7C7B\u7531 app-ui.js\n   mountBody \u6DFB\u52A0/\u79FB\u9664\u3002 */\n.feature-panel-body.wf-full-bleed {\n  margin-right: 0;\n}\n\n.wf-tab-row {\n  display: flex;\n  flex-wrap: nowrap;\n  min-width: 0;\n  width: 100%;\n  overflow-x: auto;\n  scrollbar-width: none;\n}\n\n.wf-tab-row::-webkit-scrollbar {\n  display: none;\n}\n\n/* \u591A\u884C\u6A21\u5F0F\uFF1A\u9875\u7B7E\u4EE5\u538B\u7F29\u6863\uFF08104 = \u5168\u5C40 tab-item min-width\uFF09\u4E3A\u57FA\u51C6\uFF1B\n   \u975E\u672B\u884C\u7981\u6B62\u62C9\u4F38\uFF08flex-grow 0\uFF09\u2014\u2014\u62C9\u4F38\u4F1A\u628A\u884C\u5C3E\u9875\u7B7E\u5B8C\u5168\u63A8\u51FA\u884C\u5916\uFF0C\n   \u8FDD\u53CD\u300C\u53EA\u6709\u5B8C\u5168\u9690\u85CF\u624D\u6362\u884C\u300D\u7684\u5206\u884C\u5224\u5B9A\uFF1B\u672B\u884C\uFF08\u884C\u5C3E\uFF09\u5141\u8BB8\u62C9\u4F38\u94FA\u6EE1\u3002 */\n.wf-tabstrip.is-multi .wf-tab-row .gen-ui-surface-tab-item {\n  flex: 1 1 104px;\n  min-width: 104px;\n  max-width: 176px;\n}\n\n.wf-tabstrip.is-multi .wf-tab-row:not(:last-child) .gen-ui-surface-tab-item {\n  flex-grow: 0;\n}\n\n.wf-panel .gen-ui-surface-tab-item.is-active {\n  /* \u6CBF\u7528\u5171\u4EAB\u9875\u7B7E\u7684\u539F\u6709\u5F62\u6001\uFF0C\u53EA\u589E\u5F3A\u539F\u6709\u5E95\u8272\u3001\u8FB9\u6846\u4E0E\u6587\u5B57\u7684\u660E\u6697\u5BF9\u6BD4\u3002 */\n  border-color: #56565f;\n  background: #303036;\n  color: #ffffff;\n}\n\n.wf-panel .gen-ui-surface-tab-item.is-active .gen-ui-surface-tab {\n  color: #ffffff;\n}\n\nbody[data-theme="light"] .wf-panel .gen-ui-surface-tab-item.is-active {\n  border-color: #aeb9d3;\n  background: #e3e8f2;\n  color: #172033;\n}\n\nbody[data-theme="light"] .wf-panel .gen-ui-surface-tab-item.is-active .gen-ui-surface-tab {\n  color: #172033;\n}\n\n.wf-panel .gen-ui-surface-tab-item:not(.is-active) {\n  border-color: #2b2b30;\n  background: #141416;\n}\n\n.wf-panel .gen-ui-surface-tab-item:not(.is-active):hover {\n  background: #1d1d21;\n}\n\nbody[data-theme="light"] .wf-panel .gen-ui-surface-tab-item:not(.is-active) {\n  border-color: #d9d9de;\n  background: #ececee;\n}\n\nbody[data-theme="light"] .wf-panel .gen-ui-surface-tab-item:not(.is-active):hover {\n  background: #e3e3e6;\n}\n\n.wf-tab-icon {\n  display: inline-flex;\n  flex: 0 0 auto;\n  align-items: center;\n  margin-right: 6px;\n}\n\n.wf-tab-label {\n  min-width: 0;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n\n/* \u2500\u2500 divider\uFF1A\u53EF\u89C6\u5206\u9694\u7EBF + \u62D6\u62FD\u70ED\u533A \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 */\n\n.wf-divider {\n  position: relative;\n  z-index: 1;\n  flex: 0 0 1px;\n  cursor: col-resize;\n  touch-action: none;\n}\n\n/* \u53EF\u89C1\u5206\u9694\u7EBF\u5360\u636E pane \u8FB9\u754C\u672C\u8EAB\uFF0C\u4E0D\u7559\u4E24\u4FA7\u89C6\u89C9\u7A7A\u9699\uFF1B\u900F\u660E\u4F2A\u5143\u7D20\u5411\u4E24\u4FA7\u6269\u5C55\n   \u62D6\u62FD\u70ED\u533A\uFF0C\u4FDD\u6301\u6613\u4E8E\u6293\u53D6\u7684 9px \u547D\u4E2D\u8303\u56F4\u3002 */\n.wf-divider::before {\n  content: "";\n  position: absolute;\n  top: 0;\n  bottom: 0;\n  left: -4px;\n  width: 9px;\n  cursor: col-resize;\n}\n\n.wf-divider::after {\n  content: "";\n  position: absolute;\n  top: 0;\n  bottom: 0;\n  left: 0;\n  width: 1px;\n  background: var(--border-color, rgba(255, 255, 255, 0.1));\n  transition: background 120ms ease, box-shadow 120ms ease;\n}\n\n.wf-divider:hover::after,\n.wf-divider:active::after {\n  background: var(--accent, #4f6bed);\n  box-shadow: 0 0 0 0.5px var(--accent, #4f6bed);\n}\n\n/* \u2500\u2500 pane \u5185\u5BB9\u533A \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 */\n\n.wf-pane-body {\n  position: relative;\n  display: flex;\n  flex: 1 1 auto;\n  min-height: 0;\n  overflow: hidden;\n}\n\n.wf-tab-page {\n  display: flex;\n  flex: 1 1 auto;\n  min-width: 0;\n  min-height: 0;\n  overflow: hidden;\n}\n\n.wf-empty {\n  display: flex;\n  flex: 1 1 auto;\n  align-items: center;\n  justify-content: center;\n  padding: 24px 12px;\n  color: var(--text-muted, #98a2b3);\n  font-size: 12px;\n}\n\n/* \u6811\u4E2D\u7684\u52A0\u8F7D/\u7A7A\u76EE\u5F55/\u9519\u8BEF\u72B6\u6001\u662F\u4E00\u6761\u5B50\u9879\uFF0C\u4E0D\u662F\u5360\u6EE1\u89C6\u53E3\u7684\u7A7A\u6001\u9762\u677F\u3002 */\n.wf-tree-state {\n  display: flex;\n  width: 100%;\n  align-items: center;\n  gap: 6px;\n  padding: 4px 8px;\n  color: var(--text-muted, #98a2b3);\n  font-size: 12px;\n  line-height: 20px;\n  text-align: left;\n}\n\n.wf-error { color: #e5484d; }\n\n/* \u2500\u2500 \u9762\u677F\u6EDA\u52A8\u533A\u7EDF\u4E00\u7EC6\u6EDA\u52A8\u6761 \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n   \u9879\u76EE\u65E2\u6709 thin \u914D\u65B9\uFF08layout.css \u540C\u6B3E\u6807\u51C6\u5C5E\u6027\uFF09\uFF1A\u5168\u5C40 ::-webkit 8px \u6EDA\u52A8\u6761\n   \u5728\u7A84\u680F\u9762\u677F\u91CC\u663E\u5F97\u7C97\u7B28\uFF08\u7528\u6237\u53CD\u9988\uFF09\uFF0C\u7EC6\u6761 + \u534A\u900F\u660E thumb \u66F4\u534F\u8C03\u3002\n   Chrome 121+ \u6807\u51C6\u5C5E\u6027\u4F18\u5148\u4E8E\u5168\u5C40 ::-webkit \u89C4\u5219\uFF0C\u65E0\u9700\u79C1\u6709\u8986\u76D6\u3002 */\n.wf-tree,\n.wf-code-wrap,\n.wf-md,\n.wf-csv-wrap,\n.wf-docx-scroll,\n.wf-image-stage {\n  scrollbar-width: thin;\n  scrollbar-color: rgba(255, 255, 255, 0.16) transparent;\n}\n\nbody[data-theme="light"] .wf-tree,\nbody[data-theme="light"] .wf-code-wrap,\nbody[data-theme="light"] .wf-md,\nbody[data-theme="light"] .wf-csv-wrap,\nbody[data-theme="light"] .wf-docx-scroll,\nbody[data-theme="light"] .wf-image-stage {\n  scrollbar-color: rgba(0, 0, 0, 0.22) transparent;\n}\n\n/* \u2500\u2500 \u6587\u4EF6\u6811 \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 */\n\n.wf-tree {\n  display: flex;\n  flex: 1 1 auto;\n  flex-direction: column;\n  min-height: 0;\n  overflow: auto;\n  padding: 4px 0 12px 6px;\n}\n\n.wf-tree-state.wf-retry {\n  border: 0;\n  background: transparent;\n  color: var(--accent, #4f6bed);\n  cursor: pointer;\n  font: inherit;\n  font-size: 12px;\n}\n\n.wf-entry {\n  display: flex;\n  width: 100%;\n  align-items: center;\n  gap: 6px;\n  padding: 4px 8px;\n  border: 0;\n  background: transparent;\n  color: var(--text-primary, #1f2329);\n  cursor: pointer;\n  font: inherit;\n  font-size: 12px;\n  line-height: 20px;\n  text-align: left;\n}\n\n.wf-entry:hover { background: rgba(128, 128, 140, 0.12); }\n\n.wf-entry.wf-unsupported {\n  color: var(--text-muted, #98a2b3);\n  cursor: default;\n}\n\n.wf-entry.wf-unsupported:hover { background: transparent; }\n\n.wf-entry-icon {\n  display: inline-flex;\n  flex: 0 0 auto;\n  align-items: center;\n  justify-content: center;\n  width: 18px;\n  /* \u76EE\u5F55\u56FE\u6807\u4E09\u7EA7\u58A8\u8272\uFF1ADSH design-platform \u9759\u6001\u503C\uFF08\u6DF1\u8272\u4E3B\u9898 neutral-bluish-400 /\n     \u6D45\u8272 neutral-bluish-600\uFF09\u3002\u4E0D\u53D6 --text-muted\uFF1A\u5176\u8FD0\u884C\u65F6\u503C\u8FC7\u6D45\uFF0C\n     \u56FE\u6807\u5728\u4E24\u4E3B\u9898\u4E0B\u90FD\u53D1\u865A\uFF08\u7528\u6237\u53CD\u9988\uFF09\uFF0C\u9759\u6001\u503C\u4FDD\u8BC1\u4E24\u4E3B\u9898\u4E0B\u90FD\u4E0E DSH \u540C\u5BF9\u6BD4\u5EA6\u3002 */\n  color: rgb(173, 178, 184);\n}\n\nbody[data-theme="light"] .wf-entry-icon {\n  color: rgb(129, 133, 140);\n}\n\n.wf-entry-name {\n  min-width: 0;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n\n/* \u6587\u4EF6\u7C7B\u578B\u914D\u8272\uFF08DSH design-platform \u9759\u6001 token \u503C\uFF09 */\n.wf-ft { display: inline-flex; line-height: 0; }\n.wf-ft-code, .wf-ft-html, .wf-ft-markdown { color: rgb(65, 118, 230); }\n.wf-ft-excel { color: rgb(34, 197, 94); }\n.wf-ft-image, .wf-ft-video { color: rgb(139, 118, 246); }\n.wf-ft-other { color: rgb(207, 211, 214); }\n.wf-ft-pdf { color: rgb(236, 19, 19); }\n.wf-ft-ppt { color: rgb(245, 158, 11); }\n.wf-ft-word { color: rgb(86, 134, 254); }\n.wf-ft-code-brand { color: inherit; }\n\n/* \u2500\u2500 \u4EE3\u7801\u89C6\u56FE \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 */\n\n.wf-code-wrap {\n  display: flex;\n  flex: 1 1 auto;\n  min-width: 0;\n  min-height: 0;\n  overflow: auto;\n  /* \u65E0\u72EC\u7ACB\u5E95\u8272\uFF1A\u878D\u5165\u9762\u677F\u80CC\u666F\uFF08\u7528\u6237\u53CD\u9988\u5E95\u677F\u989C\u8272\u4E0D\u597D\u770B\uFF09 */\n}\n\n.wf-gutter {\n  flex: 0 0 auto;\n  padding: 10px 8px 10px 12px;\n  border-right: 1px solid var(--border-color, rgba(255, 255, 255, 0.08));\n  color: var(--text-muted, #98a2b3);\n  /* Fira Code \u5728\u5F53\u524D Windows \u73AF\u5883\u672A\u5B89\u88C5\uFF1B\u4EE5\u7CFB\u7EDF\u5DF2\u5B89\u88C5\u7684 Cascadia Code \u4E3A\u9996\u9009\uFF0C\n     \u5E76\u7528\u7A0D\u5F3A\u5B57\u91CD\u4FDD\u8BC1\u884C\u53F7\u4E0E\u4EE3\u7801\u6B63\u6587\u7684\u7B14\u753B\u5BC6\u5EA6\u4E00\u81F4\u3002 */\n  font-family: "Cascadia Code", "Cascadia Mono", "Fira Code", "Source Code Pro", "JetBrains Mono", ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, monospace;\n  font-size: 12px;\n  font-weight: 600;\n  line-height: 1.55;\n  text-align: right;\n  user-select: none;\n  white-space: pre;\n}\n\n.wf-code {\n  flex: 1 1 auto;\n  margin: 0;\n  padding: 10px 16px;\n  font-family: "Cascadia Code", "Cascadia Mono", "Fira Code", "Source Code Pro", "JetBrains Mono", ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, monospace;\n  font-size: 12px;\n  font-weight: 600;\n  line-height: 1.55;\n  white-space: pre;\n}\n\n/* \u5168\u5C40 highlight.js \u4E3B\u9898\u4F1A\u7ED9 code.hljs \u52A0\u72EC\u7ACB\u80CC\u666F\u548C padding\uFF0C\u5BFC\u81F4\u4EE3\u7801\u533A\u51FA\u73B0\n   \u4E0E\u9762\u677F\u5E95\u8272\u4E0D\u540C\u7684\u8272\u5757\uFF1B\u5728\u672C\u9884\u89C8\u4E2D\u660E\u786E\u7EE7\u627F\u4EE3\u7801\u533A\u5B57\u91CD\u5E76\u4FDD\u6301\u900F\u660E\u3002 */\n.wf-code > code,\n.wf-code > code.hljs {\n  padding: 0 !important;\n  background: transparent !important;\n  font: inherit;\n}\n\n/* \u2500\u2500 markdown / csv / \u5BCC\u5A92\u4F53 \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 */\n\n.wf-md {\n  flex: 1 1 auto;\n  min-width: 0;\n  overflow: auto;\n  padding: 14px 18px;\n}\n\n.wf-csv-wrap {\n  display: flex;\n  flex-direction: column;\n  flex: 1 1 auto;\n  min-height: 0;\n  overflow: auto;\n}\n\n/* docx-preview \u8F93\u51FA\u6587\u6863\u6D41\u5BB9\u5668\uFF1A\u72EC\u7ACB\u6EDA\u52A8 + \u5E95\u8272\u886C\u6258\u5206\u9875 */\n.wf-docx-scroll {\n  flex: 1 1 auto;\n  min-height: 0;\n  overflow: auto;\n  background: var(--panel-bg, #111114);\n}\n\n.wf-docx-scroll .docx-wrapper {\n  padding: 16px 24px 32px;\n  background: transparent;\n}\n\n.wf-docx-scroll .docx-wrapper > section.docx {\n  background: #ffffff;\n  color: #1f2329;\n  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.25);\n  margin-bottom: 16px;\n}\n\n.wf-csv-table {\n  border-collapse: collapse;\n  min-width: 100%;\n  font-size: 12px;\n}\n\n.wf-csv-table td {\n  max-width: 320px;\n  overflow: hidden;\n  padding: 4px 10px;\n  border-bottom: 1px solid var(--border-color, rgba(255, 255, 255, 0.06));\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n\n.wf-csv-table tr.wf-csv-head td {\n  position: sticky;\n  top: 0;\n  background: var(--panel-bg, #141416);\n  color: var(--text-primary, #1f2329);\n  font-weight: 600;\n}\n\n.wf-csv-note {\n  padding: 8px 12px;\n  color: var(--text-muted, #98a2b3);\n  font-size: 11px;\n  text-align: center;\n}\n\n.wf-binary-frame {\n  flex: 1 1 auto;\n  width: 100%;\n  border: 0;\n  background: #ffffff;\n}\n\n.wf-media-stage {\n  display: flex;\n  flex: 1 1 auto;\n  align-items: center;\n  justify-content: center;\n  min-height: 0;\n  padding: 16px;\n}\n\n.wf-media-stage video {\n  max-width: 100%;\n  max-height: 100%;\n}\n\n.wf-media-audio audio { width: min(420px, 100%); }\n\n/* \u2500\u2500 \u56FE\u7247\u89C6\u56FE \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 */\n\n.wf-image-bar {\n  display: flex;\n  flex: 0 0 auto;\n  align-items: center;\n  gap: 8px;\n  padding: 6px 10px;\n  border-bottom: 1px solid var(--border-color, rgba(255, 255, 255, 0.08));\n}\n\n.wf-image-toggle {\n  padding: 2px 10px;\n  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.16));\n  border-radius: 6px;\n  background: transparent;\n  color: var(--text-secondary, #667085);\n  cursor: pointer;\n  font: inherit;\n  font-size: 11px;\n}\n\n.wf-image-toggle:hover { color: var(--text-primary, #1f2329); }\n\n.wf-image-meta {\n  color: var(--text-muted, #98a2b3);\n  font-size: 11px;\n}\n\n.wf-image-stage {\n  display: flex;\n  flex: 1 1 auto;\n  align-items: center;\n  justify-content: center;\n  min-height: 0;\n  overflow: auto;\n  padding: 12px;\n}\n\n.wf-image-stage img { max-width: 100%; max-height: 100%; }\n\n.wf-image-stage.is-full {\n  align-items: flex-start;\n  justify-content: flex-start;\n}\n\n.wf-image-stage.is-full img { max-width: none; max-height: none; }\n\n/* \u2500\u2500 \u62D6\u62FD\u505C\u9760 \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 */\n\n.wf-panel.is-dragging .gen-ui-surface-tab-item.is-drag-source { opacity: 0.45; }\n\n.wf-draggable-tab { cursor: grab; }\n\n.wf-tab-row { position: relative; }\n\n.wf-panel .wf-tab-row-drop-indicator {\n  position: absolute;\n  z-index: 3;\n  top: 4px;\n  bottom: 4px;\n  width: 3px;\n  transform: translateX(-50%);\n  border-radius: 3px;\n  background: #6b91ff;\n  pointer-events: none;\n  box-shadow: 0 0 6px rgba(93, 133, 255, 0.72);\n}\n\n.wf-pane-body { position: relative; }\n\n.wf-dock-scrim {\n  position: absolute;\n  inset: 0;\n  z-index: 2;\n  background: color-mix(in srgb, var(--panel-bg, #17171b) 72%, transparent);\n  backdrop-filter: blur(4px);\n  pointer-events: none;\n  animation: wf-dock-scrim-in 140ms ease-out both;\n}\n\n.wf-dock-hint {\n  position: absolute;\n  top: 0;\n  bottom: 0;\n  left: 0;\n  width: 50%;\n  box-sizing: border-box;\n  display: flex;\n  padding: 8px;\n  transform: none;\n  z-index: 3;\n  pointer-events: none;\n}\n\n.wf-dock-hint.wf-dock-right { left: 50%; }\n\n/* DSH \u7684 dockkit \u4EE5\u5F31\u5316\u5E95\u5C42\u5185\u5BB9 + \u5185\u7F29\u843D\u533A\u5361\u7247\u8868\u8FBE\u76EE\u6807\uFF1B\u4EC5\u5F53\u524D\u843D\u533A\n   \u4F7F\u7528\u5F3A\u8C03\u8272\uFF0C\u907F\u514D\u84DD\u8272\u5B9E\u5E95\u906E\u6321\u6587\u4EF6\u9884\u89C8\u3002 */\n.wf-dock-hint.wf-dock-center {\n  left: 0;\n  width: 100%;\n}\n\n.wf-dock-card {\n  display: flex;\n  flex: 1 1 auto;\n  min-width: 0;\n  min-height: 0;\n  flex-direction: column;\n  align-items: center;\n  justify-content: center;\n  gap: 8px;\n  padding: 12px;\n  overflow: hidden;\n  border: 1.5px dashed var(--border-color, rgba(255, 255, 255, 0.24));\n  border-radius: 10px;\n  color: var(--text-secondary, #a3a3ad);\n  background: color-mix(in srgb, var(--panel-bg, #17171b) 22%, transparent);\n  transition: color 120ms ease-out, background-color 120ms ease-out, border-color 120ms ease-out;\n  animation: wf-dock-card-in 140ms ease-out both;\n}\n\n.wf-dock-hint:not(.wf-dock-center) .wf-dock-card { border-color: color-mix(in srgb, var(--border-color, #383842) 72%, transparent); }\n.wf-dock-hint[data-drop-active] .wf-dock-card {\n  color: var(--accent, #4f6bed);\n  border-color: var(--accent, #4f6bed);\n  background: color-mix(in srgb, var(--accent, #4f6bed) 8%, transparent);\n}\n\n.wf-dock-glyph {\n  flex: none;\n  width: 20px;\n  height: 20px;\n}\n\n.wf-dock-label {\n  max-width: 100%;\n  overflow: hidden;\n  font-size: 12px;\n  font-weight: 500;\n  line-height: 1.4;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n\n@keyframes wf-dock-card-in {\n  from { opacity: 0; transform: scale(0.98); }\n  to { opacity: 1; transform: none; }\n}\n\n@keyframes wf-dock-scrim-in {\n  from { opacity: 0; }\n  to { opacity: 1; }\n}\n\n@media (prefers-reduced-motion: reduce) {\n  .wf-dock-scrim,\n  .wf-dock-card { animation: none; }\n}\n';
 
 // public/src/react-panels/workspace-files/icons.tsx
 import { useId } from "/src/react-panels-dist/shared/react.js?v=^19.3.1";
@@ -39261,7 +39261,7 @@ function WorkspaceFiles() {
       activePaneId,
       splitRatio,
       imageModes,
-      nextPaneId: nextPaneId.curren
+      nextPaneId: nextPaneId.current
     });
   });
   useEffect(() => {
@@ -39714,7 +39714,25 @@ function WorkspaceFiles() {
                   },
                   tabId
                 )),
-                dockHint?.paneId === pane.id && /* @__PURE__ */ jsx2("div", { className: `wf-dock-hint wf-dock-${dockHint.side}`, children: dockHint.side === "center" ? "\u677E\u5F00\u79FB\u52A8\u5230\u6B64\u5206\u680F" : `\u677E\u5F00\u505C\u9760\u5230${dockHint.side === "left" ? "\u5DE6\u4FA7" : "\u53F3\u4FA7"}` })
+                dockHint?.paneId === pane.id && /* @__PURE__ */ jsx2("div", { className: "wf-dock-scrim", "aria-hidden": "true" }),
+                dockHint?.paneId === pane.id && /* @__PURE__ */ jsx2("div", { className: `wf-dock-hint wf-dock-${dockHint.side}`, role: "status", "data-drop-active": true, children: /* @__PURE__ */ jsxs2("div", { className: "wf-dock-card", children: [
+                  /* @__PURE__ */ jsxs2("svg", { className: "wf-dock-glyph", viewBox: "0 0 24 24", fill: "none", "aria-hidden": "true", children: [
+                    /* @__PURE__ */ jsx2("rect", { x: "3", y: "3", width: "18", height: "18", rx: "2", stroke: "currentColor", strokeWidth: "1.5" }),
+                    /* @__PURE__ */ jsx2(
+                      "rect",
+                      {
+                        x: dockHint.side === "right" ? 12.5 : 4.5,
+                        y: "4.5",
+                        width: dockHint.side === "center" ? 15 : 7,
+                        height: "15",
+                        rx: "1",
+                        fill: "currentColor",
+                        fillOpacity: "0.45"
+                      }
+                    )
+                  ] }),
+                  /* @__PURE__ */ jsx2("span", { className: "wf-dock-label", children: dockHint.side === "center" ? "\u79FB\u52A8\u5230\u6B64\u5206\u680F" : `\u505C\u9760\u5230${dockHint.side === "left" ? "\u5DE6\u4FA7" : "\u53F3\u4FA7"}` })
+                ] }) })
               ]
             }
           )
@@ -39735,7 +39753,7 @@ function mount(host) {
   return () => root.unmount();
 }
 export {
-  moun
+  mount
 };
 /*! Bundled license information:
 

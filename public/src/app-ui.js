@@ -1746,7 +1746,7 @@ registerFeaturePanel('files', {
     const token = ++_filesPanelMountId;
     host.dataset.filesMountToken = String(token);
     host.classList.add('wf-full-bleed');
-    host.innerHTML = '<div class="wf-empty">正在加载文件面板…</div>';
+    host.innerHTML = '<div style="display:flex;width:100%;height:100%;align-items:center;justify-content:center"><span class="chat-loading-spinner" role="status" aria-label="正在加载文件面板"></span></div>';
     const panelUrl = window.__PROTOCLAW_APP_URL__?.('/src/react-panels-dist/workspace-files/index.js') || '/src/react-panels-dist/workspace-files/index.js';
     import(panelUrl).then(module => {
       if (!active || host.dataset.filesMountToken !== String(token)) return;

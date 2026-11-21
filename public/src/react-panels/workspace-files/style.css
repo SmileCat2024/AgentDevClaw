@@ -525,30 +525,92 @@ body[data-theme="light"] .wf-entry-icon {
 
 .wf-pane-body { position: relative; }
 
+.wf-dock-scrim {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  background: color-mix(in srgb, var(--panel-bg, #17171b) 72%, transparent);
+  backdrop-filter: blur(4px);
+  pointer-events: none;
+  animation: wf-dock-scrim-in 140ms ease-out both;
+}
+
 .wf-dock-hint {
   position: absolute;
-  top: 8px;
-  bottom: 8px;
-  left: 50%;
+  top: 0;
+  bottom: 0;
+  left: 0;
   width: 50%;
-  transform: translateX(-100%);
-  z-index: 2;
-  border: 1px dashed var(--accent, #4f6bed);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--accent, #4f6bed) 10%, transparent);
-  color: var(--accent, #4f6bed);
-  align-items: center;
+  box-sizing: border-box;
   display: flex;
-  justify-content: center;
-  font-size: 12px;
+  padding: 8px;
+  transform: none;
+  z-index: 3;
   pointer-events: none;
 }
 
-.wf-dock-hint.wf-dock-right { transform: none; }
+.wf-dock-hint.wf-dock-right { left: 50%; }
 
-/* 双 pane 时的落区提示：整个对方 pane 高亮（按既有分区分，不左右半拆） */
+/* DSH 的 dockkit 以弱化底层内容 + 内缩落区卡片表达目标；仅当前落区
+   使用强调色，避免蓝色实底遮挡文件预览。 */
 .wf-dock-hint.wf-dock-center {
   left: 0;
   width: 100%;
-  transform: none;
+}
+
+.wf-dock-card {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 12px;
+  overflow: hidden;
+  border: 1.5px dashed var(--border-color, rgba(255, 255, 255, 0.24));
+  border-radius: 10px;
+  color: var(--text-secondary, #a3a3ad);
+  background: color-mix(in srgb, var(--panel-bg, #17171b) 22%, transparent);
+  transition: color 120ms ease-out, background-color 120ms ease-out, border-color 120ms ease-out;
+  animation: wf-dock-card-in 140ms ease-out both;
+}
+
+.wf-dock-hint:not(.wf-dock-center) .wf-dock-card { border-color: color-mix(in srgb, var(--border-color, #383842) 72%, transparent); }
+.wf-dock-hint[data-drop-active] .wf-dock-card {
+  color: var(--accent, #4f6bed);
+  border-color: var(--accent, #4f6bed);
+  background: color-mix(in srgb, var(--accent, #4f6bed) 8%, transparent);
+}
+
+.wf-dock-glyph {
+  flex: none;
+  width: 20px;
+  height: 20px;
+}
+
+.wf-dock-label {
+  max-width: 100%;
+  overflow: hidden;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@keyframes wf-dock-card-in {
+  from { opacity: 0; transform: scale(0.98); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes wf-dock-scrim-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wf-dock-scrim,
+  .wf-dock-card { animation: none; }
 }

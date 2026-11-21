@@ -104,7 +104,7 @@ for (const entry of entries) {
   }
   // Keep generated bundles clean for repository whitespace checks (some vendor
   // CSS strings contain source trailing spaces that esbuild preserves verbatim).
-  js = js.replace(/[ \\t]+$/gm, '');
+  js = js.replace(/[ \t]+$/gm, '');
   await writeFile(jsPath, js);
   await writeFile(path.join(outputDir, 'build-meta.json'), JSON.stringify({
     panelId,
