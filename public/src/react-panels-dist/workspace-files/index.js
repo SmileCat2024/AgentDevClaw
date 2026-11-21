@@ -39528,14 +39528,6 @@ function WorkspaceFiles() {
     const row = event.currentTarget;
     const position = getRowDropPosition(row, event.clientX);
     if (!position?.tabId) {
-      const pane = panes.find((item) => item.id === paneId);
-      if (!pane || pane.tabs.some((id) => id !== dragTab)) {
-        setDragOverTab(null);
-        return;
-      }
-      event.preventDefault();
-      event.stopPropagation();
-      event.dataTransfer.dropEffect = "move";
       setDragOverTab(null);
       return;
     }
@@ -39576,29 +39568,8 @@ function WorkspaceFiles() {
       moveTabToPosition(paneId, position.tabId, position.after);
       return;
     }
-    if (!position?.tabId) {
-      const pane = panes.find((item) => item.id === paneId);
-      const sourcePane = panes.find((item) => item.tabs.includes(dragTab));
-      if (!pane || !sourcePane || pane.tabs.some((id) => id !== dragTab)) return;
-      event.preventDefault();
-      event.stopPropagation();
-      setPanes((current) => current.map((item) => {
-        if (item.id === sourcePane.id) {
-          const tabs = item.tabs.filter((id) => id !== dragTab);
-          return { ...item, tabs, active: item.active === dragTab ? tabs[0] ?? TREE_TAB : item.active };
-        }
-        if (item.id === paneId) return { ...item, tabs: [dragTab], active: dragTab };
-        return item;
-      }).filter((item) => item.tabs.length > 0));
-      setActivePaneId(paneId);
-      setDragTab(null);
-      setDragOverTab(null);
-      setDockHint(null);
-      return;
-    }
-    event.preventDefault();
-    event.stopPropagation();
-    moveTabToPosition(paneId, position.tabId, position.after);
+    setDragOverTab(null);
+    setDockHint(null);
   };
   const onTabDragEnd = () => {
     clearDragArm();

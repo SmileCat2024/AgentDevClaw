@@ -796,14 +796,10 @@ function WorkspaceFiles() {
     const row = event.currentTarget as HTMLElement;
     const position = getRowDropPosition(row, event.clientX);
     if (!position?.tabId) {
-      const pane = panes.find(item => item.id === paneId);
-      if (!pane || pane.tabs.some(id => id !== dragTab)) {
-        setDragOverTab(null);
-        return;
-      }
-      event.preventDefault();
-      event.stopPropagation();
-      event.dataTransfer.dropEffect = 'move';
+      // 行内没有可参照的其他页签（典型：该栏只含被拖页签；多行时被拖
+      // 页签独占一行同理）。此行不存在有效插入槽，也不允许落点——
+      // 同栏单页签拖动应是无效操作，释放即取消，收尾交给 dragend。
+      // 跨栏不会走到这里：目标栏不含被拖页签，其行内必有其他页签可参照。
       setDragOverTab(null);
       return;
     }
@@ -851,29 +847,10 @@ function WorkspaceFiles() {
       moveTabToPosition(paneId, position.tabId, position.after);
       return;
     }
-    if (!position?.tabId) {
-      const pane = panes.find(item => item.id === paneId);
-      const sourcePane = panes.find(item => item.tabs.includes(dragTab));
-      if (!pane || !sourcePane || pane.tabs.some(id => id !== dragTab)) return;
-      event.preventDefault();
-      event.stopPropagation();
-      setPanes(current => current.map(item => {
-        if (item.id === sourcePane.id) {
-          const tabs = item.tabs.filter(id => id !== dragTab);
-          return { ...item, tabs, active: item.active === dragTab ? (tabs[0] ?? TREE_TAB) : item.active };
-        }
-        if (item.id === paneId) return { ...item, tabs: [dragTab], active: dragTab };
-        return item;
-      }).filter(item => item.tabs.length > 0));
-      setActivePaneId(paneId);
-      setDragTab(null);
-      setDragOverTab(null);
-      setDockHint(null);
-      return;
-    }
-    event.preventDefault();
-    event.stopPropagation();
-    moveTabToPosition(paneId, position.tabId, position.after);
+    // 行内无可参照页签（同栏单页签/独占一行）：无效落点，无事可做。
+    // dragover 已不允许此类落点，这里只做防御性清理。
+    setDragOverTab(null);
+    setDockHint(null);
   };
 
   const onTabDragEnd = () => {
