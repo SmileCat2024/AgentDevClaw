@@ -519,13 +519,13 @@ function applyOptimisticWorkspaceSession(agentId, session) {
 }
 
 // ── 幂等键（ADR-0011）：写类提交统一携带（本地忽略、远程强制）───────────
-// **不上桥**（与 input-actions / ctx-menu-handlers 同制）：classic 相
-// `wg-threads-panel.js` 的同名顶层声明已经把 `window.newIdempotencyKey` 建成
-// non-configurable 数据属性（悬置域，先于模块相执行），对它 defineKey 会在
-// 模块求值期抛 `Cannot redefine property` —— 那会中断整个编排域。因此本模块
-// 保持私有副本自用；既有 window 消费方（claw-host 的插件 env 裸引用守卫、
-// context-guard-toggle 的 `window.newIdempotencyKey()`）继续取到 wg 侧逐字
-// 相同的实现，语义不变。全仓同名单例收敛留给 T5（悬置域封存）。
+// **不上桥**（与 input-actions / ctx-menu-handlers 同制）：window 上同名
+// 属性（wg-threads-panel.js 的 classic 顶层声明）已随该脚本改按需装载
+// （lazy-domains）不再是稳定供给，且对 non-configurable 属性 defineKey
+// 会在模块求值期抛 `Cannot redefine property` —— 那会中断整个编排域。
+// 原先经 window 消费的两个入口已自足：context-guard-toggle 改 import
+// input-actions 的导出，claw-host 的插件 env 内联同款实现。本模块保持
+// 私有副本自用。全仓同名单例收敛留给 T5（悬置域封存）。
 function newIdempotencyKey() {
   const cryptoObj = (typeof crypto !== 'undefined') ? crypto : null;
   if (cryptoObj && typeof cryptoObj.randomUUID === 'function') {

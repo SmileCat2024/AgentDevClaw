@@ -646,8 +646,6 @@ async function panelCase({
       sandbox.featurePanelBody = { addEventListener() {} };
       sandbox.renderFeaturePanel = () => {};
       sandbox.renderAgentList = () => {};
-      // app-main（编排域）的幂等键入口：本沙箱不装载 app-main，按契约给确定性值。
-      sandbox.newIdempotencyKey = () => 'test-idem-key';
       sandbox.loadSource('public/src/modules/claw-host.js');
     },
     globals: { URLSearchParams },

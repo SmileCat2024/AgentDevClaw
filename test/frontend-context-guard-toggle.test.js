@@ -70,10 +70,7 @@ async function guardSandbox(overrides = {}) {
   const toasts = [];
   const { fetch: fetchOverride, ...windowOverrides } = overrides;
   const cleanupStubs = installBrowserStubs({
-    window: {
-      newIdempotencyKey: () => 'test-idem-key',
-      ...windowOverrides,
-    },
+    window: { ...windowOverrides },
   });
   // 会话身份：viewer 侧绑定（生产由 switchAgent 建立）
   identity.setViewerSessionBinding('runtime-a', 'session-a');
@@ -232,7 +229,10 @@ describe('ContextGuardToggle: three-state cycling with toast feedback', () => {
 
     const call = calls.find((c) => c.url === '/protoclaw/context_guard_control');
     assert.ok(call, 'control request was posted');
-    assert.equal(call.options.headers['x-idempotency-key'], 'test-idem-key');
+    // 幂等键由模块本地私有副本生成（randomUUID 或无 crypto 时的 key- 前缀
+    // 随机串），不经 window（wg-threads-panel 改按需装载后 window 无稳定供给）
+    assert.match(call.options.headers['x-idempotency-key'],
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$|^key-/);
     assert.deepEqual(JSON.parse(call.options.body), {
       agentId: 'programming-helper',
       sessionId: 'session-a',

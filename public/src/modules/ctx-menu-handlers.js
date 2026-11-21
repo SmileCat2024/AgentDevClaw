@@ -604,16 +604,15 @@ container.addEventListener('contextmenu', (event) => {
 // 注销条件：sidebar-render 改用 import 后删除 defineKey 并下调桥债基线。
 //
 // 不建桥（同名覆盖会破坏求值）— newIdempotencyKey：
-//   classic 全局赢家是 app-main.js 的顶层 `function newIdempotencyKey()`
-//   （index.html :554 的 classic 标签在 ctx-menu-handlers 原位 :544 之后），
-//   classic 顶层函数声明在浏览器里是 **non-configurable** 的 window 属性，
+//   带顶层同名声明的 classic 脚本（曾长期是 app-main 的 classic 标签，后为
+//   wg-threads-panel.js）挂成的 window 属性是 **non-configurable** 的，
 //   KernelState.defineKey 的 Object.defineProperty 在真实 Chromium 抛
 //   `TypeError: Cannot redefine property: newIdempotencyKey` —— 整个模块求值
-//   失败。因此本文件只在内部使用自己的私有副本（幂等请求头），外部消费方
-//   （claw-host 的 typeof 兜底 / persistent-input / choice-input 裸调用 /
-//   ESM context-guard-toggle 的 window.newIdempotencyKey）继续取 app-main 的
-//   classic 实现（两份实现逐字相同，行为零变化）。app-main 日后迁 ESM 时由
-//   该批一并处理同名不可配置约束与消费面。
+//   失败。因此本文件只在内部使用自己的私有副本（幂等请求头）。原先经
+//   window 取全局实现的消费方已全部自足（claw-host 插件 env 内联、
+//   persistent-input / choice-input / context-guard-toggle import
+//   input-actions 的导出）；现存 window 属性提供者（wg-threads-panel）
+//   已改按需装载（lazy-domains），不再是稳定全局供给。
 // 本文件其余函数（isDeletedAgentFocused）零跨文件消费方，保持模块私有、不上桥。
 const bridgeApi = { openAgentActions };
 window.KernelState.defineKey('ctx-menu-handlers', 'openAgentActions', openAgentActions);

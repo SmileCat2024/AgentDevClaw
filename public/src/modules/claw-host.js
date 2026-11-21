@@ -673,9 +673,16 @@
       formatDate(value) {
         return typeof formatWorkspaceDate === 'function' ? formatWorkspaceDate(value) : '';
       },
-      // 幂等键（与宿主请求通道同一生成实现；coder 插件的 interrupt 等直连请求用）
+      // 幂等键（与宿主请求通道同一生成实现；coder 插件的 interrupt 等直连请求用）。
+      // 自足实现：原先裸引用 window.newIdempotencyKey（靠 wg-threads-panel 的 classic
+      // 顶层声明提供），该脚本改按需装载（lazy-domains）后未装载期恒为 undefined，
+      // typeof 守卫静默退化为空键；内联后行为不再依赖其它脚本的装载时点。
       newIdempotencyKey() {
-        return typeof newIdempotencyKey === 'function' ? newIdempotencyKey() : '';
+        const cryptoObj = (typeof crypto !== 'undefined') ? crypto : null;
+        if (cryptoObj && typeof cryptoObj.randomUUID === 'function') {
+          return cryptoObj.randomUUID();
+        }
+        return `key-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
       },
       markdown: {
         render: (text) => (window.renderMarkdown ? window.renderMarkdown(text) : String(text ?? '')),

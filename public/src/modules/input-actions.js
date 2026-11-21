@@ -30,8 +30,10 @@
  *   `requestSupportsAction` / `getRollbackInputRequest` 的唯一跨文件消费方是
  *   rollback-dialog-runtime（本批已 ESM，直接 import）；`getAvailableCallIndices`
  *   / `syncRollbackActionButtons` / `_notifyActionSubmitFailed` 为模块私有。
- *   `newIdempotencyKey` **刻意不上桥**：同名 classic 顶层函数声明（app-main.js）
- *   在 window 上是不可配置属性，再 defineKey 会直接抛错，且消费方只需函数值。
+ *   `newIdempotencyKey` **刻意不上桥**：window 上同名属性是 classic 顶层
+ *   函数声明挂成的不可配置属性（现存提供者 wg-threads-panel.js，已改按需
+ *   装载、非稳定供给），再 defineKey 会直接抛错，且消费方只需函数值、
+ *   直接 import 即可。
  *
  * 依赖形态：
  *   - 已迁 ESM 直接 import：会话视图存储（currentInputRequests / currentMessages）、

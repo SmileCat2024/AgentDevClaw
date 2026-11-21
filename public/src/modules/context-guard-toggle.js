@@ -33,9 +33,13 @@
  *
  * ESM 化（P2）：已迁移的状态域直接 import（编排的 currentRuntimeAgentId、
  * 列表的 focusedAgentId、会话视图快照的 currentHookInspector、i18n 的实时
- * 语言、toast 的 ClawToast）；仍是 classic 的函数按调用时点显式 window
- * 晚绑定（updateChatContextBar / _scheduleInspectorRefresh / 身份解析 /
- * newIdempotencyKey）。持有面板/badge 缓存的 `_statusByRuntime` 是本模块
+ * 语言、toast 的 ClawToast）；幂等键用本地私有副本（同 app-main / claw-host
+ * 之制——原 window 晚绑定的提供者 wg-threads-panel.js 已改按需装载
+ * （lazy-domains），未装载期 `window.newIdempotencyKey` 不存在，点击开关即
+ * 抛 TypeError；而不走 input-actions 的导出，是为了不把它的依赖图传染给
+ * 本模块的全部下游装载方）；仍是 classic 的函数按调用时点显式 window
+ * 晚绑定（updateChatContextBar / _scheduleInspectorRefresh / 身份解析）。
+ * 持有面板/badge 缓存的 `_statusByRuntime` 是本模块
  * 唯一 owner，不再经 window 暴露。
  */
 
@@ -52,6 +56,18 @@ const _statusByRuntime = new Map();
 // mode 三态与循环次序（allowRotation=false 时 rotate 从循环中摘除）
 const MODE_CYCLE_FULL = ['off', 'interrupt', 'rotate'];
 const MODE_CYCLE_BASIC = ['off', 'interrupt'];
+
+// ── 幂等键（ADR-0011）：本地私有副本（同 app-main / claw-host 之制）─────────
+// 各副本逐字相同；不 import input-actions 的导出、也不经 window 取——
+// 前者会把 input-actions 的依赖图传染给本模块的下游装载方，后者的 window
+// 提供者（wg-threads-panel 的 classic 顶层声明）已改按需装载、非稳定供给。
+function newIdempotencyKey() {
+  const cryptoObj = (typeof crypto !== 'undefined') ? crypto : null;
+  if (cryptoObj && typeof cryptoObj.randomUUID === 'function') {
+    return cryptoObj.randomUUID();
+  }
+  return `key-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
 
 function normalizeMode(value, armedLegacy) {
   if (value === 'off' || value === 'interrupt' || value === 'rotate') return value;
@@ -261,8 +277,8 @@ export async function toggleGuard() {
   try {
     const response = await fetch('/protoclaw/context_guard_control', {
       method: 'POST',
-      // 桥接期：幂等键生成仍由 app-main（编排域）提供，收敛后转 import
-      headers: { 'Content-Type': 'application/json', 'x-idempotency-key': window.newIdempotencyKey() },
+      // 幂等键（ADR-0011）：本地私有副本（见上方函数注释）
+      headers: { 'Content-Type': 'application/json', 'x-idempotency-key': newIdempotencyKey() },
       body: JSON.stringify({ agentId, sessionId, mode: nextMode }),
     });
     const payload = await response.json().catch(() => ({}));
