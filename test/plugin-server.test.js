@@ -420,6 +420,162 @@ describe('mountPluginServerRoutes', () => {
   });
 });
 
+// ── plugin-host 子进程执行模型（ADR-0055）──────────────────────────
+
+describe('plugin-host 子进程执行模型（ADR-0055）', () => {
+  let httpApp;
+
+  beforeEach(() => {
+    httpApp = makeHttpApp();
+  });
+  afterEach(async () => {
+    unmountPluginServerRoutes(httpApp.app);
+    await httpApp.close();
+  });
+
+  const baseOpts = (sparse = mountedLayer('srv-demo', '1.0.0')) => ({
+    catalogRoots: { userRoot: root, officialRoot: join(root, 'official-empty') },
+    resolvers: makeResolvers(sparse),
+    serverRoot: join(root, 'server-env'),
+  });
+
+  it('插件 handler 跑在独立子进程：process.pid 异于宿主', async () => {
+    const fixture = makeServerPluginTgz({
+      serverCode: `export default { registerRoutes(router) { router.get('/who', (req, res) => res.json({ pid: process.pid })); } };`,
+    });
+    await extractServerAssets(fixture, { serverRoot: join(root, 'server-env') });
+    await mountPluginServerRoutes(httpApp.app, baseOpts());
+    const port = await httpApp.listen();
+    const res = await fetch(`http://127.0.0.1:${port}/protoclaw/plugin/srv-demo/who`);
+    assert.equal(res.status, 200);
+    const { pid } = await res.json();
+    assert.notEqual(pid, process.pid, '插件执行进程必须不是宿主（server.js）进程');
+  });
+
+  it('子进程崩溃：在途请求 503，退避重启后自动恢复', async () => {
+    const fixture = makeServerPluginTgz({
+      serverCode: `export default { registerRoutes(router) {
+        router.get('/crash', () => { process.exit(7); });
+        router.get('/ok', (req, res) => res.json({ ok: true }));
+      } };`,
+    });
+    await extractServerAssets(fixture, { serverRoot: join(root, 'server-env') });
+    await mountPluginServerRoutes(httpApp.app, baseOpts());
+    const port = await httpApp.listen();
+    const crashed = await fetch(`http://127.0.0.1:${port}/protoclaw/plugin/srv-demo/crash`);
+    assert.equal(crashed.status, 503);
+    assert.equal((await crashed.json()).error.code, 'plugin-host-crashed');
+    // 指数退避首次 250ms + fork 启动：轮询等待恢复（不固定 sleep）
+    let recovered = false;
+    for (let i = 0; i < 40 && !recovered; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      try {
+        const probe = await fetch(`http://127.0.0.1:${port}/protoclaw/plugin/srv-demo/ok`);
+        recovered = probe.status === 200 && (await probe.json()).ok === true;
+      } catch { /* 重启窗口内的瞬时失败：继续轮询 */ }
+    }
+    assert.ok(recovered, '崩溃后应在指数退避重启后自动恢复服务');
+  });
+
+  it('请求超时：504 且携带 plugin-host-timeout（cancel 通知子进程）', async () => {
+    const fixture = makeServerPluginTgz({
+      serverCode: `export default { registerRoutes(router) { router.get('/hang', () => new Promise(() => {})); } };`,
+    });
+    await extractServerAssets(fixture, { serverRoot: join(root, 'server-env') });
+    await mountPluginServerRoutes(httpApp.app, { ...baseOpts(), requestTimeoutMs: 250 });
+    const port = await httpApp.listen();
+    const res = await fetch(`http://127.0.0.1:${port}/protoclaw/plugin/srv-demo/hang`);
+    assert.equal(res.status, 504);
+    assert.equal((await res.json()).error.code, 'plugin-host-timeout');
+  });
+
+  it('分块流式响应：多 chunk 顺序收全（pipe 语义的协议基底）', async () => {
+    const fixture = makeServerPluginTgz({
+      serverCode: `export default { registerRoutes(router) {
+        router.get('/stream', (req, res) => {
+          res.set('Content-Type', 'text/plain');
+          res.write('chunk1;');
+          res.write('chunk2;');
+          res.end('done');
+        });
+      } };`,
+    });
+    await extractServerAssets(fixture, { serverRoot: join(root, 'server-env') });
+    await mountPluginServerRoutes(httpApp.app, baseOpts());
+    const port = await httpApp.listen();
+    const res = await fetch(`http://127.0.0.1:${port}/protoclaw/plugin/srv-demo/stream`);
+    assert.equal(res.status, 200);
+    assert.equal(await res.text(), 'chunk1;chunk2;done');
+  });
+
+  it('removeHeader 透传：插件可摘除宿主预设安全头（PDF iframe 嵌入语义）', async () => {
+    const fixture = makeServerPluginTgz({
+      serverCode: `export default { registerRoutes(router) {
+        router.get('/frame', (req, res) => { res.removeHeader('X-Frame-Options'); res.type('text/plain'); res.end('ok'); });
+      } };`,
+    });
+    await extractServerAssets(fixture, { serverRoot: join(root, 'server-env') });
+    httpApp.app.use((_req, res, next) => { res.setHeader('X-Frame-Options', 'DENY'); next(); });
+    await mountPluginServerRoutes(httpApp.app, baseOpts());
+    const port = await httpApp.listen();
+    const res = await fetch(`http://127.0.0.1:${port}/protoclaw/plugin/srv-demo/frame`);
+    assert.equal(res.status, 200);
+    assert.equal(res.headers.get('x-frame-options'), null, '插件 removeHeader 的宿主预设头不应出现在响应');
+  });
+
+  it('POST JSON body 经 IPC 下发并可解析', async () => {
+    const fixture = makeServerPluginTgz({
+      serverCode: `export default { registerRoutes(router) { router.post('/echo', (req, res) => res.json({ got: req.body ?? null })); } };`,
+    });
+    await extractServerAssets(fixture, { serverRoot: join(root, 'server-env') });
+    await mountPluginServerRoutes(httpApp.app, baseOpts());
+    const port = await httpApp.listen();
+    const res = await fetch(`http://127.0.0.1:${port}/protoclaw/plugin/srv-demo/echo`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ a: 1 }),
+    });
+    assert.equal(res.status, 200);
+    assert.deepEqual(await res.json(), { got: { a: 1 } });
+  });
+
+  it('HEAD 请求按 Express 语义回落 GET 路由（不 404）', async () => {
+    const fixture = makeServerPluginTgz({
+      serverCode: `export default { registerRoutes(router) { router.get('/data', (req, res) => { res.type('application/json'); res.end('{"ok":true}'); }); } };`,
+    });
+    await extractServerAssets(fixture, { serverRoot: join(root, 'server-env') });
+    await mountPluginServerRoutes(httpApp.app, baseOpts());
+    const port = await httpApp.listen();
+    const res = await fetch(`http://127.0.0.1:${port}/protoclaw/plugin/srv-demo/data`, { method: 'HEAD' });
+    assert.equal(res.status, 200, 'HEAD 应命中 GET 路由（Express 自动回落语义），而非子进程精确匹配 404');
+    assert.match(res.headers.get('content-type') || '', /json/);
+    assert.equal(await res.text(), '', 'HEAD 响应不带 body');
+  });
+
+  it('remount 切换瞬间：在途请求在宽限期内完成，新请求由新进程服务', async () => {
+    const fixture = makeServerPluginTgz({
+      serverCode: `export default { registerRoutes(router) {
+        router.get('/slow', (req, res) => setTimeout(() => res.json({ ok: true }), 350));
+        router.get('/ping', (req, res) => res.json({ pid: process.pid }));
+      } };`,
+    });
+    await extractServerAssets(fixture, { serverRoot: join(root, 'server-env') });
+    await mountPluginServerRoutes(httpApp.app, baseOpts());
+    const port = await httpApp.listen();
+    const before = await (await fetch(`http://127.0.0.1:${port}/protoclaw/plugin/srv-demo/ping`)).json();
+    // 发出慢请求，途中触发 remount（预启新进程 + 原子切换 + 旧进程宽限回收）
+    const inflight = fetch(`http://127.0.0.1:${port}/protoclaw/plugin/srv-demo/slow`);
+    await new Promise((resolve) => setTimeout(resolve, 80)); // 让请求进入旧子进程
+    await remountPluginServerRoutes(httpApp.app, baseOpts());
+    const slow = await inflight; // 旧进程在宽限期（3s）内完成 350ms 的在途请求
+    assert.equal(slow.status, 200);
+    assert.deepEqual(await slow.json(), { ok: true });
+    const after = await (await fetch(`http://127.0.0.1:${port}/protoclaw/plugin/srv-demo/ping`)).json();
+    assert.notEqual(after.pid, before.pid, 'remount 后应由新子进程服务');
+    assert.equal((await (await fetch(`http://127.0.0.1:${port}/protoclaw/plugin/srv-demo/slow`)).json()).ok, true);
+  });
+});
+
 // ── extractServerAssets 的 ESM 标记 ────────────────────────────────
 
 describe('extractServerAssets ESM 标记', () => {

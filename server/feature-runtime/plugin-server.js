@@ -1,34 +1,36 @@
 /**
- * plugin-server.js — 插件数据面（server 面）挂载器（ADR-0045 P2）
+ * plugin-server.js — 插件数据面（server 面）挂载器（ADR-0045 P2 → ADR-0055）
  *
  * 契约：插件包 manifest v3 的 server 声明 `{ entry, prefix }`；包内
  * server/ 面导出 `registerRoutes(router, context)`。宿主在本模块完成：
  *
  *   - 挂载点选择：`/protoclaw/plugin/<prefix>/*`——prefix 是包声明的路由
  *     前缀，全局唯一（冲突时后挂载者拒绝 + 警告）。prefix 即审计面：
- *     listMountedPluginServerPrefixes() 列出当前全部生效前缀与归属包。
+ *     当前全部生效前缀与归属包见挂载结果 mounted 列表。
  *   - 触发条件：包被装配（任一工作空间身份装配，或任一 opt-in 身份消费
  *     默认装配源——装配事实与 UI 面同源，collectAssemblyFacts 已把 global
  *     层展开为声明 defaultMounts 的身份条目）；未装配的包不挂载。多版本
  *     装配取装配版本里最高者（catalog 更高版本不跟随，与面板下发同款钉版
  *     语义）。
- *   - 受控 router：只暴露 get/post/put/delete，注册路径必须是以 / 开头
- *     的相对子路径（无 .. 、无绝对段）；宿主包装 handler 做异常计数
- *     熔断（同一包连续 5 次未捕获异常 → 摘除该包全部路由并显式警告，
- *     remountPluginServerRoutes() 可整体重建）。
- *   - 新声明的包用 context.getConfig(req)：宿主在调用 handler 前按请求的
- *     工作空间、会话归属与包摘要验证并解析一次，配置修改无需重启。
- *   - 存量包保留 context.getConfig()：按第一个装配身份合成全局与空间参数。
  *
- * 信任与依赖模型（ADR-0045）：server 面在主 server.js 进程内执行，与
- * 工具面同级的信任（本机代码）；依赖约束为 node 内置模块 + 相对导入
- * （解出目录脱离包根 npm 环境，外部依赖不可解析）。import 失败的包
- * 跳过挂载并警告，不阻塞其他包。
+ * 执行模型（ADR-0055）：插件 server 面代码不再在本进程内执行——本模块只
+ * 计算 mounts 清单（catalog / 装配事实 / 解出自愈）并把代理路由挂进
+ * Express；执行体在 plugin-host 子进程（plugin-host-manager 管理 fork /
+ * 原子切换 / 崩溃退避重启）。宿主侧收口三件事（收权点即安全点）：
+ *
+ *   - digest guard：settingsDigest 校验沿用进程内时代语义；
+ *   - 配置合成：新协议按请求四层合成（readRequestPluginSettings），存量
+ *     包按第一装配身份两层合成——每请求现读，快照随 IPC 下发，子进程
+ *     接触不到配置文件；
+ *   - 路由匹配：Express 路径模式匹配后下发 (packageName, method,
+ *     routePath)，子进程精确分发，构不成对其他插件路由的请求。
+ *
+ * 包级熔断（连续 5 次未捕获异常 → 503 circuit-open）与异常信封语义由
+ * 子进程适配层保持（ADR-0055 决策 3：插件契约零改动）。
  */
 
 import path from 'path';
 import { existsSync } from 'fs';
-import { pathToFileURL } from 'url';
 
 import { catalogRootsWithWorkspaceRepositories, isCatalogEntryVisibleTo, scanFeatureCatalog } from './catalog.js';
 import { collectAssemblyFacts } from './plugin-ui.js';
@@ -37,11 +39,18 @@ import { versionServerDir, ensureFacetExtracted } from './feature-assets.js';
 import { resolveScopeConfig } from '../routes/feature-config.js';
 import { readRequestPluginSettings } from './plugin-settings-context.js';
 import { createClawLogger as createLogger } from '../shared/claw-logger.js';
+import {
+  ensurePluginHostLocked,
+  replacePluginHostLocked,
+  terminatePluginHost,
+  runPluginHostLifecycle,
+  getActivePluginHost,
+  readRawBody,
+} from './plugin-host/plugin-host-manager.js';
 
 const log = createLogger('plugin-server');
 
 const PREFIX_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
-const CIRCUIT_BREAK_THRESHOLD = 5;
 
 /**
  * 计算当前应挂载的 server 面。
@@ -136,19 +145,12 @@ export async function buildPluginServerMounts({ catalogRoots, resolvers, serverR
   return { mounts, warnings };
 }
 
-/**
- * 挂载到 Express app。重复调用安全：先摘除上一次挂载的全部路由
- * （unmountPluginServerRoutes），再按当前装配事实重新挂载——导入、装配、
- * 禁用变化后调 remountPluginServerRoutes 整体重建。
- *
- * @returns {Promise<{mounted: Array<{packageName, prefix}>, warnings: string[]}>}
- */
 // 模块级挂载记录：prefix → [{ method, fullPath }]（unmount 反向摘除依据）
 const mountedRouteRegistry = new Map();
 
-export function unmountPluginServerRoutes(app) {
-  // Express 4：app.router 是废弃 getter（访问即抛错），路由栈只在 _router
-  const router = app._router;
+/** 从 Express 路由栈摘除 registry 记录的全部路由，返回摘除条数。 */
+function removeRegisteredRoutes(app) {
+  const router = app._router; // Express 4：app.router 是废弃 getter（访问即抛错）
   if (!router || !Array.isArray(router.stack)) return 0;
   const registered = new Set();
   for (const entries of mountedRouteRegistry.values()) {
@@ -166,134 +168,151 @@ export function unmountPluginServerRoutes(app) {
       removed += 1;
     }
   }
-  mountedRouteRegistry.clear();
   return removed;
 }
 
-export async function remountPluginServerRoutes(app, options = {}) {
-  unmountPluginServerRoutes(app);
-  return mountPluginServerRoutes(app, options);
+/**
+ * 摘除当前挂载的全部数据面路由。挂载表清空即数据面整体下线——同时终止
+ * plugin-host 子进程（进程不再空转；测试 teardown 亦依赖此清理。
+ * terminatePluginHost 幂等：无活跃进程时为空操作）。
+ */
+export function unmountPluginServerRoutes(app) {
+  const removed = removeRegisteredRoutes(app);
+  mountedRouteRegistry.clear();
+  terminatePluginHost().catch((error) => {
+    log.warn(`plugin-host 终止失败：${error?.message || error}`);
+  });
+  return removed;
 }
 
-export async function mountPluginServerRoutes(app, options = {}) {
-  const { mounts, warnings } = await buildPluginServerMounts(options);
+/**
+ * 挂载/重建入口（签名与进程内时代一致，消费方 server.js 与测试零改动）。
+ *
+ * mount：确保存在匹配 mounts 的 plugin-host（指纹一致复用；不一致预启新
+ * 进程原子切换）→ 把代理路由挂进 Express。
+ * remount：强制换新进程（规避子进程内 ESM import 缓存的换版不生效），
+ * 旧进程优雅回收、在途请求在宽限期内完成。
+ */
+/**
+ * 挂载/重建入口（签名与进程内时代一致，消费方 server.js 与测试零改动）。
+ *
+ * 全程持有宿主生命周期锁（runPluginHostLifecycle）：mounts 计算、host
+ * 切换与 Express 路由安装是一个原子段——并发的 mount / remount 串行化，
+ * 杜绝「旧调用的路由安装覆盖新切换」的交错窗口。
+ *
+ * mount：指纹一致复用现有 plugin-host（配置合成每请求现读，resolvers
+ * 变化不换进程）；remount：强制换新进程（规避子进程内 ESM import 缓存
+ * 的换版不生效），旧进程优雅回收、在途请求在宽限期内完成。
+ */
+function mountOrRemountPluginServerRoutes(app, options, { replace }) {
+  return runPluginHostLifecycle(async () => {
+    const { mounts, warnings } = await buildPluginServerMounts(options);
+    const host = replace
+      ? await replacePluginHostLocked(mounts, options)
+      : await ensurePluginHostLocked(mounts, options);
+    for (const warning of host.warnings || []) warnings.push(warning);
+    return installProxyRoutes(app, mounts, host, options, warnings);
+  });
+}
+
+export function mountPluginServerRoutes(app, options = {}) {
+  return mountOrRemountPluginServerRoutes(app, options, { replace: false });
+}
+
+export function remountPluginServerRoutes(app, options = {}) {
+  return mountOrRemountPluginServerRoutes(app, options, { replace: true });
+}
+
+/**
+ * 把 host 路由表挂成 Express 代理路由：先摘旧记录再挂新（remount 场景
+ * 同路径换闭包，避免新旧 handler 叠挂），记账与挂载间无 await。
+ */
+function installProxyRoutes(app, mounts, host, options, warnings) {
+  removeRegisteredRoutes(app);
+  const registryEntries = new Map(); // prefix → [{method, fullPath}]
   const mounted = [];
 
-  for (const mount of mounts) {
-    let mod;
-    try {
-      mod = await import(pathToFileURL(mount.entryPath).href);
-    } catch (err) {
-      warnings.push(`插件 ${mount.packageName}@${mount.version} server 面加载失败（${err?.message || err}）：跳过挂载`);
-      continue;
+  for (const route of host.routes) {
+    const mount = mounts.find((item) => item.packageName === route.packageName);
+    if (!mount) continue;
+    const fullPath = `/protoclaw/plugin/${mount.prefix}${route.routePath === '/' ? '' : route.routePath}`;
+    app[route.method](fullPath, makeProxyHandler(mount, route.routePath, options));
+    let list = registryEntries.get(mount.prefix);
+    if (!list) {
+      list = [];
+      registryEntries.set(mount.prefix, list);
+      mounted.push({ packageName: mount.packageName, prefix: mount.prefix });
     }
-    const registerRoutes = mod?.default?.registerRoutes || mod?.registerRoutes;
-    if (typeof registerRoutes !== 'function') {
-      warnings.push(`插件 ${mount.packageName}@${mount.version} server 面未导出 registerRoutes(router, context)：跳过挂载`);
-      continue;
-    }
-
-    // 熔断状态（包级）：连续异常计数
-    let consecutiveFailures = 0;
-    let broken = false;
-
-    const base = `/protoclaw/plugin/${mount.prefix}`;
-    const requestSettings = new WeakMap();
-    const guard = (handler) => async (req, res, next) => {
-      if ((mount.settingsDigest || req.query.digest !== undefined) && req.query.digest !== mount.settingsDigest) {
-        res.status(409).json({ error: '请求的插件实现与数据路由不匹配' });
-        return;
-      }
-      if (mount.settingsDigest) {
-        try {
-          const { values } = await readRequestPluginSettings(mount.packageName, req.query, options);
-          requestSettings.set(req, values);
-        } catch (error) {
-          res.status(error.statusCode || 500).json({ error: error.message });
-          return;
-        }
-      }
-      if (broken) {
-        res.status(503).json({ ok: false, error: { code: 'plugin-server-circuit-open', message: `插件 ${mount.packageName} 数据面已因连续异常被摘除（前缀 ${mount.prefix}）` } });
-        return;
-      }
-      try {
-        await handler(req, res, next);
-      } catch (err) {
-        consecutiveFailures += 1;
-        if (consecutiveFailures >= CIRCUIT_BREAK_THRESHOLD) {
-          broken = true;
-          log.warn(`插件 ${mount.packageName}@${mount.version} 数据面连续 ${consecutiveFailures} 次异常，前缀 ${mount.prefix} 已熔断摘除`, { lastError: err?.message || String(err) });
-        }
-        if (!res.headersSent) {
-          res.status(500).json({ ok: false, error: { code: 'plugin-server-error', message: String(err?.message || err) } });
-          return;
-        }
-        res.destroy();
-      }
-    };
-
-    const makeRouter = () => {
-      const registrations = [];
-      const route = (method) => (routePath, handler) => {
-        const rel = String(routePath || '');
-        if (!rel.startsWith('/') || rel.includes('..') || rel.includes('\\') || rel.includes('\0')) {
-          throw new Error(`插件 ${mount.packageName} 注册了非法路由路径：${method} ${rel}（必须是以 / 开头的相对子路径）`);
-        }
-        registrations.push({ method, routePath: rel, handler });
-      };
-      return {
-        get: route('get'), post: route('post'), put: route('put'), delete: route('delete'),
-        _registrations: registrations,
-      };
-    };
-
-    const router = makeRouter();
-    // 配置合成身份：第一个装配身份。默认装配源条目已按 opt-in 展开、归属
-    // 到具体身份，getConfig 合成 = global 默认层 + 该身份 agent 层（ADR-0046：
-    // 数据面读 global + 装配层，按装配上下文合成）。防御性保留无身份兜底
-    //（未来事实形态变化时回落 global 层值，不抛错）。
-    const contextIdentity = mount.identities.find((fact) => fact.agentId) || null;
-    const context = {
-      // 每次调用现读：配置修改后无需重启（与工具面构造期一次合成不同，
-      // 数据面生命周期跨配置变更）
-      getConfig(req) {
-        if (mount.settingsDigest) {
-          if (!requestSettings.has(req)) throw new Error('getConfig(req) requires the current plugin request');
-          return structuredClone(requestSettings.get(req));
-        }
-        try {
-          if (!contextIdentity) {
-            const { sparse } = readGlobalDeclaredMounts(options.resolvers);
-            const raw = sparse[mount.packageName];
-            return raw && typeof raw === 'object' ? raw : {};
-          }
-          const { merged } = resolveScopeConfig({ agentId: contextIdentity.agentId }, options.resolvers);
-          return (merged && merged[mount.packageName]) || {};
-        } catch {
-          return {};
-        }
-      },
-      package: { name: mount.packageName, version: mount.version },
-    };
-
-    try {
-      registerRoutes(router, context);
-    } catch (err) {
-      warnings.push(`插件 ${mount.packageName}@${mount.version} registerRoutes 抛错（${err?.message || err}）：跳过挂载`);
-      continue;
-    }
-
-    const registeredForPackage = [];
-    for (const { method, routePath, handler } of router._registrations) {
-      const fullPath = `${base}${routePath === '/' ? '' : routePath}`;
-      app[method](fullPath, guard(handler));
-      registeredForPackage.push({ method, fullPath });
-    }
-    mountedRouteRegistry.set(mount.prefix, registeredForPackage);
-    mounted.push({ packageName: mount.packageName, prefix: mount.prefix });
+    list.push({ method: route.method, fullPath });
   }
+
+  mountedRouteRegistry.clear();
+  for (const [prefix, entries] of registryEntries) mountedRouteRegistry.set(prefix, entries);
 
   for (const warning of warnings) log.warn(warning);
   return { mounted, warnings };
+}
+
+/**
+ * 单条路由的宿主侧代理：digest guard + 配置合成收口 → IPC 转发。
+ * 执行与熔断在 plugin-host 子进程；本层不 import 插件代码。
+ */
+function makeProxyHandler(mount, routePath, options) {
+  // 配置合成身份：第一个装配身份（存量包 getConfig 无参语义）。默认装配源
+  // 条目已按 opt-in 展开、归属到具体身份（ADR-0046）。防御性保留无身份
+  // 兜底（回落 global 层值，不抛错）。
+  const contextIdentity = mount.identities.find((fact) => fact.agentId) || null;
+
+  const legacySettingsSnapshot = () => {
+    try {
+      if (!contextIdentity) {
+        const { sparse } = readGlobalDeclaredMounts(options.resolvers);
+        const raw = sparse[mount.packageName];
+        return raw && typeof raw === 'object' ? raw : {};
+      }
+      const { merged } = resolveScopeConfig({ agentId: contextIdentity.agentId }, options.resolvers);
+      return (merged && merged[mount.packageName]) || {};
+    } catch {
+      return {};
+    }
+  };
+
+  return async (req, res) => {
+    // digest guard（与进程内挂载器同款语义）
+    if ((mount.settingsDigest || req.query.digest !== undefined) && req.query.digest !== mount.settingsDigest) {
+      res.status(409).json({ error: '请求的插件实现与数据路由不匹配' });
+      return;
+    }
+    // 配置合成（宿主收口）：新协议按请求四层合成，存量包按第一装配身份两层
+    let settings;
+    if (mount.settingsDigest) {
+      try {
+        const { values } = await readRequestPluginSettings(mount.packageName, req.query, options);
+        settings = values;
+      } catch (error) {
+        res.status(error.statusCode || 500).json({ error: error.message });
+        return;
+      }
+    } else {
+      settings = legacySettingsSnapshot();
+    }
+
+    const host = getActivePluginHost();
+    if (!host || host.disposed) {
+      res.status(503).json({ ok: false, error: { code: 'plugin-host-unavailable', message: '插件宿主进程不可用（启动或重启中）' } });
+      return;
+    }
+
+    const body = req.method === 'GET' || req.method === 'HEAD' ? null : await readRawBody(req);
+    host.request({
+      packageName: mount.packageName,
+      method: req.method,
+      routePath,
+      params: req.params,
+      query: req.query,
+      headers: req.headers,
+      body,
+      settings,
+    }, res);
+  };
 }

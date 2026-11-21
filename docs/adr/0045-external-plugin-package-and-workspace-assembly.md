@@ -73,6 +73,8 @@ rail 按钮是三层叠加的结果，链路四步：manifest 素材声明 → s
 
 导入 tgz 即信任执行：工具面本来就在 runtime 进程执行任意 Node 代码，server 面在宿主进程执行，差异是崩溃隔离而非安全边界。三层缓解：路由前缀声明（审计面）、context 收窄、异常熔断。会话相关数据继续走 feature-comms（ADR-0018）；server 面服务与工作空间无关的全局数据（agentero vault）。未来若宿主内执行不可接受，升级路径是独立子进程 server runner，manifest 契约不变。
 
+> **修订（ADR-0055，2026-11-21）**：决策 9 预留的升级路径已落地——数据面迁入统一 plugin-host 子进程，宿主只保留薄代理（digest 校验、配置合成、路由匹配三收口，插件进程拿不到配置文件与配置树读取能力）。上文"server 面在宿主进程执行"按此读作历史状态；"差异是崩溃隔离而非安全边界"的定性不变（插件代码与 plugin-host 宿主层同进程、无 `--permission` 硬边界），manifest 与 `registerRoutes` 契约零改动。见 [ADR-0055](0055-plugin-server-host-process-isolation.md)。
+
 ### 10. 验收样本与实施顺序
 
 agentero 三件套整体出仓（主仓库删除全部三处实现）为总验收。阶段：P1 资产通道 + ui 声明 + 前端 registry（agentero UI 面出仓）；P2 server 面（数据面出仓）；P3 工具面出仓（agent.js 删静态 import，经 $mount 装配，验证 `features[].config` 与构造参数对齐）；P4 studio 契约同步、清单动态化、呈现配置与 localStorage 迁移、术语与文档收尾。明细以实施计划文档为准。
