@@ -220,8 +220,27 @@
    */
   function undeclarePanel(id) {
     const key = String(id || '').trim();
+    const stubEntry = panelStubs.get(key);
     panelStubs.delete(key);
-    if (!panels.has(key)) return false;
+    // 返回值语义：进入时该面板存在于任一注册表（real 或 stub）= 声明退场
+    // 构成变化。必须在 fire unloadPlugin 之前采样：模块无 unmount 钩子时
+    // unloadPlugin 会同步直通卸载兜底（unregisterPanelsOf + restorePanelStub），
+    // 中间把 panels 里的 real 摘掉——外层再查 panels.has 会误报「从未存在」，
+    // changed=false 导致 rail 孤儿按钮残留（2026-11-21 浏览器实测定位）。
+    const existed = panels.has(key) || Boolean(stubEntry);
+    // 声明退场即卸载实现模块（该插件不再被任何面板声明引用时）：
+    // loaded / loadState 残留会让重装后的 ensurePlugin 被 'loaded' 态拦截，
+    // 面板永远卡在「加载中」，唯一恢复路径是刷新页面（2026-11-21 实测缺口）。
+    // 卸载是异步收尾，不阻塞退场；unloadPlugin 幂等，多面板场景重复调用安全。
+    if (stubEntry) {
+      const stillUsed = Array.from(panelStubs.values()).some((entry) => entry.pluginId === stubEntry.pluginId);
+      if (!stillUsed) {
+        unloadPlugin(stubEntry.pluginId).catch((err) => {
+          console.error('[claw-host] 声明退场后的模块卸载失败（忽略）：', stubEntry.pluginId, err);
+        });
+      }
+    }
+    if (!panels.has(key)) return existed;
     panels.delete(key);
     teardownPanel(key);
     return true;
@@ -394,7 +413,7 @@
     };
   }
 
-  async function activatePlugin(key, mod) {
+  async function activatePlugin(key, mod, url) {
     const owner = mod.id || key;
     for (const [type, renderer] of Object.entries(mod.blocks || {})) {
       registerBlock(type, renderer, owner);
@@ -424,14 +443,18 @@
         throw err;
       }
     }
-    loaded.set(key, { module: mod, owner });
+    loaded.set(key, { module: mod, owner, url });
     return mod;
   }
 
   async function loadPlugin(pluginId, url) {
     const key = String(pluginId || '').trim();
     if (!key) throw new TypeError('pluginId is required');
-    if (loaded.has(key)) return loaded.get(key).module;
+    const entry = loaded.get(key);
+    if (entry && (!url || entry.url === url)) return entry.module;
+    // 同 pluginId 换 url（换版重声明）：旧模块先卸载再装新，否则短路命中
+    // 旧 entry，面板永远展示上一版实现。
+    if (entry) await unloadPlugin(key);
     // 子路径部署收口（docs/plans/2026-11-14-frontend-basepath-unification.md）：
     // 清单声明的是应用内路径（相对站点根），动态 import 不经 window.fetch
     // patch，须在此统一过 base-path 映射，否则脱离部署前缀 404。
@@ -449,7 +472,13 @@
     const key = String(pluginId || '').trim();
     if (!key) return false;
     const state = loadState.get(key);
-    if (state === 'loading' || state === 'loaded' || state === 'failed') return false;
+    if (state === 'loading' || state === 'failed') return false;
+    if (state === 'loaded') {
+      const entry = loaded.get(key);
+      // 换版重声明（url 变了）不算已装载：放行走重新装载，loadPlugin 内部
+      // 先卸旧模块再 import 新 url。
+      if (!url || !entry || entry.url === url) return false;
+    }
     loadState.set(key, 'loading');
     loadPlugin(key, url)
       .then(() => {

@@ -315,6 +315,44 @@ describe('ClawHost 卸载契约', () => {
     await host.unloadPlugin('demo');
     assert.equal(host.blocks.refresh('solo-refresh'), false, '无同名 block 的 refresher 不得残留');
   });
+
+  it('面板声明退场时卸载实现模块：重装不被残留 loaded 态拦截', async () => {
+    const host = makeHost();
+    host.panels.declare('demo-panel', { title: 'Demo' }, { pluginId: 'demo', url: '/plugins/demo/index.js' });
+    await host.activatePlugin('demo', pluginFixture());
+    assert.equal(host.isPluginLoaded('demo'), true);
+
+    host.panels.undeclare('demo-panel');
+    await new Promise((resolve) => setTimeout(resolve, 0)); // 卸载是异步收尾
+    assert.equal(host.isPluginLoaded('demo'), false, '声明退场应卸载实现模块（loaded 残留会让重装卡在「加载中」）');
+  });
+
+  it('多面板共用插件：卸其一不卸模块，全部声明退场才卸', async () => {
+    const host = makeHost();
+    host.panels.declare('p1', { title: 'P1' }, { pluginId: 'demo', url: '/plugins/demo/index.js' });
+    host.panels.declare('p2', { title: 'P2' }, { pluginId: 'demo', url: '/plugins/demo/index.js' });
+    await host.activatePlugin('demo', pluginFixture());
+
+    host.panels.undeclare('p1');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(host.isPluginLoaded('demo'), true, '仍有面板引用该插件：模块保留');
+
+    host.panels.undeclare('p2');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(host.isPluginLoaded('demo'), false, '全部声明退场：模块卸载');
+  });
+
+  it('同 pluginId 换 url（换版）：先卸旧再装新，不短路返回上一版', async () => {
+    const host = makeHost();
+    await host.activatePlugin('demo', pluginFixture());
+    // 旧 entry 无 url 信息，与新 url 不匹配：应走卸载 + 重新 import。
+    // vm 沙箱无动态 import 回调，失败本身证明没有短路命中旧模块直接返回。
+    await assert.rejects(
+      () => host.loadPlugin('demo', '/plugins/demo/v2.js'),
+      /dynamic import callback/,
+    );
+    assert.equal(host.isPluginLoaded('demo'), false, '换版失败后不留旧模块');
+  });
 });
 
 /**

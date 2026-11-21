@@ -28,6 +28,7 @@
  *   - t（i18n.js 的 classic 顶层函数，经 window 晚绑定）
  *   - currentLanguage（i18n-environment-state.js 命名导出）
  *   - _phRefreshMountsView（ph-settings.js 具名导出，写操作后刷新工作空间插件页）
+ *   - window.ClawFW.featureUi.refresh（可选晚绑定；装配写操作后立即刷新右栏面板声明）
  *   - window.ClawFW.phSurfaceDetail（可选钩子；全仓暂无写入方，卡片声明面行恒空）
  *
  * ESM 化（P2 迁移批次 6）：两态判定与即时保存来自 feature-setup-core.js 命名
@@ -176,6 +177,12 @@ async function _fsAfterChange(identity) {
   _phRefreshMountsView(identity);
   // 右侧 Features 面板的来源分类消费同一份装配事实，强制失效缓存重拉
   refreshMountFacts();
+  // 装配事实变化立即反映到右栏面板声明（装了立即出现 / 卸了立即退场），
+  // 不等 feature-ui-registry 的 30s 轮询；经 window 晚绑定（ESM 装载顺序
+  // 不作保证，缺席时静默跳过——轮询仍是兜底）。
+  if (typeof window.ClawFW?.featureUi?.refresh === 'function') {
+    window.ClawFW.featureUi.refresh();
+  }
 }
 
 // 安装计时：秒数展示（安装期间每秒重渲染，给"在动"的感知）
