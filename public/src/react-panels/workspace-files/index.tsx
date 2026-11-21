@@ -2,10 +2,10 @@
 // - 一切皆页签：每个 pane = 上方 gen-ui-surface-tabs 页签条 + 下方单一内容区，
 //   默认单 pane；「文件树」是首个 pane 里不可关闭的常驻页签，可像文件页签
 //   一样拖拽分栏/转移（源 pane 只剩它时不可拆）。
-// - 文件页签可拖到 pane 内容区左/右半区（虚线提示卡）→ 拆出左右分栏；
-//   docked pane 最多 2 个，中间 divider 可拖宽且带可视分隔线。已是双 pane
-//   时落区按既有分区分：整个对方 pane 高亮（不再左右半拆），松开 = 移动
-//   页签到对方 pane（源 pane 因此变空则并回单 pane）。
+// - 单 pane 的文件页签按拖动落点拆栏：内容区上半区按左右半区，下半区
+//   向下拆分，构成倒 T 命中区；最多 2 个 pane，divider 按方向
+//   调整宽度/高度。双 pane 时整块对方 pane 是移动落区，不再拆第三栏；
+//   松开后移动页签到对方 pane（源 pane 因此变空则并回单 pane）。
 // - 页签行滚轮：悬停页签条时滚轮不穿透滚动页面；该行有隐藏页签（溢出）
 //   时滚轮量转为该行横向滚动，未溢出则只拦截不动作。
 // - 非激活页签保持挂载（display:none），滚动与视图状态不丢。
@@ -38,7 +38,8 @@ type FileTab = { path: string; name: string; preview: Preview };
 type Identity = { agentId: string; sessionId: string };
 type Pane = { id: number; tabs: string[]; active: string }; // 页签 id：'tree' 或文件路径
 // center = 双 pane 时的落区形态：整个对方 pane 高亮，语义是移动页签而非再拆分。
-type DockHint = { paneId: number; side: 'left' | 'right' | 'center' };
+type SplitDirection = 'horizontal' | 'vertical'; // horizontal = 左右分栏，vertical = 上下分栏
+type DockHint = { paneId: number; side: 'left' | 'right' | 'bottom' | 'center' };
 type PanelSnapshot = {
   tree: Record<string, TreeNode>;
   expanded: Set<string>;
@@ -46,6 +47,7 @@ type PanelSnapshot = {
   panes: Pane[];
   activePaneId: number;
   splitRatio: number;
+  splitDirection: SplitDirection;
   imageModes: Record<string, 'fit' | 'full'>;
   nextPaneId: number;
 };
@@ -325,13 +327,13 @@ function FileView({ file, imageMode, onToggleImageMode }: {
 
 /* ── 页签分行：确定性算法（用户澄清的规则）─────────────────
  * 换行判定只有一个：不换行就会完全隐藏的页签才换到下一行。
- * 全部页签按压缩宽度（104，与全局 tab-item 的 min-width 对齐）计，
- * 本行容量 capacity = ceil(容器宽 / 104)：第 capacity 个页签左缘仍在
+ * 全部页签按文件面板压缩宽度（88）计，
+ * 本行容量 capacity = ceil(容器宽 / 88)：第 capacity 个页签左缘仍在
  * 容器内（部分可见，溢出部分由行滚动容器裁切）；只有左缘会越过容器
  * 右缘的页签才换行。因此满行行尾永远顶到右缘，不出现空档；最后一行
  * 允许不满（它是行尾，无空档问题）。
  * 不做逐页签宽度测量——只依赖容器宽度，天然免疫字体加载/布局时序。 */
-const TAB_MIN_WIDTH = 104;
+const TAB_MIN_WIDTH = 88;
 
 function computeTabRows(tabIds: string[], available: number): string[][] {
   if (available <= 0 || tabIds.length <= 1) return [tabIds];
@@ -369,6 +371,7 @@ function WorkspaceFiles() {
   const [panes, setPanes] = useState<Pane[]>([{ id: 1, tabs: [TREE_TAB], active: TREE_TAB }]);
   const [activePaneId, setActivePaneId] = useState(1);
   const [splitRatio, setSplitRatio] = useState(0.5);
+  const [splitDirection, setSplitDirection] = useState<SplitDirection>('horizontal');
   const [dragTab, setDragTab] = useState<string | null>(null);
   const [dragReadyTab, setDragReadyTab] = useState<string | null>(null);
   const [dragOverTab, setDragOverTab] = useState<{ paneId: number; rowKey: string; tabId: string; side: 'before' | 'after'; offsetX: number } | null>(null);
@@ -507,7 +510,7 @@ function WorkspaceFiles() {
   useEffect(() => {
     if (stateKeyRef.current === null) return;
     sessionStateCache.set(stateKeyRef.current, {
-      tree, expanded, files, panes, activePaneId, splitRatio, imageModes, nextPaneId: nextPaneId.current,
+      tree, expanded, files, panes, activePaneId, splitRatio, splitDirection, imageModes, nextPaneId: nextPaneId.current,
     });
   });
 
@@ -539,6 +542,7 @@ function WorkspaceFiles() {
       setPanes(cached.panes);
       setActivePaneId(cached.activePaneId);
       setSplitRatio(cached.splitRatio);
+      setSplitDirection(cached.splitDirection ?? 'horizontal');
       setImageModes(cached.imageModes);
       nextPaneId.current = cached.nextPaneId;
     } else {
@@ -548,6 +552,7 @@ function WorkspaceFiles() {
       setPanes([{ id: 1, tabs: [TREE_TAB], active: TREE_TAB }]);
       setActivePaneId(1);
       setSplitRatio(0.5);
+      setSplitDirection('horizontal');
       setImageModes({});
       nextPaneId.current = 2;
     }
@@ -877,13 +882,13 @@ function WorkspaceFiles() {
     }
     event.preventDefault();
     event.dataTransfer.dropEffect = 'move';
-    // 落区形态：单 pane 按内容区左/右半区拆分栏；双 pane 按既有分区分——
-    // 整个对方 pane 都是落区（side='center'），语义是移动页签到对方 pane，
-    // 不再左右半拆（用户澄清：开了两个之后从左往右拖 = 转移到右边 pane）。
+    // 单 pane 时使用倒 T 命中区：底部二分之一向下拆分；其余区域左右拆分。
+    // 双 pane 时整块对方 pane 是移动落区，不允许再拆出第三栏。
     let side: DockHint['side'] = 'center';
     if (panes.length === 1) {
       const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
-      side = event.clientX - rect.left < rect.width / 2 ? 'left' : 'right';
+      if (event.clientY >= rect.top + rect.height / 2) side = 'bottom';
+      else side = event.clientX < rect.left + rect.width / 2 ? 'left' : 'right';
     }
     setDockHint(current => (current && current.paneId === paneId && current.side === side ? current : { paneId, side }));
   };
@@ -894,7 +899,7 @@ function WorkspaceFiles() {
     setDockHint(null);
   };
 
-  const performDock = (targetPaneId: number, side: 'left' | 'right') => {
+  const performDock = (targetPaneId: number, side: 'left' | 'right' | 'bottom') => {
     if (!dragTab || !canDock(targetPaneId)) return;
     const sourcePane = panes.find(pane => pane.tabs.includes(dragTab));
     if (!sourcePane) return;
@@ -909,6 +914,7 @@ function WorkspaceFiles() {
         active: sourcePane.active === dragTab ? remaining[0] : sourcePane.active,
       };
       setPanes(side === 'left' ? [newPane, updatedSource] : [updatedSource, newPane]);
+      setSplitDirection(side === 'bottom' ? 'vertical' : 'horizontal');
       setSplitRatio(0.5);
       setActivePaneId(newPaneId);
     } else {
@@ -938,8 +944,11 @@ function WorkspaceFiles() {
   const onDividerPointerMove = (event: ReactPointerEvent) => {
     if (event.buttons !== 1) return;
     const rect = paneRowRef.current?.getBoundingClientRect();
-    if (!rect || rect.width === 0) return;
-    setSplitRatio(clampRatio((event.clientX - rect.left) / rect.width));
+    if (!rect) return;
+    const extent = splitDirection === 'horizontal' ? rect.width : rect.height;
+    const coordinate = splitDirection === 'horizontal' ? event.clientX - rect.left : event.clientY - rect.top;
+    if (extent === 0) return;
+    setSplitRatio(clampRatio(coordinate / extent));
   };
 
   const onDividerPointerUp = (event: ReactPointerEvent) => {
@@ -992,15 +1001,15 @@ function WorkspaceFiles() {
 
   return (
     <div className={`wf-panel${dragTab ? ' is-dragging' : ''}`}>
-      <div className="wf-pane-row" ref={paneRowRef}>
+      <div className={`wf-pane-row${splitDirection === 'vertical' ? ' is-vertical' : ''}`} ref={paneRowRef}>
         {panes.map((pane, index) => (
           <Fragment key={pane.id}>
             {index > 0 && (
               <div
-                className="wf-divider"
+                className={`wf-divider${splitDirection === 'vertical' ? ' is-horizontal' : ''}`}
                 role="separator"
-                aria-orientation="vertical"
-                title="拖动调整分栏宽度"
+                aria-orientation={splitDirection === 'horizontal' ? 'vertical' : 'horizontal'}
+                title={`拖动调整分栏${splitDirection === 'horizontal' ? '宽度' : '高度'}`}
                 onPointerDown={onDividerPointerDown}
                 onPointerMove={onDividerPointerMove}
                 onPointerUp={onDividerPointerUp}
@@ -1038,7 +1047,7 @@ function WorkspaceFiles() {
                 ))}
               </div>
               <div
-                className="wf-pane-body"
+                className={`wf-pane-body${dockHint?.paneId === pane.id ? ' is-docking' : ''}`}
                 onDragOver={onPaneBodyDragOver(pane.id)}
                 onDragLeave={onPaneBodyDragLeave(pane.id)}
                 onDrop={event => {
@@ -1047,7 +1056,9 @@ function WorkspaceFiles() {
                     setDockHint(null);
                     return;
                   }
-                  if (dockHint?.paneId === pane.id) performDock(pane.id, dockHint.side);
+                  if (dockHint?.paneId === pane.id && dockHint.side !== 'center' && dockHint.side !== 'top') {
+                    performDock(pane.id, dockHint.side);
+                  } else if (dockHint?.paneId === pane.id && dockHint.side === 'center') performDock(pane.id, 'right');
                   else setDockHint(null);
                 }}
               >
@@ -1068,10 +1079,10 @@ function WorkspaceFiles() {
                       <svg className="wf-dock-glyph" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                         <rect x="3" y="3" width="18" height="18" rx="2" stroke="currentColor" strokeWidth="1.5" />
                         <rect
-                          x={dockHint.side === 'right' ? 12.5 : 4.5}
-                          y="4.5"
+                          x={dockHint.side === 'right' || dockHint.side === 'center' ? 12.5 : 4.5}
+                          y={dockHint.side === 'bottom' ? 12.5 : '4.5'}
                           width={dockHint.side === 'center' ? 15 : 7}
-                          height="15"
+                          height={dockHint.side === 'bottom' ? 7 : '15'}
                           rx="1"
                           fill="currentColor"
                           fillOpacity="0.45"
@@ -1080,7 +1091,7 @@ function WorkspaceFiles() {
                       <span className="wf-dock-label">
                         {dockHint.side === 'center'
                           ? '移动到此分栏'
-                          : `停靠到${dockHint.side === 'left' ? '左侧' : '右侧'}`}
+                          : `停靠到${dockHint.side === 'bottom' ? '下方' : dockHint.side === 'left' ? '左侧' : '右侧'}`}
                       </span>
                     </div>
                   </div>
