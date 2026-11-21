@@ -352,6 +352,15 @@ function insertTabAt(tabs: string[], tabId: string, targetId: string, after: boo
   return withoutDragged;
 }
 
+/* 拖拽手势门槛：
+ * - DRAG_ARM_DELAY：按住该时长后才进入“已拿起”状态（此前移动视为点击/误触）。
+ * - DRAG_INTENT_DISTANCE：从拖拽起点算的意图距离。原生拖拽在按住后只需
+ *   约 4-5px 的无感位移就会启动并持续触发 dragover，配合“始终显示最近
+ *   槽位”会让蓝线在体感“没动”时就出现（多行页签下纵向漂移到相邻行同理）。
+ *   位移不足该距离期间一律不显示插入线与停靠提示，释放也不触发排序。 */
+const DRAG_ARM_DELAY = 180;
+const DRAG_INTENT_DISTANCE = 24;
+
 function WorkspaceFiles() {
   const [identity, setIdentity] = useState<Identity>(readIdentity);
   const [tree, setTree] = useState<Record<string, TreeNode>>({});
@@ -361,7 +370,12 @@ function WorkspaceFiles() {
   const [activePaneId, setActivePaneId] = useState(1);
   const [splitRatio, setSplitRatio] = useState(0.5);
   const [dragTab, setDragTab] = useState<string | null>(null);
+  const [dragReadyTab, setDragReadyTab] = useState<string | null>(null);
   const [dragOverTab, setDragOverTab] = useState<{ paneId: number; rowKey: string; tabId: string; side: 'before' | 'after'; offsetX: number } | null>(null);
+  const dragArmTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const dragArmedRef = useRef(false);
+  const dragArmOrigin = useRef<{ x: number; y: number } | null>(null);
+  const dragStartOrigin = useRef<{ x: number; y: number } | null>(null);
   const [dockHint, setDockHint] = useState<DockHint | null>(null);
   const [imageModes, setImageModes] = useState<Record<string, 'fit' | 'full'>>({});
   const paneRowRef = useRef<HTMLDivElement | null>(null);
@@ -448,10 +462,15 @@ function WorkspaceFiles() {
       <div
         key={tabId}
         data-tab-id={tabId}
-        className={`gen-ui-surface-tab-item${isActive ? ' is-active' : ''} wf-draggable-tab${dragTab === tabId ? ' is-drag-source' : ''}`}
+        className={`gen-ui-surface-tab-item${isActive ? ' is-active' : ''} wf-draggable-tab${dragTab === tabId ? ' is-drag-source' : ''}${dragReadyTab === tabId ? ' is-drag-ready' : ''}`}
         draggable
+        onPointerDown={onTabPointerDown(tabId)}
         onDragStart={onTabDragStart(tabId)}
         onDragEnd={onTabDragEnd}
+        onClick={event => {
+          if (event.target instanceof Element && event.target.closest('.gen-ui-surface-tab-close')) return;
+          activateTab(pane.id, tabId);
+        }}
       >
         <button
           type="button"
@@ -459,7 +478,6 @@ function WorkspaceFiles() {
           role="tab"
           aria-selected={isActive}
           title={isTree ? '工作目录文件树' : tabId}
-          onClick={() => activateTab(pane.id, tabId)}
         >
           <span className="wf-tab-icon" aria-hidden="true">
             {isTree ? <FolderCloseIcon size={14} /> : <FileTypeIcon path={label} size={14} />}
@@ -648,8 +666,54 @@ function WorkspaceFiles() {
     });
   };
 
+  const clearDragArm = () => {
+    if (dragArmTimer.current !== null) clearTimeout(dragArmTimer.current);
+    dragArmTimer.current = null;
+    dragArmedRef.current = false;
+    dragArmOrigin.current = null;
+  };
+
+  const onTabPointerDown = (tabId: string) => (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0 || event.pointerType === 'touch'
+      || (event.target instanceof Element && event.target.closest('.gen-ui-surface-tab-close'))) return;
+    clearDragArm();
+    dragArmOrigin.current = { x: event.clientX, y: event.clientY };
+    dragArmTimer.current = setTimeout(() => {
+      dragArmedRef.current = true;
+      dragArmTimer.current = null;
+      setDragReadyTab(tabId);
+    }, DRAG_ARM_DELAY);
+  };
+
+  useEffect(() => {
+    const onPointerMove = (event: PointerEvent) => {
+      if (dragArmTimer.current === null || dragArmedRef.current) return;
+      const origin = dragArmOrigin.current;
+      if (origin && Math.hypot(event.clientX - origin.x, event.clientY - origin.y) > 5) clearDragArm();
+    };
+    const onPointerUp = () => {
+      clearDragArm();
+      setDragReadyTab(null);
+    };
+    window.addEventListener('pointermove', onPointerMove, true);
+    window.addEventListener('pointerup', onPointerUp, true);
+    window.addEventListener('pointercancel', onPointerUp, true);
+    return () => {
+      window.removeEventListener('pointermove', onPointerMove, true);
+      window.removeEventListener('pointerup', onPointerUp, true);
+      window.removeEventListener('pointercancel', onPointerUp, true);
+      clearDragArm();
+    };
+  }, []);
+
   const onTabDragStart = (tabId: string) => (event: ReactDragEvent) => {
+    if (!dragArmedRef.current) {
+      event.preventDefault();
+      return;
+    }
+    clearDragArm();
     setDragTab(tabId);
+    dragStartOrigin.current = { x: event.clientX, y: event.clientY };
     event.dataTransfer.setData('text/plain', tabId);
     event.dataTransfer.effectAllowed = 'move';
   };
@@ -716,8 +780,19 @@ function WorkspaceFiles() {
     else if (contentX > right) row.scrollLeft = contentX - row.clientWidth;
   };
 
+  const hasDragIntent = (event: ReactDragEvent) => {
+    const origin = dragStartOrigin.current;
+    if (!origin) return true;
+    return Math.hypot(event.clientX - origin.x, event.clientY - origin.y) >= DRAG_INTENT_DISTANCE;
+  };
+
   const onTabRowDragOver = (paneId: number) => (event: ReactDragEvent) => {
     if (!dragTab) return;
+    if (!hasDragIntent(event)) {
+      setDragOverTab(null);
+      setDockHint(null);
+      return;
+    }
     const row = event.currentTarget as HTMLElement;
     const position = getRowDropPosition(row, event.clientX);
     if (!position?.tabId) {
@@ -762,6 +837,13 @@ function WorkspaceFiles() {
 
   const onTabRowDrop = (paneId: number) => (event: ReactDragEvent) => {
     if (!dragTab) return;
+    if (!hasDragIntent(event)) {
+      // 无拖拽意图的释放：只阻止浏览器默认落点行为，不排序，收尾交给 dragend。
+      event.preventDefault();
+      setDragOverTab(null);
+      setDockHint(null);
+      return;
+    }
     const position = getRowDropPosition(event.currentTarget as HTMLElement, event.clientX);
     if (position) {
       event.preventDefault();
@@ -795,9 +877,12 @@ function WorkspaceFiles() {
   };
 
   const onTabDragEnd = () => {
+    clearDragArm();
+    setDragReadyTab(null);
     setDragTab(null);
     setDragOverTab(null);
     setDockHint(null);
+    dragStartOrigin.current = null;
   };
 
   const canDock = (targetPaneId: number) => {
@@ -809,6 +894,10 @@ function WorkspaceFiles() {
 
   const onPaneBodyDragOver = (paneId: number) => (event: ReactDragEvent) => {
     if (!dragTab || !canDock(paneId)) return;
+    if (!hasDragIntent(event)) {
+      setDockHint(null);
+      return;
+    }
     event.preventDefault();
     event.dataTransfer.dropEffect = 'move';
     // 落区形态：单 pane 按内容区左/右半区拆分栏；双 pane 按既有分区分——
@@ -977,6 +1066,10 @@ function WorkspaceFiles() {
                 onDragLeave={onPaneBodyDragLeave(pane.id)}
                 onDrop={event => {
                   event.preventDefault();
+                  if (!dragTab || !hasDragIntent(event)) {
+                    setDockHint(null);
+                    return;
+                  }
                   if (dockHint?.paneId === pane.id) performDock(pane.id, dockHint.side);
                   else setDockHint(null);
                 }}

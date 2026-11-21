@@ -37,6 +37,10 @@
   /* 覆盖全局 .gen-ui-surface-tabs 的 align-items: flex-end：
      列方向下它会让行收缩到内容宽并水平右对齐，左侧出现莫名空档 */
   align-items: stretch;
+  /* 首行浮起余量：吸收首行 margin-top 的上探，使浮起/阴影完整落在
+     .wf-panel（overflow: hidden）以内——否则恰好在面板顶缘
+     （宿主面板 title 区下沿）被裁掉。 */
+  padding-top: 4px;
 }
 
 /* 占满：剥掉复用 .settings-tab-bar 的胶囊容器样式（4px padding + 半透明底
@@ -61,6 +65,14 @@
   width: 100%;
   overflow-x: auto;
   scrollbar-width: none;
+  /* 长按“拿起”的浮起与阴影需要竖向余量：行是滚动容器，两个方向都会裁剪
+     溢出内容。padding 把余量纳入裁剪区（可见），负 margin 抵消布局增高——
+     重叠区只发生在相邻行的空白 padding 带，内容条带仍首尾相接；
+     首行的上探由 .wf-tabstrip 的 padding-top 吸收。 */
+  padding-top: 4px;
+  padding-bottom: 2px;
+  margin-top: -4px;
+  margin-bottom: -2px;
 }
 
 .wf-tab-row::-webkit-scrollbar {
@@ -504,11 +516,33 @@ body[data-theme="light"] .wf-entry-icon {
 
 /* ── 拖拽停靠 ───────────────────────────────────────────── */
 
-.wf-panel.is-dragging .gen-ui-surface-tab-item.is-drag-source { opacity: 0.45; }
+/* 实际拖动中：源页签回到原位淡化（dragstart 时的拖影快照已是“浮起”形态），
+   不再占用浮起样式，避免淡化和阴影叠加显得浑浊。 */
+.wf-panel.is-dragging .gen-ui-surface-tab-item.is-drag-source {
+  opacity: 0.45;
+  transform: none;
+  box-shadow: none;
+}
 
-.wf-draggable-tab { cursor: grab; }
-
+.wf-draggable-tab { cursor: pointer; position: relative; }
+.wf-draggable-tab .gen-ui-surface-tab { width: 100%; }
 .wf-tab-row { position: relative; }
+
+/* 长按“拿起”：页签浮起到其余页签之上，强调边框呼应插入线的蓝色，
+   明确告知已进入可拖拽状态。竖向浮起依赖行容器的余量（见 .wf-tab-row）。 */
+.wf-panel .gen-ui-surface-tab-item.is-drag-ready {
+  cursor: grab;
+  z-index: 6;
+  transform: translateY(-2px) scale(1.05);
+  border-color: rgba(107, 145, 255, 0.75);
+  box-shadow: 0 5px 14px rgba(0, 0, 0, 0.45);
+  transition: transform 130ms ease, box-shadow 130ms ease, border-color 130ms ease;
+}
+
+body[data-theme="light"] .wf-panel .gen-ui-surface-tab-item.is-drag-ready {
+  border-color: rgba(76, 106, 219, 0.6);
+  box-shadow: 0 6px 16px rgba(15, 23, 42, 0.22);
+}
 
 .wf-panel .wf-tab-row-drop-indicator {
   position: absolute;
