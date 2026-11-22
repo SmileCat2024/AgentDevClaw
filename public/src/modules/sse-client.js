@@ -28,11 +28,11 @@
  *   与 queue-projection 的双向静态环：两侧对端绑定都只在函数体内调用，
  *   模块求值期零解引用；本模块只 import 一个具名函数，队列快照缓存的公开
  *   读取面仍以 window.ClawFW.SseClient 供 classic 消费方使用。
- * - app-notification 呈现与前台时钟仍由 desktop-notify 提供：该模块保持唯一
+ * - app-notification 呈现仍由 desktop-notify 提供：该模块保持唯一
  *   classic 实现（桌面壳原生 toast 激活入口必须在经典相同轮次可投递，见
  *   desktop-notify 头注），本模块按其**既有 window 函数协议**
- *   （window._presentAppNotification / window._syncForegroundState）调用，
- *   不 import classic 文件、不复制通知业务。
+ *   （window._presentAppNotification）调用，不 import classic 文件、
+ *   不复制通知业务。
  * - 仍 classic 的函数按调用时点显式 window 晚绑定：updateNotificationStatus
  *   （runtime-status）、captureSessionViewToken（session-view-state）、
  *   getRuntimeRecord（app-core）、renderAgentList（sidebar-render）。
@@ -172,11 +172,6 @@ function isSameRuntime(a, b) {
 // ── 事件帧分发 ─────────────────────────────────────────────────────
 
 function handleNotificationEvent(frame) {
-  // 事件到达本身证明页面代码在运行：顺带刷新前台时钟（§5.4 时钟源迁移的
-  // 预置钩子，P3 心跳改造后成为宽限期判定的主时钟源之一）
-  // 桥接期：_syncForegroundState 定义于 desktop-notify（classic 顶层函数，
-  // 通知域收敛时改 import）
-  if (typeof window._syncForegroundState === 'function') window._syncForegroundState();
   const payload = frame?.data;
   if (!payload || typeof payload !== 'object') return;
   if (isSameRuntime(frame.agentId, currentRuntimeAgentId)) {

@@ -1682,7 +1682,17 @@ describe('InputGateway (unified user input routing)', () => {
     const { integration } = makeFixture();
 
     // direct 路径验证网关透传契约：stub fetch 模拟 viewer 原生结果。
-    // R6 后线程域一律入箱，direct 仅保留给纯 session（无线程 / 非 host）。
+    // R6 后线程域一律入箱，direct 仅保留给纯 session（无线程 / 非 host）；
+    // c9275772 起已声明线程宿主（coder）查不到线程记录必须 fail closed
+    // （thread_ownership_unresolved，见 input-gateway-queue.test.js），不走
+    // direct——本用例注册非宿主 runtime（programming-helper）验证直通透传。
+    const PH_VIEWER_KEY = 'programming-helper::ig-ph1';
+    managedAgents.set(PH_VIEWER_KEY, {
+      agentId: 'programming-helper',
+      selectedSessionId: 'ig-ph1',
+      viewerAgentId: 'viewer-ig-ph1',
+      process: null,
+    });
     const fetchImpl = async (_url, init) => ({
       ok: true,
       json: async () => ({
@@ -1691,12 +1701,16 @@ describe('InputGateway (unified user input routing)', () => {
         text: JSON.parse(init.body).text,
       }),
     });
-    const result = await deliverUserInput(
-      { viewerAgentId: 'viewer-ig-1', text: 'hello' },
-      { integration, fetchImpl },
-    );
-    assert.equal(result.delivery, 'delivered');
-    assert.equal(result.text, 'hello');
+    try {
+      const result = await deliverUserInput(
+        { viewerAgentId: 'viewer-ig-ph1', text: 'hello' },
+        { integration, fetchImpl },
+      );
+      assert.equal(result.delivery, 'delivered');
+      assert.equal(result.text, 'hello');
+    } finally {
+      managedAgents.delete(PH_VIEWER_KEY);
+    }
   });
 
   test('historical thread sessions reject writes instead of silently targeting the head', async () => {

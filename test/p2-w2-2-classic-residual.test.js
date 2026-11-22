@@ -15,6 +15,9 @@
  *     见 P4 L2 批次；
  *   - desktop-notify 仍是**外部 eval 入口**这一类 bootstrap 边界，P4 L2 审计
  *     判定保留 classic（理由与竞态窗口同上），本文件继续钉住它的同轮可投递。
+ *     其前台时钟（_syncForegroundState）与 Worker 心跳已随通知三态模式配置
+ *     退役（帧携带 modes、按设备端当下焦点态选键），不再是 window 函数协议
+ *     的一部分，故不在本文件的经典顶层函数清单内。
  *
  * 本文件用 classic 沙箱（frontend-vm）钉住 desktop-notify **在装载的同一同步
  * 轮次内**完成激活入口注册：测试体内不出现 await、不排空微任务，因此断言
@@ -64,10 +67,6 @@ test('desktop-notify：经典装载同一轮次内壳入口就已可投递（无
       },
       { permission: 'granted', requestPermission: async () => 'granted' },
     ),
-    // 前台心跳 Worker 的最小可构造形态（心跳只刷前台时钟）
-    Worker: class WorkerStub { constructor() { this.onmessage = null; } },
-    Blob: class BlobStub {},
-    URL: { createObjectURL: () => 'blob:heartbeat', revokeObjectURL() {} },
     normalizeAgentIdentity: (value) => String(value || '').trim(),
     // 运行时条目（生产由 /api/agents 快照提供）：runtimeId → 会话导航目标
     allAgents: [{ id: 'memo', name: 'Memo', runtime_session_id: 'rt-a' }],
@@ -84,7 +83,7 @@ test('desktop-notify：经典装载同一轮次内壳入口就已可投递（无
   // ── 以下全部在 loadSource 的同一同步轮次内完成：无 await、无 pending 模块 ──
   assert.equal(ctx.run('typeof window.__clawConsumeNotificationActivation'), 'function',
     '壳 eval 的激活入口在经典装载返回时即已注册');
-  for (const name of ['_presentAppNotification', '_syncForegroundState',
+  for (const name of ['_presentAppNotification',
     '_markAgentCallStartedForNotify', '_requestNotifyPermission']) {
     assert.equal(ctx.run(`typeof window.${name}`), 'function',
       `${name} 是经典顶层函数（ESM 消费方的既有 window 函数协议）`);

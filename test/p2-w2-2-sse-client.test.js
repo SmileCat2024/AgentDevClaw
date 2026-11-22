@@ -6,8 +6,8 @@
  * window/document 桩 + 其 ESM 依赖链）；**desktop-notify 以 classic 装载**
  * 到同一个 window（sandbox 即 window 对象，顶层 function 声明成为 window
  * 属性，与浏览器真实语义一致）——它保持唯一 classic 实现，ESM 侧只经既有
- * window._presentAppNotification / window._syncForegroundState 协议消费，
- * 不 import classic 文件、不复制通知业务。
+ * window._presentAppNotification 协议消费（前台时钟 _syncForegroundState
+ * 已随通知三态模式配置退役），不 import classic 文件、不复制通知业务。
  *
  * 钉住迁移不该改变的契约：
  *   - 认证启动链：__clawAuthReady 未放行前不建连；放行后单连接，hello 激活；
@@ -715,7 +715,6 @@ test('sse-client：不 import classic 模块，通知面只经既有 window 函�
   const source = fs.readFileSync(new URL('../public/src/modules/sse-client.js', import.meta.url), 'utf8');
   assert.doesNotMatch(source, /from '\.\/desktop-notify\.js'/, 'desktop-notify 是 classic，ESM 侧不得 import 它');
   assert.match(source, /window\._presentAppNotification/, 'app-notification 帧经既有 window 函数协议投递');
-  assert.match(source, /window\._syncForegroundState/, '前台时钟经既有 window 函数协议刷新');
 });
 
 test('sse-client：window.ClawFW.SseClient 命名空间与命名导出同源，私有 helper 不上桥', () => {
@@ -728,11 +727,11 @@ test('sse-client：window.ClawFW.SseClient 命名空间与命名导出同源，�
   for (const key of ['handleNotificationEvent', 'watchdogDecide', 'bootSseClient', 'connect']) {
     assert.equal(window[key], undefined, `${key} 不应挂在 window 上`);
   }
-  // 同批模块：desktop-notify 的两个 classic 入口仍在桥上
+  // 同批模块：desktop-notify 的 classic 入口仍在桥上
   // desktop-notify 保持 classic：其顶层函数是 window 属性（既有函数协议），
-  // SSE 经该协议消费，未新增桥键、未复制通知业务。
+  // SSE 经该协议消费，未新增桥键、未复制通知业务。前台时钟
+  // （_syncForegroundState）已随通知三态模式配置退役，不再是该协议成员。
   assert.equal(typeof window._presentAppNotification, 'function');
-  assert.equal(typeof window._syncForegroundState, 'function');
   assert.equal(typeof window.__clawConsumeNotificationActivation, 'function',
     '壳原生激活入口由 classic 模块在同一轮次注册');
 });

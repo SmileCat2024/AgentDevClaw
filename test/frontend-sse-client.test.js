@@ -160,7 +160,6 @@ const SINK_OVERRIDES = `
   window.ClawFW = window.ClawFW || {};
   // 编排域迁 ESM 后本行会被 app-main 模块求值期的挂载顶掉，用例体里重挂（见下）。
   window.ClawFW.forceFullPollOnce = () => window.__sinkForceFullPoll();
-  window._syncForegroundState = () => window.__sinkForegroundSync();
 `;
 
 /**
@@ -225,7 +224,6 @@ async function withSseCase(opts, fn) {
     updateNotificationStatus: [],
     renders: [],
     forceFullPoll: 0,
-    foregroundSyncs: 0,
     fetches: [],
   };
   const { document } = createDocumentStub();
@@ -299,7 +297,6 @@ async function withSseCase(opts, fn) {
       },
       __sinkRenderAgentList: () => { calls.renders.push(1); },
       __sinkForceFullPoll: () => { calls.forceFullPoll += 1; },
-      __sinkForegroundSync: () => { calls.foregroundSyncs += 1; },
       ...extraGlobals,
     },
   }, async (c) => withNoiseClean('sse-client 用例', async () => {
@@ -492,8 +489,6 @@ describe('sse-client: 事件分发焦点路由', () => {
       assert.equal(calls.updateNotificationStatus[0].token.runtimeId, 'rt-focus');
       // 非焦点路径改走真实 agent-call-states ESM：共享的调用状态容器被写入
       assert.equal(c.read('_agentCallActive.has("rt-other")'), false);
-      // 事件到达顺带刷新前台时钟（§5.4 时钟源钩子）
-      assert.ok(calls.foregroundSyncs >= 1);
 
       latestSource().emit('notification', { kind: 'notification', agentId: 'rt-other', data: payload });
       assert.equal(calls.updateNotificationStatus.length, 1);
