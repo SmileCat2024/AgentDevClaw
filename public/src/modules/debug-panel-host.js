@@ -106,7 +106,7 @@ function runAfterPanelOpenFrame(callback) {
 }
 
 // ═══════════════════════════════════════════════════════════════
-// 容器型面板（ADR-0044 P2c）
+// 容器型面板（ADR-0044 P2c）+ 现场实例（scene）通用机制
 // ═══════════════════════════════════════════════════════════════
 //
 // 面板元数据声明 mountBody(bodyEl, ctx) 时，body 的渲染权移交面板：
@@ -115,27 +115,123 @@ function runAfterPanelOpenFrame(callback) {
 // 永远不触碰它的 DOM——这是 React 等自管渲染库挂进右栏的通道。
 // 与字符串型面板的关键区别：不参与内容签名去重/preserveOnReRender
 //（天然保留），刷新节奏由面板自管（onOpen 里启动，unmountBody 里清理）。
+//
+// ── 现场实例（scenes 能力，面板可选声明）─────────────────────────
+//
+// 面板在注册元数据上声明 `scenes: { overlayContext, renderStrip,
+// activateDefault }` 即可拥有多现场形态：同一面板按 context.instanceKey
+// 同时存在多份实例，keepAlive 实例在切换/收起时被暂存保活而不是卸载，
+// 重新选中时原 DOM 原样接回（React 状态不丢）。宿主只认 instanceKey /
+// keepAlive 这两个通用字段，不感知任何具体面板的现场语义：
+//   - overlayContext(base) → 覆盖字段（identity / instanceKey / keepAlive /
+//     panelTitle 等 + 面板域自有字段），null/缺席 = 无现场形态（默认）
+//   - renderStrip(stripEl) → 自绘头部现场页签条（宿主只提供槽位）
+//   - activateDefault() → rail 图标点击时的「回默认现场」接管，返回
+//     false = 走常规开关
+// 面板实例协议补充：onContextUpdate(node, context) 在实例被重新选中或
+// 上下文变化（如接续换代）时回调，面板自行 diff。首个接入：文件面板的
+// 固定文件现场（modules/files-scenes.js）。
 
-let mountedContainer = null; // { id, unmount }：unmountBody 引用在挂载时缓存，面板被摘除后仍可卸载
+let mountedContainer = null; // { id, instanceKey?, keepAlive?, node?, settingsKey?, unmount }
+const stashedInstances = new Map(); // `${panelId}::${instanceKey}` → 同构记录（保活暂存）
 
+/** 现场实例的隐藏暂存区（挂在 body 下的常驻容器，节点移动而非重建）。 */
+function sceneStashRoot() {
+  let root = document.getElementById('feature-panel-scene-stash');
+  if (!root) {
+    root = document.createElement('div');
+    root.id = 'feature-panel-scene-stash';
+    root.hidden = true;
+    document.body.appendChild(root);
+  }
+  return root;
+}
+
+function stashInstance(mounted) {
+  mounted.node.hidden = true;
+  mounted.node.classList.add('feature-panel-instance-stashed');
+  sceneStashRoot().appendChild(mounted.node);
+  stashedInstances.set(`${mounted.id}::${mounted.instanceKey}`, mounted);
+}
+
+/**
+ * 收回当前挂载的容器：keepAlive 的现场实例暂存保活（切换面板、收起右栏
+ * 都不销毁），其余正常卸载。「显式关闭现场」不走这里——那是
+ * releaseSceneInstance 的职责。
+ */
 function unmountContainerPanel(reason) {
   if (!mountedContainer) return;
-  const { id, unmount } = mountedContainer;
+  const mounted = mountedContainer;
   mountedContainer = null;
-  if (typeof unmount === 'function') {
-    try {
-      unmount();
-    } catch (err) {
-      console.error(`[panel:${id}] unmountBody failed (${reason})`, err);
+  if (mounted.keepAlive && mounted.instanceKey) {
+    stashInstance(mounted);
+  } else {
+    if (typeof mounted.unmount === 'function') {
+      try {
+        mounted.unmount();
+      } catch (err) {
+        console.error(`[panel:${mounted.id}] unmountBody failed (${reason})`, err);
+      }
     }
+    mounted.node?.remove();
   }
   featurePanelBody.innerHTML = '';
   delete featurePanelBody.dataset.panel;
 }
 
+/**
+ * 显式释放一个现场实例（面板域关闭现场时调用）：暂存中或在位挂载都精确
+ * 卸载一次，不影响其他实例。返回是否找到了该实例。
+ */
+export function releaseSceneInstance(panelId, instanceKey) {
+  if (!panelId || !instanceKey) return false;
+  const stashKey = `${panelId}::${instanceKey}`;
+  const stashed = stashedInstances.get(stashKey);
+  if (stashed) {
+    stashedInstances.delete(stashKey);
+    stashed.node.remove();
+    try { stashed.unmount?.(); } catch (err) {
+      console.error(`[panel:${panelId}] unmountBody failed (release-scene)`, err);
+    }
+    return true;
+  }
+  if (mountedContainer?.id === panelId && mountedContainer.instanceKey === instanceKey) {
+    const mounted = mountedContainer;
+    mountedContainer = null;
+    try { mounted.unmount?.(); } catch (err) {
+      console.error(`[panel:${panelId}] unmountBody failed (release-scene)`, err);
+    }
+    mounted.node.remove();
+    featurePanelBody.innerHTML = '';
+    delete featurePanelBody.dataset.panel;
+    return true;
+  }
+  return false;
+}
+
+/**
+ * 把当前在位的实例原地升级为持久现场（用户点「固定」时面板域调用）：
+ * instanceKey 原地改写、容器节点不重建，React DOM 与内部状态原样保留。
+ * 守卫是「在位实例尚未 keepAlive」：live 默认现场（带 live instanceKey）与
+ * 无现场形态的容器都可转正；已 keepAlive 的固定现场拒绝——它的 DOM 归属
+ * 已按旧 key 记入暂存索引，改写会让索引与事实失配。
+ */
+export function adoptSceneInstance(panelId, instanceKey) {
+  if (!panelId || !instanceKey) return false;
+  if (!mountedContainer || mountedContainer.id !== panelId || mountedContainer.keepAlive) return false;
+  mountedContainer.instanceKey = instanceKey;
+  mountedContainer.keepAlive = true;
+  mountedContainer.node.dataset.panelInstance = instanceKey;
+  return true;
+}
+
 function pluginPanelContext(panelId) {
   const spec = window.ClawHost?.panels.getSettingsBinding?.(panelId);
-  if (!spec) return { panelId };
+  if (!spec) {
+    const minimal = { panelId };
+    const overlay = window.ClawPanels.get(panelId)?.scenes?.overlayContext?.(minimal);
+    return overlay ? { ...minimal, ...overlay } : minimal;
+  }
   const agentId = window.getCurrentHostAgentRecord?.()?.id || window.focusedAgentId;
   const view = window.getCurrentSessionViewIdentity?.();
   const runtimeId = window.currentRuntimeAgentId;
@@ -151,7 +247,7 @@ function pluginPanelContext(panelId) {
     for (const [key, value] of query) target.searchParams.set(key, value);
     return target.pathname + target.search;
   };
-  return {
+  const context = {
     panelId,
     settingsKey: JSON.stringify([spec.packageName, runtimeId, query.toString(), ready]),
     async getPluginSettings() {
@@ -163,15 +259,53 @@ function pluginPanelContext(panelId) {
     },
     pluginRequestUrl: bind,
   };
+  const overlay = window.ClawPanels.get(panelId)?.scenes?.overlayContext?.(context);
+  return overlay ? { ...context, ...overlay } : context;
 }
 
 function mountContainerPanel(panel, panelId, context) {
-  mountedContainer = { id: panelId, settingsKey: context.settingsKey, unmount: panel.unmountBody || null };
-  try {
-    panel.mountBody(featurePanelBody, context);
-  } catch (err) {
-    console.error(`[panel:${panelId}] mountBody failed`, err);
-    mountedContainer = null; // 挂载失败视作未挂载，防幽灵 unmount
+  if (!context.instanceKey) {
+    mountedContainer = { id: panelId, settingsKey: context.settingsKey, unmount: panel.unmountBody || null };
+    try {
+      panel.mountBody(featurePanelBody, context);
+    } catch (err) {
+      console.error(`[panel:${panelId}] mountBody failed`, err);
+      mountedContainer = null; // 挂载失败视作未挂载，防幽灵 unmount
+    }
+    featurePanel.classList.add('body-ready');
+    return;
+  }
+  // 现场实例：独立容器节点按 instanceKey 挂载；曾暂存的实例原样接回
+  const stashKey = `${panelId}::${context.instanceKey}`;
+  const stashed = stashedInstances.get(stashKey);
+  if (stashed) {
+    stashedInstances.delete(stashKey);
+    stashed.node.hidden = false;
+    stashed.node.classList.remove('feature-panel-instance-stashed');
+    featurePanelBody.innerHTML = '';
+    featurePanelBody.appendChild(stashed.node);
+    mountedContainer = stashed;
+    panel.onContextUpdate?.(stashed.node, context);
+  } else {
+    const node = document.createElement('div');
+    node.className = 'feature-panel-instance';
+    node.dataset.panelInstance = context.instanceKey;
+    featurePanelBody.innerHTML = '';
+    featurePanelBody.appendChild(node);
+    mountedContainer = {
+      id: panelId,
+      instanceKey: context.instanceKey,
+      keepAlive: !!context.keepAlive,
+      node,
+      settingsKey: context.settingsKey,
+      unmount: () => panel.unmountBody?.(node),
+    };
+    try {
+      panel.mountBody(node, context);
+    } catch (err) {
+      console.error(`[panel:${panelId}] mountBody failed`, err);
+      mountedContainer = null; // 挂载失败视作未挂载，防幽灵 unmount
+    }
   }
   featurePanel.classList.add('body-ready');
   // 底部渐变与字符串面板同口径（内层滚动容器同样检查）
@@ -212,11 +346,13 @@ export function renderFeaturePanel(options = {}) {
   if (!activeFeaturePanel || !window.ClawPanels.get(activeFeaturePanel)) {
     featurePanelRenderVersion += 1;
     _panelBodyHtmlCache.clear();
-    unmountContainerPanel('close'); // 容器型面板随面板关闭卸载（无挂载时幂等 no-op）
+    unmountContainerPanel('close'); // keepAlive 现场实例暂存保活，其余卸载
     featurePanel.classList.remove('open');
     featurePanel.classList.remove('body-ready');
     document.querySelector('.main-content')?.classList.remove('panel-open');
     featurePanelTitle.textContent = t('panel_structure');
+    const closedStrip = document.getElementById('feature-panel-scenes');
+    if (closedStrip) closedStrip.innerHTML = '';
     featurePanelBody.innerHTML = wrapPanelContent(window.getFeaturePanelEmptyHtml()); // 桥接期：定义于 app-core
     document.querySelectorAll('.rail-button[data-panel]').forEach(button => button.classList.remove('active'));
     // 清理可能残留的 Feature 详情弹窗 portal
@@ -242,7 +378,16 @@ export function renderFeaturePanel(options = {}) {
   if (!wasOpen) {
     featurePanel.style.setProperty('--feature-panel-width', getFeaturePanelWidth() + 'px');
   }
-  featurePanelTitle.textContent = typeof panel.title === 'function' ? panel.title() : panel.title;
+  const isContainerPanel = typeof panel.mountBody === 'function';
+  const panelContext = isContainerPanel ? pluginPanelContext(panelId) : null;
+  featurePanelTitle.textContent = panelContext?.panelTitle
+    ?? (typeof panel.title === 'function' ? panel.title() : panel.title);
+  // 现场页签槽位：声明 scenes.renderStrip 的面板自绘内容，其余面板清空
+  const scenesStrip = document.getElementById('feature-panel-scenes');
+  if (scenesStrip) {
+    if (isContainerPanel && panel.scenes?.renderStrip) panel.scenes.renderStrip(scenesStrip);
+    else scenesStrip.innerHTML = '';
+  }
   document.querySelectorAll('.rail-button[data-panel]').forEach(button => {
     button.classList.toggle('active', button.dataset.panel === activeFeaturePanel);
   });
@@ -273,18 +418,25 @@ export function renderFeaturePanel(options = {}) {
     }
 
     // ── 容器型面板（ADR-0044 P2c）──
-    // 挂载中的容器面板与当前面板不一致时先卸载：覆盖「容器→容器」切换，
-    // 也覆盖「容器→字符串」切换（innerHTML 路径会销毁其 DOM，必须先给
-    // unmountBody 清理定时器/订阅的机会）。「字符串→容器」无挂载，直挂。
-    const context = pluginPanelContext(panelId);
-    if (mountedContainer && (mountedContainer.id !== panelId || mountedContainer.settingsKey !== context.settingsKey)) {
+    // 挂载中的容器面板与当前面板/现场不一致时先收回：keepAlive 现场实例
+    // 暂存保活，其余卸载。覆盖「容器→容器」切换（含同面板换现场），也覆盖
+    // 「容器→字符串」切换（innerHTML 路径会销毁其 DOM，必须先给 unmountBody
+    // 清理定时器/订阅的机会）。「字符串→容器」无挂载，直挂。
+    const context = panelContext;
+    if (mountedContainer && (
+      mountedContainer.id !== panelId
+      || (context.instanceKey
+        ? mountedContainer.instanceKey !== context.instanceKey
+        : mountedContainer.settingsKey !== context.settingsKey)
+    )) {
       unmountContainerPanel('switch');
     }
     if (typeof panel.mountBody === 'function') {
       if (!mountedContainer) {
         mountContainerPanel(panel, panelId, context);
       } else {
-        // 已挂载的重渲染（轮询触发）：容器面板自管刷新，宿主 no-op
+        // 已挂载的重渲染（轮询/接续触发）：上下文交给面板自行 diff
+        panel.onContextUpdate?.(mountedContainer.node, context);
         featurePanel.classList.add('body-ready');
       }
       return;
@@ -462,7 +614,11 @@ function createRailButton(panel) {
   btn.innerHTML = panel.icon + (panel.badge
     ? '<span class="rail-badge" id="rail-' + panel.id + '-badge"></span>'
     : '');
-  btn.addEventListener('click', () => toggleFeaturePanel(panel.id));
+  btn.addEventListener('click', () => {
+    // scenes 面板可接管图标点击（如「回到默认现场」）；返回 false 走常规开关
+    if (panel.scenes?.activateDefault?.()) return;
+    toggleFeaturePanel(panel.id);
+  });
   return btn;
 }
 

@@ -27,7 +27,7 @@ function createDocumentHarness() {
   const harness = createDomHarness();
   const document = harness.document;
   const nodes = new Map();
-  for (const id of ['feature-panel', 'feature-panel-title', 'feature-panel-body', 'right-rail']) {
+  for (const id of ['feature-panel', 'feature-panel-title', 'feature-panel-body', 'right-rail', 'feature-panel-scenes']) {
     const el = document.createElement('div');
     el.id = id;
     document.body.appendChild(el);
@@ -38,7 +38,7 @@ function createDocumentHarness() {
   // dom-harness 的 innerHTML 只记录空串（它的用例断言子节点树）。面板宿主的
   // 字符串面板路径以 innerHTML 为渲染出口，这里给面板 / body / 标题三个节点
   // 装可读写的 innerHTML（子节点只做一个占位，供「body 非空」判定使用）。
-  for (const id of ['feature-panel', 'feature-panel-title', 'feature-panel-body']) {
+  for (const id of ['feature-panel', 'feature-panel-title', 'feature-panel-body', 'feature-panel-scenes']) {
     const el = nodes.get(id);
     Object.defineProperty(el, 'innerHTML', {
       configurable: true,
@@ -80,7 +80,16 @@ async function withPanelHost(fn, { beforeModules } = {}) {
       // 打开面板的 deferBody 路径经双 rAF 提交：本文件同步化 rAF，body 挂载可同步断言。
       sandbox.requestAnimationFrame = (callback) => { callback(); return 0; };
       sandbox.window.requestAnimationFrame = sandbox.requestAnimationFrame;
-      if (typeof beforeModules === 'function') beforeModules(sandbox);
+      if (typeof beforeModules === 'function') beforeModules(sandbox, dom);
+      else {
+        sandbox.window.ClawThreads = { threads: [], byId: {}, sessionIndex: {}, activeConversation: null };
+        sandbox.window.getThreadForSession = () => null;
+        sandbox.window.getCurrentHostAgentRecord = () => ({ id: 'programming-helper' });
+        sandbox.window.focusedAgentId = 'programming-helper';
+        sandbox.window.currentRuntimeAgentId = 'runtime-current';
+        sandbox.window.getCurrentSessionViewIdentity = () => ({ agentId: 'programming-helper', sessionId: 'session-current' });
+        sandbox.window.allAgents = [{ sessionId: 'session-current', title: 'Current' }];
+      }
     },
   }, async (c) => {
     const mod = await c.load(PANEL_HOST);
@@ -274,6 +283,61 @@ function registerContainerPanels(c, log) {
     render: () => '<div data-plain></div>',
   });
 }
+
+test('固定文件现场在右栏切换后保留原 DOM，重新选择并关闭时精确卸载', async () => {
+  await withPanelHost(async ({ c, mod, panelBody, document }) => {
+    const scenes = await c.load('public/src/modules/files-scenes.js');
+    const mounts = [];
+    const activations = [];
+    const unmounts = [];
+    let currentSessionId = 'session-a';
+    c.window.getCurrentSessionViewIdentity = () => ({ agentId: 'programming-helper', sessionId: currentSessionId });
+    c.window.ClawThreads = {
+      threads: [], byId: { 'thread-a': { threadId: 'thread-a', headSessionId: 'session-a', title: 'A' } },
+      sessionIndex: { 'programming-helper::session-a': { threadId: 'thread-a', title: 'A' } },
+      activeConversation: null,
+    };
+    c.window.ClawPanels.register('files', {
+      when: { surfaces: ['chat'] },
+      title: () => '文件',
+      scenes: scenes.filesSceneCapability,
+      mountBody(host, context) {
+        mounts.push({ host, context });
+        host.dataset.renderedFor = context.identity.sessionId;
+      },
+      unmountBody(host) { unmounts.push(host); },
+      onContextUpdate(host, context) { activations.push({ host, context }); },
+    });
+    mod.toggleFeaturePanel('files');
+    const originalHost = panelBody.children[0];
+    assert.equal(originalHost.dataset.renderedFor, 'session-a');
+    const strip = document.getElementById('feature-panel-scenes');
+    assert.match(strip.innerHTML, /data-pin-scene/, '未固定对话的当前页签应带加号');
+    await scenes.pinCurrentScene();
+    assert.doesNotMatch(strip.innerHTML, /data-pin-scene/, '当前对话固定后当前页签隐藏');
+    assert.equal(scenes.listPinnedScenes().length, 1, '固定入口应登记一个 A 文件现场');
+
+    currentSessionId = 'session-b';
+    scenes.selectCurrentScene();
+    assert.match(strip.innerHTML, /data-pin-scene/, '切到未固定对话后当前页签（带加号）重新出现');
+    const currentHost = panelBody.children[0];
+    assert.notEqual(currentHost, originalHost, '当前对话入口应创建 B 的独立文件现场');
+    assert.ok(document.body.contains(originalHost), '固定现场 A 应离开活动容器但继续挂载');
+    assert.equal(unmounts.length, 0, '切换对话不能卸载已固定现场');
+
+    assert.equal(mounts.length, 2);
+    assert.equal(mounts[1].context.identity.sessionId, 'session-b', '文件入口应按当前焦点建立 B 现场');
+    c.window.ClawThreads.byId['thread-a'].headSessionId = 'session-a-2';
+    assert.equal(scenes.selectPinnedScene('programming-helper:thread-a'), true);
+    assert.equal(panelBody.children[0], originalHost, '选择 A 页签应恢复原文件面板实例');
+    assert.equal(activations.at(-1).context.identity.sessionId, 'session-a-2', '接续后固定现场应解析到线程 head session');
+    assert.equal(panelBody.children[0].dataset.renderedFor, 'session-a');
+    assert.equal(scenes.closePinnedScene('programming-helper:thread-a'), true);
+    assert.equal(unmounts.filter(host => host === originalHost).length, 1, '关闭 A 固定页签应恰好卸载 A 现场一次');
+    assert.equal(unmounts.length, 2, '切换到 A 时已释放未固定的 B 现场，关闭 A 再释放 A');
+    assert.equal(scenes.listPinnedScenes().length, 0);
+  });
+});
 
 test('容器面板打开时 mountBody 收到 body 容器与 panelId，轮询重渲染不重复挂载', async () => {
   await withPanelHost(async ({ c, mod, panelBody }) => {

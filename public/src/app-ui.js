@@ -151,6 +151,7 @@ import { loadLogs, renderLogsPanel } from './modules/debug-logs.js';
 import { loadMcpInfo, renderMcpPanel } from './modules/debug-mcp.js';
 import { renderPreflightPanel } from './modules/debug-preflight.js';
 import { renderFeaturePanel, syncRailButtons } from './modules/debug-panel-host.js';
+import { filesSceneCapability } from './modules/files-scenes.js';
 import { openSettings, renderSettingsOverlay } from './modules/model-settings.js';
 import { openProxySettings } from './modules/proxy-overlay.js';
 import { openRemoteClawSettings } from './modules/remote-claw-settings.js';
@@ -1731,8 +1732,8 @@ export function registerFeaturePanel(panelId, panel) {
   return window.ClawPanels.register(panelId, panel);
 }
 
-let _filesPanelUnmount = null;
 let _filesPanelMountId = 0;
+const _filesPanelMounts = new WeakMap();
 registerFeaturePanel('files', {
   when: { agentIds: ['programming-helper'], surfaces: ['chat'] },
   title: () => '文件',
@@ -1740,8 +1741,10 @@ registerFeaturePanel('files', {
   description: { zh: '浏览当前会话工作目录', en: 'Browse the current session directory' },
   icon: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 6a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path></svg>',
   order: 5,
-  mountBody(host) {
+  scenes: filesSceneCapability,
+  mountBody(host, context = {}) {
     let active = true;
+    let sceneContext = context;
     let unmountReact = null;
     const token = ++_filesPanelMountId;
     host.dataset.filesMountToken = String(token);
@@ -1750,22 +1753,33 @@ registerFeaturePanel('files', {
     const panelUrl = window.__PROTOCLAW_APP_URL__?.('/src/react-panels-dist/workspace-files/index.js') || '/src/react-panels-dist/workspace-files/index.js';
     import(panelUrl).then(module => {
       if (!active || host.dataset.filesMountToken !== String(token)) return;
-      unmountReact = module.mount(host);
+      unmountReact = module.mount(host, sceneContext);
     }).catch(error => {
       if (!active || host.dataset.filesMountToken !== String(token)) return;
       console.error('[panel:files] load failed', error);
       host.innerHTML = '<div class="wf-empty wf-error">文件面板加载失败，请刷新页面重试</div>';
     });
-    _filesPanelUnmount = () => {
-      active = false;
-      unmountReact?.();
-      unmountReact = null;
-      delete host.dataset.filesMountToken;
-      host.classList.remove('wf-full-bleed');
-      _filesPanelMountId += 1;
-    };
+    _filesPanelMounts.set(host, {
+      activate: (nextContext) => {
+        if (!active) return;
+        sceneContext = nextContext;
+        host.dispatchEvent(new CustomEvent('claw:files-scene-context', { detail: sceneContext }));
+      },
+      unmount: () => {
+        active = false;
+        unmountReact?.();
+        unmountReact = null;
+        delete host.dataset.filesMountToken;
+        host.classList.remove('wf-full-bleed');
+        _filesPanelMounts.delete(host);
+        _filesPanelMountId += 1;
+      },
+    });
   },
-  unmountBody() { _filesPanelUnmount?.(); _filesPanelUnmount = null; },
+  onContextUpdate(host, context) {
+    _filesPanelMounts.get(host)?.activate(context);
+  },
+  unmountBody(host) { _filesPanelMounts.get(host)?.unmount(); },
 });
 
 registerFeaturePanel('workspace', {

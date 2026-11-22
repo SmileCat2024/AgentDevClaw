@@ -3,6 +3,9 @@
    非激活页签给可见轮廓（用户反馈：默认态太"无界"）、divider 带可视分隔线、
    文件类型图标配色取自 DSH design-platform 的静态 token 值。 */
 
+/* 对话页签条（.feature-panel-scene*）样式统一在壳层 public/styles/layout.css；
+   固定入口是当前页签上的加号（files-scenes.js 渲染），面板内部不再有现场相关 UI。 */
+
 .wf-panel {
   display: flex;
   flex-direction: column;

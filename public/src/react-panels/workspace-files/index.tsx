@@ -36,6 +36,11 @@ type Preview =
   | { state: 'pdf' | 'video' | 'audio'; url: string; mimeType: string };
 type FileTab = { path: string; name: string; preview: Preview };
 type Identity = { agentId: string; sessionId: string };
+type PanelContext = {
+  identity?: Identity;
+  instanceKey?: string;
+  pinned?: boolean;
+};
 type Pane = { id: number; tabs: string[]; active: string }; // 页签 id：'tree' 或文件路径
 // center = 双 pane 时的落区形态：整个对方 pane 高亮，语义是移动页签而非再拆分。
 type SplitDirection = 'horizontal' | 'vertical'; // horizontal = 左右分栏，vertical = 上下分栏
@@ -363,8 +368,45 @@ function insertTabAt(tabs: string[], tabId: string, targetId: string, after: boo
 const DRAG_ARM_DELAY = 180;
 const DRAG_INTENT_DISTANCE = 24;
 
-function WorkspaceFiles() {
-  const [identity, setIdentity] = useState<Identity>(readIdentity);
+function WorkspaceFiles({ panelContext: initialPanelContext = {} }: { panelContext?: PanelContext }) {
+  const [panelContext, setPanelContext] = useState<PanelContext>(initialPanelContext);
+  const contextRef = useRef(panelContext);
+  const activeIdentityRef = useRef<Identity>(readIdentity(panelContext.identity));
+  contextRef.current = panelContext;
+  useEffect(() => {
+    const onSceneContext = (event: Event) => {
+      const next = (event as CustomEvent<PanelContext>).detail;
+      if (!next) return;
+      const previous = contextRef.current;
+      const sceneChanged = previous.instanceKey !== next.instanceKey;
+      const nextIdentity = readIdentity(next.identity);
+      const identityChanged = !identityEquals(readIdentity(previous.identity), nextIdentity);
+      setPanelContext(next);
+      if (identityChanged) {
+        activeIdentityRef.current = nextIdentity;
+        setIdentity(current => identityEquals(current, nextIdentity) ? current : nextIdentity);
+      }
+      if (sceneChanged || identityChanged) {
+        // 现场缓存键：instanceKey 稳定跨接续（同现场换代只换请求目标），
+        // 默认现场退化为会话身份键（切会话换现场）
+        const nextKey = next.instanceKey || `${nextIdentity.agentId}:${nextIdentity.sessionId}`;
+        const cached = sessionStateCache.get(nextKey);
+        if (cached) {
+          setTree(cached.tree); setExpanded(cached.expanded); setFiles(cached.files); setPanes(cached.panes);
+          setActivePaneId(cached.activePaneId); setSplitRatio(cached.splitRatio); setSplitDirection(cached.splitDirection);
+          setImageModes(cached.imageModes); nextPaneId.current = cached.nextPaneId;
+        } else {
+          setTree({}); setExpanded(new Set([''])); setFiles({}); setPanes([{ id: 1, tabs: [TREE_TAB], active: TREE_TAB }]);
+          setActivePaneId(1); setSplitRatio(0.5); setSplitDirection('horizontal'); setImageModes({}); nextPaneId.current = 2;
+        }
+      }
+    };
+    window.addEventListener('claw:files-scene-context', onSceneContext);
+    return () => window.removeEventListener('claw:files-scene-context', onSceneContext);
+  }, []);
+  const [identity, setIdentity] = useState<Identity>(() => readIdentity(panelContext.identity));
+  activeIdentityRef.current = identity;
+  const followsCurrentSession = !panelContext.pinned;
   const [tree, setTree] = useState<Record<string, TreeNode>>({});
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set(['']));
   const [files, setFiles] = useState<Record<string, FileTab>>({});
@@ -500,7 +542,7 @@ function WorkspaceFiles() {
     );
   };
   const nextPaneId = useRef(2);
-  const identityKey = `${identity.agentId}:${identity.sessionId}`;
+  const identityKey = panelContext.instanceKey || `${identity.agentId}:${identity.sessionId}`;
   // null = 组件刚挂载、尚未恢复过状态：保证 remount（面板折叠再展开）也走缓存恢复分支。
   const stateKeyRef = useRef<string | null>(null);
 
@@ -516,14 +558,16 @@ function WorkspaceFiles() {
 
   // 会话身份变化：事件驱动（session-view-state 广播），无轮询。
   useEffect(() => {
+    if (!followsCurrentSession) return;
     const onViewChanged = (event: Event) => {
       const detail = (event as CustomEvent).detail as { identity?: { agentId?: string; sessionId?: string } } | undefined;
       const next = readIdentity(detail?.identity ?? null);
+      activeIdentityRef.current = next;
       setIdentity(current => (identityEquals(current, next) ? current : next));
     };
     window.addEventListener('claw:session-view-changed', onViewChanged);
     return () => window.removeEventListener('claw:session-view-changed', onViewChanged);
-  }, []);
+  }, [followsCurrentSession]);
 
   // 身份切换：当前状态已由上面的快照 effect 存进旧 key；此处从缓存恢复
   // 新会话状态（无缓存则复位为初始单 pane 形态），并做 LRU 淘汰。
@@ -570,10 +614,10 @@ function WorkspaceFiles() {
       });
       const body = await response.json();
       if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
-      if (!identityEquals(readIdentity(), identity)) return;
+      if (!identityEquals(activeIdentityRef.current, identity)) return;
       setTree(current => ({ ...current, [directory]: { entries: body.entries } }));
     } catch (error) {
-      if (!identityEquals(readIdentity(), identity)) return;
+      if (!identityEquals(activeIdentityRef.current, identity)) return;
       setTree(current => ({ ...current, [directory]: { ...current[directory], loading: false, error: error instanceof Error ? error.message : String(error) } }));
     }
   }, [identity]);
@@ -581,9 +625,14 @@ function WorkspaceFiles() {
   useEffect(() => {
     if (!identity.agentId || !identity.sessionId) return;
     void loadDirectory('');
-  }, [identityKey, loadDirectory]);
+  }, [identityKey, identity.agentId, identity.sessionId, loadDirectory]);
 
-  const identityGuarded = () => identityEquals(readIdentity(), identity);
+  // 在途请求的身份守卫：现场面板以宿主下发的 context.identity 为准；
+  // 无上下文身份（异常形态）退回全局当前会话。
+  const identityGuarded = () => {
+    const current = contextRef.current;
+    return identityEquals(readIdentity(current.identity ?? null), identity);
+  };
 
   const openFile = async (entry: Entry) => {
     if (!entry.supported || !identity.agentId || !identity.sessionId) return;
@@ -621,6 +670,7 @@ function WorkspaceFiles() {
         return { ...current, [entry.path]: { ...tab, preview } };
       });
     } catch (error) {
+      if (!identityGuarded()) return;
       setFiles(current => current[entry.path]
         ? { ...current, [entry.path]: { ...current[entry.path], preview: { state: 'error', message: error instanceof Error ? error.message : String(error) } } }
         : current);
@@ -1117,7 +1167,7 @@ declare global {
   }
 }
 
-export function mount(host: HTMLElement) {
+export function mount(host: HTMLElement, panelContext: PanelContext = {}) {
   if (!document.getElementById('workspace-files-style')) {
     const style = document.createElement('style');
     style.id = 'workspace-files-style';
@@ -1125,6 +1175,6 @@ export function mount(host: HTMLElement) {
     document.head.append(style);
   }
   const root = createRoot(host);
-  root.render(<WorkspaceFiles />);
+  root.render(<WorkspaceFiles panelContext={panelContext} />);
   return () => root.unmount();
 }

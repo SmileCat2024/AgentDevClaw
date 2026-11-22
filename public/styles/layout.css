@@ -1024,10 +1024,71 @@ body[data-theme="light"] .agent-icon {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 8px;
   border-bottom: 1px solid rgba(255,255,255,0.05);
   flex-shrink: 0;
   min-width: var(--feature-panel-width, 500px);
 }
+
+.feature-panel-scenes {
+  display: flex;
+  flex: 1 1 auto; /* 占满 header 标题右侧的剩余宽度（页签从左排布） */
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.feature-panel-scenes::-webkit-scrollbar { display: none; }
+
+/* 现场实例容器（debug-panel-host 按 instanceKey 创建的中间层）：
+   必须占满 body 高度并建立 flex 纵向链——否则面板根的 height:100% 解析
+   为 auto，内部滚动区塌缩、内容溢出到 body 的滚动壳变成整体滚动。 */
+.feature-panel-instance {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  height: 100%;
+  min-height: 0;
+}
+
+.feature-panel-scene {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  max-width: 280px;
+  border-radius: 9px 9px 0 0;
+  background: transparent;
+}
+.feature-panel-scene.is-active { background: var(--active-bg); }
+.feature-panel-scene-select {
+  max-width: 240px;
+  height: 32px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 9px 9px 0 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+.feature-panel-scene.is-active .feature-panel-scene-select { color: var(--text-primary); }
+.feature-panel-scene-close,
+.feature-panel-scene-pin {
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.feature-panel-scene-close:hover,
+.feature-panel-scene-pin:hover { background: var(--hover-bg); color: var(--text-primary); }
 
 body[data-theme="light"] .feature-panel-header {
   border-bottom-color: #e0e0e0;
