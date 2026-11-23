@@ -8,7 +8,12 @@ import {
   buildCompactOverview,
   normalizeSummaryPolicy,
   buildSummarySeedMessage,
+  buildRecentUserInputReminder,
+  writeSummarizedHandoffPackage,
 } from '../server/context-continuity/summarized-handoff.js';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 
 describe('summarized-handoff pure functions', () => {
 
@@ -202,6 +207,73 @@ describe('summarized-handoff pure functions', () => {
       const msg = buildSummarySeedMessage('');
       assert.equal(msg.role, 'system');
       assert.ok(msg.content.includes('摘要：'));
+    });
+  });
+
+  describe('buildRecentUserInputReminder', () => {
+    it('keeps the last user messages verbatim, newest last, within the caps', () => {
+      const reminder = buildRecentUserInputReminder([
+        { role: 'user', content: '早期要求' },
+        { role: 'assistant', content: '答复' },
+        { role: 'tool', toolCallId: 't1', content: '工具输出' },
+        { role: 'user', content: '改一下方向：先别动配置层' },
+        { role: 'assistant', content: '收到' },
+        { role: 'user', content: '另外补一个回归用例' },
+      ], { maxMessages: 2 });
+      assert.ok(reminder.includes('1. 改一下方向：先别动配置层'));
+      assert.ok(reminder.includes('2. 另外补一个回归用例'));
+      assert.ok(!reminder.includes('早期要求'), 'older user input is dropped by the message cap');
+      assert.ok(!reminder.includes('工具输出'), 'tool results never enter the reminder');
+    });
+
+    it('truncates long input instead of letting it blow the char budget', () => {
+      const reminder = buildRecentUserInputReminder(
+        [{ role: 'user', content: 'x'.repeat(500) }],
+        { maxChars: 120 },
+      );
+      assert.ok(reminder.includes('…'));
+      assert.ok(reminder.length < 260, `reminder stays bounded, got ${reminder.length}`);
+    });
+
+    it('returns an empty string when the session has no user input', () => {
+      assert.equal(buildRecentUserInputReminder([{ role: 'assistant', content: 'a' }]), '');
+      assert.equal(buildRecentUserInputReminder(null), '');
+    });
+  });
+
+  describe('writeSummarizedHandoffPackage appendix', () => {
+    it('attaches the reminder without touching the summary seed skeleton', async () => {
+      const root = await mkdtemp(path.join(tmpdir(), 'claw-summarized-appendix-'));
+      try {
+        const { handoffPath } = await writeSummarizedHandoffPackage({
+          userDataRoot: root,
+          agentId: 'coder',
+          sessionId: 'session-1',
+          summaryText: '摘要正文',
+          appendixContent: '以下是用户此前在这项任务中说过的话（按时间顺序）：\n1. 先别动配置层',
+        });
+        const onDisk = JSON.parse(await readFile(handoffPath, 'utf8'));
+        assert.equal(onDisk.seedMessages.length, 1, 'seed skeleton stays a single summary message');
+        assert.equal(onDisk.appendix.kind, 'recent-user-input');
+        assert.ok(onDisk.appendix.content.includes('先别动配置层'));
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it('omits the appendix field when the option is off', async () => {
+      const root = await mkdtemp(path.join(tmpdir(), 'claw-summarized-noappendix-'));
+      try {
+        const { handoff } = await writeSummarizedHandoffPackage({
+          userDataRoot: root,
+          agentId: 'coder',
+          sessionId: 'session-1',
+          summaryText: '摘要正文',
+        });
+        assert.equal(handoff.appendix, undefined);
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
     });
   });
 });

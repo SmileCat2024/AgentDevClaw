@@ -253,6 +253,46 @@ describe('ContextGuardFeature (interactive shell)', () => {
     assert.equal(defensive.getStatus().strategy, 'adaptive');
   });
 
+  it('attach options: control validation, snapshot migration and event payload', async () => {
+    const feature = new ContextGuardFeature({
+      allowRotation: true,
+      agentId: 'coder',
+      sessionId: 'session-1',
+      serverOrigin: 'http://127.0.0.1:14200',
+      contextLength: 1000,
+      compressRatio: 80,
+    });
+    feature.setCallArbiter(makeArbiter());
+
+    // 只有布尔值可写入；未知类型被拒且不改现值
+    const invalid = await feature.onHostRequest('set', { attachSummary: 'yes' });
+    assert.equal(invalid.ok, false);
+    assert.equal(invalid.code, 'invalid_payload');
+    assert.equal(feature.getStatus().attachSummary, false);
+
+    const applied = await feature.onHostRequest('set', { strategy: 'trim', attachSummary: true });
+    assert.equal(applied.ok, true);
+    assert.equal(feature.getStatus().attachSummary, true);
+
+    // 快照迁移：两个开关随会话持久化与接续
+    const snapshot = feature.captureState() as Record<string, unknown>;
+    assert.equal(snapshot.attachSummary, true);
+    assert.equal(snapshot.attachRecentUserInput, false);
+    const successor = new ContextGuardFeature({ allowRotation: true });
+    await successor.restoreState(snapshot);
+    assert.equal(successor.getStatus().attachSummary, true);
+
+    // 事件载荷携带两个开关（服务端按当前策略取用）
+    await feature.onHostRequest('set', { mode: 'rotate', attachRecentUserInput: true });
+    const agent = makeAgent();
+    const featureForEvent = feature as any;
+    featureForEvent.pendingReport = { crossing: { inputTokens: 900, thresholdTokens: 800 }, reason: 'threshold' };
+    await feature.reportRotationOnCallFinish({});
+    assert.equal(posted.length, 1);
+    assert.equal(posted[0].body.attachSummary, true);
+    assert.equal(posted[0].body.attachRecentUserInput, true);
+  });
+
   it('legacy enabled boolean maps to modes; explicit mode wins; default follows assembly capability', () => {
     assert.equal(new ContextGuardFeature({ enabled: false }).getStatus().mode, 'off');
     assert.equal(new ContextGuardFeature({ enabled: true }).getStatus().mode, 'interrupt');

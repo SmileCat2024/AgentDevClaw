@@ -71,6 +71,41 @@ function buildSourceRecord(sourceRecord = {}) {
   };
 }
 
+/** 摘要包可附带的用户输入上限：条数与字符双闸，避免大段粘贴把上下文撑回去。 */
+export const RECENT_USER_INPUT_MAX_MESSAGES = 3;
+export const RECENT_USER_INPUT_MAX_CHARS = 2000;
+
+/**
+ * 纯摘要接续会丢弃全部原始对话，用户最近的原话（尤其方向纠正）随之消失。
+ * 这里把最近几条用户输入原样收成一段提醒块：它随 handoff 的 appendix
+ * 在 runtime 侧以 system reminder 注入，不改接续产物骨架、不占 seed 账目、
+ * 也不参与 turn 编号空间（ADR-0048）。
+ */
+export function buildRecentUserInputReminder(
+  messages,
+  { maxMessages = RECENT_USER_INPUT_MAX_MESSAGES, maxChars = RECENT_USER_INPUT_MAX_CHARS } = {},
+) {
+  if (!Array.isArray(messages) || messages.length === 0) return '';
+  const picked = [];
+  let budget = maxChars;
+  for (let i = messages.length - 1; i >= 0 && picked.length < maxMessages && budget > 0; i -= 1) {
+    const message = messages[i];
+    if (message?.role !== 'user') continue;
+    const text = cleanMultilineText(typeof message.content === 'string' ? message.content : '');
+    if (!text) continue;
+    const clipped = text.length > budget ? `${text.slice(0, Math.max(1, budget - 1)).trimEnd()}…` : text;
+    picked.unshift(clipped);
+    budget -= clipped.length;
+  }
+  if (picked.length === 0) return '';
+  return [
+    '以下是用户此前在这项任务中说过的话（按时间顺序）：',
+    ...picked.map((text, index) => `${index + 1}. ${text}`),
+    '',
+    '继续工作时以这些要求为准；已经完成或已被后面的要求取代的部分不必重做。',
+  ].join('\n');
+}
+
 function buildCompactOverview(sourceRecord = {}) {
   const lines = [];
   const title = cleanInlineText(sourceRecord?.taskTitle || sourceRecord?.title);
@@ -115,6 +150,7 @@ export async function writeSummarizedHandoffPackage({
   gitMeta = null,
   sourceSessionSnapshot = null,
   featureContinuity = null,
+  appendixContent = '',
 }) {
   const policy = normalizeSummaryPolicy(rawPolicy);
   const continuity = featureContinuity && typeof featureContinuity === 'object'
@@ -165,6 +201,9 @@ export async function writeSummarizedHandoffPackage({
     } : null,
     featureContinuity: continuity,
     seedMessages: [buildSummarySeedMessage(summaryText)],
+    ...(cleanMultilineText(appendixContent)
+      ? { appendix: { kind: 'recent-user-input', content: cleanMultilineText(appendixContent) } }
+      : {}),
   };
 
   const handoffPath = getContextHandoffFilePath(userDataRoot, agentId, handoffId);
@@ -188,6 +227,7 @@ export async function exportSummarizedHandoffPackage({
   sourceSessionSnapshot = null,
   timeoutMs = SESSION_TRANSFORMATION_TIMEOUT_MS,
   signal = null,
+  includeRecentUserInput = false,
 }) {
   const policy = normalizeSummaryPolicy(rawPolicy);
 
@@ -221,5 +261,8 @@ export async function exportSummarizedHandoffPackage({
     importantSkills: Array.isArray(summaryResult?.importantSkills) ? summaryResult.importantSkills : [],
     fileRanges: typeof summaryResult?.fileRanges === 'object' && summaryResult.fileRanges !== null ? summaryResult.fileRanges : {},
     sourceSessionSnapshot,
+    appendixContent: includeRecentUserInput
+      ? buildRecentUserInputReminder(sourceSessionSnapshot?.runtime?.context?.messages)
+      : '',
   });
 }

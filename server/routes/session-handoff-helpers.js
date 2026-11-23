@@ -17,6 +17,7 @@ import {
 import {
   readHandoffPackage,
   exportHistoryOnlyHandoffPackage,
+  resolveTrimToolBatchPolicy,
   writeTrimWithSummaryHandoffPackage,
 } from '../context-continuity/handoff-package.js';
 import {
@@ -76,6 +77,9 @@ export function createSessionHandoffHelpers(deps) {
         sourceSessionSnapshot,
         signal: options.signal || null,
         timeoutMs: options.timeoutMs,
+        // 纯摘要档可选增强：用户最近输入以 appendix 提醒块随包下发（runtime 侧
+        // 经 HandoffSeedFeature 的 appendix 通道注入，不改 seed 骨架）。
+        includeRecentUserInput: options.includeRecentUserInput === true,
       });
       await setSessionHasSummary(ownerAgentId, sessionId, true);
       return result;
@@ -113,7 +117,12 @@ export function createSessionHandoffHelpers(deps) {
         sessionId,
         projectRoot: PROJECT_ROOT,
         sourceSessionSnapshot: sessionSnapshot,
-        policy: applyContinuityToolPolicy(policy),
+        // 批次数在这里就换算成框架的调用数预算：组合变换只认
+        // keepRecentToolCalls，不认识 Claw 侧的 keepRecentToolBatches。
+        policy: applyContinuityToolPolicy(resolveTrimToolBatchPolicy(
+          policy,
+          sessionSnapshot?.runtime?.context?.messages ?? [],
+        )),
         signal: options.signal || null,
         timeoutMs: options.timeoutMs,
       });
@@ -259,12 +268,14 @@ export function createSessionHandoffHelpers(deps) {
     policy = {},
     startRuntime = true,
     appendSummary = false,
+    includeRecentUserInput = false,
     trace = null,
     signal = null,
   }) {
     trace?.mark('handoff_export_started');
     const exportResult = await exportContextHandoffForSession(sessionId, preferredAgentId, policy, {
       appendSummary,
+      includeRecentUserInput,
       signal,
     });
     trace?.mark('handoff_exported');

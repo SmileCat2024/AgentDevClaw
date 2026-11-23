@@ -41,9 +41,16 @@ thread-rotation 的策略解析变为：**事件载荷中的会话级策略（�
 - 会话控制面板最上方新增接续策略选择器（自适应 / 纯精简 / 纯摘要，与 coder 面板同标签），仅守卫可用且 allowRotation 的会话显示，写经 `context_guard_control {strategy}`，应答回填 badge 缓存；
 - 全局系统 feature 配置（system-feature-config 内联副本）同步三态声明，旧布尔值（`enabled: true/false`）兼容读取。
 
+### 7. 会话面板的接续增强开关（2026-11-23 修订）
+
+策略三选一之外，纯精简与纯摘要各加一个会话级开关，面板只在选中对应策略时呈现：纯精简可选「附带摘要」（复用组合变换，等价于既有 appendSummary 路径）；纯摘要可选「附带最近用户输入」（摘要包写 `appendix`，runtime 经 `HandoffSeedFeature.appendix` 以 system reminder 注入，不改 seed 骨架、不计 seed 账目）。
+
+档位标签统一为「自适应 / 精简优先 / 摘要优先」（枚举值 `adaptive` / `trim` / `summary` 不变）。两个开关与 `{mode, strategy}` 同层：随 feature 快照持久化、随 `declareContinuity` 迁移，`context_guard_control` 与 `context_guard_event` 双向携带，手动恢复（`resumeRotation`）按请求携带值执行。`attachSummary` 只在 `strategy='trim'`、`attachRecentUserInput` 只在 `strategy='summary'` 下被消费，自适应档忽略两者。
+
 ## 影响
 
 - ADR-0032 决策 2 末条预留正式关闭；该 ADR 其余决策不变。
 - 手动接续入口（`/trim` `/summary` 与精简页）不受影响：策略选择器只驱动自动接续，不兼作手动接续参数。
 - 远程旧版 runtime 的 `{armed}` 布尔状态回报由前端映射为两态基线（rotate 能力未知按无处理）。
+- 2026-11-23 修订新增两个会话级增强开关（决策 7）：涉及 `local-features/context-guard/src/index.ts`、`server/routes/agent-lifecycle.js`、`server/routes/session.js`、`server/thread-control/thread-rotation.js`、`server/thread-control/thread-routes.js`、`server/routes/session-handoff-helpers.js`、`server/context-continuity/summarized-handoff.js`、`server/shared/handoff-payload.js`、`scripts/run-prebuilt-agent.js`、`public/src/modules/context-guard-toggle.js`、`public/src/panel-plugins/session-controls.js`。
 - 涉及：`local-features/context-guard/src/index.ts`、`server/thread-control/thread-rotation.js`、`server/routes/session.js`（事件策略载荷）、`server/routes/agent-lifecycle.js`（控制载荷）、`public/src/modules/context-guard-toggle.js` / `runtime-status.js` / `session-controls-panel.js` / `chat-context-bar.js`、`prebuilt-agents/official/programming-helper/agent.js`、`prebuilt-agents/official/agent-studio/agent.js`、`server/routes/system-feature-config.js`。

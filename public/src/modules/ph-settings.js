@@ -624,15 +624,15 @@ async function _phLoadCoderPolicy() {
       optionCard('adaptive', strategy === 'adaptive',
         isZh ? '自适应' : 'Adaptive',
         isZh
-          ? '默认。先精简并保留最近 5 次工具调用；压缩不足时逐级升级——仍超 50% 追加摘要，超 80% 转为纯摘要。'
-          : 'Default. Trim first, keeping the last 5 tool calls; escalate only when compression falls short: above 50% appends a summary, above 80% switches to pure summary.'),
+          ? '默认。先精简并保留最近五批工具调用（同批调用及其结果一起留）；压缩不足时逐级升级——仍超 40% 追加摘要，超 80% 只保留摘要。'
+          : 'Default. Trim first, keeping the last five tool-call batches (all calls in a batch and their results); escalate only when compression falls short: above 40% appends a summary, above 80% keeps the summary only.'),
       optionCard('trim', strategy === 'trim',
-        isZh ? '纯精简' : 'Trim Only',
+        isZh ? '精简优先' : 'Trim first',
         isZh
-          ? '折叠工具活动，保留对话文本与最近 5 次工具调用；不生成摘要，无额外模型开销。'
-          : 'Fold tool activity, keep dialogue plus the last 5 tool calls. No summary, no extra LLM cost.'),
+          ? '折叠工具活动，保留对话文本与最近五批工具调用（含配对结果）；不生成摘要，无额外模型开销。'
+          : 'Fold tool activity, keep dialogue plus the last five tool-call batches (with paired results). No summary, no extra LLM cost.'),
       optionCard('summary', strategy === 'summary',
-        isZh ? '纯摘要' : 'Summary Only',
+        isZh ? '摘要优先' : 'Summary first',
         isZh
           ? '将整个会话浓缩为一份九段式摘要；上下文最小，保留细节最少。'
           : 'Condense the whole session into one nine-section summary. Smallest context, least detail.'),

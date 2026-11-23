@@ -10,7 +10,7 @@
  * 过程提示由线程既有「上下文接力中…」承载，badge 零新增提示。
  * 循环点击：关闭 → 自动打断 → 自动接续 → 关闭（allowRotation=false 时
  * 两态循环）；仅当前会话生效。控制入口从 session-controls-panel 的
- * 「上下文保护」区迁来：badge 内嵌在 chat-context-bar 的 token 进度条
+ * 「上下文接续」区迁来：badge 内嵌在 chat-context-bar 的 token 进度条
  * 组内——开关管的阈值与进度条是同一个（contextLength × compressRatio%），
  * 读数与守卫放在一起；详情行并入 ccb-popup（hover 弹窗，只读）。
  *
@@ -126,6 +126,8 @@ function applyStatusPayload(payload) {
   return {
     mode: normalizeMode(status.mode, status.armed === true),
     strategy: status.strategy === 'trim' || status.strategy === 'summary' ? status.strategy : 'adaptive',
+    attachSummary: status.attachSummary === true,
+    attachRecentUserInput: status.attachRecentUserInput === true,
     allowRotation: status.allowRotation === true,
     trip: normalizeTrip(status.trip),
     thresholdTokens: Number.isFinite(thresholdTokens) && thresholdTokens > 0 ? Math.round(thresholdTokens) : null,
@@ -244,8 +246,8 @@ export function renderBadge() {
   const ariaLabel = mode === 'interrupt'
     ? (zh ? '超阈值自动打断已开启，点击切换为自动接续' : 'Auto-interrupt on; click for auto-rotation')
     : mode === 'rotate'
-      ? (zh ? '超阈值自动接续已开启，点击关闭守卫' : 'Auto-rotation on; click to disable the guard')
-      : (zh ? '超阈值守卫已关闭，点击开启自动打断' : 'Guard off; click to enable auto-interrupt');
+      ? (zh ? '自动接续已开启，点击关闭' : 'Auto-rotation on; click to turn it off')
+      : (zh ? '上下文接续已关闭，点击开启自动打断' : 'Context rotation off; click to enable auto-interrupt');
 
   return '<button type="button" class="' + cls.join(' ') + '" data-guard-toggle="1"'
     + (pending || readonly ? ' disabled' : '')
@@ -320,7 +322,7 @@ function _toastToggle(mode, thresholdTokens) {
     ClawToast.show({
       id: 'context-guard-toggle',
       status: 'warning',
-      title: zh ? '已关闭超阈值守卫' : 'Context guard disarmed',
+      title: zh ? '已关闭上下文接续' : 'Context rotation off',
       description: zh
         ? '上下文超阈值时将不再自动打断，token 开销可能大幅增加'
         : 'Usage above the threshold will no longer be interrupted; token costs may increase sharply',
@@ -333,7 +335,7 @@ function _toastToggleError(error) {
   ClawToast.show({
     id: 'context-guard-toggle',
     status: 'error',
-    title: zh ? '切换超阈值守卫失败' : 'Failed to toggle the context guard',
+    title: zh ? '切换上下文接续失败' : 'Failed to toggle context rotation',
     description: String(error?.message || error),
     closable: true,
     autoDismiss: 8000,
@@ -348,6 +350,8 @@ export function getDetail() {
   return {
     mode: state.mode,
     strategy: state.strategy,
+    attachSummary: state.attachSummary === true,
+    attachRecentUserInput: state.attachRecentUserInput === true,
     allowRotation: state.allowRotation,
     thresholdTokens: state.thresholdTokens,
     trip: state.trip,

@@ -264,8 +264,8 @@ const stateByRuntime = new Map();
 
   const GUARD_STRATEGY_OPTIONS = [
     { value: 'adaptive', zh: '自适应', en: 'Adaptive', zhDesc: '先精简，不足再逐级升级摘要', enDesc: 'Trim first; escalate to summary only if needed' },
-    { value: 'trim', zh: '纯精简', en: 'Trim', zhDesc: '折叠工具活动，保留对话与最近工具调用', enDesc: 'Fold tool activity; keep dialogue and recent tool calls' },
-    { value: 'summary', zh: '纯摘要', en: 'Summary', zhDesc: '整会话浓缩为一份摘要', enDesc: 'Condense the whole session into one summary' },
+    { value: 'trim', zh: '精简优先', en: 'Trim first', zhDesc: '折叠工具活动，保留对话与最近五批工具调用', enDesc: 'Fold tool activity; keep dialogue and the last five tool batches' },
+    { value: 'summary', zh: '摘要优先', en: 'Summary first', zhDesc: '整会话浓缩为一份摘要', enDesc: 'Condense the whole session into one summary' },
   ];
 
   let _guardStrategyPending = false;
@@ -274,6 +274,44 @@ const stateByRuntime = new Map();
   function guardStrategyVisible() {
     const detail = window.ContextGuardToggle?.getDetail?.();
     return window.ContextGuardToggle?.isAvailable?.() === true && detail?.allowRotation === true;
+  }
+
+  // 增强开关：每一档各有一项，只在该档被选中时出现（选项对别的档没有意义）。
+  const GUARD_ATTACH_OPTIONS = {
+    trim: {
+      key: 'attachSummary',
+      zh: '附带摘要',
+      en: 'Attach summary',
+      zhHelp: '裁剪结果末尾追加一份摘要，接续后无需重读调查过程；每接力一次多一次模型调用。',
+      enHelp: 'Append a summary to the trimmed transcript so the successor need not re-read the investigation; costs one model call per relay.',
+    },
+    summary: {
+      key: 'attachRecentUserInput',
+      zh: '附带最近用户输入',
+      en: 'Attach recent user input',
+      zhHelp: '以提醒块附上用户最近几条输入的原文，避免摘要优先丢掉方向性要求；不改接续产物骨架。',
+      enHelp: 'Attach the last few user messages verbatim as a reminder block so pure summary does not lose directional requirements; the seed structure is unchanged.',
+    },
+  };
+
+  function renderGuardAttachRow({ zh, strategy, detail, disabled }) {
+    const option = GUARD_ATTACH_OPTIONS[strategy];
+    if (!option) return '';
+    const checked = detail[option.key] === true;
+    return [
+      '<div class="force-continuation-candidate" data-guard-attach-row="' + option.key + '">',
+      '<div class="force-continuation-candidate-main">',
+      '<div class="force-continuation-candidate-label">', esc(zh ? option.zh : option.en), '</div>',
+      '<div class="force-continuation-candidate-desc">', esc(zh ? option.zhHelp : option.enHelp), '</div>',
+      '</div>',
+      renderSwitch({
+        checked,
+        disabled,
+        title: zh ? '切换' + option.zh : 'Toggle ' + option.en,
+        attribute: 'data-guard-attach="' + option.key + '"',
+      }),
+      '</div>',
+    ].join('');
   }
 
   function renderGuardStrategySection({ zh, writeEnabled = true }) {
@@ -302,11 +340,37 @@ const stateByRuntime = new Map();
       '<div class="force-continuation-group-label">', zh ? '上下文接续' : 'CONTEXT ROTATION', '</div>',
       ...rows,
       '<div class="ph-pm-body ph-coder-runtime-options session-controls-guard-strategy-options">', cards, '</div>',
+      renderGuardAttachRow({ zh, strategy: current, detail, disabled }),
       '<div class="force-continuation-candidate-desc">', zh
         ? '触发线程接力时使用的策略；仅当前会话生效。'
         : 'Strategy applied when the thread relays; this session only.', '</div>',
       '</section>',
     ].join('');
+  }
+
+  async function updateGuardAttach(key, value) {
+    if (key !== 'attachSummary' && key !== 'attachRecentUserInput') return;
+    if (!guardStrategyVisible() || !panelWriteEnabled()) return;
+    const sessionId = currentSessionId();
+    if (!sessionId || !focusedAgentId || _guardStrategyPending) return;
+    _guardStrategyPending = true;
+    _guardStrategyError = '';
+    if (activeFeaturePanel === 'session-controls') renderFeaturePanel();
+    try {
+      const response = await fetch('/protoclaw/context_guard_control', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-idempotency-key': newIdempotencyKey() },
+        body: JSON.stringify({ agentId: panelAgentId(), sessionId, [key]: value === true }),
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok || payload.ok !== true) throw new Error(payload.error || `HTTP ${response.status}`);
+      window.ContextGuardToggle?.applyStatus?.(payload, currentRuntimeAgentId);
+      if (typeof window._scheduleInspectorRefresh === 'function') window._scheduleInspectorRefresh(120);
+    } catch (error) {
+      _guardStrategyError = String(error?.message || error);
+    }
+    _guardStrategyPending = false;
+    if (activeFeaturePanel === 'session-controls') renderFeaturePanel();
   }
 
   async function updateGuardStrategy(strategy) {
@@ -496,6 +560,11 @@ const stateByRuntime = new Map();
     const trigger = event.target?.closest?.('[data-force-continuation-trigger]');
     if (trigger) {
       updateTrigger(trigger.dataset.forceContinuationTrigger, trigger.checked);
+      return;
+    }
+    const guardAttach = event.target?.closest?.('[data-guard-attach]');
+    if (guardAttach) {
+      void updateGuardAttach(guardAttach.dataset.guardAttach, guardAttach.checked);
       return;
     }
     const limit = event.target?.closest?.('[data-force-continuation-limit]');
@@ -1106,6 +1175,7 @@ export {
   refreshStyleStatus,
   updateStyleSelection,
   updateGuardStrategy,
+  updateGuardAttach,
 };
 export const isAvailable = () => {
   const caps = resolveCaps();

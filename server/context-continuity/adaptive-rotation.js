@@ -2,12 +2,12 @@
  * Adaptive Rotation — 自适应上下文接续策略的定档与编排（Claw 产品层验证）
  *
  * 一次性阶梯（设计定案 2026-10-18）：
- *   1. 进程内先按「trim + keepRecentToolCalls」跑一遍框架引擎（纯函数、
+ *   1. 进程内先按「trim + 保最近五批工具调用」跑一遍框架引擎（纯函数、
  *      零 LLM 成本）得到试探 seed；
  *   2. 字符比 = 试探 seed 消息字符总量 ÷ 原始消息字符总量（对称口径：
  *      content 字符 + toolCalls JSON 字符，无分词器依赖）：
- *        ratio ≤ 0.5        → trim 档（history-only handoff）
- *        0.5 < ratio ≤ 0.8  → trim+追加摘要档（框架官方组合变换）
+ *        ratio ≤ 0.4        → trim 档（history-only handoff）
+ *        0.4 < ratio ≤ 0.8  → trim+追加摘要档（框架官方组合变换）
  *        ratio > 0.8        → 纯摘要档（summarized-nine-section，试探 seed 弃用）
  *   3. 摘要追加后不复测：摘要自身体积不参与判定，避免自我指涉的档位抖动。
  *
@@ -16,7 +16,7 @@
  *
  * 分层（设计定案 Q1=B）：定档与编排在产品层验证，验证后视结果下沉框架
  * 官方变换；引擎原语（keepRecentToolCalls）在框架侧，三条 handoff 产物
- * 路径全部复用既有实现，本模块不重写任何变换语义。
+ * 路径全部复用既有实现；Claw 将批次数换算为框架已有的调用数预算。
  */
 
 import {
@@ -25,6 +25,8 @@ import {
 } from '@agentdevjs/core';
 import {
   exportHistoryOnlyHandoffPackage,
+  resolveTrimToolBatchPolicy,
+  ROTATION_KEEP_RECENT_TOOL_BATCHES,
   writeTrimWithSummaryHandoffPackage,
 } from './handoff-package.js';
 import { exportSummarizedHandoffPackage } from './summarized-handoff.js';
@@ -34,13 +36,9 @@ import { createClawLogger } from '../shared/claw-logger.js';
 
 const logger = createClawLogger('adaptive-rotation');
 
-/** coder 接续 trim 系策略的引擎保护面：保最近 N 次工具调用（设计定案 Q2=B）。 */
-export const ROTATION_KEEP_RECENT_TOOL_CALLS = 5;
-
 /** 自适应阶梯参数（常量，不进配置页；试验反馈后再议参数化）。 */
 export const ADAPTIVE_DEFAULTS = Object.freeze({
-  keepRecentToolCalls: ROTATION_KEEP_RECENT_TOOL_CALLS,
-  appendSummaryRatio: 0.5,
+  appendSummaryRatio: 0.4,
   pureSummaryRatio: 0.8,
 });
 
@@ -119,16 +117,16 @@ export async function runAdaptiveRotationHandoff(params) {
   const writeTrimWithSummary = executors.writeTrimWithSummary || writeTrimWithSummaryHandoffPackage;
   const exportSummarized = executors.exportSummarized || exportSummarizedHandoffPackage;
 
-  const keepRecentToolCalls = Number.isInteger(options.keepRecentToolCalls) && options.keepRecentToolCalls > 0
-    ? options.keepRecentToolCalls
-    : ADAPTIVE_DEFAULTS.keepRecentToolCalls;
   const rawMessages = Array.isArray(sessionSnapshot?.runtime?.context?.messages)
     ? sessionSnapshot.runtime.context.messages
     : [];
 
   // 试探 trim 与 trim / 追加摘要两档的产物策略完全同面（含 continuity 装饰），
   // 定档与落盘出自同一策略，避免「测一套、写一套」的分叉。
-  const probePolicy = applyContinuityToolPolicy({ ...rawPolicy, keepRecentToolCalls });
+  const probePolicy = applyContinuityToolPolicy(resolveTrimToolBatchPolicy({
+    ...rawPolicy,
+    keepRecentToolBatches: ROTATION_KEEP_RECENT_TOOL_BATCHES,
+  }, rawMessages));
   const { seedMessages } = buildTrimmedSeedMessages(rawMessages, normalizeExportPolicy(probePolicy));
   const originalTotal = measureMessagesCharTotal(rawMessages);
   const trimmedTotal = measureMessagesCharTotal(seedMessages);

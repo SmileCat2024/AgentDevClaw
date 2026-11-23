@@ -257,10 +257,15 @@ app.post('/protoclaw/context_guard_event', express.json(), async (req, res, next
     if (threadRotation) {
       // 会话级接续策略（交互守卫自动接续态上报）：有效枚举值透传，无效值忽略。
       const strategy = cleanSessionText(req.body?.strategy);
+      // 两个增强开关（会话控制面板按当前策略提供）：只接受布尔值，缺省即关闭。
       void threadRotation.handleContextGuard(
         agentId,
         sessionId,
         strategy === 'adaptive' || strategy === 'trim' || strategy === 'summary' ? strategy : null,
+        {
+          attachSummary: req.body?.attachSummary === true,
+          attachRecentUserInput: req.body?.attachRecentUserInput === true,
+        },
       ).catch((error) => {
         console.error('[thread-rotation] context rotation failed:', error.message);
       });

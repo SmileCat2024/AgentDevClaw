@@ -1,5 +1,5 @@
 /**
- * context-guard-toggle（上边栏超阈值守卫三态 badge）单元测试。
+ * context-guard-toggle（上边栏上下文接续三态 badge）单元测试。
  *
  * 真实 import 路线（P2 ESM 化）：模块经 esm-module-loader 真实动态 import；
  * 已迁 ESM 的状态域（编排的 currentRuntimeAgentId、列表的 focusedAgentId、
@@ -167,7 +167,7 @@ describe('ContextGuardToggle: mount probe & badge rendering', () => {
     assert.match(html, /M21 12a9 9 0 1 1-9-9c2\.52 0 4\.93 1 6\.74 2\.74L21 8/);
     assert.doesNotMatch(html, /M12 8v4/);
     assert.match(html, /自动接续/);
-    assert.match(html, /aria-label="[^"]*点击关闭守卫/);
+    assert.match(html, /aria-label="[^"]*点击关闭/);
   });
 
   it('maps a legacy remote payload (armed boolean only) onto the two-state baseline', async () => {
@@ -275,7 +275,7 @@ describe('ContextGuardToggle: three-state cycling with toast feedback', () => {
     assert.match(module.renderBadge(), /is-off/);
     assert.equal(toasts.length, 1);
     assert.equal(toasts[0].status, 'warning');
-    assert.match(toasts[0].title, /已关闭超阈值守卫/);
+    assert.match(toasts[0].title, /已关闭上下文接续/);
     assert.match(toasts[0].description, /大幅增加/);
   });
 
@@ -333,7 +333,7 @@ describe('ContextGuardToggle: three-state cycling with toast feedback', () => {
     assert.doesNotMatch(html, /is-interrupt/);
     assert.equal(toasts.length, 1);
     assert.equal(toasts[0].status, 'error');
-    assert.match(toasts[0].title, /切换超阈值守卫失败/);
+    assert.match(toasts[0].title, /切换上下文接续失败/);
     assert.match(toasts[0].description, /not mounted/);
   });
 

@@ -33,7 +33,7 @@ import { postUserTurnToViewerMailbox, waitForArbiterIdle } from './runtime-inter
 import { WORKSPACE_SESSION_AGENT_IDS, resolveUserDataDir, AGENT_USER_CONFIG_PATH, MODEL_PRESETS_PATH } from '../server/shared/constants.js';
 import { declareSessionBundleAgent, resolveSessionStoreDir } from '../server/shared/session-storage.js';
 import { resolveDesktopWorkspace } from '../server/shared/desktop-workspace.js';
-import { parseHandoffContent } from '../server/shared/handoff-payload.js';
+import { buildHandoffSeedConfig, parseHandoffContent } from '../server/shared/handoff-payload.js';
 import { internalAuthHeaders } from '../server/shared/internal-auth.js';
 import { resolveWorkspaceAgent, resolveWorkspaceAgentClass, workspaceAgentDisplayName } from '../server/shared/workspace-agents.js';
 import { resolveSessionRuntimeDirectory } from '../server/shared/session-project.js';
@@ -938,10 +938,10 @@ SessionLifecycle.prototype.start = async function () {
   }
 
   if (this.runtimeHandoff?.handoff && (this.runtimeHandoff.handoff.sourceSummary || this.runtimeHandoff.handoff.seedMessages?.length)) {
-    // 框架标准 handoff seed feature（原 Claw context-handoff-seed 已下沉，见 docs/tickets/008）
-    this.agent.use(new HandoffSeedFeature({
-      handoff: this.runtimeHandoff.handoff,
-    }));
+    // 框架标准 handoff seed feature（原 Claw context-handoff-seed 已下沉，见 docs/tickets/008）。
+    // 包的 appendix（如纯摘要档附带的用户最近输入）走框架既有 appendix 通道：
+    // 以 system reminder 注入在 seed 之后，不计入 seed 账目、不占 turn 编号空间。
+    this.agent.use(new HandoffSeedFeature(buildHandoffSeedConfig(this.runtimeHandoff.handoff)));
     console.log(`[ProtoClaw Runtime] 已挂载 handoff seed (${this.runtimeHandoff.source})`);
   }
 

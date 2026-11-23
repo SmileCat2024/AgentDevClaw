@@ -113,4 +113,27 @@ describe('parseHandoffContent 共享解析器', () => {
     assert.equal(parsed.seedMessages.length, 2);
     assert.deepEqual(parsed.seedMessages.map(m => m.role), ['user', 'assistant']);
   });
+
+  test('appendix 原样透出：摘要包的最近用户输入提醒块随包到达 runtime', () => {
+    const raw = JSON.stringify({
+      mode: 'summarized-nine-section',
+      sourceSummary: '摘要正文',
+      seedMessages: [{ role: 'system', content: '摘要正文', turn: 0 }],
+      appendix: { kind: 'recent-user-input', content: '用户最近输入原文' },
+    });
+    const parsed = parseHandoffContent(raw, '/fake/path.json');
+    assert.deepEqual(parsed.appendix, { kind: 'recent-user-input', content: '用户最近输入原文' });
+    // 骨架不受影响：仍只有一条摘要 seed
+    assert.equal(parsed.seedMessages.length, 1);
+  });
+
+  test('缺少 appendix 或内容为空时按无附录处理', () => {
+    const withoutAppendix = parseHandoffContent(JSON.stringify({ sourceSummary: '摘要' }), '/fake/path.json');
+    assert.equal(withoutAppendix.appendix, null);
+    const emptyAppendix = parseHandoffContent(JSON.stringify({
+      sourceSummary: '摘要',
+      appendix: { kind: 'recent-user-input', content: '   ' },
+    }), '/fake/path.json');
+    assert.equal(emptyAppendix.appendix, null);
+  });
 });

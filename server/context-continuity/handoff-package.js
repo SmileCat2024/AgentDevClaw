@@ -152,6 +152,32 @@ function buildTrimNoticeSeedMessage({ sourceSessionId, trimmedAt }) {
   };
 }
 
+// 接续 trim 系策略的工具保护面：按批计（一条 assistant 消息连同其工具调用为一批），
+// 同批调用与结果一起保留——按调用计数会把并行读的一批切掉一半。
+export const ROTATION_KEEP_RECENT_TOOL_BATCHES = 5;
+
+/**
+ * 把「最近 N 批工具调用」换算成框架既有的尾随调用数预算（keepRecentToolCalls）。
+ * 框架侧不新增字段：批数只在 Claw 策略面出现，落盘 handoff 里仍是调用数。
+ * 未声明批预算时原样返回 policy。
+ */
+export function resolveTrimToolBatchPolicy(rawPolicy, messages) {
+  const { keepRecentToolBatches, ...policy } = rawPolicy ?? {};
+  if (!Number.isInteger(keepRecentToolBatches) || keepRecentToolBatches <= 0) return policy;
+
+  let remainingBatches = keepRecentToolBatches;
+  let callCount = 0;
+  for (let i = messages.length - 1; i >= 0 && remainingBatches > 0; i--) {
+    const message = messages[i];
+    if (message?.role !== 'assistant' || !Array.isArray(message.toolCalls)) continue;
+    const count = message.toolCalls.filter(call => typeof call?.id === 'string' && call.id.trim()).length;
+    if (count === 0) continue;
+    callCount += count;
+    remainingBatches--;
+  }
+  return { ...policy, keepRecentToolCalls: callCount || null };
+}
+
 export async function exportHistoryOnlyHandoffPackage({
   userDataRoot,
   agentId,
@@ -162,10 +188,10 @@ export async function exportHistoryOnlyHandoffPackage({
 }) {
   const sessionSnapshot = await readJson(path.resolve(String(sessionPath || '').trim()));
   const featureContinuity = exportFeatureContinuity(sessionSnapshot, { mode: 'trim-transcript' });
-  const policy = normalizeExportPolicy(applyContinuityToolPolicy(rawPolicy));
   const rawMessages = Array.isArray(sessionSnapshot?.runtime?.context?.messages)
     ? sessionSnapshot.runtime.context.messages
     : [];
+  const policy = normalizeExportPolicy(applyContinuityToolPolicy(resolveTrimToolBatchPolicy(rawPolicy, rawMessages)));
   // 源消息时间投影（enriched 侧 timestamp）：透传进 trim 产物，接续会话保留
   // 历史时间线；长度失配的结构异常快照按无时间锚降级。
   const enrichedMessages = Array.isArray(sessionSnapshot?.runtime?.context?.enrichedMessages)

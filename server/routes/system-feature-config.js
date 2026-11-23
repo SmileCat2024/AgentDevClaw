@@ -11,20 +11,20 @@ const CONTEXT_GUARD_MANIFEST = {
   settings: {
     sections: [{
       id: 'context-guard',
-      title: '上下文保护',
+      title: '上下文接续',
       properties: ['mode', 'strategy'],
     }],
     properties: {
       mode: {
         type: 'select',
         default: 'rotate',
-        title: '上下文保护',
+        title: '接近上限时',
         options: [
           { label: '关闭', value: 'off' },
           { label: '自动打断', value: 'interrupt' },
           { label: '自动接续', value: 'rotate' },
         ],
-        description: '关闭 = 全停；自动打断 = 过界打断本轮并拦截机器唤醒直到人工输入——那条输入即视为批准继续，本次越界期间不再拦截；自动接续 = 过界打断后立即走线程接力（coder 同构）。缺省档为自动接续（线程宿主装配语境）；自动接续档仅线程宿主工作空间（编程小助手）生效，其他工作空间启动时钳制为自动打断。旧布尔配置（enabled: true/false）兼容读取。仅交互式工作空间；coder / memo 线程自动接力不受此配置影响。',
+        description: '关闭：不监控也不打断；自动打断：接近上限时打断当前轮，等你输入后继续；自动接续：自动整理当前会话并延续到新会话，无需确认。默认为自动接续；装配未开放接续能力时按自动打断处理。',
       },
       strategy: {
         type: 'select',
@@ -32,11 +32,11 @@ const CONTEXT_GUARD_MANIFEST = {
         title: '接续策略',
         options: [
           { label: '自适应', value: 'adaptive' },
-          { label: '纯精简', value: 'trim' },
-          { label: '纯摘要', value: 'summary' },
+          { label: '精简优先', value: 'trim' },
+          { label: '摘要优先', value: 'summary' },
         ],
         showWhen: { property: 'mode', values: ['rotate'] },
-        description: '自动接续采用的精简方式（会话内可随时经会话控制面板切换，下一次接力生效）。',
+        description: '自动接续时如何整理上下文：自适应按需在精简与摘要之间选择；精简优先只裁剪旧内容，不额外调用模型；摘要优先压成一份摘要。可在会话内切换，下一次接续生效。',
       },
     },
   },

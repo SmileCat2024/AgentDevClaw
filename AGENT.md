@@ -127,7 +127,7 @@ AI 标题是**应用职责**（[ADR-0041](docs/adr/0041-title-generation-as-app-
 
 ### Coder（coder）★
 
-入口 `prebuilt-agents/official/coder/`（`agent.js` + `metadata.json`，`host: programming-helper` / `visibility: on-demand`）。无人值守自主编码 APP（权威：[ADR-0025](docs/adr/0025-coder-workspace-promotion.md)，含旧身份迁入与入口可见性合流规则）。配置层 `workspaces/coder/feature-config/agent.json`（`readAgentLayer('coder')`）。关键行为：线程宿主（自动建 WorkThread，`workspaceId=coder`，上下文过阈值自动接力）；接续策略声明驱动三选一（自适应 / 纯 trim / 纯摘要，声明式配置、`rotate()` 时现读生效，见 [docs/plans/2026-10-18-coder-adaptive-rotation.md](docs/plans/2026-10-18-coder-adaptive-rotation.md)）；只能由调度面创建（ACP / `claw threads` / claw-coder-dispatch 技能），UI 不能直接创建；Web UI 左侧入口是其线程列表投影（on-demand 可见性服务端合流 + 用户覆盖，规则见 ADR-0025）；线程归档是生命周期事务（执行中归档打断当前轮并收纳，任何状态不拒绝归档；已归档拒绝新指令）。coder 会话直接以 `agentId=coder` 寻址（会话身份投影机制已退役）。
+入口 `prebuilt-agents/official/coder/`（`agent.js` + `metadata.json`，`host: programming-helper` / `visibility: on-demand`）。无人值守自主编码 APP（权威：[ADR-0025](docs/adr/0025-coder-workspace-promotion.md)，含旧身份迁入与入口可见性合流规则）。配置层 `workspaces/coder/feature-config/agent.json`（`readAgentLayer('coder')`）。关键行为：线程宿主（自动建 WorkThread，`workspaceId=coder`，上下文过阈值自动接力）；接续策略声明驱动三选一（自适应 / 精简优先 / 摘要优先，声明式配置、`rotate()` 时现读生效，见 [docs/plans/2026-10-18-coder-adaptive-rotation.md](docs/plans/2026-10-18-coder-adaptive-rotation.md)）；只能由调度面创建（ACP / `claw threads` / claw-coder-dispatch 技能），UI 不能直接创建；Web UI 左侧入口是其线程列表投影（on-demand 可见性服务端合流 + 用户覆盖，规则见 ADR-0025）；线程归档是生命周期事务（执行中归档打断当前轮并收纳，任何状态不拒绝归档；已归档拒绝新指令）。coder 会话直接以 `agentId=coder` 寻址（会话身份投影机制已退役）。
 
 ### Agent Studio（agent-studio）★
 

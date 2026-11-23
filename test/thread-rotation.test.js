@@ -223,19 +223,46 @@ describe('thread rotation (context guard relay)', () => {
 describe('thread rotation strategy dispatch (声明驱动三选一)', () => {
   const thread = { threadId: 'wt-1', status: 'running', headSessionId: 'session-1' };
 
-  it('trim strategy maps to history-only handoff with keepRecentToolCalls', async () => {
+  it('trim strategy maps to history-only handoff with keepRecentToolBatches', async () => {
     const { service, calls } = buildDeps({ thread, strategy: 'trim' });
     const result = await service.handleContextGuard('coder', 'session-1');
     assert.equal(result.applied, true);
     assert.deepEqual(calls.compact, [{
       preferredAgentId: 'coder',
       sessionId: 'session-1',
-      policy: { strategy: 'trim-transcript', keepRecentToolCalls: 5 },
+      policy: { strategy: 'trim-transcript', keepRecentToolBatches: 5 },
       appendSummary: false,
       startRuntime: true,
     }]);
     // 策略按 agentId 现读（用户覆盖 > 作者默认，改配置即时生效）
     assert.deepEqual(calls.strategy, ['coder']);
+  });
+
+  it('trim with attachSummary appends a summary through the combined path', async () => {
+    const { service, calls } = buildDeps({ thread, strategy: 'trim' });
+    await service.handleContextGuard('coder', 'session-1', null, { attachSummary: true });
+    assert.deepEqual(calls.compact[0].policy, { strategy: 'trim-transcript', keepRecentToolBatches: 5 });
+    assert.equal(calls.compact[0].appendSummary, true);
+  });
+
+  it('summary with attachRecentUserInput asks the summary package for the user-input reminder', async () => {
+    const { service, calls } = buildDeps({ thread, strategy: 'summary' });
+    await service.handleContextGuard('coder', 'session-1', null, { attachRecentUserInput: true });
+    assert.deepEqual(calls.compact[0].policy, { strategy: 'summarized-nine-section' });
+    assert.equal(calls.compact[0].includeRecentUserInput, true);
+  });
+
+  it('keeps the attach options off by default and ignores them for adaptive', async () => {
+    const trimDeps = buildDeps({ thread, strategy: 'trim' });
+    await trimDeps.service.handleContextGuard('coder', 'session-1');
+    assert.equal(trimDeps.calls.compact[0].appendSummary, false);
+
+    const adaptiveDeps = buildDeps({ thread, strategy: 'adaptive' });
+    await adaptiveDeps.service.handleContextGuard('coder', 'session-1', null, {
+      attachSummary: true, attachRecentUserInput: true,
+    });
+    assert.deepEqual(adaptiveDeps.calls.compact[0].policy, { strategy: 'adaptive' });
+    assert.equal(adaptiveDeps.calls.compact[0].includeRecentUserInput, undefined);
   });
 
   it('summary strategy maps to the nine-section summarized handoff', async () => {
@@ -247,18 +274,19 @@ describe('thread rotation strategy dispatch (声明驱动三选一)', () => {
       sessionId: 'session-1',
       policy: { strategy: 'summarized-nine-section' },
       appendSummary: false,
+      includeRecentUserInput: false,
       startRuntime: true,
     }]);
   });
 
-  it('adaptive strategy maps to the adaptive handoff with keepRecentToolCalls', async () => {
+  it('adaptive strategy delegates the tool policy to the adaptive handoff', async () => {
     const { service, calls } = buildDeps({ thread, strategy: 'adaptive' });
     const result = await service.handleContextGuard('coder', 'session-1');
     assert.equal(result.applied, true);
     assert.deepEqual(calls.compact, [{
       preferredAgentId: 'coder',
       sessionId: 'session-1',
-      policy: { strategy: 'adaptive', keepRecentToolCalls: 5 },
+      policy: { strategy: 'adaptive' },
       appendSummary: false,
       startRuntime: true,
     }]);
@@ -301,7 +329,7 @@ describe('thread rotation strategy dispatch (声明驱动三选一)', () => {
     assert.deepEqual(calls.compact, [{
       preferredAgentId: 'programming-helper',
       sessionId: 'session-1',
-      policy: { strategy: 'trim-transcript', keepRecentToolCalls: 5 },
+      policy: { strategy: 'trim-transcript', keepRecentToolBatches: 5 },
       appendSummary: false,
       startRuntime: true,
     }]);
@@ -316,7 +344,7 @@ describe('thread rotation strategy dispatch (声明驱动三选一)', () => {
     assert.deepEqual(calls.compact, [{
       preferredAgentId: 'programming-helper',
       sessionId: 'session-1',
-      policy: { strategy: 'adaptive', keepRecentToolCalls: 5 },
+      policy: { strategy: 'adaptive' },
       appendSummary: false,
       startRuntime: true,
     }]);

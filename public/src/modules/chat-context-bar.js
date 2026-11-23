@@ -229,12 +229,12 @@ function _buildCcbPopupHtml(d) {
   }
   // 超阈值自动打断：badge 的只读详情（开关在进度条组末端的盾牌图标）
   if (d.guard) {
-    ctxRows.push('<div class="ccb-popup-row"><span class="ccb-popup-label">' + (isZh ? '超阈值守卫' : 'Context guard') + '</span><span class="ccb-popup-value">'
+    ctxRows.push('<div class="ccb-popup-row"><span class="ccb-popup-label">' + (isZh ? '上下文接续' : 'Context rotation') + '</span><span class="ccb-popup-value">'
       + (d.guard.mode === 'interrupt' ? (isZh ? '自动打断' : 'Auto-interrupt')
         : d.guard.mode === 'rotate' ? (isZh ? '自动接续' : 'Auto-rotate') : (isZh ? '关闭' : 'Off'))
       + (d.guard.mode === 'rotate' && d.guard.strategy
-        ? ' · ' + (d.guard.strategy === 'trim' ? (isZh ? '纯精简' : 'Trim')
-          : d.guard.strategy === 'summary' ? (isZh ? '纯摘要' : 'Summary') : (isZh ? '自适应' : 'Adaptive'))
+        ? ' · ' + (d.guard.strategy === 'trim' ? (isZh ? '精简优先' : 'Trim first')
+          : d.guard.strategy === 'summary' ? (isZh ? '摘要优先' : 'Summary first') : (isZh ? '自适应' : 'Adaptive'))
         : '')
       + '</span></div>');
     if (d.guard.trip && d.guard.trip.inputTokens && d.guard.trip.thresholdTokens) {

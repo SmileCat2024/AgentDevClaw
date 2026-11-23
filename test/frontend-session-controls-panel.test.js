@@ -417,7 +417,10 @@ describe('SessionControlsPanel output style (stylized-output)', () => {
   });
 });
 describe('SessionControlsPanel: guard rotation strategy selector', () => {
-  const GUARD_STATUS = { mode: 'rotate', strategy: 'adaptive', allowRotation: true, trip: null, thresholdTokens: 160000 };
+  const GUARD_STATUS = {
+    mode: 'rotate', strategy: 'adaptive', allowRotation: true, trip: null, thresholdTokens: 160000,
+    attachSummary: false, attachRecentUserInput: false,
+  };
 
   async function guardPanelSandbox(overrides = {}) {
     const calls = [];
@@ -449,6 +452,12 @@ describe('SessionControlsPanel: guard rotation strategy selector', () => {
         if (String(url) === '/protoclaw/context_guard_control') {
           const body = options.body ? JSON.parse(options.body) : null;
           if (body && body.strategy) guardState.status = { ...guardState.status, strategy: body.strategy };
+          if (body && typeof body.attachSummary === 'boolean') {
+            guardState.status = { ...guardState.status, attachSummary: body.attachSummary };
+          }
+          if (body && typeof body.attachRecentUserInput === 'boolean') {
+            guardState.status = { ...guardState.status, attachRecentUserInput: body.attachRecentUserInput };
+          }
           return { ok: true, status: 200, json: async () => ({ ok: true, status: { ...guardState.status } }) };
         }
         if (String(url).includes('force_continuation_status')) {
@@ -520,8 +529,8 @@ describe('SessionControlsPanel: guard rotation strategy selector', () => {
     assert.match(html, /data-guard-strategy="trim"[^>]*aria-pressed="false"/);
     assert.match(html, /data-guard-strategy="summary"[^>]*aria-pressed="false"/);
     assert.match(html, /自适应/);
-    assert.match(html, /纯精简/);
-    assert.match(html, /纯摘要/);
+    assert.match(html, /精简优先/);
+    assert.match(html, /摘要优先/);
     // 说明句只保留核心语义（触发线程接力时使用的策略）
     assert.match(html, /触发线程接力时使用的策略/);
     assert.doesNotMatch(html, /上边栏守卫第三档/);
@@ -534,6 +543,41 @@ describe('SessionControlsPanel: guard rotation strategy selector', () => {
     const html = ctx.run('window.__pluginModule.render()');
     assert.doesNotMatch(html, /data-guard-strategy/);
     assert.match(html, /API 重试/, 'the rest of the panel still renders');
+  });
+
+  it('shows only the attach option that belongs to the selected strategy', async () => {
+    const { ctx } = await guardPanelSandbox();
+    await ctx.run('window.__pluginModule.refreshStatus({ renderWhenDone: false })');
+
+    const adaptiveHtml = ctx.run('window.__pluginModule.render()');
+    assert.doesNotMatch(adaptiveHtml, /data-guard-attach/, 'adaptive carries no attach options');
+
+    await ctx.run('window.__pluginModule.updateGuardStrategy("trim")');
+    const trimHtml = ctx.run('window.__pluginModule.render()');
+    assert.match(trimHtml, /data-guard-attach="attachSummary"/);
+    assert.doesNotMatch(trimHtml, /attachRecentUserInput/);
+
+    ctx.run('window.ContextGuardToggle.applyStatus({ status: { mode: "rotate", strategy: "summary", allowRotation: true, trip: null, thresholdTokens: 160000, attachSummary: false, attachRecentUserInput: true } }, "runtime-a")');
+    const summaryHtml = ctx.run('window.__pluginModule.render()');
+    assert.match(summaryHtml, /data-guard-attach="attachRecentUserInput"[^>]*checked/, 'summary row reflects the session value');
+    assert.doesNotMatch(summaryHtml, /attachSummary/);
+  });
+
+  it('persists an attach option through context_guard_control and syncs the badge cache', async () => {
+    const { ctx, calls } = await guardPanelSandbox();
+    await ctx.run('window.__pluginModule.refreshStatus({ renderWhenDone: false })');
+
+    await ctx.run('window.__pluginModule.updateGuardAttach("attachSummary", true)');
+
+    const write = calls.find((c) => c.url === '/protoclaw/context_guard_control');
+    assert.ok(write, 'guard control write posted');
+    assert.deepEqual(JSON.parse(write.options.body), {
+      agentId: 'programming-helper',
+      sessionId: 'session-a',
+      attachSummary: true,
+    });
+    // 应答回填 badge 缓存：开关与策略选择器同源
+    assert.equal(ctx.run('window.ContextGuardToggle.getDetail()').attachSummary, true);
   });
 
   it('posts the chosen strategy through context_guard_control and syncs the badge cache', async () => {

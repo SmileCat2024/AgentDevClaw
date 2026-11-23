@@ -37,6 +37,10 @@ export interface ContextGuardConfig {
   enabled?: boolean;
   mode?: ContextGuardMode;
   strategy?: ContextRotationStrategy;
+  /** 精简优先（trim）：裁剪结果末尾追加一份摘要（走组合变换，需一次摘要调用）。 */
+  attachSummary?: boolean;
+  /** 摘要优先（summary）：以 system reminder 块附上用户最近的输入原文（不改进接续产物骨架）。 */
+  attachRecentUserInput?: boolean;
   /** 装配能力门控：线程宿主工作空间传 true 才开放 rotate 态（agent-studio 等纯会话工作空间不传）。 */
   allowRotation?: boolean;
   contextLength?: number | null;
@@ -60,6 +64,10 @@ export interface ContextGuardStatus {
   /** 当前模式（badge 循环点击的真值）：触发不改变它，只有用户手动切换或配置初值影响。 */
   mode: ContextGuardMode;
   strategy: ContextRotationStrategy;
+  /** 精简优先（trim）的增强开关：仅该策略下生效。 */
+  attachSummary: boolean;
+  /** 摘要优先（summary）的增强开关：仅该策略下生效。 */
+  attachRecentUserInput: boolean;
   /** 装配能力：false 时 rotate 不可选（badge 两态循环、面板无策略行）。 */
   allowRotation: boolean;
   /** 最近一次拦截事实；null 表示本会话从未触发。 */
@@ -193,11 +201,13 @@ export class ContextGuardFeatureInner implements AgentFeature {
   readonly name = 'context-guard';
   readonly dependencies: string[] = [];
   readonly source = __filename.replace(/\\/g, '/');
-  readonly description = 'Guards a session at the compression threshold with three modes: off, one-shot interrupt that holds machine wakeups until a human input approves continuing, and auto-rotation that reports a thread succession event (coder-isomorphic) carrying the session-level strategy.';
+  readonly description = '接近上下文上限时决定会话如何继续：不干预、打断一次等待人工输入，或自动整理并接续到新会话。';
 
   private readonly core: ContextGuardCore;
   private mode: ContextGuardMode;
   private strategy: ContextRotationStrategy;
+  private attachSummary: boolean;
+  private attachRecentUserInput: boolean;
   private readonly allowRotation: boolean;
   private readonly agentId: string;
   private readonly sessionId: string;
@@ -232,6 +242,8 @@ export class ContextGuardFeatureInner implements AgentFeature {
       ? 'interrupt'
       : (configuredMode ?? (config.enabled === false ? 'off' : fallbackMode));
     this.strategy = normalizeGuardStrategy(config.strategy) ?? 'adaptive';
+    this.attachSummary = config.attachSummary === true;
+    this.attachRecentUserInput = config.attachRecentUserInput === true;
     this.agentId = typeof config.agentId === 'string' ? config.agentId.trim() : '';
     this.sessionId = typeof config.sessionId === 'string' ? config.sessionId.trim() : '';
     this.serverOrigin = typeof config.serverOrigin === 'string'
@@ -265,8 +277,8 @@ export class ContextGuardFeatureInner implements AgentFeature {
         properties: {
           mode: {
             type: 'select',
-            title: '上下文保护',
-            description: '关闭 = 全停；自动打断 = 过界打断本轮并拦截机器唤醒直到人工输入（那条输入即视为批准继续），本次越界期间不再拦截；自动接续 = 过界打断后立即走线程接力（coder 同构）。缺省档按装配能力取自动接续（非线程宿主两态时为自动打断）。仅交互式工作空间；coder / memo 线程自动接力不受此配置影响。',
+            title: '接近上限时',
+            description: '关闭：不监控也不打断；自动打断：接近上限时打断当前轮，等你输入后继续；自动接续：自动整理当前会话并延续到新会话，无需确认。默认为自动接续；装配未开放接续能力时按自动打断处理。',
             default: this.allowRotation ? 'rotate' : 'interrupt',
             options: modeOptions,
           },
@@ -275,12 +287,12 @@ export class ContextGuardFeatureInner implements AgentFeature {
               strategy: {
                 type: 'select',
                 title: '接续策略',
-                description: '自动接续采用的精简方式（会话内可随时经会话控制面板切换，下一次接力生效）。',
+                description: '自动接续时如何整理上下文：自适应按需在精简与摘要之间选择；精简优先只裁剪旧内容，不额外调用模型；摘要优先压成一份摘要。可在会话内切换，下一次接续生效。',
                 default: 'adaptive',
                 options: [
                   { label: '自适应', value: 'adaptive' },
-                  { label: '纯精简', value: 'trim' },
-                  { label: '纯摘要', value: 'summary' },
+                  { label: '精简优先', value: 'trim' },
+                  { label: '摘要优先', value: 'summary' },
                 ],
                 showWhen: { property: 'mode', values: ['rotate'] },
               },
@@ -289,7 +301,7 @@ export class ContextGuardFeatureInner implements AgentFeature {
         },
         sections: [{
           id: 'guard',
-          title: '上下文保护',
+          title: '上下文接续',
           properties: this.allowRotation ? ['mode', 'strategy'] : ['mode'],
         }],
       },
@@ -314,6 +326,8 @@ export class ContextGuardFeatureInner implements AgentFeature {
     return {
       mode: this.mode,
       strategy: this.strategy,
+      attachSummary: this.attachSummary,
+      attachRecentUserInput: this.attachRecentUserInput,
       allowRotation: this.allowRotation,
       trip: this.trip ? { ...this.trip } : null,
       thresholdTokens: this.core.getThresholdTokens(),
@@ -361,8 +375,20 @@ export class ContextGuardFeatureInner implements AgentFeature {
           }
           this.strategy = nextStrategy;
         }
-        if (!('mode' in body) && !('strategy' in body)) {
-          return { ok: false, code: 'invalid_payload', error: 'mode or strategy is required' };
+        if ('attachSummary' in body) {
+          if (typeof body.attachSummary !== 'boolean') {
+            return { ok: false, code: 'invalid_payload', error: 'attachSummary must be a boolean' };
+          }
+          this.attachSummary = body.attachSummary;
+        }
+        if ('attachRecentUserInput' in body) {
+          if (typeof body.attachRecentUserInput !== 'boolean') {
+            return { ok: false, code: 'invalid_payload', error: 'attachRecentUserInput must be a boolean' };
+          }
+          this.attachRecentUserInput = body.attachRecentUserInput;
+        }
+        if (!('mode' in body) && !('strategy' in body) && !('attachSummary' in body) && !('attachRecentUserInput' in body)) {
+          return { ok: false, code: 'invalid_payload', error: 'mode, strategy or an attach option is required' };
         }
         return { ok: true, status: this.getStatus() };
       }
@@ -502,6 +528,8 @@ export class ContextGuardFeatureInner implements AgentFeature {
         agentId: this.agentId,
         sessionId: this.sessionId,
         strategy: this.strategy,
+        attachSummary: this.attachSummary,
+        attachRecentUserInput: this.attachRecentUserInput,
         contextGuard: {
           blocked: true,
           blockedAt: Date.now(),
@@ -518,12 +546,24 @@ export class ContextGuardFeatureInner implements AgentFeature {
   }
 
   /**
-   * continuity 白名单：只有模式与策略迁移（快照随会话持久化、接续 / 分支
-   * 读旧写新）；触发事实 / 闩锁 / 拦截状态不迁移——successor runtime 天然
-   * 开启新一轮尽职。
+   * continuity 白名单：模式、策略与两个增强开关迁移（快照随会话持久化、
+   * 接续 / 分支读旧写新）；触发事实 / 闩锁 / 拦截状态不迁移——successor
+   * runtime 天然开启新一轮尽职。
    */
-  captureState(): { schemaVersion: number; mode: ContextGuardMode; strategy: ContextRotationStrategy } {
-    return { schemaVersion: 1, mode: this.mode, strategy: this.strategy };
+  captureState(): {
+    schemaVersion: number;
+    mode: ContextGuardMode;
+    strategy: ContextRotationStrategy;
+    attachSummary: boolean;
+    attachRecentUserInput: boolean;
+  } {
+    return {
+      schemaVersion: 1,
+      mode: this.mode,
+      strategy: this.strategy,
+      attachSummary: this.attachSummary,
+      attachRecentUserInput: this.attachRecentUserInput,
+    };
   }
 
   /**
@@ -542,6 +582,8 @@ export class ContextGuardFeatureInner implements AgentFeature {
     }
     const strategy = normalizeGuardStrategy(raw.strategy);
     if (strategy) this.strategy = strategy;
+    if (typeof raw.attachSummary === 'boolean') this.attachSummary = raw.attachSummary;
+    if (typeof raw.attachRecentUserInput === 'boolean') this.attachRecentUserInput = raw.attachRecentUserInput;
   }
 
   /**
@@ -573,7 +615,8 @@ export class ContextGuardFeatureInner implements AgentFeature {
 }
 
 /**
- * continuity 自声明包装：{mode, strategy} 随会话快照持久化、随 trim / rotate
+ * continuity 自声明包装：{mode, strategy, attachSummary, attachRecentUserInput}
+ * 随会话快照持久化、随 trim / rotate
  * 接续与 branch 注入流转（protocol 'claw.context-guard-continuity.v1'，
  * importMode replace——restoreState 自身按 origin / allowRotation 区分语义）。
  * 协议在 server/context-continuity/feature-continuity.js 的 PROTOCOL_ADAPTERS
@@ -617,7 +660,7 @@ export class ContextRotationTriggerFeature implements AgentFeature {
   readonly name = 'context-rotation-trigger';
   readonly dependencies: string[] = [];
   readonly source = __filename.replace(/\\/g, '/');
-  readonly description = 'Interrupts the thread-host session at the compression threshold and reports the event for automatic trim+summary rotation.';
+  readonly description = '线程宿主会话接近上下文上限时自动打断本轮并触发接力，无需人工确认。';
 
   private readonly core: ContextGuardCore;
   private readonly agentId: string;

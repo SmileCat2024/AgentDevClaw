@@ -494,8 +494,8 @@ describe('programming-helper workspace process mode UI', () => {
       // 用户覆盖（trim）压过作者默认（adaptive）
       assert.doesNotMatch(host.innerHTML, /ph-pm-card active[^>]*data-mode="adaptive"/);
       assert.match(host.innerHTML, /自适应/);
-      assert.match(host.innerHTML, /纯精简/);
-      assert.match(host.innerHTML, /纯摘要/);
+      assert.match(host.innerHTML, /精简优先/);
+      assert.match(host.innerHTML, /摘要优先/);
       // 两行同形态（ph-mc-row + 名称/解释）：并发上限在上、接续策略在下，
       // 无分节小标题（settings-section-title）
       assert.doesNotMatch(host.innerHTML, /settings-section-title/);

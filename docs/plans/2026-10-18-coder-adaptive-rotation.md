@@ -14,21 +14,21 @@ coder 是线程宿主（ADR-0025），上下文过阈值时经 `ContextRotationT
 | 决策点 | 定案 |
 |---|---|
 | 实现归属（Q1） | 产品层编排（Claw `server/context-continuity/adaptive-rotation.js`）；引擎原语在框架侧；验证后视结果下沉框架官方变换 |
-| 纯 trim 语义（Q2） | trim 系一律保最近 5 次工具调用（`keepRecentToolCalls`），不追求「纯粹」 |
+| 纯 trim 语义（Q2） | trim 系保留最近的工具调用与结果，不追求「纯粹」（2026-11-23 修订为按批计，见文末） |
 | 默认与去留（Q3） | 默认 = 自适应；组合模式退出 coder 自动接力路径，代码保留（手动精简页、编程小助手仍用） |
 | 口径与次数（Q4） | 字符总量比（content + toolCalls JSON，对称计量器）+ 一次性阶梯（摘要追加后不复测） |
 | 失败语义（Q5） | 升级档摘要 LLM 失败 → rotation_failed，不引入隐式降级（与组合模式同语义） |
 
 ### 自适应阶梯
 
-1. 进程内按「trim + keepRecentToolCalls=5」跑框架引擎（`buildTrimmedSeedMessages`，纯函数、零 LLM 成本）得试探 seed；
+1. 进程内按「trim + 最近五批工具调用」跑框架引擎（`buildTrimmedSeedMessages`，纯函数、零 LLM 成本）得试探 seed；
 2. ratio = 试探 seed 字符总量 ÷ 原始消息字符总量：
-   - ratio ≤ 0.5 → **trim 档**（`exportHistoryOnlyHandoffPackage`，内部重跑同策略 trim，确定性同结果）
-   - 0.5 < ratio ≤ 0.8 → **trim+追加摘要档**（框架官方 `runTrimTranscriptWithSummary` + `writeTrimWithSummaryHandoffPackage`，不另写组合逻辑）
-   - ratio > 0.8 → **纯摘要档**（`exportSummarizedHandoffPackage` 九段式，试探 seed 弃用；不保留任何消息——保 5 是 trim 系特征）
+   - ratio ≤ 0.4 → **trim 档**（`exportHistoryOnlyHandoffPackage`，内部重跑同策略 trim，确定性同结果）
+   - 0.4 < ratio ≤ 0.8 → **trim+追加摘要档**（框架官方 `runTrimTranscriptWithSummary` + `writeTrimWithSummaryHandoffPackage`，不另写组合逻辑）
+   - ratio > 0.8 → **纯摘要档**（`exportSummarizedHandoffPackage` 九段式，试探 seed 弃用；不保留任何消息——保留最近五批工具调用是 trim 系特征）
 3. 非有限 ratio 视为 0（空上下文归 trim 档）；试探策略与 trim 系落盘策略同面（含 continuity 装饰），「测一套、写一套」分叉不存在。
 
-参数 5 / 0.5 / 0.8 为常量（`ADAPTIVE_DEFAULTS`），不进配置页，试验反馈后再议参数化。
+参数 5 批 / 0.4 / 0.8 为常量（`ADAPTIVE_DEFAULTS` 与 `ROTATION_KEEP_RECENT_TOOL_BATCHES`），不进配置页。
 
 ## 声明驱动的策略面（试验不波及其他宿主）
 
@@ -68,3 +68,28 @@ coder 是线程宿主（ADR-0025），上下文过阈值时经 `ContextRotationT
 - Claw 仓 `test:core` 全量通过（含新增 20 用例）。
 - 前端卡片渲染 / 保存链路经 sandbox 测试覆盖（含用户覆盖压过作者默认的判定链断言）。
 - 未验证项：真实 LLM 升级档摘要的端到端接力（需运行期观察 adaptive 日志 `[adaptive_rotation] tier=... ratio=...` 与 handoff meta）。
+
+## 修订（2026-11-23）：工具保护面改按批计，纯精简上界 0.4
+
+本轮只动 Claw 产品层的定档参数与策略装配，框架引擎和三个官方变换不变。
+
+**保护面按批计。** 原策略以「调用」为单位保留最近 5 次工具调用：一次并行读多个文件时，最后一批会按调用数被切掉一部分，接续后读到一半的调查无法拼回。改为按批（一条 assistant 消息连同其工具调用为一批，批内调用与结果一起保留）：
+
+- 策略字段 `keepRecentToolBatches`，默认 5 批（常量 `ROTATION_KEEP_RECENT_TOOL_BATCHES`，定义在 `handoff-package.js`）。
+- `resolveTrimToolBatchPolicy` 从会话末尾倒数 N 条带工具调用的 assistant 消息，统计这些批一共包含多少调用，换算成框架既有的 `keepRecentToolCalls` 预算写进 policy。框架侧不需要新字段，落盘 handoff 里仍是调用数预算。
+- 不含工具调用的 assistant 消息不占批数。
+
+**纯精简档准入 0.5 → 0.4。** `ADAPTIVE_DEFAULTS.appendSummaryRatio` 下调。字符比是「裁剪后字符 ÷ 原始字符」，比值越小说明裁剪越彻底；上界下调把一部分原本留在零 LLM 成本档的会话推向带摘要的追加档，用一次摘要调用换取调查结论的留存。0.4 作为起步值，参数仍不进配置页。
+
+**同步面。** `thread-rotation.js` 的 trim 档下发 `keepRecentToolBatches`，adaptive 档不再预置工具预算（由编排层统一换算，避免声明档与试探档两套口径）；Coder 策略卡片文案改为「最近五批工具调用（含配对结果）」与 40%；`test/adaptive-rotation.test.js` 增加批预算用例（同批多工具、五批边界、未声明时不改写策略），`test/coder-rotation-e2e.test.js` 的 fixture 改为含同批多工具的六批调用，断言调用与结果成对重放。
+
+**已知边界。** 一批内若没有任何带 id 的调用，不计入批数；单批调用数超过 2000 时，框架的调用数归一化会截到 2000，实际保留批数可能少于 5。两者在真实会话中都不出现。
+
+**增强开关（2026-11-23，同批落地）。** 策略之外，纯精简与纯摘要各有一个会话级开关，由会话控制面板按当前选中的策略呈现：
+
+- 纯精简 + `attachSummary`：裁剪结果末尾追加一份摘要。执行面直接复用组合变换（`appendSummary` 路径，`TrimTranscriptWithSummaryTransformation`），不新增变换。
+- 纯摘要 + `attachRecentUserInput`：摘要包附带用户最近输入的原文（`appendix`，最多 3 条、2000 字符），runtime 经 `HandoffSeedFeature` 的 `appendix` 通道以 system reminder 注入——不改 seed 骨架、不计入 seed 账目、不占 turn 编号空间（ADR-0048 的锚位语义不受影响）。
+- 两个开关是会话级事实：`ContextGuardFeature` 的 `captureState` / `restoreState` 迁移它们，`context_guard_event` 与 `context_guard_control` 双向携带，手动恢复按请求携带值执行。
+- 产物字段只在启用时出现（`handoff.appendix`），未启用时包形态与之前逐字节一致。
+
+**未纳入本轮。** 按工具名倾斜的保留预算（read 多留、执行类少留）需要框架提供按名分配的预算能力，本次不做。

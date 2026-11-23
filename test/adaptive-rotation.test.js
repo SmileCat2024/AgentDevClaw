@@ -2,13 +2,21 @@ import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  ADAPTIVE_DEFAULTS,
-  ROTATION_KEEP_RECENT_TOOL_CALLS,
   measureMessagesCharTotal,
   decideAdaptiveTier,
   runAdaptiveRotationHandoff,
 } from '../server/context-continuity/adaptive-rotation.js';
+import { resolveTrimToolBatchPolicy } from '../server/context-continuity/handoff-package.js';
 import { PERMISSION_ITEMS } from '../server/shared/permission-registry.js';
+import { buildTrimmedSeedMessages, normalizeExportPolicy } from '@agentdevjs/core';
+
+/** 一批调用：一条 assistant 消息带多个 toolCall + 配对结果。 */
+function pushToolBatch(messages, ids) {
+  messages.push({ role: 'assistant', content: '', toolCalls: ids.map(id => ({ id, name: 'read', arguments: '{}' })) });
+  for (const id of ids) {
+    messages.push({ role: 'tool', toolCallId: id, content: `result-${id}` });
+  }
+}
 
 function buildSnapshot(messages) {
   return { runtime: { context: { messages } } };
@@ -53,8 +61,8 @@ function baseParams(sessionSnapshot, options = {}) {
 describe('adaptive rotation tier decision (一次性阶梯)', () => {
   it('maps ratio bands to tiers with boundary values falling to the lower tier', () => {
     assert.equal(decideAdaptiveTier(0).tier, 'trim');
-    assert.equal(decideAdaptiveTier(0.5).tier, 'trim');
-    assert.equal(decideAdaptiveTier(0.500001).tier, 'trim-summary');
+    assert.equal(decideAdaptiveTier(0.4).tier, 'trim');
+    assert.equal(decideAdaptiveTier(0.400001).tier, 'trim-summary');
     assert.equal(decideAdaptiveTier(0.8).tier, 'trim-summary');
     assert.equal(decideAdaptiveTier(0.800001).tier, 'summary');
     assert.equal(decideAdaptiveTier(1).tier, 'summary');
@@ -66,11 +74,25 @@ describe('adaptive rotation tier decision (一次性阶梯)', () => {
     assert.equal(decideAdaptiveTier(Number.NEGATIVE_INFINITY).tier, 'trim');
   });
 
-  it('defaults thresholds to the agreed constants (0.5 / 0.8)', () => {
-    assert.equal(ADAPTIVE_DEFAULTS.appendSummaryRatio, 0.5);
-    assert.equal(ADAPTIVE_DEFAULTS.pureSummaryRatio, 0.8);
-    assert.equal(ROTATION_KEEP_RECENT_TOOL_CALLS, 5);
-    assert.equal(ADAPTIVE_DEFAULTS.keepRecentToolCalls, ROTATION_KEEP_RECENT_TOOL_CALLS);
+});
+
+describe('rotation tool batch budget (最近五批工具调用)', () => {
+  it('keeps every call of the last five batches, including a batch that ran several tools', () => {
+    const messages = [{ role: 'user', content: 'go' }];
+    for (let i = 1; i <= 6; i += 1) pushToolBatch(messages, i === 6 ? ['x1', 'x2', 'x3'] : [`c${i}`]);
+
+    const policy = normalizeExportPolicy(resolveTrimToolBatchPolicy({ keepRecentToolBatches: 5 }, messages));
+    const { seedMessages } = buildTrimmedSeedMessages(messages, policy);
+    const keptResults = seedMessages.filter(m => m.role === 'tool').map(m => m.toolCallId);
+
+    // 六批中最早的一批被折叠，其余五批（含同批三个工具）调用与结果成对保留
+    assert.deepEqual(keptResults.sort(), ['c2', 'c3', 'c4', 'c5', 'x1', 'x2', 'x3']);
+  });
+
+  it('leaves the policy untouched when no batch budget is declared', () => {
+    const messages = [];
+    pushToolBatch(messages, ['a']);
+    assert.deepEqual(resolveTrimToolBatchPolicy({ strategy: 'trim-transcript' }, messages), { strategy: 'trim-transcript' });
   });
 });
 
@@ -95,8 +117,7 @@ describe('adaptive rotation char measurement (对称口径)', () => {
 
 describe('adaptive rotation dispatch (三档复用既有产物路径)', () => {
   it('tool-heavy context (low ratio) stays on the trim tier via history-only export', async () => {
-    // 10 次工具调用：早期 5 次大结果（被折叠）+ 最近 5 次小结果（被 keepRecentToolCalls
-    // 保护原样保留）→ seed 只剩小调用与折叠 note，字符比远低于 0.5。
+    // 10 批调用，每批 1 个：前 5 批大结果被折叠，后 5 批小结果原样保留。
     const messages = [{ role: 'user', content: 'hello' }];
     for (let i = 1; i <= 10; i += 1) {
       const resultSize = i <= 5 ? 10000 : 5;
@@ -108,13 +129,32 @@ describe('adaptive rotation dispatch (三档复用既有产物路径)', () => {
     const result = await runAdaptiveRotationHandoff(params);
 
     assert.equal(result.adaptive.tier, 'trim');
-    assert.ok(result.adaptive.ratio < 0.5);
+    assert.ok(result.adaptive.ratio < 0.4);
     assert.equal(calls.history.length, 1);
     assert.equal(calls.trimWithSummary.length, 0);
     assert.equal(calls.summarized.length, 0);
-    // 试探策略与落盘策略同面：保最近 N 次工具调用随 policy 下发
-    assert.equal(calls.history[0].policy.keepRecentToolCalls, ROTATION_KEEP_RECENT_TOOL_CALLS);
     assert.equal(calls.history[0].agentId, 'coder');
+  });
+
+  it('the tier ratio uses the batch policy, not the old per-call budget', async () => {
+    // 六批、每批三个 read：前四批结果很大，后两批很小。
+    // 按调用留 5 个 → seed 几乎只剩小结果，ratio 极低（trim 档）；
+    // 按批留 5 批 → b2..b6 的大结果一起留在 seed 里，ratio 升到追加摘要档。
+    const messages = [{ role: 'user', content: 'go' }];
+    for (let batch = 1; batch <= 6; batch += 1) {
+      const ids = [1, 2, 3].map((i) => `b${batch}-t${i}`);
+      messages.push({ role: 'assistant', content: '', toolCalls: ids.map((id) => ({ id, name: 'read', arguments: '{}' })) });
+      for (const id of ids) {
+        messages.push({ role: 'tool', toolCallId: id, content: 'x'.repeat(batch <= 4 ? 4000 : 10) });
+      }
+    }
+    const { calls, params } = baseParams(buildSnapshot(messages));
+    const result = await runAdaptiveRotationHandoff(params);
+
+    assert.equal(result.adaptive.tier, 'trim-summary', 'tier follows the five-batch probe ratio');
+    assert.ok(result.adaptive.ratio > 0.4, `ratio came from the batch policy, got ${result.adaptive.ratio}`);
+    assert.equal(calls.trimWithSummary.length, 1);
+    assert.equal(calls.history.length, 0);
   });
 
   it('middle band escalates to the official trim+summary combined path', async () => {
@@ -133,7 +173,6 @@ describe('adaptive rotation dispatch (三档复用既有产物路径)', () => {
     assert.equal(calls.trimWithSummary.length, 1);
     assert.equal(calls.writeTrimWithSummary.length, 1);
     assert.equal(calls.summarized.length, 0);
-    assert.equal(calls.trimWithSummary[0].policy.keepRecentToolCalls, ROTATION_KEEP_RECENT_TOOL_CALLS);
     assert.equal(calls.writeTrimWithSummary[0].seed, seedSentinel, 'combined seed flows from the official transform into the handoff writer');
   });
 

@@ -40,7 +40,7 @@
 
 import { isSuccessionGateFailure } from './thread-integration.js';
 import { cleanSessionText } from '../shared/string-helpers.js';
-import { ROTATION_KEEP_RECENT_TOOL_CALLS } from '../context-continuity/adaptive-rotation.js';
+import { ROTATION_KEEP_RECENT_TOOL_BATCHES } from '../context-continuity/handoff-package.js';
 
 export function createThreadRotationService({
   sessionApi,
@@ -92,16 +92,33 @@ export function createThreadRotationService({
     }
   }
 
-  /** 策略 → handoff 调用面（policy + appendSummary）。 */
-  function buildRotationHandoffOptions(strategy) {
+  /**
+   * 策略 → handoff 调用面（policy + appendSummary + includeRecentUserInput）。
+   *
+   * 两个增强开关由会话控制面板按当前策略提供，只在对应策略下生效：
+   * - 纯精简 + attachSummary：复用组合变换（裁剪 + 摘要追加），等价于
+   *   appendSummary 路径，不新增变换。
+   * - 纯摘要 + attachRecentUserInput：摘要包附带用户最近输入提醒块（appendix），
+   *   由 runtime 以 system reminder 注入，不改 seed 骨架。
+   */
+  function buildRotationHandoffOptions(strategy, rotationOptions = {}) {
+    const attachSummary = rotationOptions?.attachSummary === true;
+    const attachRecentUserInput = rotationOptions?.attachRecentUserInput === true;
     if (strategy === 'trim') {
-      return { policy: { strategy: 'trim-transcript', keepRecentToolCalls: ROTATION_KEEP_RECENT_TOOL_CALLS }, appendSummary: false };
+      return {
+        policy: { strategy: 'trim-transcript', keepRecentToolBatches: ROTATION_KEEP_RECENT_TOOL_BATCHES },
+        appendSummary: attachSummary,
+      };
     }
     if (strategy === 'summary') {
-      return { policy: { strategy: 'summarized-nine-section' }, appendSummary: false };
+      return {
+        policy: { strategy: 'summarized-nine-section' },
+        appendSummary: false,
+        includeRecentUserInput: attachRecentUserInput,
+      };
     }
     if (strategy === 'adaptive') {
-      return { policy: { strategy: 'adaptive', keepRecentToolCalls: ROTATION_KEEP_RECENT_TOOL_CALLS }, appendSummary: false };
+      return { policy: { strategy: 'adaptive' }, appendSummary: false };
     }
     // 组合 trim+追加摘要（现状语义）：mode trim-transcript-with-summary，
     // 摘要 system message 追加到 seed 尾部。
@@ -116,7 +133,7 @@ export function createThreadRotationService({
     return strategy === 'trim' || strategy === 'summary' || strategy === 'adaptive' ? strategy : null;
   }
 
-  async function rotate(agentId, sessionId, sessionStrategy = null) {
+  async function rotate(agentId, sessionId, sessionStrategy = null, rotationOptions = {}) {
     const thread = await threadCore.findThreadByHeadSession(agentId, sessionId);
     if (!thread || thread.status === 'closed') return null;
     // T005：删除中的线程不启动接力（与 integration.beginSessionSuccession /
@@ -151,14 +168,14 @@ export function createThreadRotationService({
         preferredAgentId: agentId,
         sessionId,
         // 接续策略（设计定案 2026-10-18，声明驱动三选一）：
-        //   'trim'     → 纯精简（保最近 N 次工具调用，无 LLM 开销）
+        //   'trim'     → 纯精简（保最近五批工具调用与结果，无 LLM 开销）
         //   'summary'  → 九段式纯摘要
         //   'adaptive' → 自适应阶梯（试探 trim 定档，见 adaptive-rotation.js）
         //   null（未声明，如 memo 等未声明权限项的线程宿主）→ 维持组合
         //   trim+追加摘要（现状语义，试验不波及其他宿主）。
         // 策略每次接力现读：会话级载荷（交互守卫的自动接续态随事件上报）优先，
         // 无载荷回落 APP 级判定链（用户覆盖 > 作者默认），改配置对下一次接力即时生效。
-        ...buildRotationHandoffOptions(resolvedStrategy),
+        ...buildRotationHandoffOptions(resolvedStrategy, rotationOptions),
         startRuntime: true,
       });
       const nextSessionId = cleanSessionText(result?.session?.id);
@@ -244,13 +261,13 @@ export function createThreadRotationService({
    * sessionStrategy：会话级接续策略载荷（交互守卫的自动接续态上报），
    * 有效值优先于 APP 级判定链，无效/未携带回落。
    */
-  async function handleContextGuard(agentId, sessionId, sessionStrategy = null) {
+  async function handleContextGuard(agentId, sessionId, sessionStrategy = null, rotationOptions = {}) {
     const normalizedAgentId = String(agentId || '').trim();
     const normalizedSessionId = String(sessionId || '').trim();
     if (!normalizedAgentId || !normalizedSessionId) return null;
 
     if (inflight.has(normalizedSessionId)) return inflight.get(normalizedSessionId);
-    const task = rotate(normalizedAgentId, normalizedSessionId, sessionStrategy)
+    const task = rotate(normalizedAgentId, normalizedSessionId, sessionStrategy, rotationOptions)
       .finally(() => inflight.delete(normalizedSessionId));
     inflight.set(normalizedSessionId, task);
     return task;
@@ -282,7 +299,7 @@ export function createThreadRotationService({
    * @param {string|null} [opts.strategy] - 会话级策略载荷（同自动接续语义）
    * @param {Function} [opts.ensureHeadRuntime] - head runtime 就绪闸
    */
-  async function resumeRotation({ agentId, sessionId, strategy = null, ensureHeadRuntime } = {}) {
+  async function resumeRotation({ agentId, sessionId, strategy = null, rotationOptions = {}, ensureHeadRuntime } = {}) {
     const normalizedAgentId = String(agentId || '').trim();
     const normalizedSessionId = String(sessionId || '').trim();
     if (!normalizedAgentId || !normalizedSessionId) {
@@ -304,7 +321,7 @@ export function createThreadRotationService({
         };
       }
     }
-    return handleContextGuard(normalizedAgentId, normalizedSessionId, normalizeSessionStrategy(strategy));
+    return handleContextGuard(normalizedAgentId, normalizedSessionId, normalizeSessionStrategy(strategy), rotationOptions);
   }
 
   return { handleContextGuard, resumeRotation };

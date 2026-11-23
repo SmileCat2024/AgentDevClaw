@@ -37,8 +37,8 @@ const { createThreadSuccessionService } = await import('../server/thread-control
 const { createThreadRotationService } = await import('../server/thread-control/thread-rotation.js');
 const { createSessionHandoffHelpers } = await import('../server/routes/session-handoff-helpers.js');
 const { buildRotationStrategyResolver } = await import('../server/context-continuity/rotation-strategy-resolver.js');
-const { runAdaptiveRotationHandoff, measureMessagesCharTotal } = await import('../server/context-continuity/adaptive-rotation.js');
-const { applyContinuityToolPolicy, getContinuityToolPolicy } = await import('../server/context-continuity/feature-continuity.js');
+const { runAdaptiveRotationHandoff } = await import('../server/context-continuity/adaptive-rotation.js');
+const { getContinuityToolPolicy } = await import('../server/context-continuity/feature-continuity.js');
 const { getPrebuiltSessionFilePath } = await import('../server/shared/session-access.js');
 
 const AGENT_ID = 'coder';
@@ -48,7 +48,7 @@ const FAKE_AGENT_DIR = path.join(tmpRoot, 'fake-agent-dir');
 
 // ── fixture：模拟 coder 真实工单上下文 ──────────────────────────────
 
-/** tool-heavy：早期大文件调查（折叠面）+ 最近 5 次小修复（保护面）→ trim 档。 */
+/** tool-heavy：早期大文件调查（折叠面）+ 最近五批小修复（含同批多个工具）→ trim 档。 */
 function buildToolHeavyMessages() {
   const messages = [
     { role: 'system', content: '你是无人值守编码 agent，修复指定工单。', turn: 0 },
@@ -62,12 +62,15 @@ function buildToolHeavyMessages() {
     messages.push({ role: 'tool', toolCallId: `probe-${i}`, turn: 1, content: `// module ${i}\n` + 'export function noop() { return 1; }\n'.repeat(400) });
   }
   messages.push({ role: 'assistant', content: '定位到根因：连接池未释放导致排队超时。开始修复。', turn: 2 });
-  for (let i = 1; i <= 5; i += 1) {
-    messages.push({
-      role: 'assistant', content: '', turn: 3,
-      toolCalls: [{ id: `fix-${i}`, name: 'edit', arguments: JSON.stringify({ filePath: 'server/auth.js', oldString: `release-${i}`, newString: `release-${i}-fixed` }) }],
-    });
-    messages.push({ role: 'tool', toolCallId: `fix-${i}`, turn: 3, content: `ok-${i}` });
+  for (let batch = 1; batch <= 5; batch += 1) {
+    const toolCalls = Array.from({ length: batch === 1 ? 2 : 1 }, (_, index) => ({
+      id: `fix-${batch}-${index + 1}`, name: index === 0 ? 'edit' : 'read',
+      arguments: JSON.stringify({ filePath: 'server/auth.js' }),
+    }));
+    messages.push({ role: 'assistant', content: '', turn: 3, toolCalls });
+    for (const { id } of toolCalls) {
+      messages.push({ role: 'tool', toolCallId: id, turn: 3, content: `ok-${id}` });
+    }
   }
   messages.push({ role: 'assistant', content: '修复完成，正在验证。', turn: 4 });
   return messages;
@@ -79,14 +82,13 @@ function buildMixedMessages() {
     { role: 'system', content: '你是无人值守编码 agent，按工单重构模块。', turn: 0 },
     { role: 'user', content: '工单：重构认证模块并补写迁移文档。', turn: 1 },
   ];
-  // 8 次调用：前 5 次大结果（超出 keepRecentToolCalls=5 保护面 → 折叠），
-  // 后 3 次小结果（保护原样保留）。
+  // 8 批调用：前三批折叠，第 4 批含两个工具，两个都应随最近五批保留。
   for (let i = 1; i <= 8; i += 1) {
     const big = i <= 5;
-    messages.push({
-      role: 'assistant', content: '', turn: 1,
-      toolCalls: [{ id: `scan-${i}`, name: 'read', arguments: JSON.stringify({ filePath: `auth/legacy-${i}.js` }) }],
-    });
+    const toolCalls = [{ id: `scan-${i}`, name: 'read', arguments: JSON.stringify({ filePath: `auth/legacy-${i}.js` }) }];
+    if (i === 4) toolCalls.push({ id: 'scan-4-bash', name: 'bash', arguments: '{"command":"git status --short"}' });
+    messages.push({ role: 'assistant', content: '', turn: 1, toolCalls });
+    if (i === 4) messages.push({ role: 'tool', toolCallId: 'scan-4-bash', turn: 1, content: ' M auth/legacy-4.js' });
     messages.push({
       role: 'tool', toolCallId: `scan-${i}`, turn: 1,
       content: big ? `// legacy ${i}\n` + 'function placeholder() {}\n'.repeat(90) : `ok-${i}`,
@@ -105,16 +107,14 @@ function buildMixedMessages() {
   return messages;
 }
 
-/** mixed fixture 的试探比必须落在追加摘要档（fixture 漂移时先炸这里）。 */
-async function assertMixedFixtureInMiddleBand(messages) {
-  const { normalizeExportPolicy, buildTrimmedSeedMessages } = await import('@agentdevjs/core');
-  const probePolicy = applyContinuityToolPolicy({ keepRecentToolCalls: 5 });
-  const { seedMessages } = buildTrimmedSeedMessages(messages, normalizeExportPolicy(probePolicy));
-  const ratio = measureMessagesCharTotal(seedMessages) / measureMessagesCharTotal(messages);
-  assert.ok(ratio > 0.5 && ratio <= 0.8, `mixed fixture ratio ${ratio.toFixed(3)} out of the trim-summary band`);
-  return ratio;
+function assertReplayedToolBatchResults(handoff, expectedIds) {
+  const calls = handoff.seedMessages.flatMap(message => message.toolCalls ?? []);
+  const results = handoff.seedMessages.filter(message => message.role === 'tool');
+  assert.deepEqual(calls.map(call => call.id).sort(), [...expectedIds].sort());
+  assert.deepEqual(results.map(message => message.toolCallId).sort(), [...expectedIds].sort());
 }
 
+const MIXED_RETAINED_TOOL_IDS = ['scan-4', 'scan-4-bash', 'scan-5', 'scan-6', 'scan-7', 'scan-8'];
 async function writeSessionSnapshot(sessionId, messages) {
   const snapshot = {
     schemaVersion: 1,
@@ -232,14 +232,14 @@ describe('scenario A: adaptive default rotates a tool-heavy thread end-to-end (t
     const handoffPath = spawnCalls[spawnBase].opts.extraEnv.PROTOCLAW_HANDOFF_PATH;
     const handoff = JSON.parse(await readFile(handoffPath, 'utf8'));
     assert.equal(handoff.mode, 'trim-transcript');
-    assert.equal(handoff.policy.keepRecentToolCalls, 5);
+    assert.equal(handoff.policy.keepRecentToolCalls, MIXED_RETAINED_TOOL_IDS.length);
     // continuity 装饰真实进入落盘 policy（按名保护工具并集）
     for (const name of getContinuityToolPolicy().preserveToolNames) {
       assert.ok(handoff.policy.preserveToolNames.includes(name), `preserveToolNames should carry ${name}`);
     }
-    // keepRecentToolCalls 保护面：最近 5 次调用原样保留，早期 5 次折叠
-    const keptToolIds = handoff.seedMessages.filter((m) => m.role === 'tool').map((m) => m.toolCallId);
-    assert.deepEqual([...keptToolIds].sort(), ['fix-1', 'fix-2', 'fix-3', 'fix-4', 'fix-5']);
+    // 保护面按批计：最近五批全部保留，最后一批同批两个工具也一并保留；
+    // 早期五批调查调用折叠成一条活动记录。
+    assertReplayedToolBatchResults(handoff, ['fix-1-1', 'fix-1-2', 'fix-2-1', 'fix-3-1', 'fix-4-1', 'fix-5-1']);
     assert.ok(handoff.seedMessages.some((m) => m.tag === 'folded-tool-activity'));
     // trim notice 注入末尾（含旧会话 id）+ seedBoundary 账目
     const last = handoff.seedMessages[handoff.seedMessages.length - 1];
@@ -279,7 +279,7 @@ describe('scenario B: escalation tier fails on missing model preset → rotation
   it('converges the barrier, keeps the old head, leaves the R3 instruction pending', async () => {
     const sessionId = 'session-e2e-b';
     const messages = buildMixedMessages();
-    await assertMixedFixtureInMiddleBand(messages); // fixture 保证真实落入 trim-summary 档
+    // fixture 刻意保留长对话主体，试探比落在追加摘要档
     await writeSessionSnapshot(sessionId, messages);
     await control.core.start({ sessionRef: { agentId: AGENT_ID, sessionId }, title: '重构认证模块' });
     const spawnBase = spawnCalls.length;
@@ -324,7 +324,7 @@ describe('scenario C: thread recovers on the next guard after rotation_failed', 
     assert.equal(spawnCalls.length - spawnBase, 1);
     const handoff = JSON.parse(await readFile(spawnCalls[spawnBase].opts.extraEnv.PROTOCLAW_HANDOFF_PATH, 'utf8'));
     assert.equal(handoff.mode, 'trim-transcript');
-    assert.equal(handoff.policy.keepRecentToolCalls, 5);
+    assert.equal(handoff.policy.keepRecentToolCalls, MIXED_RETAINED_TOOL_IDS.length);
 
     // 线程回到 open、head 换代；R3 播种幂等（同 threadId+fromSessionId 不重复）
     const record = await findThreadByHead(result.headSessionId);
@@ -342,7 +342,7 @@ describe('scenario D: adaptive trim-summary tier with an injected stub LLM', () 
 
   it('runs the official combined transformation and writes the v1 handoff with the appended summary', async () => {
     const messages = buildMixedMessages();
-    await assertMixedFixtureInMiddleBand(messages);
+    // fixture 刻意保留长对话主体，试探比落在追加摘要档
     const snapshot = await writeSessionSnapshot(sessionId, messages);
     const llmCalls = [];
 
@@ -375,7 +375,7 @@ describe('scenario D: adaptive trim-summary tier with an injected stub LLM', () 
     assert.equal(handoff.mode, 'trim-transcript-with-summary');
     assert.ok(handoff.appendedSummary.summaryText.includes('接续摘要'));
     // trimPolicy 保留保护面（框架 meta.trimPolicy 透传）
-    assert.equal(handoff.policy.keepRecentToolCalls, 5);
+    assert.equal(handoff.policy.keepRecentToolCalls, MIXED_RETAINED_TOOL_IDS.length);
     // 摘要种子追加末尾 + seedBoundary 注入账目
     const last = handoff.seedMessages[handoff.seedMessages.length - 1];
     assert.equal(last.role, 'system');
@@ -386,7 +386,7 @@ describe('scenario D: adaptive trim-summary tier with an injected stub LLM', () 
   it('surfaces escalation LLM failure without silent downgrade (maxAttempts retries then throws)', async () => {
     // 自建快照（不依赖上一用例的落盘），失败注入独立可跑
     const messages = buildMixedMessages();
-    await assertMixedFixtureInMiddleBand(messages);
+    // fixture 刻意保留长对话主体，试探比落在追加摘要档
     const snapshot = await writeSessionSnapshot(sessionId, messages);
     const llmCalls = [];
 

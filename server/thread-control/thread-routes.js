@@ -945,6 +945,12 @@ export function setupThreadRoutes(app, express, { control, lifecycle, threadDele
         agentId: thread.agentId,
         sessionId: headSessionId,
         strategy: typeof req.body?.strategy === 'string' ? req.body.strategy : null,
+        // 两个增强开关与策略同口径：人工重试按请求携带值（缺省关闭），
+        // 与自动接续的会话级选项语义一致。
+        rotationOptions: {
+          attachSummary: req.body?.attachSummary === true,
+          attachRecentUserInput: req.body?.attachRecentUserInput === true,
+        },
         ensureHeadRuntime,
       });
       // applied=false 是「接续未完成」的业务结果，不是请求错误：调用方需要

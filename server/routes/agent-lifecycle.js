@@ -912,15 +912,23 @@ export function createAgentLifecycleModule(ctx) {
       try {
         // 三态控制载荷（ADR-0032 预留条目落地）：mode 三态 + 会话级接续策略。
         // 旧字段 armed 不再接受，前端 badge 已同步换发 {mode, strategy}。
-        const { mode, strategy } = req.body || {};
+        const { mode, strategy, attachSummary, attachRecentUserInput } = req.body || {};
         if (mode !== undefined && !['off', 'interrupt', 'rotate'].includes(mode)) {
           return res.status(400).json({ ok: false, error: 'mode must be one of off | interrupt | rotate' });
         }
         if (strategy !== undefined && !['adaptive', 'trim', 'summary'].includes(strategy)) {
           return res.status(400).json({ ok: false, error: 'strategy must be one of adaptive | trim | summary' });
         }
-        if (mode === undefined && strategy === undefined) {
-          return res.status(400).json({ ok: false, error: 'mode or strategy is required' });
+        // 两个增强开关按策略各管一档：纯精简 → attachSummary（追加摘要），
+        // 纯摘要 → attachRecentUserInput（最近用户输入提醒块）。
+        for (const [key, value] of [['attachSummary', attachSummary], ['attachRecentUserInput', attachRecentUserInput]]) {
+          if (value !== undefined && typeof value !== 'boolean') {
+            return res.status(400).json({ ok: false, error: `${key} must be a boolean` });
+          }
+        }
+        if (mode === undefined && strategy === undefined
+          && attachSummary === undefined && attachRecentUserInput === undefined) {
+          return res.status(400).json({ ok: false, error: 'mode, strategy or an attach option is required' });
         }
         let target;
         try {
@@ -956,6 +964,8 @@ export function createAgentLifecycleModule(ctx) {
           featureCommsRequest('context-guard', 'set', {
             ...(mode !== undefined ? { mode } : {}),
             ...(strategy !== undefined ? { strategy } : {}),
+            ...(attachSummary !== undefined ? { attachSummary } : {}),
+            ...(attachRecentUserInput !== undefined ? { attachRecentUserInput } : {}),
           }), 'feature-comms-result');
         if (!result.ok) return res.status(503).json({ ok: false, error: result.error });
         res.json({ ok: true, agentId, sessionId, status: result.status });

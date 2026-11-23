@@ -74,6 +74,12 @@ export function parseHandoffContent(raw, sourceLabel, { rawTextFallback = false 
       const featureContinuity = parsed.featureContinuity && typeof parsed.featureContinuity === 'object'
         ? parsed.featureContinuity
         : null;
+      // appendix：摘要包可附带的用户最近输入提醒块（不改 seed 骨架，由 runtime
+      // 经 HandoffSeedFeature 的 appendix 通道以 system reminder 注入）。
+      const appendixContent = cleanValue(parsed.appendix?.content);
+      const appendix = appendixContent
+        ? { kind: cleanValue(parsed.appendix?.kind) || 'recent-user-input', content: appendixContent }
+        : null;
       // branch 注入包（ADR-0034 §4.1）：只有 mode/sourceSessionId/featureContinuity，
       // 无摘要与种子消息——有 continuity 载荷即视为合法包。
       if (seedMessages.length === 0 && !sourceSummary && !featureContinuity) {
@@ -96,6 +102,7 @@ export function parseHandoffContent(raw, sourceLabel, { rawTextFallback = false 
           ?? pickObject(parsed.appendedSummary?.fileRanges)
           ?? {},
         featureContinuity,
+        appendix,
       };
     }
   } catch (error) {
@@ -108,4 +115,17 @@ export function parseHandoffContent(raw, sourceLabel, { rawTextFallback = false 
   }
 
   return { sourceSummary: text, seedMessages: [] };
+}
+
+/**
+ * handoff 包的 seed 装配参数（runtime 侧唯一构造点）。
+ *
+ * appendix（当前用于纯摘要档的「最近用户输入」）以框架既有通道注入，
+ * 与 seed 同事务、排在 seed 与文件/技能重载块之后，不计入 seed 账目。
+ */
+export function buildHandoffSeedConfig(handoff) {
+  return {
+    handoff,
+    ...(handoff?.appendix?.content ? { appendix: { content: handoff.appendix.content } } : {}),
+  };
 }
