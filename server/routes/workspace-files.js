@@ -4,25 +4,33 @@ import { promises as fs } from 'node:fs';
 import { readSessionIndexShared } from '../shared/session-access.js';
 import { resolveSessionRuntimeDirectory } from '../shared/session-project.js';
 import { cleanSessionText } from '../shared/string-helpers.js';
+import { sharedOfficeConverter } from '../shared/office-converter.js';
 
 const MAX_FILE_BYTES = 1024 * 1024;
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
 const MAX_MEDIA_BYTES = 32 * 1024 * 1024;
-const TEXT_EXTENSIONS = new Set([
-  '.txt', '.md', '.markdown', '.mdx', '.json', '.jsonc', '.js', '.jsx', '.mjs', '.cjs',
-  '.ts', '.tsx', '.css', '.scss', '.less', '.html', '.htm', '.xml', '.yaml', '.yml', '.toml',
-  '.ini', '.env', '.sh', '.bash', '.ps1', '.py', '.rb', '.go', '.rs', '.java', '.c', '.h', '.cpp',
-  '.hpp', '.cs', '.sql', '.log', '.diff', '.patch', '.gitignore', '.dockerfile',
-  '.csv', '.tsv', '.vue', '.svelte', '.astro', '.kt', '.kts', '.swift', '.dart', '.scala',
-  '.clj', '.cljs', '.ex', '.exs', '.erl', '.hs', '.lua', '.pl', '.r', '.jl', '.groovy',
-  '.gradle', '.proto', '.graphql', '.gql', '.bat', '.cmd', '.tex', '.rst', '.adoc',
-  '.editorconfig', '.gitattributes', '.npmrc', '.babelrc', '.eslintrc', '.prettierrc',
+// 预览分派对齐 DSH DocumentPreview 的「白名单之外一律纯文本」模型：
+// 图片 → base64 dataUrl（<img> 模式加载，SVG 内嵌脚本在该模式下不执行）；
+// pdf / video / audio → 同源 raw 字节流，浏览器原生查看器；
+// docx → raw 字节流给 docx-preview；xlsx / xls → raw 字节流给 SheetJS；
+// doc / ppt / pptx → 本机 LibreOffice 转 PDF（office-pdf 端点）；
+// 其余后缀按文本读取，只有下面这份「已知二进制容器」清单判为不可预览。
+// 用黑名单而非文本白名单：DSH 里任何非二进制后缀都能以纯文本打开，白名单
+// 会让 .conf/.properties/.tf 这类文本在 Claw 侧变成「不支持预览」。
+const UNVIEWABLE_BINARY_EXTENSIONS = new Set([
+  // 归档
+  '.zip', '.gz', '.tgz', '.bz2', '.xz', '.zst', '.7z', '.rar', '.tar', '.jar',
+  // 可执行与编译产物
+  '.exe', '.dll', '.so', '.dylib', '.bin', '.o', '.obj', '.class', '.pyc', '.wasm',
+  // 字体
+  '.ttf', '.otf', '.woff', '.woff2', '.eot',
+  // 磁盘镜像与数据库
+  '.dmg', '.iso', '.img', '.sqlite', '.db',
+  // 设计稿与本预览不支持的图片/办公格式（doc/ppt/pptx/xls 有专门渲染器，不在此列；
+  // `.key` 保持在黑名单外：它常是 PEM 私钥这类文本，与 DSH 口径一致）
+  '.psd', '.ai', '.sketch', '.tiff', '.tif', '.heic', '.heif', '.odt', '.ods', '.odp',
+  '.pages', '.numbers', '.avi', '.mkv', '.flv', '.wmv', '.wma', '.opus',
 ]);
-// 预览分派按类型返回（对齐 DSH DocumentPreview 支持矩阵）：
-// 文本走 content；图片走 base64 dataUrl（<img> 模式加载，SVG 内嵌脚本在该模式
-// 下不执行）；pdf / video / audio 走 base64 dataUrl（前端转 object URL 用浏览器
-// 原生查看器）；html 源码按文本返回，前端以禁脚本沙箱 iframe 渲染。
-// 其余后缀视为不可预览。
 const IMAGE_MIME_BY_EXTENSION = {
   '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif',
   '.webp': 'image/webp', '.bmp': 'image/bmp', '.svg': 'image/svg+xml', '.ico': 'image/x-icon',
@@ -34,13 +42,15 @@ const MEDIA_MIME_BY_EXTENSION = {
   '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.ogg': 'audio/ogg', '.m4a': 'audio/mp4',
   '.flac': 'audio/flac', '.aac': 'audio/aac',
 };
-// Office 文档（OOXML）：前端经 raw URL fetch 字节流后由 docx-preview / SheetJS
-// 浏览器端渲染（DSH 用 LibreOffice 转 PDF，本机无该引擎，取等效浏览器渲染路径；
-// 二进制老格式 doc/xls/ppt 维持不可预览）。
+// Office 文档：docx / xlsx / xls 经 raw URL 取字节流，浏览器端由 docx-preview /
+// SheetJS 渲染；doc / ppt / pptx 由本机 LibreOffice 转 PDF 后走 PDF 查看器
+// （引擎缺失时 read() 直接返回可读的错误码，面板给出安装提示）。
 const OFFICE_MIME_BY_EXTENSION = {
   '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  '.xls': 'application/vnd.ms-excel',
 };
+const OFFICE_PDF_EXTENSIONS = new Set(['.doc', '.ppt', '.pptx']);
 
 function previewKindOf(extension) {
   if (IMAGE_MIME_BY_EXTENSION[extension]) return 'image';
@@ -50,8 +60,9 @@ function previewKindOf(extension) {
     return mimeType.startsWith('video/') ? 'video' : 'audio';
   }
   if (OFFICE_MIME_BY_EXTENSION[extension]) return extension === '.docx' ? 'docx' : 'xlsx';
-  if (TEXT_EXTENSIONS.has(extension) || !extension) return 'text';
-  return null;
+  if (OFFICE_PDF_EXTENSIONS.has(extension)) return 'office-pdf';
+  if (UNVIEWABLE_BINARY_EXTENSIONS.has(extension)) return null;
+  return 'text';
 }
 
 function normalizeRelativePath(value) {
@@ -110,12 +121,38 @@ async function resolveSessionRoot(agentId, sessionId, requireAgentLight) {
 function sendError(res, error) {
   const status = error === 'not_found' || error === 'session_not_found' ? 404
     : error === 'path_outside_workspace' || error === 'symlink_not_allowed' ? 403
-      : error === 'invalid_path' || error === 'agentId_and_sessionId_required'
-        || error === 'unsupported_file_type' || error === 'file_too_large' || error === 'not_a_file' ? 400 : 500;
+      : error === 'office_engine_unavailable' ? 503
+        : error === 'office_convert_timeout' ? 504
+          : error === 'office_convert_failed' ? 502
+            : error === 'binary_content' ? 415
+              : error === 'invalid_path' || error === 'agentId_and_sessionId_required'
+                || error === 'unsupported_file_type' || error === 'file_too_large' || error === 'not_a_file' ? 400 : 500;
   res.status(status).json({ error });
 }
 
-export function createWorkspaceFileService({ requireAgentLight, fsApi = fs, resolveRoot } = {}) {
+/** BOM 优先的文本解码；含 NUL 的内容判为二进制（未知后缀不做垃圾文本渲染）。 */
+function decodeTextContent(bytes) {
+  if (bytes.length >= 2 && bytes[0] === 0xFF && bytes[1] === 0xFE) return bytes.subarray(2).toString('utf16le');
+  if (bytes.length >= 2 && bytes[0] === 0xFE && bytes[1] === 0xFF) {
+    const swapped = Buffer.from(bytes.subarray(2));
+    for (let index = 0; index + 1 < swapped.length; index += 2) {
+      const low = swapped[index];
+      swapped[index] = swapped[index + 1];
+      swapped[index + 1] = low;
+    }
+    return swapped.toString('utf16le');
+  }
+  const start = bytes.length >= 3 && bytes[0] === 0xEF && bytes[1] === 0xBB && bytes[2] === 0xBF ? 3 : 0;
+  const limit = Math.min(bytes.length, 8192);
+  for (let index = start; index < limit; index += 1) {
+    if (bytes[index] === 0) return null;
+  }
+  return bytes.subarray(start).toString('utf8');
+}
+
+export function createWorkspaceFileService({
+  requireAgentLight, fsApi = fs, resolveRoot, officeConverter = sharedOfficeConverter,
+} = {}) {
   async function withTarget(body, res, action) {
     const agentId = cleanSessionText(body?.agentId);
     const sessionId = cleanSessionText(body?.sessionId);
@@ -207,11 +244,56 @@ export function createWorkspaceFileService({ requireAgentLight, fsApi = fs, reso
             });
             return;
           }
+          if (previewKind === 'office-pdf') {
+            if (stat.size > MAX_MEDIA_BYTES) return sendError(res, 'file_too_large');
+            // 引擎缺失在握手阶段就回报：面板能直接显示安装提示，而不是先挂
+            // 一个会返回 JSON 错误的 iframe。
+            if (!(await officeConverter.available())) return sendError(res, 'office_engine_unavailable');
+            res.json({
+              path: target.relativePath,
+              kind: 'office-pdf',
+              mimeType: 'application/pdf',
+              size: stat.size,
+              modifiedAt: stat.mtimeMs,
+            });
+            return;
+          }
           if (stat.size > MAX_FILE_BYTES) return sendError(res, 'file_too_large');
-          const content = await fsApi.readFile(target.absolutePath, 'utf8');
+          const content = decodeTextContent(await fsApi.readFile(target.absolutePath));
+          if (content === null) return sendError(res, 'binary_content');
           res.json({ path: target.relativePath, kind: 'text', content, size: stat.size, modifiedAt: stat.mtimeMs });
         } catch {
           sendError(res, 'read_failed');
+        }
+      });
+    },
+    async officePdf(body, res) {
+      // doc / ppt / pptx 的本机转换端点：转换结果以 PDF 字节直出，交给面板
+      // 现有的 PDF iframe（同源 + frame-ancestors 'self'，与 raw 同一套头）。
+      return withTarget(body, res, async (_root, target) => {
+        let stat;
+        try { stat = await fsApi.stat(target.absolutePath); }
+        catch (error) { return sendError(res, error.code === 'ENOENT' ? 'not_found' : 'read_failed'); }
+        if (!stat.isFile()) return sendError(res, 'not_a_file');
+        const extension = path.extname(target.absolutePath).toLowerCase();
+        if (!OFFICE_PDF_EXTENSIONS.has(extension)) return sendError(res, 'unsupported_file_type');
+        if (stat.size > MAX_MEDIA_BYTES) return sendError(res, 'file_too_large');
+        try {
+          const bytes = await officeConverter.toPdf(target.absolutePath, {
+            realPath: target.absolutePath, mtimeMs: stat.mtimeMs, size: stat.size,
+          });
+          res.setHeader('Content-Type', 'application/pdf');
+          res.setHeader('X-Content-Type-Options', 'nosniff');
+          res.setHeader('Content-Disposition', 'inline');
+          res.setHeader('Cache-Control', 'no-store');
+          res.setHeader('Content-Security-Policy', "frame-ancestors 'self'");
+          res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+          res.end(bytes);
+        } catch (error) {
+          const code = error?.code === 'office_engine_unavailable' ? 'office_engine_unavailable'
+            : error?.code === 'office_convert_timeout' ? 'office_convert_timeout'
+              : 'office_convert_failed';
+          sendError(res, code);
         }
       });
     },
@@ -250,8 +332,8 @@ export function createWorkspaceFileService({ requireAgentLight, fsApi = fs, reso
   };
 }
 
-export function setupWorkspaceFileRoutes(app, { requireAgentLight, resolveRoot } = {}) {
-  const service = createWorkspaceFileService({ requireAgentLight, resolveRoot });
+export function setupWorkspaceFileRoutes(app, { requireAgentLight, resolveRoot, officeConverter } = {}) {
+  const service = createWorkspaceFileService({ requireAgentLight, resolveRoot, officeConverter });
   app.post('/protoclaw/workspace-files/list', jsonBody(), async (req, res, next) => {
     try { await service.list(req.body, res); } catch (error) { next(error); }
   });
@@ -260,6 +342,9 @@ export function setupWorkspaceFileRoutes(app, { requireAgentLight, resolveRoot }
   });
   app.get('/protoclaw/workspace-files/raw', async (req, res, next) => {
     try { await service.raw(req.query, res); } catch (error) { next(error); }
+  });
+  app.get('/protoclaw/workspace-files/office-pdf', async (req, res, next) => {
+    try { await service.officePdf(req.query, res); } catch (error) { next(error); }
   });
   return service;
 }

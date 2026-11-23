@@ -12,6 +12,17 @@
   height: 100%;
   min-height: 0;
   overflow: hidden;
+  /* 文档预览底色与页面质感：取 DSH design-platform 的
+     bg-document-preview（深 rgb(21,21,23) / 浅 rgb(235,238,242)）与
+     elevation-prominent 的页影口径，双主题成对定义。 */
+  --wf-doc-bg: #151517;
+  --wf-page-shadow: 0 2px 12px rgba(0, 0, 0, 0.5);
+  --wf-doc-font: "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", -apple-system, "Segoe UI", sans-serif;
+}
+
+body[data-theme="light"] .wf-panel {
+  --wf-doc-bg: #ebecf2;
+  --wf-page-shadow: 0 2px 12px rgba(15, 23, 42, 0.16);
 }
 
 .wf-pane-row {
@@ -249,8 +260,11 @@ body[data-theme="light"] .wf-panel .gen-ui-surface-tab-item:not(.is-active):hove
   overflow: hidden;
 }
 
+/* 页签内容列式排列：多段式视图（如文档工具条 + 内容区）上下堆叠，
+   单段式视图（代码/表格/媒体）照常由自身 flex:1 撑满。 */
 .wf-tab-page {
   display: flex;
+  flex-direction: column;
   flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
@@ -448,24 +462,39 @@ body[data-theme="light"] .wf-entry-icon {
   overflow: auto;
 }
 
-/* docx-preview 输出文档流容器：独立滚动 + 底色衬托分页 */
+/* Word 文档流：滚动与四周留白由外框承担，页面缩放不改变留白。
+   scrollbar-gutter: stable 让「出现纵向滚动条 → 可用宽变小 → 页更矮 →
+   滚动条消失」的来回抖动只发生一次。 */
 .wf-docx-scroll {
   flex: 1 1 auto;
   min-height: 0;
+  padding: 12px;
   overflow: auto;
-  background: var(--panel-bg, #111114);
+  background: var(--wf-doc-bg);
+  scrollbar-gutter: stable;
 }
 
-.wf-docx-scroll .docx-wrapper {
-  padding: 16px 24px 32px;
-  background: transparent;
+/* 页容器：宽度跟随页自身（Word 页面 96dpi 宽），整页宽度由 JS 量出后
+   作为 100% 基准。窄面板下按比例缩小整页，而不是让正文按窄栏重排。 */
+.wf-docx-pages {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  width: max-content;
+  max-width: none;
+  margin: 0 auto;
+  font-family: var(--wf-doc-font);
 }
 
-.wf-docx-scroll .docx-wrapper > section.docx {
+/* docx-preview 产出的每一页：纸张本身占满页宽、白底 + 页影。
+   缩放在「页」上而不是页容器上——页间距保持固定 12px，不随倍率变大变小。 */
+.wf-docx-pages > section {
+  flex: none;
   background: #ffffff;
   color: #1f2329;
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.25);
-  margin-bottom: 16px;
+  box-shadow: var(--wf-page-shadow);
+  zoom: var(--wf-docx-scale, 1);
 }
 
 .wf-csv-table {
@@ -521,19 +550,73 @@ body[data-theme="light"] .wf-entry-icon {
 
 .wf-media-audio audio { width: min(420px, 100%); }
 
-/* ── 图片视图 ───────────────────────────────────────────── */
+/* ── 文档视图（图片 / Word 共用）：工具条 + 内容区 ─────────
+   工具条是内容区的上一行兄弟节点（列方向排列）。此前两者直接挂在 flex 行
+   容器里，工具条被压成左侧竖条、图片只剩 357px 宽——列式容器是布局前提。 */
+.wf-doc-view {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
 
-.wf-image-bar {
+/* 文档工具条：左侧尺寸/页数，右侧缩放档位 + 适应宽度开关 */
+.wf-doc-bar {
   display: flex;
   flex: 0 0 auto;
   align-items: center;
+  justify-content: space-between;
   gap: 8px;
   padding: 6px 10px;
   border-bottom: 1px solid var(--border-color, rgba(255, 255, 255, 0.08));
+  color: var(--text-muted, #98a2b3);
+  font-size: 11px;
+  line-height: 16px;
 }
 
-.wf-image-toggle {
-  padding: 2px 10px;
+.wf-doc-meta {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.wf-doc-zoom {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 2px;
+}
+
+.wf-doc-step {
+  display: inline-flex;
+  width: 22px;
+  height: 22px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary, #667085);
+  cursor: pointer;
+}
+
+.wf-doc-step:hover {
+  background: var(--hover-bg, rgba(255, 255, 255, 0.06));
+  color: var(--text-primary, #1f2329);
+}
+
+.wf-doc-zoom-value {
+  min-width: 38px;
+  color: var(--text-secondary, #667085);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.wf-doc-fit {
+  padding: 2px 8px;
   border: 1px solid var(--border-color, rgba(255, 255, 255, 0.16));
   border-radius: 6px;
   background: transparent;
@@ -543,31 +626,76 @@ body[data-theme="light"] .wf-entry-icon {
   font-size: 11px;
 }
 
-.wf-image-toggle:hover { color: var(--text-primary, #1f2329); }
+.wf-doc-fit:hover { color: var(--text-primary, #1f2329); }
 
-.wf-image-meta {
-  color: var(--text-muted, #98a2b3);
-  font-size: 11px;
+.wf-doc-fit.is-active {
+  border-color: rgba(99, 145, 255, 0.55);
+  background: rgba(99, 145, 255, 0.16);
+  color: var(--text-primary, #1f2329);
 }
 
+/* Word 渲染中：居中文案浮在未就绪的页容器之上，避免空白等待 */
+.wf-docx-stage {
+  position: relative;
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.wf-docx-status {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary, #667085);
+  font-size: 12px;
+  pointer-events: none;
+}
+
+/* ── 图片视图 ─────────────────────────────────────────────
+   帧（frame）跟随滚动区宽高：小于视口的图被 margin:auto 居中；大于视口
+   的图撑开帧并滚动，宽图不会出现「左右都裁掉、左边滚不回来」的居中溢出。 */
 .wf-image-stage {
   display: flex;
   flex: 1 1 auto;
-  align-items: center;
-  justify-content: center;
   min-height: 0;
-  overflow: auto;
   padding: 12px;
+  overflow: auto;
+  scrollbar-gutter: stable;
 }
 
-.wf-image-stage img { max-width: 100%; max-height: 100%; }
+.wf-image-stage.is-pannable { cursor: grab; }
 
-.wf-image-stage.is-full {
-  align-items: flex-start;
-  justify-content: flex-start;
+.wf-image-stage.is-panning {
+  cursor: grabbing;
+  user-select: none;
 }
 
-.wf-image-stage.is-full img { max-width: none; max-height: none; }
+.wf-image-frame {
+  display: flex;
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 100%;
+  height: max-content;
+  min-height: 100%;
+}
+
+.wf-image-surface {
+  display: block;
+  flex: none;
+  margin: auto;
+}
+
+.wf-image-surface img {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-width: none;
+  border-radius: 8px;
+  user-select: none;
+  -webkit-user-drag: none;
+}
 
 /* ── 拖拽停靠 ───────────────────────────────────────────── */
 

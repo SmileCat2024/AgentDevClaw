@@ -188,6 +188,28 @@ export function FileTypeIcon({ path, size = 16, className }: IconProps & { reado
   return <span className={`wf-ft wf-ft-${type} ${className ?? ''}`}>{traditionalGlyph(type, size, undefined)}</span>;
 }
 
+/* ---- 文档缩放档位按钮图标（放大镜 ±，currentColor 线性图标） ---- */
+
+export function ZoomInIcon({ size = 16, className }: IconProps): ReactNode {
+  return (
+    <svg width={size} height={size} className={className} viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <circle cx="6.75" cy="6.75" r="4.25" stroke="currentColor"></circle>
+      <path d="M10 10L13.5 13.5" stroke="currentColor" strokeLinecap="round"></path>
+      <path d="M4.75 6.75H8.75M6.75 4.75V8.75" stroke="currentColor" strokeLinecap="round"></path>
+    </svg>
+  );
+}
+
+export function ZoomOutIcon({ size = 16, className }: IconProps): ReactNode {
+  return (
+    <svg width={size} height={size} className={className} viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <circle cx="6.75" cy="6.75" r="4.25" stroke="currentColor"></circle>
+      <path d="M10 10L13.5 13.5" stroke="currentColor" strokeLinecap="round"></path>
+      <path d="M4.75 6.75H8.75" stroke="currentColor" strokeLinecap="round"></path>
+    </svg>
+  );
+}
+
 /* ---- 文件树目录图标（照搬 DSH icons/artwork.ts 的 folder-open / folder-close，currentColor） ---- */
 
 export function FolderOpenIcon({ size = 16, className }: IconProps): ReactNode {

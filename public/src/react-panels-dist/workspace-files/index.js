@@ -38363,7 +38363,7 @@ import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, use
 import { createRoot } from "/src/react-panels-dist/shared/react-dom-client.js?v=^19.3.1";
 
 // public/src/react-panels/workspace-files/style.css
-var style_default = '/* \u6587\u4EF6\u9762\u677F\u6837\u5F0F\uFF08DSH \u5F0F\uFF09\u3002\r\n   \u9875\u7B7E\u6761\u672C\u4F53\u590D\u7528\u5168\u5C40 gen-ui-surface-tabs \u4F53\u7CFB\uFF0C\u6B64\u5904\u53EA\u505A wf \u57DF\u5185\u7684\u8986\u76D6\u4E0E\u8865\u5145\uFF1A\r\n   \u975E\u6FC0\u6D3B\u9875\u7B7E\u7ED9\u53EF\u89C1\u8F6E\u5ED3\uFF08\u7528\u6237\u53CD\u9988\uFF1A\u9ED8\u8BA4\u6001\u592A"\u65E0\u754C"\uFF09\u3001divider \u5E26\u53EF\u89C6\u5206\u9694\u7EBF\u3001\r\n   \u6587\u4EF6\u7C7B\u578B\u56FE\u6807\u914D\u8272\u53D6\u81EA DSH design-platform \u7684\u9759\u6001 token \u503C\u3002 */\r\n\r\n/* \u5BF9\u8BDD\u9875\u7B7E\u6761\uFF08.feature-panel-scene*\uFF09\u6837\u5F0F\u7EDF\u4E00\u5728\u58F3\u5C42 public/styles/layout.css\uFF1B\r\n   \u56FA\u5B9A\u5165\u53E3\u662F\u5F53\u524D\u9875\u7B7E\u4E0A\u7684\u52A0\u53F7\uFF08files-scenes.js \u6E32\u67D3\uFF09\uFF0C\u9762\u677F\u5185\u90E8\u4E0D\u518D\u6709\u73B0\u573A\u76F8\u5173 UI\u3002 */\r\n\r\n.wf-panel {\r\n  display: flex;\r\n  flex-direction: column;\r\n  height: 100%;\r\n  min-height: 0;\r\n  overflow: hidden;\r\n}\r\n\r\n.wf-pane-row {\r\n  display: flex;\r\n  flex-direction: row;\r\n  flex: 1 1 auto;\r\n  min-height: 0;\r\n}\r\n\r\n.wf-pane-row.is-vertical {\r\n  flex-direction: column;\r\n}\r\n\r\n.wf-pane {\r\n  display: flex;\r\n  flex-direction: column;\r\n  min-width: 0;\r\n  min-height: 0;\r\n  overflow: hidden;\r\n}\r\n\r\n/* \u2500\u2500 \u9875\u7B7E\u6761\u8986\u76D6\uFF1A\u975E\u6FC0\u6D3B\u6001\u7ED9\u8F6E\u5ED3 \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 */\r\n\r\n/* \u5206\u884C\u5E03\u5C40\uFF1AcomputeTabRows \u786E\u5B9A\u6027\u5206\u884C\uFF08\u5BB9\u91CF = ceil(\u5BB9\u5668\u5BBD/104)\uFF09\uFF0C\u5916\u5C42\u7EB5\u5411\u5806\u53E0\u3002\r\n   \u884C\u662F\u6A2A\u5411\u6EDA\u52A8\u5BB9\u5668\uFF08\u6EDA\u52A8\u6761\u9690\u85CF\uFF09\uFF1A\u88AB\u88C1\u5207\u7684\u9875\u7B7E\u4ECD\u53EF\u8BBF\u95EE\u2014\u2014\u9009\u4E2D\u65F6 JS \u81EA\u52A8\r\n   \u6EDA\u52A8\u8BA9\u5B83\u5B8C\u6574\u9732\u51FA\uFF08\u542B\u5173\u95ED\u6309\u94AE\uFF09\uFF0C\u70B9\u5DE6\u4FA7\u90E8\u5206\u9690\u85CF\u9879\u5219\u5F80\u56DE\u6EDA\u52A8\u3002 */\r\n.wf-tabstrip {\r\n  display: flex;\r\n  flex-direction: column;\r\n  flex-wrap: nowrap;\r\n  /* \u8986\u76D6\u5168\u5C40 .gen-ui-surface-tabs \u7684 align-items: flex-end\uFF1A\r\n     \u5217\u65B9\u5411\u4E0B\u5B83\u4F1A\u8BA9\u884C\u6536\u7F29\u5230\u5185\u5BB9\u5BBD\u5E76\u6C34\u5E73\u53F3\u5BF9\u9F50\uFF0C\u5DE6\u4FA7\u51FA\u73B0\u83AB\u540D\u7A7A\u6863 */\r\n  align-items: stretch;\r\n  /* \u9996\u884C\u6D6E\u8D77\u4F59\u91CF\uFF1A\u5438\u6536\u9996\u884C margin-top \u7684\u4E0A\u63A2\uFF0C\u4F7F\u6D6E\u8D77/\u9634\u5F71\u5B8C\u6574\u843D\u5728\r\n     .wf-panel\uFF08overflow: hidden\uFF09\u4EE5\u5185\u2014\u2014\u5426\u5219\u6070\u597D\u5728\u9762\u677F\u9876\u7F18\r\n     \uFF08\u5BBF\u4E3B\u9762\u677F title \u533A\u4E0B\u6CBF\uFF09\u88AB\u88C1\u6389\u3002 */\r\n  padding-top: 2px;\r\n}\r\n\r\n/* \u5360\u6EE1\uFF1A\u5265\u6389\u590D\u7528 .settings-tab-bar \u7684\u80F6\u56CA\u5BB9\u5668\u6837\u5F0F\uFF084px padding + \u534A\u900F\u660E\u5E95\r\n   + 12px \u5706\u89D2\uFF09\u2014\u2014\u9875\u7B7E\u4E0E\u5185\u5BB9\u533A\u9876\u6EE1\u5206\u533A\u8FB9\u7F18\uFF08\u7528\u6237\u53CD\u9988\u5206\u533A\u4E24\u4FA7\u6709\u5185\u8FB9\u8DDD\uFF09\u3002 */\r\n.wf-tabstrip.settings-tab-bar {\r\n  padding: 0;\r\n  background: transparent;\r\n  border-radius: 0;\r\n}\r\n\r\n/* \u6587\u4EF6\u9762\u677F\u4E13\u7528\u7D27\u51D1\u9875\u7B7E\uFF1A\u51CF\u5C11\u9875\u7B7E\u6761\u4E0E\u9875\u7B7E\u672C\u8EAB\u5360\u636E\u7684\u5782\u76F4\u7A7A\u95F4\u3002 */\r\n.wf-panel .wf-tabstrip .gen-ui-surface-tab-item {\r\n  height: 30px;\r\n  min-height: 30px;\r\n  padding-block: 2px;\r\n}\r\n\r\n.wf-panel .wf-tabstrip .gen-ui-surface-tab {\r\n  min-height: 22px;\r\n  padding-block: 2px;\r\n  font-size: 11px;\r\n}\r\n\r\n.wf-panel .wf-tabstrip .gen-ui-surface-tab-close {\r\n  width: 20px;\r\n  height: 20px;\r\n  font-size: 13px;\r\n}\r\n\r\n/* \u53F3\u7F18\u5360\u6EE1\uFF1A\u58F3\u5C42 .feature-panel-body \u7EDF\u4E00 margin-right: 6px \u662F\u6EDA\u52A8\u6761\u9884\u7559\uFF0C\r\n   \u672C\u9762\u677F\u5185\u90E8\u81EA\u7BA1\u6EDA\u52A8\u3001body \u6C38\u4E0D\u6EDA\u52A8\uFF0C6px \u662F\u7EAF\u635F\u8017\u3002\u6302\u8F7D\u7C7B\u7531 app-ui.js\r\n   mountBody \u6DFB\u52A0/\u79FB\u9664\u3002 */\r\n.feature-panel-body.wf-full-bleed {\r\n  margin-right: 0;\r\n}\r\n\r\n.wf-tab-row {\r\n  display: flex;\r\n  flex-wrap: nowrap;\r\n  min-width: 0;\r\n  width: 100%;\r\n  overflow-x: auto;\r\n  scrollbar-width: none;\r\n  /* \u957F\u6309\u201C\u62FF\u8D77\u201D\u7684\u6D6E\u8D77\u4E0E\u9634\u5F71\u9700\u8981\u7AD6\u5411\u4F59\u91CF\uFF1A\u884C\u662F\u6EDA\u52A8\u5BB9\u5668\uFF0C\u4E24\u4E2A\u65B9\u5411\u90FD\u4F1A\u88C1\u526A\r\n     \u6EA2\u51FA\u5185\u5BB9\u3002padding \u628A\u4F59\u91CF\u7EB3\u5165\u88C1\u526A\u533A\uFF08\u53EF\u89C1\uFF09\uFF0C\u8D1F margin \u62B5\u6D88\u5E03\u5C40\u589E\u9AD8\u2014\u2014\r\n     \u91CD\u53E0\u533A\u53EA\u53D1\u751F\u5728\u76F8\u90BB\u884C\u7684\u7A7A\u767D padding \u5E26\uFF0C\u5185\u5BB9\u6761\u5E26\u4ECD\u9996\u5C3E\u76F8\u63A5\uFF1B\r\n     \u9996\u884C\u7684\u4E0A\u63A2\u7531 .wf-tabstrip \u7684 padding-top \u5438\u6536\u3002 */\r\n  padding-top: 2px;\r\n  padding-bottom: 1px;\r\n  margin-top: -2px;\r\n  margin-bottom: -1px;\r\n}\r\n\r\n.wf-tab-row::-webkit-scrollbar {\r\n  display: none;\r\n}\r\n\r\n/* \u591A\u884C\u6A21\u5F0F\uFF1A\u9875\u7B7E\u4EE5\u538B\u7F29\u6863\uFF08104 = \u5168\u5C40 tab-item min-width\uFF09\u4E3A\u57FA\u51C6\uFF1B\r\n   \u975E\u672B\u884C\u7981\u6B62\u62C9\u4F38\uFF08flex-grow 0\uFF09\u2014\u2014\u62C9\u4F38\u4F1A\u628A\u884C\u5C3E\u9875\u7B7E\u5B8C\u5168\u63A8\u51FA\u884C\u5916\uFF0C\r\n   \u8FDD\u53CD\u300C\u53EA\u6709\u5B8C\u5168\u9690\u85CF\u624D\u6362\u884C\u300D\u7684\u5206\u884C\u5224\u5B9A\uFF1B\u672B\u884C\uFF08\u884C\u5C3E\uFF09\u5141\u8BB8\u62C9\u4F38\u94FA\u6EE1\u3002 */\r\n.wf-tabstrip.is-multi .wf-tab-row .gen-ui-surface-tab-item {\r\n  flex: 1 1 88px;\r\n  min-width: 88px;\r\n  max-width: 160px;\r\n}\r\n\r\n.wf-tabstrip.is-multi .wf-tab-row:not(:last-child) .gen-ui-surface-tab-item {\r\n  flex-grow: 0;\r\n}\r\n\r\n.wf-panel .gen-ui-surface-tab-item.is-active {\r\n  /* \u6CBF\u7528\u5171\u4EAB\u9875\u7B7E\u7684\u539F\u6709\u5F62\u6001\uFF0C\u53EA\u589E\u5F3A\u539F\u6709\u5E95\u8272\u3001\u8FB9\u6846\u4E0E\u6587\u5B57\u7684\u660E\u6697\u5BF9\u6BD4\u3002 */\r\n  border-color: #56565f;\r\n  background: #303036;\r\n  color: #ffffff;\r\n}\r\n\r\n.wf-panel .gen-ui-surface-tab-item.is-active .gen-ui-surface-tab {\r\n  color: #ffffff;\r\n}\r\n\r\nbody[data-theme="light"] .wf-panel .gen-ui-surface-tab-item.is-active {\r\n  border-color: #aeb9d3;\r\n  background: #e3e8f2;\r\n  color: #172033;\r\n}\r\n\r\nbody[data-theme="light"] .wf-panel .gen-ui-surface-tab-item.is-active .gen-ui-surface-tab {\r\n  color: #172033;\r\n}\r\n\r\n.wf-panel .gen-ui-surface-tab-item:not(.is-active) {\r\n  border-color: #2b2b30;\r\n  background: #141416;\r\n}\r\n\r\n.wf-panel .gen-ui-surface-tab-item:not(.is-active):hover {\r\n  background: #1d1d21;\r\n}\r\n\r\nbody[data-theme="light"] .wf-panel .gen-ui-surface-tab-item:not(.is-active) {\r\n  border-color: #d9d9de;\r\n  background: #ececee;\r\n}\r\n\r\nbody[data-theme="light"] .wf-panel .gen-ui-surface-tab-item:not(.is-active):hover {\r\n  background: #e3e3e6;\r\n}\r\n\r\n.wf-tab-icon {\r\n  display: inline-flex;\r\n  flex: 0 0 auto;\r\n  align-items: center;\r\n  margin-right: 6px;\r\n}\r\n\r\n.wf-tab-label {\r\n  min-width: 0;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\r\n}\r\n\r\n/* \u2500\u2500 divider\uFF1A\u53EF\u89C6\u5206\u9694\u7EBF + \u62D6\u62FD\u70ED\u533A \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 */\r\n\r\n.wf-divider {\r\n  position: relative;\r\n  z-index: 1;\r\n  flex: 0 0 1px;\r\n  cursor: col-resize;\r\n  touch-action: none;\r\n}\r\n\r\n.wf-divider.is-horizontal {\r\n  flex-basis: 1px;\r\n  cursor: row-resize;\r\n}\r\n\r\n/* \u53EF\u89C1\u5206\u9694\u7EBF\u5360\u636E pane \u8FB9\u754C\u672C\u8EAB\uFF0C\u4E0D\u7559\u4E24\u4FA7\u89C6\u89C9\u7A7A\u9699\uFF1B\u900F\u660E\u4F2A\u5143\u7D20\u5411\u4E24\u4FA7\u6269\u5C55\r\n   \u62D6\u62FD\u70ED\u533A\uFF0C\u4FDD\u6301\u6613\u4E8E\u6293\u53D6\u7684 9px \u547D\u4E2D\u8303\u56F4\u3002 */\r\n.wf-divider::before {\r\n  content: "";\r\n  position: absolute;\r\n  top: 0;\r\n  bottom: 0;\r\n  left: -4px;\r\n  width: 9px;\r\n  cursor: col-resize;\r\n}\r\n\r\n.wf-divider.is-horizontal::before {\r\n  top: -4px;\r\n  right: 0;\r\n  bottom: auto;\r\n  left: 0;\r\n  width: auto;\r\n  height: 9px;\r\n  cursor: row-resize;\r\n}\r\n\r\n.wf-divider::after {\r\n  content: "";\r\n  position: absolute;\r\n  top: 0;\r\n  bottom: 0;\r\n  left: 0;\r\n  width: 1px;\r\n  background: var(--border-color, rgba(255, 255, 255, 0.1));\r\n  transition: background 120ms ease, box-shadow 120ms ease;\r\n}\r\n\r\n.wf-divider.is-horizontal::after {\r\n  top: 0;\r\n  right: 0;\r\n  bottom: auto;\r\n  left: 0;\r\n  width: auto;\r\n  height: 1px;\r\n}\r\n\r\n.wf-divider:hover::after,\r\n.wf-divider:active::after {\r\n  background: var(--accent, #4f6bed);\r\n  box-shadow: 0 0 0 0.5px var(--accent, #4f6bed);\r\n}\r\n\r\n.wf-pane-row.is-vertical .wf-pane {\r\n  width: 100%;\r\n}\r\n\r\n/* \u2500\u2500 pane \u5185\u5BB9\u533A \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 */\r\n\r\n.wf-pane-body {\r\n  position: relative;\r\n  display: flex;\r\n  flex: 1 1 auto;\r\n  min-height: 0;\r\n  overflow: hidden;\r\n}\r\n\r\n.wf-tab-page {\r\n  display: flex;\r\n  flex: 1 1 auto;\r\n  min-width: 0;\r\n  min-height: 0;\r\n  overflow: hidden;\r\n}\r\n\r\n.wf-empty {\r\n  display: flex;\r\n  flex: 1 1 auto;\r\n  align-items: center;\r\n  justify-content: center;\r\n  padding: 24px 12px;\r\n  color: var(--text-muted, #98a2b3);\r\n  font-size: 12px;\r\n}\r\n\r\n/* \u6811\u4E2D\u7684\u52A0\u8F7D/\u7A7A\u76EE\u5F55/\u9519\u8BEF\u72B6\u6001\u662F\u4E00\u6761\u5B50\u9879\uFF0C\u4E0D\u662F\u5360\u6EE1\u89C6\u53E3\u7684\u7A7A\u6001\u9762\u677F\u3002 */\r\n.wf-tree-state {\r\n  display: flex;\r\n  width: 100%;\r\n  align-items: center;\r\n  gap: 6px;\r\n  padding: 4px 8px;\r\n  color: var(--text-muted, #98a2b3);\r\n  font-size: 12px;\r\n  line-height: 20px;\r\n  text-align: left;\r\n}\r\n\r\n.wf-error { color: #e5484d; }\r\n\r\n/* \u2500\u2500 \u9762\u677F\u6EDA\u52A8\u533A\u7EDF\u4E00\u7EC6\u6EDA\u52A8\u6761 \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\r\n   \u9879\u76EE\u65E2\u6709 thin \u914D\u65B9\uFF08layout.css \u540C\u6B3E\u6807\u51C6\u5C5E\u6027\uFF09\uFF1A\u5168\u5C40 ::-webkit 8px \u6EDA\u52A8\u6761\r\n   \u5728\u7A84\u680F\u9762\u677F\u91CC\u663E\u5F97\u7C97\u7B28\uFF08\u7528\u6237\u53CD\u9988\uFF09\uFF0C\u7EC6\u6761 + \u534A\u900F\u660E thumb \u66F4\u534F\u8C03\u3002\r\n   Chrome 121+ \u6807\u51C6\u5C5E\u6027\u4F18\u5148\u4E8E\u5168\u5C40 ::-webkit \u89C4\u5219\uFF0C\u65E0\u9700\u79C1\u6709\u8986\u76D6\u3002 */\r\n.wf-tree,\r\n.wf-code-wrap,\r\n.wf-md,\r\n.wf-csv-wrap,\r\n.wf-docx-scroll,\r\n.wf-image-stage {\r\n  scrollbar-width: thin;\r\n  scrollbar-color: rgba(255, 255, 255, 0.16) transparent;\r\n}\r\n\r\nbody[data-theme="light"] .wf-tree,\r\nbody[data-theme="light"] .wf-code-wrap,\r\nbody[data-theme="light"] .wf-md,\r\nbody[data-theme="light"] .wf-csv-wrap,\r\nbody[data-theme="light"] .wf-docx-scroll,\r\nbody[data-theme="light"] .wf-image-stage {\r\n  scrollbar-color: rgba(0, 0, 0, 0.22) transparent;\r\n}\r\n\r\n/* \u2500\u2500 \u6587\u4EF6\u6811 \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 */\r\n\r\n.wf-tree {\r\n  display: flex;\r\n  flex: 1 1 auto;\r\n  flex-direction: column;\r\n  min-height: 0;\r\n  overflow: auto;\r\n  padding: 4px 0 12px 6px;\r\n}\r\n\r\n.wf-tree-state.wf-retry {\r\n  border: 0;\r\n  background: transparent;\r\n  color: var(--accent, #4f6bed);\r\n  cursor: pointer;\r\n  font: inherit;\r\n  font-size: 12px;\r\n}\r\n\r\n.wf-entry {\r\n  display: flex;\r\n  width: 100%;\r\n  align-items: center;\r\n  gap: 6px;\r\n  padding: 4px 8px;\r\n  border: 0;\r\n  background: transparent;\r\n  color: var(--text-primary, #1f2329);\r\n  cursor: pointer;\r\n  font: inherit;\r\n  font-size: 12px;\r\n  line-height: 20px;\r\n  text-align: left;\r\n}\r\n\r\n.wf-entry:hover { background: rgba(128, 128, 140, 0.12); }\r\n\r\n.wf-entry.wf-unsupported {\r\n  color: var(--text-muted, #98a2b3);\r\n  cursor: default;\r\n}\r\n\r\n.wf-entry.wf-unsupported:hover { background: transparent; }\r\n\r\n.wf-entry-icon {\r\n  display: inline-flex;\r\n  flex: 0 0 auto;\r\n  align-items: center;\r\n  justify-content: center;\r\n  width: 18px;\r\n  /* \u76EE\u5F55\u56FE\u6807\u4E09\u7EA7\u58A8\u8272\uFF1ADSH design-platform \u9759\u6001\u503C\uFF08\u6DF1\u8272\u4E3B\u9898 neutral-bluish-400 /\r\n     \u6D45\u8272 neutral-bluish-600\uFF09\u3002\u4E0D\u53D6 --text-muted\uFF1A\u5176\u8FD0\u884C\u65F6\u503C\u8FC7\u6D45\uFF0C\r\n     \u56FE\u6807\u5728\u4E24\u4E3B\u9898\u4E0B\u90FD\u53D1\u865A\uFF08\u7528\u6237\u53CD\u9988\uFF09\uFF0C\u9759\u6001\u503C\u4FDD\u8BC1\u4E24\u4E3B\u9898\u4E0B\u90FD\u4E0E DSH \u540C\u5BF9\u6BD4\u5EA6\u3002 */\r\n  color: rgb(173, 178, 184);\r\n}\r\n\r\nbody[data-theme="light"] .wf-entry-icon {\r\n  color: rgb(129, 133, 140);\r\n}\r\n\r\n.wf-entry-name {\r\n  min-width: 0;\r\n  overflow: hidden;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\r\n}\r\n\r\n/* \u6587\u4EF6\u7C7B\u578B\u914D\u8272\uFF08DSH design-platform \u9759\u6001 token \u503C\uFF09 */\r\n.wf-ft { display: inline-flex; line-height: 0; }\r\n.wf-ft-code, .wf-ft-html, .wf-ft-markdown { color: rgb(65, 118, 230); }\r\n.wf-ft-excel { color: rgb(34, 197, 94); }\r\n.wf-ft-image, .wf-ft-video { color: rgb(139, 118, 246); }\r\n.wf-ft-other { color: rgb(207, 211, 214); }\r\n.wf-ft-pdf { color: rgb(236, 19, 19); }\r\n.wf-ft-ppt { color: rgb(245, 158, 11); }\r\n.wf-ft-word { color: rgb(86, 134, 254); }\r\n.wf-ft-code-brand { color: inherit; }\r\n\r\n/* \u2500\u2500 \u4EE3\u7801\u89C6\u56FE \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 */\r\n\r\n.wf-code-wrap {\r\n  display: flex;\r\n  flex: 1 1 auto;\r\n  min-width: 0;\r\n  min-height: 0;\r\n  overflow: auto;\r\n  /* \u65E0\u72EC\u7ACB\u5E95\u8272\uFF1A\u878D\u5165\u9762\u677F\u80CC\u666F\uFF08\u7528\u6237\u53CD\u9988\u5E95\u677F\u989C\u8272\u4E0D\u597D\u770B\uFF09 */\r\n}\r\n\r\n.wf-gutter {\r\n  flex: 0 0 auto;\r\n  padding: 10px 8px 10px 12px;\r\n  border-right: 1px solid var(--border-color, rgba(255, 255, 255, 0.08));\r\n  color: var(--text-muted, #98a2b3);\r\n  /* Fira Code \u5728\u5F53\u524D Windows \u73AF\u5883\u672A\u5B89\u88C5\uFF1B\u4EE5\u7CFB\u7EDF\u5DF2\u5B89\u88C5\u7684 Cascadia Code \u4E3A\u9996\u9009\uFF0C\r\n     \u5E76\u7528\u7A0D\u5F3A\u5B57\u91CD\u4FDD\u8BC1\u884C\u53F7\u4E0E\u4EE3\u7801\u6B63\u6587\u7684\u7B14\u753B\u5BC6\u5EA6\u4E00\u81F4\u3002 */\r\n  font-family: "Cascadia Code", "Cascadia Mono", "Fira Code", "Source Code Pro", "JetBrains Mono", ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, monospace;\r\n  font-size: 12px;\r\n  font-weight: 600;\r\n  line-height: 1.55;\r\n  text-align: right;\r\n  user-select: none;\r\n  white-space: pre;\r\n}\r\n\r\n.wf-code {\r\n  flex: 1 1 auto;\r\n  margin: 0;\r\n  padding: 10px 16px;\r\n  font-family: "Cascadia Code", "Cascadia Mono", "Fira Code", "Source Code Pro", "JetBrains Mono", ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, monospace;\r\n  font-size: 12px;\r\n  font-weight: 600;\r\n  line-height: 1.55;\r\n  white-space: pre;\r\n}\r\n\r\n/* \u5168\u5C40 highlight.js \u4E3B\u9898\u4F1A\u7ED9 code.hljs \u52A0\u72EC\u7ACB\u80CC\u666F\u548C padding\uFF0C\u5BFC\u81F4\u4EE3\u7801\u533A\u51FA\u73B0\r\n   \u4E0E\u9762\u677F\u5E95\u8272\u4E0D\u540C\u7684\u8272\u5757\uFF1B\u5728\u672C\u9884\u89C8\u4E2D\u660E\u786E\u7EE7\u627F\u4EE3\u7801\u533A\u5B57\u91CD\u5E76\u4FDD\u6301\u900F\u660E\u3002 */\r\n.wf-code > code,\r\n.wf-code > code.hljs {\r\n  padding: 0 !important;\r\n  background: transparent !important;\r\n  font: inherit;\r\n}\r\n\r\n/* \u2500\u2500 markdown / csv / \u5BCC\u5A92\u4F53 \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 */\r\n\r\n.wf-md {\r\n  flex: 1 1 auto;\r\n  min-width: 0;\r\n  overflow: auto;\r\n  padding: 14px 18px;\r\n}\r\n\r\n.wf-csv-wrap {\r\n  display: flex;\r\n  flex-direction: column;\r\n  flex: 1 1 auto;\r\n  min-height: 0;\r\n  overflow: auto;\r\n}\r\n\r\n/* docx-preview \u8F93\u51FA\u6587\u6863\u6D41\u5BB9\u5668\uFF1A\u72EC\u7ACB\u6EDA\u52A8 + \u5E95\u8272\u886C\u6258\u5206\u9875 */\r\n.wf-docx-scroll {\r\n  flex: 1 1 auto;\r\n  min-height: 0;\r\n  overflow: auto;\r\n  background: var(--panel-bg, #111114);\r\n}\r\n\r\n.wf-docx-scroll .docx-wrapper {\r\n  padding: 16px 24px 32px;\r\n  background: transparent;\r\n}\r\n\r\n.wf-docx-scroll .docx-wrapper > section.docx {\r\n  background: #ffffff;\r\n  color: #1f2329;\r\n  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.25);\r\n  margin-bottom: 16px;\r\n}\r\n\r\n.wf-csv-table {\r\n  border-collapse: collapse;\r\n  min-width: 100%;\r\n  font-size: 12px;\r\n}\r\n\r\n.wf-csv-table td {\r\n  max-width: 320px;\r\n  overflow: hidden;\r\n  padding: 4px 10px;\r\n  border-bottom: 1px solid var(--border-color, rgba(255, 255, 255, 0.06));\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\r\n}\r\n\r\n.wf-csv-table tr.wf-csv-head td {\r\n  position: sticky;\r\n  top: 0;\r\n  background: var(--panel-bg, #141416);\r\n  color: var(--text-primary, #1f2329);\r\n  font-weight: 600;\r\n}\r\n\r\n.wf-csv-note {\r\n  padding: 8px 12px;\r\n  color: var(--text-muted, #98a2b3);\r\n  font-size: 11px;\r\n  text-align: center;\r\n}\r\n\r\n.wf-binary-frame {\r\n  flex: 1 1 auto;\r\n  width: 100%;\r\n  border: 0;\r\n  background: #ffffff;\r\n}\r\n\r\n.wf-media-stage {\r\n  display: flex;\r\n  flex: 1 1 auto;\r\n  align-items: center;\r\n  justify-content: center;\r\n  min-height: 0;\r\n  padding: 16px;\r\n}\r\n\r\n.wf-media-stage video {\r\n  max-width: 100%;\r\n  max-height: 100%;\r\n}\r\n\r\n.wf-media-audio audio { width: min(420px, 100%); }\r\n\r\n/* \u2500\u2500 \u56FE\u7247\u89C6\u56FE \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 */\r\n\r\n.wf-image-bar {\r\n  display: flex;\r\n  flex: 0 0 auto;\r\n  align-items: center;\r\n  gap: 8px;\r\n  padding: 6px 10px;\r\n  border-bottom: 1px solid var(--border-color, rgba(255, 255, 255, 0.08));\r\n}\r\n\r\n.wf-image-toggle {\r\n  padding: 2px 10px;\r\n  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.16));\r\n  border-radius: 6px;\r\n  background: transparent;\r\n  color: var(--text-secondary, #667085);\r\n  cursor: pointer;\r\n  font: inherit;\r\n  font-size: 11px;\r\n}\r\n\r\n.wf-image-toggle:hover { color: var(--text-primary, #1f2329); }\r\n\r\n.wf-image-meta {\r\n  color: var(--text-muted, #98a2b3);\r\n  font-size: 11px;\r\n}\r\n\r\n.wf-image-stage {\r\n  display: flex;\r\n  flex: 1 1 auto;\r\n  align-items: center;\r\n  justify-content: center;\r\n  min-height: 0;\r\n  overflow: auto;\r\n  padding: 12px;\r\n}\r\n\r\n.wf-image-stage img { max-width: 100%; max-height: 100%; }\r\n\r\n.wf-image-stage.is-full {\r\n  align-items: flex-start;\r\n  justify-content: flex-start;\r\n}\r\n\r\n.wf-image-stage.is-full img { max-width: none; max-height: none; }\r\n\r\n/* \u2500\u2500 \u62D6\u62FD\u505C\u9760 \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 */\r\n\r\n/* \u5B9E\u9645\u62D6\u52A8\u4E2D\uFF1A\u6E90\u9875\u7B7E\u56DE\u5230\u539F\u4F4D\u6DE1\u5316\uFF08dragstart \u65F6\u7684\u62D6\u5F71\u5FEB\u7167\u5DF2\u662F\u201C\u6D6E\u8D77\u201D\u5F62\u6001\uFF09\uFF0C\r\n   \u4E0D\u518D\u5360\u7528\u6D6E\u8D77\u6837\u5F0F\uFF0C\u907F\u514D\u6DE1\u5316\u548C\u9634\u5F71\u53E0\u52A0\u663E\u5F97\u6D51\u6D4A\u3002 */\r\n.wf-panel.is-dragging .gen-ui-surface-tab-item.is-drag-source {\r\n  opacity: 0.45;\r\n  transform: none;\r\n  box-shadow: none;\r\n}\r\n\r\n.wf-draggable-tab { cursor: pointer; position: relative; }\r\n.wf-draggable-tab .gen-ui-surface-tab { width: 100%; }\r\n.wf-tab-row { position: relative; }\r\n\r\n/* \u957F\u6309\u201C\u62FF\u8D77\u201D\uFF1A\u9875\u7B7E\u6D6E\u8D77\u5230\u5176\u4F59\u9875\u7B7E\u4E4B\u4E0A\uFF0C\u5F3A\u8C03\u8FB9\u6846\u547C\u5E94\u63D2\u5165\u7EBF\u7684\u84DD\u8272\uFF0C\r\n   \u660E\u786E\u544A\u77E5\u5DF2\u8FDB\u5165\u53EF\u62D6\u62FD\u72B6\u6001\u3002\u7AD6\u5411\u6D6E\u8D77\u4F9D\u8D56\u884C\u5BB9\u5668\u7684\u4F59\u91CF\uFF08\u89C1 .wf-tab-row\uFF09\u3002 */\r\n.wf-panel .gen-ui-surface-tab-item.is-drag-ready {\r\n  cursor: grab;\r\n  z-index: 6;\r\n  transform: translateY(-2px) scale(1.05);\r\n  border-color: rgba(107, 145, 255, 0.75);\r\n  box-shadow: 0 5px 14px rgba(0, 0, 0, 0.45);\r\n  transition: transform 130ms ease, box-shadow 130ms ease, border-color 130ms ease;\r\n}\r\n\r\nbody[data-theme="light"] .wf-panel .gen-ui-surface-tab-item.is-drag-ready {\r\n  border-color: rgba(76, 106, 219, 0.6);\r\n  box-shadow: 0 6px 16px rgba(15, 23, 42, 0.22);\r\n}\r\n\r\n.wf-panel .wf-tab-row-drop-indicator {\r\n  position: absolute;\r\n  z-index: 3;\r\n  top: 4px;\r\n  bottom: 4px;\r\n  width: 3px;\r\n  transform: translateX(-50%);\r\n  border-radius: 3px;\r\n  background: #6b91ff;\r\n  pointer-events: none;\r\n  box-shadow: 0 0 6px rgba(93, 133, 255, 0.72);\r\n}\r\n\r\n.wf-pane-body { position: relative; }\r\n\r\n.wf-pane-body.is-docking > .wf-tab-page {\r\n  /* \u76F4\u63A5\u6A21\u7CCA\u9875\u9762\u5185\u5BB9\uFF0C\u4E0D\u4F9D\u8D56 backdrop-filter \u5BF9\u4E0B\u5C42\u5408\u6210\u9762\u7684\u53D6\u6837\u3002 */\r\n  filter: blur(5px);\r\n  transition: filter 140ms ease-out;\r\n}\r\n\r\n.wf-dock-scrim {\r\n  position: absolute;\r\n  inset: 0;\r\n  z-index: 2;\r\n  /* \u534A\u900F\u660E\u5E95\u8272\u4E0E\u4E0B\u5C42\u5185\u5BB9\u7684\u76F4\u63A5\u6A21\u7CCA\u5171\u540C\u5F62\u6210\u6BDB\u73BB\u7483\uFF0C\u800C\u975E\u5355\u72EC\u7684\u53D8\u6697\u906E\u7F69\u3002 */\r\n  background: color-mix(in srgb, var(--panel-bg, #17171b) 38%, transparent);\r\n  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text-primary, #fff) 12%, transparent);\r\n  pointer-events: none;\r\n  animation: wf-dock-scrim-in 140ms ease-out both;\r\n}\r\n\r\n.wf-dock-hint {\r\n  position: absolute;\r\n  top: 0;\r\n  bottom: 0;\r\n  left: 0;\r\n  width: 50%;\r\n  box-sizing: border-box;\r\n  display: flex;\r\n  padding: 8px;\r\n  transform: none;\r\n  z-index: 3;\r\n  pointer-events: none;\r\n}\r\n\r\n.wf-dock-hint.wf-dock-right { left: 50%; }\r\n\r\n/* \u4E0A\u4E0B\u65B9\u5411\u53EA\u5141\u8BB8\u5411\u4E0B\u65B0\u589E\uFF1A\u843D\u533A\u4E25\u683C\u8986\u76D6\u5185\u5BB9\u533A\u4E0B\u534A\u90E8\u3002 */\r\n.wf-dock-hint.wf-dock-bottom {\r\n  top: 50%;\r\n  bottom: 0;\r\n  left: 0;\r\n  width: 100%;\r\n  padding: 4px;\r\n}\r\n\r\n/* DSH \u7684 dockkit \u4EE5\u5F31\u5316\u5E95\u5C42\u5185\u5BB9 + \u5185\u7F29\u843D\u533A\u5361\u7247\u8868\u8FBE\u76EE\u6807\uFF1B\u4EC5\u5F53\u524D\u843D\u533A\r\n   \u4F7F\u7528\u5F3A\u8C03\u8272\uFF0C\u907F\u514D\u84DD\u8272\u5B9E\u5E95\u906E\u6321\u6587\u4EF6\u9884\u89C8\u3002 */\r\n.wf-dock-hint.wf-dock-center {\r\n  left: 0;\r\n  width: 100%;\r\n}\r\n\r\n.wf-dock-card {\r\n  display: flex;\r\n  flex: 1 1 auto;\r\n  min-width: 0;\r\n  min-height: 0;\r\n  flex-direction: column;\r\n  align-items: center;\r\n  justify-content: center;\r\n  gap: 8px;\r\n  padding: 12px;\r\n  overflow: hidden;\r\n  border: 1.5px dashed var(--border-color, rgba(255, 255, 255, 0.24));\r\n  border-radius: 10px;\r\n  color: var(--text-secondary, #a3a3ad);\r\n  background: color-mix(in srgb, var(--panel-bg, #17171b) 22%, transparent);\r\n  transition: color 120ms ease-out, background-color 120ms ease-out, border-color 120ms ease-out;\r\n  animation: wf-dock-card-in 140ms ease-out both;\r\n}\r\n\r\n.wf-dock-hint:not(.wf-dock-center) .wf-dock-card { border-color: color-mix(in srgb, var(--border-color, #383842) 72%, transparent); }\r\n.wf-dock-hint[data-drop-active] .wf-dock-card {\r\n  color: var(--accent, #4f6bed);\r\n  border-color: color-mix(in srgb, var(--accent, #4f6bed) 86%, var(--text-primary, #fff));\r\n  background: color-mix(in srgb, var(--accent, #4f6bed) 13%, transparent);\r\n  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text-primary, #fff) 7%, transparent);\r\n}\r\n\r\n.wf-dock-glyph {\r\n  flex: none;\r\n  width: 20px;\r\n  height: 20px;\r\n}\r\n\r\n.wf-dock-label {\r\n  max-width: 100%;\r\n  overflow: hidden;\r\n  font-size: 12px;\r\n  font-weight: 500;\r\n  line-height: 1.4;\r\n  text-overflow: ellipsis;\r\n  white-space: nowrap;\r\n}\r\n\r\n@keyframes wf-dock-card-in {\r\n  from { opacity: 0; transform: scale(0.98); }\r\n  to { opacity: 1; transform: none; }\r\n}\r\n\r\n@keyframes wf-dock-scrim-in {\r\n  from { opacity: 0; }\r\n  to { opacity: 1; }\r\n}\r\n\r\n@media (prefers-reduced-motion: reduce) {\r\n  .wf-dock-scrim,\r\n  .wf-dock-card { animation: none; }\r\n}\r\n';
+var style_default = '/* \u6587\u4EF6\u9762\u677F\u6837\u5F0F\uFF08DSH \u5F0F\uFF09\u3002\n   \u9875\u7B7E\u6761\u672C\u4F53\u590D\u7528\u5168\u5C40 gen-ui-surface-tabs \u4F53\u7CFB\uFF0C\u6B64\u5904\u53EA\u505A wf \u57DF\u5185\u7684\u8986\u76D6\u4E0E\u8865\u5145\uFF1A\n   \u975E\u6FC0\u6D3B\u9875\u7B7E\u7ED9\u53EF\u89C1\u8F6E\u5ED3\uFF08\u7528\u6237\u53CD\u9988\uFF1A\u9ED8\u8BA4\u6001\u592A"\u65E0\u754C"\uFF09\u3001divider \u5E26\u53EF\u89C6\u5206\u9694\u7EBF\u3001\n   \u6587\u4EF6\u7C7B\u578B\u56FE\u6807\u914D\u8272\u53D6\u81EA DSH design-platform \u7684\u9759\u6001 token \u503C\u3002 */\n\n/* \u5BF9\u8BDD\u9875\u7B7E\u6761\uFF08.feature-panel-scene*\uFF09\u6837\u5F0F\u7EDF\u4E00\u5728\u58F3\u5C42 public/styles/layout.css\uFF1B\n   \u56FA\u5B9A\u5165\u53E3\u662F\u5F53\u524D\u9875\u7B7E\u4E0A\u7684\u52A0\u53F7\uFF08files-scenes.js \u6E32\u67D3\uFF09\uFF0C\u9762\u677F\u5185\u90E8\u4E0D\u518D\u6709\u73B0\u573A\u76F8\u5173 UI\u3002 */\n\n.wf-panel {\n  display: flex;\n  flex-direction: column;\n  height: 100%;\n  min-height: 0;\n  overflow: hidden;\n  /* \u6587\u6863\u9884\u89C8\u5E95\u8272\u4E0E\u9875\u9762\u8D28\u611F\uFF1A\u53D6 DSH design-platform \u7684\n     bg-document-preview\uFF08\u6DF1 rgb(21,21,23) / \u6D45 rgb(235,238,242)\uFF09\u4E0E\n     elevation-prominent \u7684\u9875\u5F71\u53E3\u5F84\uFF0C\u53CC\u4E3B\u9898\u6210\u5BF9\u5B9A\u4E49\u3002 */\n  --wf-doc-bg: #151517;\n  --wf-page-shadow: 0 2px 12px rgba(0, 0, 0, 0.5);\n  --wf-doc-font: "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", -apple-system, "Segoe UI", sans-serif;\n}\n\nbody[data-theme="light"] .wf-panel {\n  --wf-doc-bg: #ebecf2;\n  --wf-page-shadow: 0 2px 12px rgba(15, 23, 42, 0.16);\n}\n\n.wf-pane-row {\n  display: flex;\n  flex-direction: row;\n  flex: 1 1 auto;\n  min-height: 0;\n}\n\n.wf-pane-row.is-vertical {\n  flex-direction: column;\n}\n\n.wf-pane {\n  display: flex;\n  flex-direction: column;\n  min-width: 0;\n  min-height: 0;\n  overflow: hidden;\n}\n\n/* \u2500\u2500 \u9875\u7B7E\u6761\u8986\u76D6\uFF1A\u975E\u6FC0\u6D3B\u6001\u7ED9\u8F6E\u5ED3 \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 */\n\n/* \u5206\u884C\u5E03\u5C40\uFF1AcomputeTabRows \u786E\u5B9A\u6027\u5206\u884C\uFF08\u5BB9\u91CF = ceil(\u5BB9\u5668\u5BBD/104)\uFF09\uFF0C\u5916\u5C42\u7EB5\u5411\u5806\u53E0\u3002\n   \u884C\u662F\u6A2A\u5411\u6EDA\u52A8\u5BB9\u5668\uFF08\u6EDA\u52A8\u6761\u9690\u85CF\uFF09\uFF1A\u88AB\u88C1\u5207\u7684\u9875\u7B7E\u4ECD\u53EF\u8BBF\u95EE\u2014\u2014\u9009\u4E2D\u65F6 JS \u81EA\u52A8\n   \u6EDA\u52A8\u8BA9\u5B83\u5B8C\u6574\u9732\u51FA\uFF08\u542B\u5173\u95ED\u6309\u94AE\uFF09\uFF0C\u70B9\u5DE6\u4FA7\u90E8\u5206\u9690\u85CF\u9879\u5219\u5F80\u56DE\u6EDA\u52A8\u3002 */\n.wf-tabstrip {\n  display: flex;\n  flex-direction: column;\n  flex-wrap: nowrap;\n  /* \u8986\u76D6\u5168\u5C40 .gen-ui-surface-tabs \u7684 align-items: flex-end\uFF1A\n     \u5217\u65B9\u5411\u4E0B\u5B83\u4F1A\u8BA9\u884C\u6536\u7F29\u5230\u5185\u5BB9\u5BBD\u5E76\u6C34\u5E73\u53F3\u5BF9\u9F50\uFF0C\u5DE6\u4FA7\u51FA\u73B0\u83AB\u540D\u7A7A\u6863 */\n  align-items: stretch;\n  /* \u9996\u884C\u6D6E\u8D77\u4F59\u91CF\uFF1A\u5438\u6536\u9996\u884C margin-top \u7684\u4E0A\u63A2\uFF0C\u4F7F\u6D6E\u8D77/\u9634\u5F71\u5B8C\u6574\u843D\u5728\n     .wf-panel\uFF08overflow: hidden\uFF09\u4EE5\u5185\u2014\u2014\u5426\u5219\u6070\u597D\u5728\u9762\u677F\u9876\u7F18\n     \uFF08\u5BBF\u4E3B\u9762\u677F title \u533A\u4E0B\u6CBF\uFF09\u88AB\u88C1\u6389\u3002 */\n  padding-top: 2px;\n}\n\n/* \u5360\u6EE1\uFF1A\u5265\u6389\u590D\u7528 .settings-tab-bar \u7684\u80F6\u56CA\u5BB9\u5668\u6837\u5F0F\uFF084px padding + \u534A\u900F\u660E\u5E95\n   + 12px \u5706\u89D2\uFF09\u2014\u2014\u9875\u7B7E\u4E0E\u5185\u5BB9\u533A\u9876\u6EE1\u5206\u533A\u8FB9\u7F18\uFF08\u7528\u6237\u53CD\u9988\u5206\u533A\u4E24\u4FA7\u6709\u5185\u8FB9\u8DDD\uFF09\u3002 */\n.wf-tabstrip.settings-tab-bar {\n  padding: 0;\n  background: transparent;\n  border-radius: 0;\n}\n\n/* \u6587\u4EF6\u9762\u677F\u4E13\u7528\u7D27\u51D1\u9875\u7B7E\uFF1A\u51CF\u5C11\u9875\u7B7E\u6761\u4E0E\u9875\u7B7E\u672C\u8EAB\u5360\u636E\u7684\u5782\u76F4\u7A7A\u95F4\u3002 */\n.wf-panel .wf-tabstrip .gen-ui-surface-tab-item {\n  height: 30px;\n  min-height: 30px;\n  padding-block: 2px;\n}\n\n.wf-panel .wf-tabstrip .gen-ui-surface-tab {\n  min-height: 22px;\n  padding-block: 2px;\n  font-size: 11px;\n}\n\n.wf-panel .wf-tabstrip .gen-ui-surface-tab-close {\n  width: 20px;\n  height: 20px;\n  font-size: 13px;\n}\n\n/* \u53F3\u7F18\u5360\u6EE1\uFF1A\u58F3\u5C42 .feature-panel-body \u7EDF\u4E00 margin-right: 6px \u662F\u6EDA\u52A8\u6761\u9884\u7559\uFF0C\n   \u672C\u9762\u677F\u5185\u90E8\u81EA\u7BA1\u6EDA\u52A8\u3001body \u6C38\u4E0D\u6EDA\u52A8\uFF0C6px \u662F\u7EAF\u635F\u8017\u3002\u6302\u8F7D\u7C7B\u7531 app-ui.js\n   mountBody \u6DFB\u52A0/\u79FB\u9664\u3002 */\n.feature-panel-body.wf-full-bleed {\n  margin-right: 0;\n}\n\n.wf-tab-row {\n  display: flex;\n  flex-wrap: nowrap;\n  min-width: 0;\n  width: 100%;\n  overflow-x: auto;\n  scrollbar-width: none;\n  /* \u957F\u6309\u201C\u62FF\u8D77\u201D\u7684\u6D6E\u8D77\u4E0E\u9634\u5F71\u9700\u8981\u7AD6\u5411\u4F59\u91CF\uFF1A\u884C\u662F\u6EDA\u52A8\u5BB9\u5668\uFF0C\u4E24\u4E2A\u65B9\u5411\u90FD\u4F1A\u88C1\u526A\n     \u6EA2\u51FA\u5185\u5BB9\u3002padding \u628A\u4F59\u91CF\u7EB3\u5165\u88C1\u526A\u533A\uFF08\u53EF\u89C1\uFF09\uFF0C\u8D1F margin \u62B5\u6D88\u5E03\u5C40\u589E\u9AD8\u2014\u2014\n     \u91CD\u53E0\u533A\u53EA\u53D1\u751F\u5728\u76F8\u90BB\u884C\u7684\u7A7A\u767D padding \u5E26\uFF0C\u5185\u5BB9\u6761\u5E26\u4ECD\u9996\u5C3E\u76F8\u63A5\uFF1B\n     \u9996\u884C\u7684\u4E0A\u63A2\u7531 .wf-tabstrip \u7684 padding-top \u5438\u6536\u3002 */\n  padding-top: 2px;\n  padding-bottom: 1px;\n  margin-top: -2px;\n  margin-bottom: -1px;\n}\n\n.wf-tab-row::-webkit-scrollbar {\n  display: none;\n}\n\n/* \u591A\u884C\u6A21\u5F0F\uFF1A\u9875\u7B7E\u4EE5\u538B\u7F29\u6863\uFF08104 = \u5168\u5C40 tab-item min-width\uFF09\u4E3A\u57FA\u51C6\uFF1B\n   \u975E\u672B\u884C\u7981\u6B62\u62C9\u4F38\uFF08flex-grow 0\uFF09\u2014\u2014\u62C9\u4F38\u4F1A\u628A\u884C\u5C3E\u9875\u7B7E\u5B8C\u5168\u63A8\u51FA\u884C\u5916\uFF0C\n   \u8FDD\u53CD\u300C\u53EA\u6709\u5B8C\u5168\u9690\u85CF\u624D\u6362\u884C\u300D\u7684\u5206\u884C\u5224\u5B9A\uFF1B\u672B\u884C\uFF08\u884C\u5C3E\uFF09\u5141\u8BB8\u62C9\u4F38\u94FA\u6EE1\u3002 */\n.wf-tabstrip.is-multi .wf-tab-row .gen-ui-surface-tab-item {\n  flex: 1 1 88px;\n  min-width: 88px;\n  max-width: 160px;\n}\n\n.wf-tabstrip.is-multi .wf-tab-row:not(:last-child) .gen-ui-surface-tab-item {\n  flex-grow: 0;\n}\n\n.wf-panel .gen-ui-surface-tab-item.is-active {\n  /* \u6CBF\u7528\u5171\u4EAB\u9875\u7B7E\u7684\u539F\u6709\u5F62\u6001\uFF0C\u53EA\u589E\u5F3A\u539F\u6709\u5E95\u8272\u3001\u8FB9\u6846\u4E0E\u6587\u5B57\u7684\u660E\u6697\u5BF9\u6BD4\u3002 */\n  border-color: #56565f;\n  background: #303036;\n  color: #ffffff;\n}\n\n.wf-panel .gen-ui-surface-tab-item.is-active .gen-ui-surface-tab {\n  color: #ffffff;\n}\n\nbody[data-theme="light"] .wf-panel .gen-ui-surface-tab-item.is-active {\n  border-color: #aeb9d3;\n  background: #e3e8f2;\n  color: #172033;\n}\n\nbody[data-theme="light"] .wf-panel .gen-ui-surface-tab-item.is-active .gen-ui-surface-tab {\n  color: #172033;\n}\n\n.wf-panel .gen-ui-surface-tab-item:not(.is-active) {\n  border-color: #2b2b30;\n  background: #141416;\n}\n\n.wf-panel .gen-ui-surface-tab-item:not(.is-active):hover {\n  background: #1d1d21;\n}\n\nbody[data-theme="light"] .wf-panel .gen-ui-surface-tab-item:not(.is-active) {\n  border-color: #d9d9de;\n  background: #ececee;\n}\n\nbody[data-theme="light"] .wf-panel .gen-ui-surface-tab-item:not(.is-active):hover {\n  background: #e3e3e6;\n}\n\n.wf-tab-icon {\n  display: inline-flex;\n  flex: 0 0 auto;\n  align-items: center;\n  margin-right: 6px;\n}\n\n.wf-tab-label {\n  min-width: 0;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n\n/* \u2500\u2500 divider\uFF1A\u53EF\u89C6\u5206\u9694\u7EBF + \u62D6\u62FD\u70ED\u533A \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 */\n\n.wf-divider {\n  position: relative;\n  z-index: 1;\n  flex: 0 0 1px;\n  cursor: col-resize;\n  touch-action: none;\n}\n\n.wf-divider.is-horizontal {\n  flex-basis: 1px;\n  cursor: row-resize;\n}\n\n/* \u53EF\u89C1\u5206\u9694\u7EBF\u5360\u636E pane \u8FB9\u754C\u672C\u8EAB\uFF0C\u4E0D\u7559\u4E24\u4FA7\u89C6\u89C9\u7A7A\u9699\uFF1B\u900F\u660E\u4F2A\u5143\u7D20\u5411\u4E24\u4FA7\u6269\u5C55\n   \u62D6\u62FD\u70ED\u533A\uFF0C\u4FDD\u6301\u6613\u4E8E\u6293\u53D6\u7684 9px \u547D\u4E2D\u8303\u56F4\u3002 */\n.wf-divider::before {\n  content: "";\n  position: absolute;\n  top: 0;\n  bottom: 0;\n  left: -4px;\n  width: 9px;\n  cursor: col-resize;\n}\n\n.wf-divider.is-horizontal::before {\n  top: -4px;\n  right: 0;\n  bottom: auto;\n  left: 0;\n  width: auto;\n  height: 9px;\n  cursor: row-resize;\n}\n\n.wf-divider::after {\n  content: "";\n  position: absolute;\n  top: 0;\n  bottom: 0;\n  left: 0;\n  width: 1px;\n  background: var(--border-color, rgba(255, 255, 255, 0.1));\n  transition: background 120ms ease, box-shadow 120ms ease;\n}\n\n.wf-divider.is-horizontal::after {\n  top: 0;\n  right: 0;\n  bottom: auto;\n  left: 0;\n  width: auto;\n  height: 1px;\n}\n\n.wf-divider:hover::after,\n.wf-divider:active::after {\n  background: var(--accent, #4f6bed);\n  box-shadow: 0 0 0 0.5px var(--accent, #4f6bed);\n}\n\n.wf-pane-row.is-vertical .wf-pane {\n  width: 100%;\n}\n\n/* \u2500\u2500 pane \u5185\u5BB9\u533A \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 */\n\n.wf-pane-body {\n  position: relative;\n  display: flex;\n  flex: 1 1 auto;\n  min-height: 0;\n  overflow: hidden;\n}\n\n/* \u9875\u7B7E\u5185\u5BB9\u5217\u5F0F\u6392\u5217\uFF1A\u591A\u6BB5\u5F0F\u89C6\u56FE\uFF08\u5982\u6587\u6863\u5DE5\u5177\u6761 + \u5185\u5BB9\u533A\uFF09\u4E0A\u4E0B\u5806\u53E0\uFF0C\n   \u5355\u6BB5\u5F0F\u89C6\u56FE\uFF08\u4EE3\u7801/\u8868\u683C/\u5A92\u4F53\uFF09\u7167\u5E38\u7531\u81EA\u8EAB flex:1 \u6491\u6EE1\u3002 */\n.wf-tab-page {\n  display: flex;\n  flex-direction: column;\n  flex: 1 1 auto;\n  min-width: 0;\n  min-height: 0;\n  overflow: hidden;\n}\n\n.wf-empty {\n  display: flex;\n  flex: 1 1 auto;\n  align-items: center;\n  justify-content: center;\n  padding: 24px 12px;\n  color: var(--text-muted, #98a2b3);\n  font-size: 12px;\n}\n\n/* \u6811\u4E2D\u7684\u52A0\u8F7D/\u7A7A\u76EE\u5F55/\u9519\u8BEF\u72B6\u6001\u662F\u4E00\u6761\u5B50\u9879\uFF0C\u4E0D\u662F\u5360\u6EE1\u89C6\u53E3\u7684\u7A7A\u6001\u9762\u677F\u3002 */\n.wf-tree-state {\n  display: flex;\n  width: 100%;\n  align-items: center;\n  gap: 6px;\n  padding: 4px 8px;\n  color: var(--text-muted, #98a2b3);\n  font-size: 12px;\n  line-height: 20px;\n  text-align: left;\n}\n\n.wf-error { color: #e5484d; }\n\n/* \u2500\u2500 \u9762\u677F\u6EDA\u52A8\u533A\u7EDF\u4E00\u7EC6\u6EDA\u52A8\u6761 \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n   \u9879\u76EE\u65E2\u6709 thin \u914D\u65B9\uFF08layout.css \u540C\u6B3E\u6807\u51C6\u5C5E\u6027\uFF09\uFF1A\u5168\u5C40 ::-webkit 8px \u6EDA\u52A8\u6761\n   \u5728\u7A84\u680F\u9762\u677F\u91CC\u663E\u5F97\u7C97\u7B28\uFF08\u7528\u6237\u53CD\u9988\uFF09\uFF0C\u7EC6\u6761 + \u534A\u900F\u660E thumb \u66F4\u534F\u8C03\u3002\n   Chrome 121+ \u6807\u51C6\u5C5E\u6027\u4F18\u5148\u4E8E\u5168\u5C40 ::-webkit \u89C4\u5219\uFF0C\u65E0\u9700\u79C1\u6709\u8986\u76D6\u3002 */\n.wf-tree,\n.wf-code-wrap,\n.wf-md,\n.wf-csv-wrap,\n.wf-docx-scroll,\n.wf-image-stage {\n  scrollbar-width: thin;\n  scrollbar-color: rgba(255, 255, 255, 0.16) transparent;\n}\n\nbody[data-theme="light"] .wf-tree,\nbody[data-theme="light"] .wf-code-wrap,\nbody[data-theme="light"] .wf-md,\nbody[data-theme="light"] .wf-csv-wrap,\nbody[data-theme="light"] .wf-docx-scroll,\nbody[data-theme="light"] .wf-image-stage {\n  scrollbar-color: rgba(0, 0, 0, 0.22) transparent;\n}\n\n/* \u2500\u2500 \u6587\u4EF6\u6811 \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 */\n\n.wf-tree {\n  display: flex;\n  flex: 1 1 auto;\n  flex-direction: column;\n  min-height: 0;\n  overflow: auto;\n  padding: 4px 0 12px 6px;\n}\n\n.wf-tree-state.wf-retry {\n  border: 0;\n  background: transparent;\n  color: var(--accent, #4f6bed);\n  cursor: pointer;\n  font: inherit;\n  font-size: 12px;\n}\n\n.wf-entry {\n  display: flex;\n  width: 100%;\n  align-items: center;\n  gap: 6px;\n  padding: 4px 8px;\n  border: 0;\n  background: transparent;\n  color: var(--text-primary, #1f2329);\n  cursor: pointer;\n  font: inherit;\n  font-size: 12px;\n  line-height: 20px;\n  text-align: left;\n}\n\n.wf-entry:hover { background: rgba(128, 128, 140, 0.12); }\n\n.wf-entry.wf-unsupported {\n  color: var(--text-muted, #98a2b3);\n  cursor: default;\n}\n\n.wf-entry.wf-unsupported:hover { background: transparent; }\n\n.wf-entry-icon {\n  display: inline-flex;\n  flex: 0 0 auto;\n  align-items: center;\n  justify-content: center;\n  width: 18px;\n  /* \u76EE\u5F55\u56FE\u6807\u4E09\u7EA7\u58A8\u8272\uFF1ADSH design-platform \u9759\u6001\u503C\uFF08\u6DF1\u8272\u4E3B\u9898 neutral-bluish-400 /\n     \u6D45\u8272 neutral-bluish-600\uFF09\u3002\u4E0D\u53D6 --text-muted\uFF1A\u5176\u8FD0\u884C\u65F6\u503C\u8FC7\u6D45\uFF0C\n     \u56FE\u6807\u5728\u4E24\u4E3B\u9898\u4E0B\u90FD\u53D1\u865A\uFF08\u7528\u6237\u53CD\u9988\uFF09\uFF0C\u9759\u6001\u503C\u4FDD\u8BC1\u4E24\u4E3B\u9898\u4E0B\u90FD\u4E0E DSH \u540C\u5BF9\u6BD4\u5EA6\u3002 */\n  color: rgb(173, 178, 184);\n}\n\nbody[data-theme="light"] .wf-entry-icon {\n  color: rgb(129, 133, 140);\n}\n\n.wf-entry-name {\n  min-width: 0;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n\n/* \u6587\u4EF6\u7C7B\u578B\u914D\u8272\uFF08DSH design-platform \u9759\u6001 token \u503C\uFF09 */\n.wf-ft { display: inline-flex; line-height: 0; }\n.wf-ft-code, .wf-ft-html, .wf-ft-markdown { color: rgb(65, 118, 230); }\n.wf-ft-excel { color: rgb(34, 197, 94); }\n.wf-ft-image, .wf-ft-video { color: rgb(139, 118, 246); }\n.wf-ft-other { color: rgb(207, 211, 214); }\n.wf-ft-pdf { color: rgb(236, 19, 19); }\n.wf-ft-ppt { color: rgb(245, 158, 11); }\n.wf-ft-word { color: rgb(86, 134, 254); }\n.wf-ft-code-brand { color: inherit; }\n\n/* \u2500\u2500 \u4EE3\u7801\u89C6\u56FE \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 */\n\n.wf-code-wrap {\n  display: flex;\n  flex: 1 1 auto;\n  min-width: 0;\n  min-height: 0;\n  overflow: auto;\n  /* \u65E0\u72EC\u7ACB\u5E95\u8272\uFF1A\u878D\u5165\u9762\u677F\u80CC\u666F\uFF08\u7528\u6237\u53CD\u9988\u5E95\u677F\u989C\u8272\u4E0D\u597D\u770B\uFF09 */\n}\n\n.wf-gutter {\n  flex: 0 0 auto;\n  padding: 10px 8px 10px 12px;\n  border-right: 1px solid var(--border-color, rgba(255, 255, 255, 0.08));\n  color: var(--text-muted, #98a2b3);\n  /* Fira Code \u5728\u5F53\u524D Windows \u73AF\u5883\u672A\u5B89\u88C5\uFF1B\u4EE5\u7CFB\u7EDF\u5DF2\u5B89\u88C5\u7684 Cascadia Code \u4E3A\u9996\u9009\uFF0C\n     \u5E76\u7528\u7A0D\u5F3A\u5B57\u91CD\u4FDD\u8BC1\u884C\u53F7\u4E0E\u4EE3\u7801\u6B63\u6587\u7684\u7B14\u753B\u5BC6\u5EA6\u4E00\u81F4\u3002 */\n  font-family: "Cascadia Code", "Cascadia Mono", "Fira Code", "Source Code Pro", "JetBrains Mono", ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, monospace;\n  font-size: 12px;\n  font-weight: 600;\n  line-height: 1.55;\n  text-align: right;\n  user-select: none;\n  white-space: pre;\n}\n\n.wf-code {\n  flex: 1 1 auto;\n  margin: 0;\n  padding: 10px 16px;\n  font-family: "Cascadia Code", "Cascadia Mono", "Fira Code", "Source Code Pro", "JetBrains Mono", ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, monospace;\n  font-size: 12px;\n  font-weight: 600;\n  line-height: 1.55;\n  white-space: pre;\n}\n\n/* \u5168\u5C40 highlight.js \u4E3B\u9898\u4F1A\u7ED9 code.hljs \u52A0\u72EC\u7ACB\u80CC\u666F\u548C padding\uFF0C\u5BFC\u81F4\u4EE3\u7801\u533A\u51FA\u73B0\n   \u4E0E\u9762\u677F\u5E95\u8272\u4E0D\u540C\u7684\u8272\u5757\uFF1B\u5728\u672C\u9884\u89C8\u4E2D\u660E\u786E\u7EE7\u627F\u4EE3\u7801\u533A\u5B57\u91CD\u5E76\u4FDD\u6301\u900F\u660E\u3002 */\n.wf-code > code,\n.wf-code > code.hljs {\n  padding: 0 !important;\n  background: transparent !important;\n  font: inherit;\n}\n\n/* \u2500\u2500 markdown / csv / \u5BCC\u5A92\u4F53 \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 */\n\n.wf-md {\n  flex: 1 1 auto;\n  min-width: 0;\n  overflow: auto;\n  padding: 14px 18px;\n}\n\n.wf-csv-wrap {\n  display: flex;\n  flex-direction: column;\n  flex: 1 1 auto;\n  min-height: 0;\n  overflow: auto;\n}\n\n/* Word \u6587\u6863\u6D41\uFF1A\u6EDA\u52A8\u4E0E\u56DB\u5468\u7559\u767D\u7531\u5916\u6846\u627F\u62C5\uFF0C\u9875\u9762\u7F29\u653E\u4E0D\u6539\u53D8\u7559\u767D\u3002\n   scrollbar-gutter: stable \u8BA9\u300C\u51FA\u73B0\u7EB5\u5411\u6EDA\u52A8\u6761 \u2192 \u53EF\u7528\u5BBD\u53D8\u5C0F \u2192 \u9875\u66F4\u77EE \u2192\n   \u6EDA\u52A8\u6761\u6D88\u5931\u300D\u7684\u6765\u56DE\u6296\u52A8\u53EA\u53D1\u751F\u4E00\u6B21\u3002 */\n.wf-docx-scroll {\n  flex: 1 1 auto;\n  min-height: 0;\n  padding: 12px;\n  overflow: auto;\n  background: var(--wf-doc-bg);\n  scrollbar-gutter: stable;\n}\n\n/* \u9875\u5BB9\u5668\uFF1A\u5BBD\u5EA6\u8DDF\u968F\u9875\u81EA\u8EAB\uFF08Word \u9875\u9762 96dpi \u5BBD\uFF09\uFF0C\u6574\u9875\u5BBD\u5EA6\u7531 JS \u91CF\u51FA\u540E\n   \u4F5C\u4E3A 100% \u57FA\u51C6\u3002\u7A84\u9762\u677F\u4E0B\u6309\u6BD4\u4F8B\u7F29\u5C0F\u6574\u9875\uFF0C\u800C\u4E0D\u662F\u8BA9\u6B63\u6587\u6309\u7A84\u680F\u91CD\u6392\u3002 */\n.wf-docx-pages {\n  display: flex;\n  flex-direction: column;\n  align-items: center;\n  gap: 12px;\n  width: max-content;\n  max-width: none;\n  margin: 0 auto;\n  font-family: var(--wf-doc-font);\n}\n\n/* docx-preview \u4EA7\u51FA\u7684\u6BCF\u4E00\u9875\uFF1A\u7EB8\u5F20\u672C\u8EAB\u5360\u6EE1\u9875\u5BBD\u3001\u767D\u5E95 + \u9875\u5F71\u3002\n   \u7F29\u653E\u5728\u300C\u9875\u300D\u4E0A\u800C\u4E0D\u662F\u9875\u5BB9\u5668\u4E0A\u2014\u2014\u9875\u95F4\u8DDD\u4FDD\u6301\u56FA\u5B9A 12px\uFF0C\u4E0D\u968F\u500D\u7387\u53D8\u5927\u53D8\u5C0F\u3002 */\n.wf-docx-pages > section {\n  flex: none;\n  background: #ffffff;\n  color: #1f2329;\n  box-shadow: var(--wf-page-shadow);\n  zoom: var(--wf-docx-scale, 1);\n}\n\n.wf-csv-table {\n  border-collapse: collapse;\n  min-width: 100%;\n  font-size: 12px;\n}\n\n.wf-csv-table td {\n  max-width: 320px;\n  overflow: hidden;\n  padding: 4px 10px;\n  border-bottom: 1px solid var(--border-color, rgba(255, 255, 255, 0.06));\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n\n.wf-csv-table tr.wf-csv-head td {\n  position: sticky;\n  top: 0;\n  background: var(--panel-bg, #141416);\n  color: var(--text-primary, #1f2329);\n  font-weight: 600;\n}\n\n.wf-csv-note {\n  padding: 8px 12px;\n  color: var(--text-muted, #98a2b3);\n  font-size: 11px;\n  text-align: center;\n}\n\n.wf-binary-frame {\n  flex: 1 1 auto;\n  width: 100%;\n  border: 0;\n  background: #ffffff;\n}\n\n.wf-media-stage {\n  display: flex;\n  flex: 1 1 auto;\n  align-items: center;\n  justify-content: center;\n  min-height: 0;\n  padding: 16px;\n}\n\n.wf-media-stage video {\n  max-width: 100%;\n  max-height: 100%;\n}\n\n.wf-media-audio audio { width: min(420px, 100%); }\n\n/* \u2500\u2500 \u6587\u6863\u89C6\u56FE\uFF08\u56FE\u7247 / Word \u5171\u7528\uFF09\uFF1A\u5DE5\u5177\u6761 + \u5185\u5BB9\u533A \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n   \u5DE5\u5177\u6761\u662F\u5185\u5BB9\u533A\u7684\u4E0A\u4E00\u884C\u5144\u5F1F\u8282\u70B9\uFF08\u5217\u65B9\u5411\u6392\u5217\uFF09\u3002\u6B64\u524D\u4E24\u8005\u76F4\u63A5\u6302\u5728 flex \u884C\n   \u5BB9\u5668\u91CC\uFF0C\u5DE5\u5177\u6761\u88AB\u538B\u6210\u5DE6\u4FA7\u7AD6\u6761\u3001\u56FE\u7247\u53EA\u5269 357px \u5BBD\u2014\u2014\u5217\u5F0F\u5BB9\u5668\u662F\u5E03\u5C40\u524D\u63D0\u3002 */\n.wf-doc-view {\n  display: flex;\n  flex-direction: column;\n  flex: 1 1 auto;\n  min-width: 0;\n  min-height: 0;\n}\n\n/* \u6587\u6863\u5DE5\u5177\u6761\uFF1A\u5DE6\u4FA7\u5C3A\u5BF8/\u9875\u6570\uFF0C\u53F3\u4FA7\u7F29\u653E\u6863\u4F4D + \u9002\u5E94\u5BBD\u5EA6\u5F00\u5173 */\n.wf-doc-bar {\n  display: flex;\n  flex: 0 0 auto;\n  align-items: center;\n  justify-content: space-between;\n  gap: 8px;\n  padding: 6px 10px;\n  border-bottom: 1px solid var(--border-color, rgba(255, 255, 255, 0.08));\n  color: var(--text-muted, #98a2b3);\n  font-size: 11px;\n  line-height: 16px;\n}\n\n.wf-doc-meta {\n  min-width: 0;\n  overflow: hidden;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n\n.wf-doc-zoom {\n  display: flex;\n  flex: 0 0 auto;\n  align-items: center;\n  gap: 2px;\n}\n\n.wf-doc-step {\n  display: inline-flex;\n  width: 22px;\n  height: 22px;\n  align-items: center;\n  justify-content: center;\n  padding: 0;\n  border: 0;\n  border-radius: 6px;\n  background: transparent;\n  color: var(--text-secondary, #667085);\n  cursor: pointer;\n}\n\n.wf-doc-step:hover {\n  background: var(--hover-bg, rgba(255, 255, 255, 0.06));\n  color: var(--text-primary, #1f2329);\n}\n\n.wf-doc-zoom-value {\n  min-width: 38px;\n  color: var(--text-secondary, #667085);\n  font-variant-numeric: tabular-nums;\n  text-align: center;\n}\n\n.wf-doc-fit {\n  padding: 2px 8px;\n  border: 1px solid var(--border-color, rgba(255, 255, 255, 0.16));\n  border-radius: 6px;\n  background: transparent;\n  color: var(--text-secondary, #667085);\n  cursor: pointer;\n  font: inherit;\n  font-size: 11px;\n}\n\n.wf-doc-fit:hover { color: var(--text-primary, #1f2329); }\n\n.wf-doc-fit.is-active {\n  border-color: rgba(99, 145, 255, 0.55);\n  background: rgba(99, 145, 255, 0.16);\n  color: var(--text-primary, #1f2329);\n}\n\n/* Word \u6E32\u67D3\u4E2D\uFF1A\u5C45\u4E2D\u6587\u6848\u6D6E\u5728\u672A\u5C31\u7EEA\u7684\u9875\u5BB9\u5668\u4E4B\u4E0A\uFF0C\u907F\u514D\u7A7A\u767D\u7B49\u5F85 */\n.wf-docx-stage {\n  position: relative;\n  display: flex;\n  flex: 1 1 auto;\n  min-height: 0;\n}\n\n.wf-docx-status {\n  position: absolute;\n  inset: 0;\n  display: flex;\n  align-items: center;\n  justify-content: center;\n  color: var(--text-secondary, #667085);\n  font-size: 12px;\n  pointer-events: none;\n}\n\n/* \u2500\u2500 \u56FE\u7247\u89C6\u56FE \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n   \u5E27\uFF08frame\uFF09\u8DDF\u968F\u6EDA\u52A8\u533A\u5BBD\u9AD8\uFF1A\u5C0F\u4E8E\u89C6\u53E3\u7684\u56FE\u88AB margin:auto \u5C45\u4E2D\uFF1B\u5927\u4E8E\u89C6\u53E3\n   \u7684\u56FE\u6491\u5F00\u5E27\u5E76\u6EDA\u52A8\uFF0C\u5BBD\u56FE\u4E0D\u4F1A\u51FA\u73B0\u300C\u5DE6\u53F3\u90FD\u88C1\u6389\u3001\u5DE6\u8FB9\u6EDA\u4E0D\u56DE\u6765\u300D\u7684\u5C45\u4E2D\u6EA2\u51FA\u3002 */\n.wf-image-stage {\n  display: flex;\n  flex: 1 1 auto;\n  min-height: 0;\n  padding: 12px;\n  overflow: auto;\n  scrollbar-gutter: stable;\n}\n\n.wf-image-stage.is-pannable { cursor: grab; }\n\n.wf-image-stage.is-panning {\n  cursor: grabbing;\n  user-select: none;\n}\n\n.wf-image-frame {\n  display: flex;\n  box-sizing: border-box;\n  width: 100%;\n  min-width: 100%;\n  height: max-content;\n  min-height: 100%;\n}\n\n.wf-image-surface {\n  display: block;\n  flex: none;\n  margin: auto;\n}\n\n.wf-image-surface img {\n  display: block;\n  width: 100%;\n  height: auto;\n  max-width: none;\n  border-radius: 8px;\n  user-select: none;\n  -webkit-user-drag: none;\n}\n\n/* \u2500\u2500 \u62D6\u62FD\u505C\u9760 \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500 */\n\n/* \u5B9E\u9645\u62D6\u52A8\u4E2D\uFF1A\u6E90\u9875\u7B7E\u56DE\u5230\u539F\u4F4D\u6DE1\u5316\uFF08dragstart \u65F6\u7684\u62D6\u5F71\u5FEB\u7167\u5DF2\u662F\u201C\u6D6E\u8D77\u201D\u5F62\u6001\uFF09\uFF0C\n   \u4E0D\u518D\u5360\u7528\u6D6E\u8D77\u6837\u5F0F\uFF0C\u907F\u514D\u6DE1\u5316\u548C\u9634\u5F71\u53E0\u52A0\u663E\u5F97\u6D51\u6D4A\u3002 */\n.wf-panel.is-dragging .gen-ui-surface-tab-item.is-drag-source {\n  opacity: 0.45;\n  transform: none;\n  box-shadow: none;\n}\n\n.wf-draggable-tab { cursor: pointer; position: relative; }\n.wf-draggable-tab .gen-ui-surface-tab { width: 100%; }\n.wf-tab-row { position: relative; }\n\n/* \u957F\u6309\u201C\u62FF\u8D77\u201D\uFF1A\u9875\u7B7E\u6D6E\u8D77\u5230\u5176\u4F59\u9875\u7B7E\u4E4B\u4E0A\uFF0C\u5F3A\u8C03\u8FB9\u6846\u547C\u5E94\u63D2\u5165\u7EBF\u7684\u84DD\u8272\uFF0C\n   \u660E\u786E\u544A\u77E5\u5DF2\u8FDB\u5165\u53EF\u62D6\u62FD\u72B6\u6001\u3002\u7AD6\u5411\u6D6E\u8D77\u4F9D\u8D56\u884C\u5BB9\u5668\u7684\u4F59\u91CF\uFF08\u89C1 .wf-tab-row\uFF09\u3002 */\n.wf-panel .gen-ui-surface-tab-item.is-drag-ready {\n  cursor: grab;\n  z-index: 6;\n  transform: translateY(-2px) scale(1.05);\n  border-color: rgba(107, 145, 255, 0.75);\n  box-shadow: 0 5px 14px rgba(0, 0, 0, 0.45);\n  transition: transform 130ms ease, box-shadow 130ms ease, border-color 130ms ease;\n}\n\nbody[data-theme="light"] .wf-panel .gen-ui-surface-tab-item.is-drag-ready {\n  border-color: rgba(76, 106, 219, 0.6);\n  box-shadow: 0 6px 16px rgba(15, 23, 42, 0.22);\n}\n\n.wf-panel .wf-tab-row-drop-indicator {\n  position: absolute;\n  z-index: 3;\n  top: 4px;\n  bottom: 4px;\n  width: 3px;\n  transform: translateX(-50%);\n  border-radius: 3px;\n  background: #6b91ff;\n  pointer-events: none;\n  box-shadow: 0 0 6px rgba(93, 133, 255, 0.72);\n}\n\n.wf-pane-body { position: relative; }\n\n.wf-pane-body.is-docking > .wf-tab-page {\n  /* \u76F4\u63A5\u6A21\u7CCA\u9875\u9762\u5185\u5BB9\uFF0C\u4E0D\u4F9D\u8D56 backdrop-filter \u5BF9\u4E0B\u5C42\u5408\u6210\u9762\u7684\u53D6\u6837\u3002 */\n  filter: blur(5px);\n  transition: filter 140ms ease-out;\n}\n\n.wf-dock-scrim {\n  position: absolute;\n  inset: 0;\n  z-index: 2;\n  /* \u534A\u900F\u660E\u5E95\u8272\u4E0E\u4E0B\u5C42\u5185\u5BB9\u7684\u76F4\u63A5\u6A21\u7CCA\u5171\u540C\u5F62\u6210\u6BDB\u73BB\u7483\uFF0C\u800C\u975E\u5355\u72EC\u7684\u53D8\u6697\u906E\u7F69\u3002 */\n  background: color-mix(in srgb, var(--panel-bg, #17171b) 38%, transparent);\n  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--text-primary, #fff) 12%, transparent);\n  pointer-events: none;\n  animation: wf-dock-scrim-in 140ms ease-out both;\n}\n\n.wf-dock-hint {\n  position: absolute;\n  top: 0;\n  bottom: 0;\n  left: 0;\n  width: 50%;\n  box-sizing: border-box;\n  display: flex;\n  padding: 8px;\n  transform: none;\n  z-index: 3;\n  pointer-events: none;\n}\n\n.wf-dock-hint.wf-dock-right { left: 50%; }\n\n/* \u4E0A\u4E0B\u65B9\u5411\u53EA\u5141\u8BB8\u5411\u4E0B\u65B0\u589E\uFF1A\u843D\u533A\u4E25\u683C\u8986\u76D6\u5185\u5BB9\u533A\u4E0B\u534A\u90E8\u3002 */\n.wf-dock-hint.wf-dock-bottom {\n  top: 50%;\n  bottom: 0;\n  left: 0;\n  width: 100%;\n  padding: 4px;\n}\n\n/* DSH \u7684 dockkit \u4EE5\u5F31\u5316\u5E95\u5C42\u5185\u5BB9 + \u5185\u7F29\u843D\u533A\u5361\u7247\u8868\u8FBE\u76EE\u6807\uFF1B\u4EC5\u5F53\u524D\u843D\u533A\n   \u4F7F\u7528\u5F3A\u8C03\u8272\uFF0C\u907F\u514D\u84DD\u8272\u5B9E\u5E95\u906E\u6321\u6587\u4EF6\u9884\u89C8\u3002 */\n.wf-dock-hint.wf-dock-center {\n  left: 0;\n  width: 100%;\n}\n\n.wf-dock-card {\n  display: flex;\n  flex: 1 1 auto;\n  min-width: 0;\n  min-height: 0;\n  flex-direction: column;\n  align-items: center;\n  justify-content: center;\n  gap: 8px;\n  padding: 12px;\n  overflow: hidden;\n  border: 1.5px dashed var(--border-color, rgba(255, 255, 255, 0.24));\n  border-radius: 10px;\n  color: var(--text-secondary, #a3a3ad);\n  background: color-mix(in srgb, var(--panel-bg, #17171b) 22%, transparent);\n  transition: color 120ms ease-out, background-color 120ms ease-out, border-color 120ms ease-out;\n  animation: wf-dock-card-in 140ms ease-out both;\n}\n\n.wf-dock-hint:not(.wf-dock-center) .wf-dock-card { border-color: color-mix(in srgb, var(--border-color, #383842) 72%, transparent); }\n.wf-dock-hint[data-drop-active] .wf-dock-card {\n  color: var(--accent, #4f6bed);\n  border-color: color-mix(in srgb, var(--accent, #4f6bed) 86%, var(--text-primary, #fff));\n  background: color-mix(in srgb, var(--accent, #4f6bed) 13%, transparent);\n  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--text-primary, #fff) 7%, transparent);\n}\n\n.wf-dock-glyph {\n  flex: none;\n  width: 20px;\n  height: 20px;\n}\n\n.wf-dock-label {\n  max-width: 100%;\n  overflow: hidden;\n  font-size: 12px;\n  font-weight: 500;\n  line-height: 1.4;\n  text-overflow: ellipsis;\n  white-space: nowrap;\n}\n\n@keyframes wf-dock-card-in {\n  from { opacity: 0; transform: scale(0.98); }\n  to { opacity: 1; transform: none; }\n}\n\n@keyframes wf-dock-scrim-in {\n  from { opacity: 0; }\n  to { opacity: 1; }\n}\n\n@media (prefers-reduced-motion: reduce) {\n  .wf-dock-scrim,\n  .wf-dock-card { animation: none; }\n}\n';
 
 // public/src/react-panels/workspace-files/icons.tsx
 import { useId } from "/src/react-panels-dist/shared/react.js?v=^19.3.1";
@@ -38811,6 +38811,20 @@ function FileTypeIcon({ path, size = 16, className }) {
   }
   return /* @__PURE__ */ jsx("span", { className: `wf-ft wf-ft-${type} ${className ?? ""}`, children: traditionalGlyph(type, size, void 0) });
 }
+function ZoomInIcon({ size = 16, className }) {
+  return /* @__PURE__ */ jsxs("svg", { width: size, height: size, className, viewBox: "0 0 16 16", fill: "none", xmlns: "http://www.w3.org/2000/svg", "aria-hidden": "true", children: [
+    /* @__PURE__ */ jsx("circle", { cx: "6.75", cy: "6.75", r: "4.25", stroke: "currentColor" }),
+    /* @__PURE__ */ jsx("path", { d: "M10 10L13.5 13.5", stroke: "currentColor", strokeLinecap: "round" }),
+    /* @__PURE__ */ jsx("path", { d: "M4.75 6.75H8.75M6.75 4.75V8.75", stroke: "currentColor", strokeLinecap: "round" })
+  ] });
+}
+function ZoomOutIcon({ size = 16, className }) {
+  return /* @__PURE__ */ jsxs("svg", { width: size, height: size, className, viewBox: "0 0 16 16", fill: "none", xmlns: "http://www.w3.org/2000/svg", "aria-hidden": "true", children: [
+    /* @__PURE__ */ jsx("circle", { cx: "6.75", cy: "6.75", r: "4.25", stroke: "currentColor" }),
+    /* @__PURE__ */ jsx("path", { d: "M10 10L13.5 13.5", stroke: "currentColor", strokeLinecap: "round" }),
+    /* @__PURE__ */ jsx("path", { d: "M4.75 6.75H8.75", stroke: "currentColor", strokeLinecap: "round" })
+  ] });
+}
 function FolderOpenIcon({ size = 16, className }) {
   return /* @__PURE__ */ jsxs("svg", { width: size, height: size, className, viewBox: "0 0 16 16", fill: "none", xmlns: "http://www.w3.org/2000/svg", "aria-hidden": "true", children: [
     /* @__PURE__ */ jsx("path", { d: "M2.55912 7.93683C2.67584 7.49906 3.0723 7.19446 3.52536 7.19446H13.6491C14.3061 7.19446 14.7846 7.81725 14.6153 8.45209L13.4411 12.856C13.3244 13.2938 12.9279 13.5984 12.4748 13.5984H2.35113C1.69411 13.5984 1.21562 12.9756 1.38489 12.3407L2.55912 7.93683Z", fill: "currentColor", opacity: "0.16" }),
@@ -38826,7 +38840,7 @@ function FolderCloseIcon({ size = 16, className }) {
 }
 
 // public/src/react-panels/workspace-files/index.tsx
-import { Fragment as Fragment2, jsx as jsx2, jsxs as jsxs2 } from "/src/react-panels-dist/shared/react-jsx-runtime.js?v=^19.3.1";
+import { jsx as jsx2, jsxs as jsxs2 } from "/src/react-panels-dist/shared/react-jsx-runtime.js?v=^19.3.1";
 var TREE_TAB = "tree";
 var MARKDOWN_EXTENSIONS = /* @__PURE__ */ new Set([".md", ".markdown", ".mdx"]);
 var HTML_EXTENSIONS = /* @__PURE__ */ new Set([".html", ".htm"]);
@@ -38907,6 +38921,32 @@ function rawFileUrl(identity, filePath) {
   });
   return `/protoclaw/workspace-files/raw?${params.toString()}`;
 }
+function officePdfUrl(identity, filePath) {
+  const params = new URLSearchParams({
+    agentId: identity.agentId,
+    sessionId: identity.sessionId,
+    path: filePath
+  });
+  return `/protoclaw/workspace-files/office-pdf?${params.toString()}`;
+}
+function previewErrorMessage(code) {
+  switch (code) {
+    case "office_engine_unavailable":
+      return "\u6B64\u683C\u5F0F\u9700\u8981\u672C\u673A\u5B89\u88C5 LibreOffice \u624D\u80FD\u9884\u89C8\uFF08\u53EF\u7528\u73AF\u5883\u53D8\u91CF CLAW_SOFFICE_PATH \u6307\u5B9A soffice \u8DEF\u5F84\uFF09";
+    case "office_convert_failed":
+      return "LibreOffice \u8F6C\u6362\u5931\u8D25\uFF0C\u8BF7\u7528\u672C\u673A Office \u6253\u5F00\u786E\u8BA4\u6587\u4EF6\u662F\u5426\u635F\u574F";
+    case "office_convert_timeout":
+      return "LibreOffice \u8F6C\u6362\u8D85\u65F6\uFF0C\u6587\u6863\u53EF\u80FD\u8FC7\u5927\u6216\u7ED3\u6784\u5F02\u5E38";
+    case "binary_content":
+      return "\u6B64\u6587\u4EF6\u662F\u4E8C\u8FDB\u5236\u5185\u5BB9\uFF0C\u6682\u4E0D\u652F\u6301\u9884\u89C8";
+    case "unsupported_file_type":
+      return "\u6B64\u6587\u4EF6\u7C7B\u578B\u6682\u4E0D\u652F\u6301\u9884\u89C8";
+    case "file_too_large":
+      return "\u6587\u4EF6\u8D85\u8FC7\u9884\u89C8\u5927\u5C0F\u4E0A\u9650";
+    default:
+      return code;
+  }
+}
 function renderMarkdownHtml(text) {
   try {
     if (typeof window.renderMarkdown === "function") return String(window.renderMarkdown(text) ?? "");
@@ -38959,39 +38999,304 @@ function parseDelimitedTable(text, forcedDelimiter) {
 }
 var CSV_MAX_ROWS = 2e3;
 var CSV_MAX_COLUMNS = 80;
-function DocxView({ url, name }) {
-  const [error, setError] = useState(null);
-  const containerRef = useRef(null);
+var FIT_VIEW = { kind: "fit" };
+var ZOOM_STEPS = [0.25, 0.5, 0.75, 1, 1.5, 2, 2.5, 3, 4];
+var ZOOM_MIN = 0.25;
+var ZOOM_MAX = 4;
+var DOC_INSET = 24;
+function clampZoom(value) {
+  return Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, value));
+}
+function nextZoomStep(scale, direction) {
+  const raw = scale + direction * 0.25;
+  const snapped = ZOOM_STEPS.find((step) => Math.abs(step - raw) <= 0.06);
+  return clampZoom(snapped ?? raw);
+}
+function useClientWidth(ref, onChange) {
+  useLayoutEffect(() => {
+    const element = ref.current;
+    if (!element) return;
+    const measure = () => onChange(element.clientWidth);
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [ref, onChange]);
+}
+function useWheelZoom(scrollRef, scale, onScale) {
+  const anchorRef = useRef(null);
+  const scaleRef = useRef(scale);
+  scaleRef.current = scale;
+  useLayoutEffect(() => {
+    const element = scrollRef.current;
+    const anchor = anchorRef.current;
+    anchorRef.current = null;
+    if (!element || !anchor) return;
+    element.scrollLeft = Math.max(0, anchor.contentX * anchor.ratio - anchor.viewX);
+    element.scrollTop = Math.max(0, anchor.contentY * anchor.ratio - anchor.viewY);
+  }, [scrollRef, scale]);
   useEffect(() => {
-    const container = containerRef.current;
+    const element = scrollRef.current;
+    if (!element) return;
+    const onWheel = (event) => {
+      if (!event.ctrlKey) return;
+      event.preventDefault();
+      const current = scaleRef.current;
+      const unit = event.deltaMode === WheelEvent.DOM_DELTA_LINE ? 16 : event.deltaMode === WheelEvent.DOM_DELTA_PAGE ? element.clientHeight : 1;
+      const delta = Math.max(-40, Math.min(40, event.deltaY * unit));
+      const next = clampZoom(current * Math.exp(-delta * 0.01));
+      if (Math.abs(next - current) < 1e-3) return;
+      const bounds = element.getBoundingClientRect();
+      anchorRef.current = {
+        contentX: element.scrollLeft + (event.clientX - bounds.left),
+        contentY: element.scrollTop + (event.clientY - bounds.top),
+        viewX: event.clientX - bounds.left,
+        viewY: event.clientY - bounds.top,
+        ratio: next / current
+      };
+      scaleRef.current = next;
+      onScale(next);
+    };
+    element.addEventListener("wheel", onWheel, { passive: false });
+    return () => element.removeEventListener("wheel", onWheel);
+  }, [scrollRef, onScale]);
+}
+function DocumentBar({ meta, scale, fit, onFit, onScale }) {
+  return /* @__PURE__ */ jsxs2("div", { className: "wf-doc-bar", children: [
+    /* @__PURE__ */ jsx2("span", { className: "wf-doc-meta", children: meta }),
+    /* @__PURE__ */ jsxs2("div", { className: "wf-doc-zoom", children: [
+      /* @__PURE__ */ jsx2(
+        "button",
+        {
+          type: "button",
+          className: "wf-doc-step",
+          title: "\u7F29\u5C0F",
+          "aria-label": "\u7F29\u5C0F",
+          onClick: () => onScale(nextZoomStep(scale, -1)),
+          children: /* @__PURE__ */ jsx2(ZoomOutIcon, { size: 14 })
+        }
+      ),
+      /* @__PURE__ */ jsxs2("span", { className: "wf-doc-zoom-value", children: [
+        Math.round(scale * 100),
+        "%"
+      ] }),
+      /* @__PURE__ */ jsx2(
+        "button",
+        {
+          type: "button",
+          className: "wf-doc-step",
+          title: "\u653E\u5927",
+          "aria-label": "\u653E\u5927",
+          onClick: () => onScale(nextZoomStep(scale, 1)),
+          children: /* @__PURE__ */ jsx2(ZoomInIcon, { size: 14 })
+        }
+      ),
+      /* @__PURE__ */ jsx2(
+        "button",
+        {
+          type: "button",
+          className: `wf-doc-fit${fit ? " is-active" : ""}`,
+          "aria-pressed": fit,
+          onClick: onFit,
+          children: "\u9002\u5E94\u5BBD\u5EA6"
+        }
+      )
+    ] })
+  ] });
+}
+function ImageView({ file, tabId, view, onScaleChange }) {
+  const preview = file.preview;
+  const dataUrl = preview.state === "image" ? preview.dataUrl : "";
+  const stageRef = useRef(null);
+  const [available, setAvailable] = useState(0);
+  const [intrinsic, setIntrinsic] = useState(null);
+  const [failed, setFailed] = useState(false);
+  const [panning, setPanning] = useState(false);
+  const [pannable, setPannable] = useState(false);
+  const panRef = useRef(null);
+  const surfaceRef = useRef(null);
+  useClientWidth(stageRef, setAvailable);
+  const fitScale = intrinsic && available > 0 ? Math.min(1, Math.max(1, available - DOC_INSET) / intrinsic.width) : 1;
+  const scale = view.kind === "fit" ? fitScale : view.scale;
+  const width = intrinsic ? Math.max(1, Math.round(intrinsic.width * scale)) : null;
+  const applyScale = useCallback(
+    (next) => onScaleChange(tabId, { kind: "fixed", scale: clampZoom(next) }),
+    [onScaleChange, tabId]
+  );
+  useWheelZoom(stageRef, scale, applyScale);
+  useEffect(() => {
+    setFailed(false);
+  }, [dataUrl]);
+  useLayoutEffect(() => {
+    const element = stageRef.current;
+    if (!element) return;
+    const measure = () => setPannable(element.scrollWidth > element.clientWidth + 1 || element.scrollHeight > element.clientHeight + 1);
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    if (surfaceRef.current) observer.observe(surfaceRef.current);
+    return () => observer.disconnect();
+  }, [width, available]);
+  const endPan = () => {
+    panRef.current = null;
+    setPanning(false);
+  };
+  const onPointerDown = (event) => {
+    const element = stageRef.current;
+    if (!element || event.button !== 0 || event.pointerType !== "mouse") return;
+    if (element.scrollWidth <= element.clientWidth && element.scrollHeight <= element.clientHeight) return;
+    panRef.current = { id: event.pointerId, x: event.clientX, y: event.clientY };
+    element.setPointerCapture(event.pointerId);
+    setPanning(true);
+  };
+  const onPointerMove = (event) => {
+    const element = stageRef.current;
+    const pan = panRef.current;
+    if (!element || !pan || pan.id !== event.pointerId) return;
+    if (event.buttons !== 1) {
+      endPan();
+      return;
+    }
+    element.scrollLeft += pan.x - event.clientX;
+    element.scrollTop += pan.y - event.clientY;
+    pan.x = event.clientX;
+    pan.y = event.clientY;
+  };
+  return /* @__PURE__ */ jsxs2("div", { className: "wf-doc-view", children: [
+    /* @__PURE__ */ jsx2(
+      DocumentBar,
+      {
+        meta: intrinsic ? `${intrinsic.width} \xD7 ${intrinsic.height}` : failed ? file.name : "\u6B63\u5728\u8BFB\u53D6\u56FE\u7247\u2026",
+        scale,
+        fit: view.kind === "fit",
+        onFit: () => onScaleChange(tabId, FIT_VIEW),
+        onScale: applyScale
+      }
+    ),
+    /* @__PURE__ */ jsx2(
+      "div",
+      {
+        ref: stageRef,
+        className: `wf-image-stage${pannable ? " is-pannable" : ""}${panning ? " is-panning" : ""}`,
+        onPointerDown,
+        onPointerMove,
+        onPointerUp: endPan,
+        onPointerCancel: endPan,
+        onLostPointerCapture: endPan,
+        children: failed ? /* @__PURE__ */ jsx2("div", { className: "wf-empty wf-error", children: "\u65E0\u6CD5\u663E\u793A\u6B64\u56FE\u7247" }) : /* @__PURE__ */ jsx2("div", { className: "wf-image-frame", style: { visibility: width === null ? "hidden" : "visible" }, children: /* @__PURE__ */ jsx2("div", { className: "wf-image-surface", ref: surfaceRef, style: width === null ? void 0 : { width }, children: /* @__PURE__ */ jsx2(
+          "img",
+          {
+            src: dataUrl,
+            alt: file.name,
+            draggable: false,
+            onLoad: (event) => setIntrinsic({
+              width: event.currentTarget.naturalWidth,
+              height: event.currentTarget.naturalHeight
+            }),
+            onError: () => setFailed(true)
+          }
+        ) }) })
+      }
+    )
+  ] });
+}
+function DocxView({ file, tabId, view, onScaleChange }) {
+  const url = file.preview.state === "docx" ? file.preview.url : "";
+  const scrollRef = useRef(null);
+  const pagesRef = useRef(null);
+  const [error, setError] = useState(null);
+  const [rendering, setRendering] = useState(true);
+  const [pageWidth, setPageWidth] = useState(0);
+  const [pageCount, setPageCount] = useState(0);
+  const [available, setAvailable] = useState(0);
+  useClientWidth(scrollRef, setAvailable);
+  useEffect(() => {
+    const container = pagesRef.current;
     if (!container) return;
     let cancelled = false;
     setError(null);
+    setRendering(true);
+    setPageWidth(0);
+    setPageCount(0);
     container.replaceChildren();
     (async () => {
       try {
         const [response, module] = await Promise.all([fetch(url), Promise.resolve().then(() => (init_docx_preview(), docx_preview_exports))]);
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         if (cancelled) return;
-        await module.renderAsync(await response.arrayBuffer(), container, void 0, {
-          inWrapper: true,
+        await module.renderAsync(await response.arrayBuffer(), container, container, {
+          // 不用库自带 wrapper：它是灰底 + 30px 内边距 + 固定页宽居中，窄面板下
+          // 页面两侧会被裁掉且左缘无法滚回。页容器与留白由面板自己掌握。
+          inWrapper: false,
           ignoreWidth: false,
           ignoreHeight: false,
-          ignoreFonts: false
+          ignoreFonts: false,
+          breakPages: true,
+          renderHeaders: true,
+          renderFooters: true
         });
+        if (cancelled) return;
+        setPageCount(container.querySelectorAll("section").length);
+        setRendering(false);
       } catch (cause) {
-        if (!cancelled) setError(cause instanceof Error ? cause.message : String(cause));
+        if (cancelled) return;
+        setRendering(false);
+        setError(cause instanceof Error ? cause.message : String(cause));
       }
     })();
     return () => {
       cancelled = true;
     };
   }, [url]);
-  if (error) return /* @__PURE__ */ jsxs2("div", { className: "wf-empty wf-error", children: [
-    "\u65E0\u6CD5\u6E32\u67D3\u6587\u6863\uFF1A",
-    error
+  useEffect(() => {
+    const container = pagesRef.current;
+    if (!container) return;
+    const measure = () => {
+      const first = container.querySelector("section");
+      const width = first ? Math.ceil(first.offsetWidth) : 0;
+      if (width > 0) setPageWidth((current) => current === width ? current : width);
+    };
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, [url, rendering]);
+  const fitScale = pageWidth > 0 && available > 0 ? Math.min(1, Math.max(1, available - DOC_INSET) / pageWidth) : 1;
+  const scale = view.kind === "fit" ? fitScale : view.scale;
+  const applyScale = useCallback(
+    (next) => onScaleChange(tabId, { kind: "fixed", scale: clampZoom(next) }),
+    [onScaleChange, tabId]
+  );
+  useWheelZoom(scrollRef, scale, applyScale);
+  return /* @__PURE__ */ jsxs2("div", { className: "wf-doc-view", children: [
+    /* @__PURE__ */ jsx2(
+      DocumentBar,
+      {
+        meta: pageCount > 0 ? `${pageCount} \u9875` : error ? file.name : "\u6B63\u5728\u8BFB\u53D6\u6587\u6863\u2026",
+        scale,
+        fit: view.kind === "fit",
+        onFit: () => onScaleChange(tabId, FIT_VIEW),
+        onScale: applyScale
+      }
+    ),
+    error ? /* @__PURE__ */ jsxs2("div", { className: "wf-empty wf-error", children: [
+      "\u65E0\u6CD5\u6E32\u67D3\u6587\u6863\uFF1A",
+      error
+    ] }) : /* @__PURE__ */ jsxs2("div", { className: "wf-docx-stage", children: [
+      /* @__PURE__ */ jsx2("div", { className: "wf-docx-scroll", ref: scrollRef, "aria-label": file.name, children: /* @__PURE__ */ jsx2(
+        "div",
+        {
+          className: "wf-docx-pages",
+          ref: pagesRef,
+          style: { "--wf-docx-scale": String(scale) }
+        }
+      ) }),
+      rendering && /* @__PURE__ */ jsx2("div", { className: "wf-docx-status", role: "status", children: "\u6B63\u5728\u6392\u7248\u6587\u6863\u2026" })
+    ] })
   ] });
-  return /* @__PURE__ */ jsx2("div", { className: "wf-docx-scroll", ref: containerRef, "aria-label": name });
 }
 function XlsxView({ url }) {
   const [rows, setRows] = useState(null);
@@ -39070,7 +39375,7 @@ function CodeView({ path, content }) {
     highlighted !== null ? /* @__PURE__ */ jsx2("pre", { className: "wf-code", children: /* @__PURE__ */ jsx2("code", { className: "hljs", dangerouslySetInnerHTML: { __html: highlighted } }) }) : /* @__PURE__ */ jsx2("pre", { className: "wf-code", children: /* @__PURE__ */ jsx2("code", { children: content }) })
   ] });
 }
-function FileView({ file, imageMode, onToggleImageMode }) {
+function FileView({ file, tabId, view, onScaleChange }) {
   const preview = file.preview;
   if (preview.state === "loading") return /* @__PURE__ */ jsx2("div", { className: "wf-empty", children: "\u6B63\u5728\u8BFB\u53D6\u6587\u4EF6\u2026" });
   if (preview.state === "error") return /* @__PURE__ */ jsxs2("div", { className: "wf-empty wf-error", children: [
@@ -39078,19 +39383,13 @@ function FileView({ file, imageMode, onToggleImageMode }) {
     preview.message
   ] });
   if (preview.state === "image") {
-    return /* @__PURE__ */ jsxs2(Fragment2, { children: [
-      /* @__PURE__ */ jsxs2("div", { className: "wf-image-bar", children: [
-        /* @__PURE__ */ jsx2("button", { type: "button", className: "wf-image-toggle", onClick: () => onToggleImageMode(file.path), children: imageMode === "fit" ? "\u539F\u59CB\u5927\u5C0F" : "\u9002\u5E94\u7A97\u53E3" }),
-        /* @__PURE__ */ jsx2("span", { className: "wf-image-meta", children: imageMode === "fit" ? "\u9002\u5E94\u7A97\u53E3" : "\u539F\u59CB\u5927\u5C0F" })
-      ] }),
-      /* @__PURE__ */ jsx2("div", { className: `wf-image-stage${imageMode === "full" ? " is-full" : ""}`, children: /* @__PURE__ */ jsx2("img", { src: preview.dataUrl, alt: file.name, draggable: false }) })
-    ] });
+    return /* @__PURE__ */ jsx2(ImageView, { file, tabId, view, onScaleChange });
   }
-  if (preview.state === "pdf") {
+  if (preview.state === "pdf" || preview.state === "office-pdf") {
     return /* @__PURE__ */ jsx2("iframe", { className: "wf-binary-frame", src: preview.url, title: file.name });
   }
   if (preview.state === "docx") {
-    return /* @__PURE__ */ jsx2(DocxView, { url: preview.url, name: file.name });
+    return /* @__PURE__ */ jsx2(DocxView, { file, tabId, view, onScaleChange });
   }
   if (preview.state === "xlsx") {
     return /* @__PURE__ */ jsx2(XlsxView, { url: preview.url, name: file.name });
@@ -39161,7 +39460,7 @@ function WorkspaceFiles({ panelContext: initialPanelContext = {} }) {
           setActivePaneId(cached.activePaneId);
           setSplitRatio(cached.splitRatio);
           setSplitDirection(cached.splitDirection);
-          setImageModes(cached.imageModes);
+          setViewScales(cached.viewScales ?? {});
           nextPaneId.current = cached.nextPaneId;
         } else {
           setTree({});
@@ -39171,7 +39470,7 @@ function WorkspaceFiles({ panelContext: initialPanelContext = {} }) {
           setActivePaneId(1);
           setSplitRatio(0.5);
           setSplitDirection("horizontal");
-          setImageModes({});
+          setViewScales({});
           nextPaneId.current = 2;
         }
       }
@@ -39197,7 +39496,7 @@ function WorkspaceFiles({ panelContext: initialPanelContext = {} }) {
   const dragArmOrigin = useRef(null);
   const dragStartOrigin = useRef(null);
   const [dockHint, setDockHint] = useState(null);
-  const [imageModes, setImageModes] = useState({});
+  const [viewScales, setViewScales] = useState({});
   const paneRowRef = useRef(null);
   const tabstripRefs = useRef(/* @__PURE__ */ new Map());
   const [tabRows, setTabRows] = useState({});
@@ -39321,7 +39620,7 @@ function WorkspaceFiles({ panelContext: initialPanelContext = {} }) {
       activePaneId,
       splitRatio,
       splitDirection,
-      imageModes,
+      viewScales,
       nextPaneId: nextPaneId.current
     });
   });
@@ -39352,7 +39651,7 @@ function WorkspaceFiles({ panelContext: initialPanelContext = {} }) {
       setActivePaneId(cached.activePaneId);
       setSplitRatio(cached.splitRatio);
       setSplitDirection(cached.splitDirection ?? "horizontal");
-      setImageModes(cached.imageModes);
+      setViewScales(cached.viewScales ?? {});
       nextPaneId.current = cached.nextPaneId;
     } else {
       setTree(identity.agentId && identity.sessionId ? { "": { loading: true } } : {});
@@ -39362,7 +39661,7 @@ function WorkspaceFiles({ panelContext: initialPanelContext = {} }) {
       setActivePaneId(1);
       setSplitRatio(0.5);
       setSplitDirection("horizontal");
-      setImageModes({});
+      setViewScales({});
       nextPaneId.current = 2;
     }
     stateKeyRef.current = identityKey;
@@ -39412,11 +39711,13 @@ function WorkspaceFiles({ panelContext: initialPanelContext = {} }) {
         body: JSON.stringify({ ...identity, path: entry.path })
       });
       const body = await response.json();
-      if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
+      if (!response.ok) throw new Error(previewErrorMessage(String(body.error || `HTTP ${response.status}`)));
       if (!identityGuarded()) return;
       let preview;
       if (body.kind === "image") {
         preview = { state: "image", dataUrl: String(body.dataUrl || ""), mimeType: String(body.mimeType || "") };
+      } else if (body.kind === "office-pdf") {
+        preview = { state: "office-pdf", url: officePdfUrl(identity, entry.path), mimeType: "application/pdf" };
       } else if (body.kind === "pdf" || body.kind === "video" || body.kind === "audio" || body.kind === "docx" || body.kind === "xlsx") {
         preview = { state: body.kind, url: rawFileUrl(identity, entry.path), mimeType: String(body.mimeType || "") };
       } else {
@@ -39445,7 +39746,7 @@ function WorkspaceFiles({ panelContext: initialPanelContext = {} }) {
       delete next[tabId];
       return next;
     });
-    setImageModes((current) => {
+    setViewScales((current) => {
       const next = { ...current };
       delete next[tabId];
       return next;
@@ -39714,9 +40015,15 @@ function WorkspaceFiles({ panelContext: initialPanelContext = {} }) {
   const onDividerPointerUp = (event) => {
     event.currentTarget.releasePointerCapture(event.pointerId);
   };
-  const toggleImageMode = (path) => {
-    setImageModes((current) => ({ ...current, [path]: current[path] === "full" ? "fit" : "full" }));
-  };
+  const setViewScale = useCallback((tabId, next) => {
+    setViewScales((current) => {
+      const previous = current[tabId];
+      if (previous && previous.kind === next.kind && (previous.kind === "fit" || next.kind === "fixed" && Math.abs(previous.scale - next.scale) < 1e-3)) {
+        return current;
+      }
+      return { ...current, [tabId]: next };
+    });
+  }, []);
   const renderTreeEntries = (directory, depth = 0) => {
     const node = tree[directory];
     if (node?.entries?.length) {
@@ -39749,7 +40056,7 @@ function WorkspaceFiles({ panelContext: initialPanelContext = {} }) {
     }
     const file = files[tabId];
     if (!file) return /* @__PURE__ */ jsx2("div", { className: "wf-empty", children: "\u9875\u7B7E\u5DF2\u5931\u6548" });
-    return /* @__PURE__ */ jsx2(FileView, { file, imageMode: imageModes[tabId] ?? "fit", onToggleImageMode: toggleImageMode });
+    return /* @__PURE__ */ jsx2(FileView, { file, tabId, view: viewScales[tabId] ?? FIT_VIEW, onScaleChange: setViewScale });
   };
   return /* @__PURE__ */ jsx2("div", { className: `wf-panel${dragTab ? " is-dragging" : ""}`, children: /* @__PURE__ */ jsx2("div", { className: `wf-pane-row${splitDirection === "vertical" ? " is-vertical" : ""}`, ref: paneRowRef, children: panes.map((pane, index) => /* @__PURE__ */ jsxs2(Fragment, { children: [
     index > 0 && /* @__PURE__ */ jsx2(

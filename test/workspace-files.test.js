@@ -22,12 +22,31 @@ async function fixture(t) {
   await fs.writeFile(path.join(root, 'page.html'), '<!doctype html><p>hi</p>');
   await fs.writeFile(path.join(root, 'note.docx'), Buffer.from([0x50, 0x4b, 0x03, 0x04]));
   await fs.writeFile(path.join(root, 'sheet.xlsx'), Buffer.from([0x50, 0x4b, 0x03, 0x04]));
+  // 补充：老格式 Office（转换器）、文本兜底后缀、已知二进制容器
+  await fs.writeFile(path.join(root, 'legacy.doc'), Buffer.from([0xd0, 0xcf, 0x11, 0xe0]));
+  await fs.writeFile(path.join(root, 'old.xls'), Buffer.from([0xd0, 0xcf, 0x11, 0xe0]));
+  await fs.writeFile(path.join(root, 'slides.pptx'), Buffer.from([0x50, 0x4b, 0x03, 0x04]));
+  await fs.writeFile(path.join(root, 'app.conf'), 'port = 8080\nname = claw\n');
+  await fs.writeFile(path.join(root, 'font.woff2'), Buffer.from([0x77, 0x4f, 0x46, 0x32]));
   const service = createWorkspaceFileService({ resolveRoot: async (agentId, sessionId) => {
     assert.equal(agentId, 'programming-helper');
     assert.equal(sessionId, 'session-1');
     return { root };
-  } });
+  }, officeConverter: fakeConverter() });
   return { root, service };
+}
+
+/** 免装 LibreOffice 的转换器替身：read() 的可用性探测与 office-pdf 端点共用。 */
+function fakeConverter({ available = true, pdf = Buffer.from('%PDF-1.4 fake') } = {}) {
+  return {
+    calls: [],
+    async available() { return available; },
+    async toPdf(absolutePath, identity) {
+      this.calls.push({ absolutePath, identity });
+      if (!available) { const error = new Error('no engine'); error.code = 'office_engine_unavailable'; throw error; }
+      return pdf;
+    },
+  };
 }
 
 function response() {
@@ -57,7 +76,8 @@ test('HTTP routes parse session identity and return the authorized directory lis
   const listing = await request('list', '');
   assert.equal(listing.status, 200);
   assert.deepEqual((await listing.json()).entries.map(entry => entry.name), [
-    'src', 'blob.bin', 'clip.mp4', 'data.csv', 'doc.pdf', 'image.png', 'note.docx', 'page.html', 'photo.avif', 'sheet.xlsx', 'tone.mp3',
+    'src', 'app.conf', 'blob.bin', 'clip.mp4', 'data.csv', 'doc.pdf', 'font.woff2', 'image.png',
+    'legacy.doc', 'note.docx', 'old.xls', 'page.html', 'photo.avif', 'sheet.xlsx', 'slides.pptx', 'tone.mp3',
   ]);
   const file = await request('read', 'src/main.js');
   assert.equal(file.status, 200);
@@ -72,17 +92,23 @@ test('lists only direct children and identifies directories and previewable file
   const res = response();
   await service.list({ agentId: 'programming-helper', sessionId: 'session-1', path: '' }, res);
   assert.equal(res.statusCode, 200);
+  // 白名单外一律可预览（文本兜底）；只有已知二进制容器保持 supported:false
   assert.deepEqual(res.body.entries.map(item => [item.name, item.kind, item.supported]), [
     ['src', 'directory', undefined],
+    ['app.conf', 'file', true],
     ['blob.bin', 'file', false],
     ['clip.mp4', 'file', true],
     ['data.csv', 'file', true],
     ['doc.pdf', 'file', true],
+    ['font.woff2', 'file', false],
     ['image.png', 'file', true],
+    ['legacy.doc', 'file', true],
     ['note.docx', 'file', true],
+    ['old.xls', 'file', true],
     ['page.html', 'file', true],
     ['photo.avif', 'file', true],
     ['sheet.xlsx', 'file', true],
+    ['slides.pptx', 'file', true],
     ['tone.mp3', 'file', true],
   ]);
 });
@@ -99,9 +125,23 @@ test('reads text and image files by preview kind and rejects unsupported or over
   assert.equal(image.body.kind, 'image');
   assert.equal(image.body.mimeType, 'image/png');
   assert.match(image.body.dataUrl, /^data:image\/png;base64,/);
+  // `.bin` 在已知二进制清单里：按扩展名直接判不可预览，不读字节
   const unsupported = response();
   await service.read({ agentId: 'programming-helper', sessionId: 'session-1', path: 'blob.bin' }, unsupported);
   assert.equal(unsupported.statusCode, 400);
+  assert.equal(unsupported.body.error, 'unsupported_file_type');
+  // 白名单之外但内容是文本：按纯文本打开（DSH 同口径）
+  const fallback = response();
+  await service.read({ agentId: 'programming-helper', sessionId: 'session-1', path: 'app.conf' }, fallback);
+  assert.equal(fallback.statusCode, 200);
+  assert.equal(fallback.body.kind, 'text');
+  assert.match(fallback.body.content, /port = 8080/);
+  // 二进制内容撞上未知后缀：按内容拒绝，而不是把乱码塞进代码视图
+  await fs.writeFile(path.join(root, 'mystery.dat'), Buffer.from([0x00, 0x01, 0x02]));
+  const mystery = response();
+  await service.read({ agentId: 'programming-helper', sessionId: 'session-1', path: 'mystery.dat' }, mystery);
+  assert.equal(mystery.statusCode, 415);
+  assert.equal(mystery.body.error, 'binary_content');
   await fs.writeFile(path.join(root, 'large.txt'), Buffer.alloc(1024 * 1024 + 1));
   const large = response();
   await service.read({ agentId: 'programming-helper', sessionId: 'session-1', path: 'large.txt' }, large);
@@ -125,6 +165,15 @@ test('reads csv and html as text and pdf/video/audio as raw-url handshake', asyn
       assert.equal(body.mimeType, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
       assert.equal(body.content, undefined); assert.equal(body.dataUrl, undefined);
     } },
+    { path: 'old.xls', kind: 'xlsx', expect: body => {
+      assert.equal(body.mimeType, 'application/vnd.ms-excel');
+      assert.equal(body.content, undefined);
+    } },
+    { path: 'legacy.doc', kind: 'office-pdf', expect: body => {
+      assert.equal(body.mimeType, 'application/pdf');
+      assert.equal(body.content, undefined); assert.equal(body.dataUrl, undefined);
+    } },
+    { path: 'slides.pptx', kind: 'office-pdf', expect: body => assert.equal(body.mimeType, 'application/pdf') },
   ];
   for (const item of cases) {
     const res = response();
@@ -161,6 +210,51 @@ test('raw endpoint streams media bytes with fixed content type and rejects non-m
   assert.equal(docx.status, 200);
   assert.equal(docx.headers.get('content-type'), 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
   assert.deepEqual(Buffer.from(await docx.arrayBuffer()), await fs.readFile(path.join(root, 'note.docx')));
+  // 旧版 xls 与 xlsx 共用 raw 字节流，Content-Type 按后缀区分
+  const xlsParams = new URLSearchParams({ agentId: 'programming-helper', sessionId: 'session-1', path: 'old.xls' });
+  const xls = await fetch(`http://127.0.0.1:${port}/protoclaw/workspace-files/raw?${xlsParams}`);
+  assert.equal(xls.status, 200);
+  assert.equal(xls.headers.get('content-type'), 'application/vnd.ms-excel');
+});
+
+test('office-pdf endpoint converts doc/ppt/pptx through the injected converter', async t => {
+  const { root } = await fixture(t);
+  const converter = fakeConverter();
+  const app = express();
+  setupWorkspaceFileRoutes(app, { resolveRoot: async () => ({ root }), officeConverter: converter });
+  const server = app.listen(0, '127.0.0.1');
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  await once(server, 'listening');
+  const { port } = server.address();
+  const officePdf = (filePath) => fetch(`http://127.0.0.1:${port}/protoclaw/workspace-files/office-pdf?${new URLSearchParams({
+    agentId: 'programming-helper', sessionId: 'session-1', path: filePath,
+  })}`);
+  const doc = await officePdf('legacy.doc');
+  assert.equal(doc.status, 200);
+  assert.equal(doc.headers.get('content-type'), 'application/pdf');
+  assert.equal(doc.headers.get('content-security-policy'), "frame-ancestors 'self'");
+  assert.equal(doc.headers.get('x-frame-options'), 'SAMEORIGIN');
+  assert.equal(Buffer.from(await doc.arrayBuffer()).toString(), '%PDF-1.4 fake');
+  assert.equal(converter.calls.length, 1);
+  assert.equal(converter.calls[0].identity.size, (await fs.stat(path.join(root, 'legacy.doc'))).size);
+  // 非转换后缀与不可预览后缀都不进转换器
+  assert.equal((await officePdf('note.docx')).status, 400);
+  assert.equal((await officePdf('blob.bin')).status, 400);
+  assert.equal(converter.calls.length, 1);
+});
+
+test('office-pdf reports a missing engine instead of hanging the panel', async t => {
+  const { root } = await fixture(t);
+  const missing = fakeConverter({ available: false });
+  const service = createWorkspaceFileService({ resolveRoot: async () => ({ root }), officeConverter: missing });
+  const handshake = response();
+  await service.read({ agentId: 'programming-helper', sessionId: 'session-1', path: 'legacy.doc' }, handshake);
+  assert.equal(handshake.statusCode, 503);
+  assert.equal(handshake.body.error, 'office_engine_unavailable');
+  const res = response();
+  await service.officePdf({ agentId: 'programming-helper', sessionId: 'session-1', path: 'legacy.doc' }, res);
+  assert.equal(res.statusCode, 503);
+  assert.equal(res.body.error, 'office_engine_unavailable');
 });
 
 test('rejects traversal, absolute paths and symlinks leaving the workspace', async t => {

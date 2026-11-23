@@ -16,14 +16,23 @@
 // - 文件按类型渲染（对齐 DSH DocumentPreview 支持矩阵）：markdown 走全局
 //   renderMarkdown 管线；代码用全局 hljs 高亮 + 行号槽；图片走服务端 base64
 //   dataUrl；csv/tsv 表格化；html/htm 以沙箱 iframe（禁脚本）渲染源码；
-//   pdf/video/audio 经 base64 → object URL 用浏览器原生查看器。
+//   pdf/video/audio 经同源 raw 端点交给浏览器原生查看器；doc/ppt/pptx 由
+//   服务端 LibreOffice 转 PDF 后走同一个 PDF iframe（引擎缺失时显示安装提示）；
+//   其余后缀按文本读取，只有已知二进制容器判为不可预览。
+// - 图片与 Word 的布局按 DSH 文档预览语义：默认适应宽度（缩到面板宽，
+//   不放大超过 100%），内容居中、四周 12px 留白；固定倍率 25%–400%
+//   （100% = 图片固有像素 / Word 页面 96dpi 宽），Ctrl+滚轮（含触控板捏合）
+//   以指针为锚点缩放。Word 以页面为单位缩放，页间 12px + 页影 + 文档底色，
+//   窄面板下整页可见而不是被裁掉两侧。
 // - 树行图标照搬 DSH：目录 = 开/合文件夹图标（三级墨色），文件 = 按类型
 //   着色的 FileTypeIcon（代码/配置为全彩方章，其余为「页身 + 类型角标」）。
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import type { DragEvent as ReactDragEvent, PointerEvent as ReactPointerEvent } from 'react';
+import type {
+  CSSProperties, DragEvent as ReactDragEvent, PointerEvent as ReactPointerEvent, RefObject,
+} from 'react';
 import { createRoot } from 'react-dom/client';
 import cssText from './style.css';
-import { FileTypeIcon, FolderCloseIcon, FolderOpenIcon } from './icons.tsx';
+import { FileTypeIcon, FolderCloseIcon, FolderOpenIcon, ZoomInIcon, ZoomOutIcon } from './icons.tsx';
 import type { ReactNode } from 'react';
 
 type Entry = { name: string; path: string; kind: 'directory' | 'file'; supported?: boolean; size?: number };
@@ -33,7 +42,8 @@ type Preview =
   | { state: 'error'; message: string }
   | { state: 'text'; content: string }
   | { state: 'image'; dataUrl: string; mimeType: string }
-  | { state: 'pdf' | 'video' | 'audio'; url: string; mimeType: string };
+  | { state: 'pdf' | 'video' | 'audio'; url: string; mimeType: string }
+  | { state: 'office-pdf'; url: string; mimeType: string };
 type FileTab = { path: string; name: string; preview: Preview };
 type Identity = { agentId: string; sessionId: string };
 type PanelContext = {
@@ -45,6 +55,8 @@ type Pane = { id: number; tabs: string[]; active: string }; // 页签 id：'tree
 // center = 双 pane 时的落区形态：整个对方 pane 高亮，语义是移动页签而非再拆分。
 type SplitDirection = 'horizontal' | 'vertical'; // horizontal = 左右分栏，vertical = 上下分栏
 type DockHint = { paneId: number; side: 'left' | 'right' | 'bottom' | 'center' };
+/** 文档页签的显示倍率：适应宽度（默认）或固定倍率（1 = 固有尺寸）。 */
+type ViewScale = { kind: 'fit' } | { kind: 'fixed'; scale: number };
 type PanelSnapshot = {
   tree: Record<string, TreeNode>;
   expanded: Set<string>;
@@ -53,7 +65,7 @@ type PanelSnapshot = {
   activePaneId: number;
   splitRatio: number;
   splitDirection: SplitDirection;
-  imageModes: Record<string, 'fit' | 'full'>;
+  viewScales: Record<string, ViewScale>;
   nextPaneId: number;
 };
 
@@ -113,6 +125,36 @@ function rawFileUrl(identity: Identity, filePath: string) {
   return `/protoclaw/workspace-files/raw?${params.toString()}`;
 }
 
+/** doc / ppt / pptx 的转换结果：服务端按需转 PDF，iframe 直连该端点。 */
+function officePdfUrl(identity: Identity, filePath: string) {
+  const params = new URLSearchParams({
+    agentId: identity.agentId,
+    sessionId: identity.sessionId,
+    path: filePath,
+  });
+  return `/protoclaw/workspace-files/office-pdf?${params.toString()}`;
+}
+
+/** 服务端错误码 → 面板里的可读原因（能力缺失与格式问题要区分开）。 */
+function previewErrorMessage(code: string) {
+  switch (code) {
+    case 'office_engine_unavailable':
+      return '此格式需要本机安装 LibreOffice 才能预览（可用环境变量 CLAW_SOFFICE_PATH 指定 soffice 路径）';
+    case 'office_convert_failed':
+      return 'LibreOffice 转换失败，请用本机 Office 打开确认文件是否损坏';
+    case 'office_convert_timeout':
+      return 'LibreOffice 转换超时，文档可能过大或结构异常';
+    case 'binary_content':
+      return '此文件是二进制内容，暂不支持预览';
+    case 'unsupported_file_type':
+      return '此文件类型暂不支持预览';
+    case 'file_too_large':
+      return '文件超过预览大小上限';
+    default:
+      return code;
+  }
+}
+
 function renderMarkdownHtml(text: string): string | null {
   try {
     if (typeof window.renderMarkdown === 'function') return String(window.renderMarkdown(text) ?? '');
@@ -160,34 +202,343 @@ function parseDelimitedTable(text: string, forcedDelimiter?: string): string[][]
 const CSV_MAX_ROWS = 2000;
 const CSV_MAX_COLUMNS = 80;
 
-/** docx 预览：raw URL 取字节流交给 docx-preview 保留排版渲染。
- *  DSH 的 word 方案是 LibreOffice 转 PDF（本机无该引擎），此处取等效浏览器端渲染；
- *  渲染库按需动态 import，面板未打开 docx 时不付出加载成本。 */
-function DocxView({ url, name }: { url: string; name: string }) {
-  const [error, setError] = useState<string | null>(null);
-  const containerRef = useRef<HTMLDivElement | null>(null);
+/* ── 文档缩放（图片 / Word 共用）──────────────────────────
+ * 语义对齐 DSH 文档预览：默认「适应宽度」——缩到面板可用宽，绝不放大超过
+ * 100%（小图保持固有尺寸并居中）；超高图 / 长页纵向滚动。固定倍率档位与
+ * DSH 一致（25% / 50% / 100% / 150% / 200% + 25% 递增至 400%），100% 等于
+ * 图片固有像素或 Word 页面 96dpi 下的 CSS 宽。 */
+const FIT_VIEW: ViewScale = { kind: 'fit' };
+const ZOOM_STEPS = [0.25, 0.5, 0.75, 1, 1.5, 2, 2.5, 3, 4];
+const ZOOM_MIN = 0.25;
+const ZOOM_MAX = 4;
+/** 内容四周留白（scroll 容器左右 padding 各 12）：适应宽度时从可用宽里扣除。 */
+const DOC_INSET = 24;
+
+function clampZoom(value: number) {
+  return Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, value));
+}
+
+/** 档位按钮的下一步：以 25 个百分点为步长（DSH 的 ± 口径），结果落在
+ *  标准档位附近时吸附过去，避免出现「适应宽度 74% → 75%」这种按了等于
+ *  没按、或 97% 这类奇怪读数。 */
+function nextZoomStep(scale: number, direction: 1 | -1) {
+  const raw = scale + direction * 0.25;
+  const snapped = ZOOM_STEPS.find(step => Math.abs(step - raw) <= 0.06);
+  return clampZoom(snapped ?? raw);
+}
+
+/** 观察滚动容器的内容宽（clientWidth 已扣除纵向滚动条），适应宽度据此重算。 */
+function useClientWidth(ref: RefObject<HTMLElement | null>, onChange: (width: number) => void) {
+  useLayoutEffect(() => {
+    const element = ref.current;
+    if (!element) return;
+    const measure = () => onChange(element.clientWidth);
+    measure();
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [ref, onChange]);
+}
+
+type ZoomAnchor = { contentX: number; contentY: number; viewX: number; viewY: number; ratio: number };
+
+/** Ctrl+滚轮 / 触控板捏合缩放：以指针为锚点换算滚动位置，滚轮期间进入固定倍率。 */
+function useWheelZoom(
+  scrollRef: RefObject<HTMLElement | null>,
+  scale: number,
+  onScale: (next: number) => void,
+) {
+  const anchorRef = useRef<ZoomAnchor | null>(null);
+  const scaleRef = useRef(scale);
+  scaleRef.current = scale;
+  useLayoutEffect(() => {
+    const element = scrollRef.current;
+    const anchor = anchorRef.current;
+    anchorRef.current = null;
+    if (!element || !anchor) return;
+    element.scrollLeft = Math.max(0, anchor.contentX * anchor.ratio - anchor.viewX);
+    element.scrollTop = Math.max(0, anchor.contentY * anchor.ratio - anchor.viewY);
+  }, [scrollRef, scale]);
   useEffect(() => {
-    const container = containerRef.current;
+    const element = scrollRef.current;
+    if (!element) return;
+    const onWheel = (event: WheelEvent) => {
+      if (!event.ctrlKey) return;
+      event.preventDefault();
+      const current = scaleRef.current;
+      const unit = event.deltaMode === WheelEvent.DOM_DELTA_LINE ? 16
+        : event.deltaMode === WheelEvent.DOM_DELTA_PAGE ? element.clientHeight : 1;
+      const delta = Math.max(-40, Math.min(40, event.deltaY * unit));
+      const next = clampZoom(current * Math.exp(-delta * 0.01));
+      if (Math.abs(next - current) < 0.001) return;
+      const bounds = element.getBoundingClientRect();
+      anchorRef.current = {
+        contentX: element.scrollLeft + (event.clientX - bounds.left),
+        contentY: element.scrollTop + (event.clientY - bounds.top),
+        viewX: event.clientX - bounds.left,
+        viewY: event.clientY - bounds.top,
+        ratio: next / current,
+      };
+      scaleRef.current = next;
+      onScale(next);
+    };
+    // 原生监听（passive:false）：Ctrl+滚轮是浏览器整页缩放手势，必须拦截。
+    element.addEventListener('wheel', onWheel, { passive: false });
+    return () => element.removeEventListener('wheel', onWheel);
+  }, [scrollRef, onScale]);
+}
+
+/** 文档工具条：尺寸/页数元信息 + 缩放档位 + 适应宽度开关。 */
+function DocumentBar({ meta, scale, fit, onFit, onScale }: {
+  meta: string;
+  scale: number;
+  fit: boolean;
+  onFit: () => void;
+  onScale: (next: number) => void;
+}) {
+  return (
+    <div className="wf-doc-bar">
+      <span className="wf-doc-meta">{meta}</span>
+      <div className="wf-doc-zoom">
+        <button
+          type="button"
+          className="wf-doc-step"
+          title="缩小"
+          aria-label="缩小"
+          onClick={() => onScale(nextZoomStep(scale, -1))}
+        >
+          <ZoomOutIcon size={14} />
+        </button>
+        <span className="wf-doc-zoom-value">{Math.round(scale * 100)}%</span>
+        <button
+          type="button"
+          className="wf-doc-step"
+          title="放大"
+          aria-label="放大"
+          onClick={() => onScale(nextZoomStep(scale, 1))}
+        >
+          <ZoomInIcon size={14} />
+        </button>
+        <button
+          type="button"
+          className={`wf-doc-fit${fit ? ' is-active' : ''}`}
+          aria-pressed={fit}
+          onClick={onFit}
+        >适应宽度</button>
+      </div>
+    </div>
+  );
+}
+
+/** 图片预览：按宽度自适应 + 固定倍率，溢出时按住左键拖动平移。
+ *  与 DSH 一致，`<img>` 直接吃 dataUrl（SVG 在此模式下脚本不会执行）。 */
+function ImageView({ file, tabId, view, onScaleChange }: {
+  file: FileTab;
+  tabId: string;
+  view: ViewScale;
+  onScaleChange: (tabId: string, next: ViewScale) => void;
+}) {
+  const preview = file.preview;
+  const dataUrl = preview.state === 'image' ? preview.dataUrl : '';
+  const stageRef = useRef<HTMLDivElement | null>(null);
+  const [available, setAvailable] = useState(0);
+  const [intrinsic, setIntrinsic] = useState<{ width: number; height: number } | null>(null);
+  const [failed, setFailed] = useState(false);
+  const [panning, setPanning] = useState(false);
+  const [pannable, setPannable] = useState(false);
+  const panRef = useRef<{ id: number; x: number; y: number } | null>(null);
+  const surfaceRef = useRef<HTMLDivElement | null>(null);
+  useClientWidth(stageRef, setAvailable);
+  // 适应宽度：只看宽，不放大（DSH fitWidthZoom 同口径）；高图由纵向滚动承接。
+  const fitScale = intrinsic && available > 0
+    ? Math.min(1, Math.max(1, available - DOC_INSET) / intrinsic.width)
+    : 1;
+  const scale = view.kind === 'fit' ? fitScale : view.scale;
+  const width = intrinsic ? Math.max(1, Math.round(intrinsic.width * scale)) : null;
+  const applyScale = useCallback(
+    (next: number) => onScaleChange(tabId, { kind: 'fixed', scale: clampZoom(next) }),
+    [onScaleChange, tabId],
+  );
+  useWheelZoom(stageRef, scale, applyScale);
+  useEffect(() => { setFailed(false); }, [dataUrl]);
+  // 内容溢出才允许拖动平移（与 DSH 同口径）：光标据此在 grab / 默认间切换，
+  // 图片完整落在视口内时不给「可拖动」的错误暗示。
+  useLayoutEffect(() => {
+    const element = stageRef.current;
+    if (!element) return;
+    const measure = () => setPannable(element.scrollWidth > element.clientWidth + 1
+      || element.scrollHeight > element.clientHeight + 1);
+    measure();
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    if (surfaceRef.current) observer.observe(surfaceRef.current);
+    return () => observer.disconnect();
+  }, [width, available]);
+
+  const endPan = () => {
+    panRef.current = null;
+    setPanning(false);
+  };
+  const onPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const element = stageRef.current;
+    if (!element || event.button !== 0 || event.pointerType !== 'mouse') return;
+    if (element.scrollWidth <= element.clientWidth && element.scrollHeight <= element.clientHeight) return;
+    panRef.current = { id: event.pointerId, x: event.clientX, y: event.clientY };
+    element.setPointerCapture(event.pointerId);
+    setPanning(true);
+  };
+  const onPointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const element = stageRef.current;
+    const pan = panRef.current;
+    if (!element || !pan || pan.id !== event.pointerId) return;
+    if (event.buttons !== 1) { endPan(); return; }
+    element.scrollLeft += pan.x - event.clientX;
+    element.scrollTop += pan.y - event.clientY;
+    pan.x = event.clientX;
+    pan.y = event.clientY;
+  };
+
+  return (
+    <div className="wf-doc-view">
+      <DocumentBar
+        meta={intrinsic ? `${intrinsic.width} × ${intrinsic.height}` : (failed ? file.name : '正在读取图片…')}
+        scale={scale}
+        fit={view.kind === 'fit'}
+        onFit={() => onScaleChange(tabId, FIT_VIEW)}
+        onScale={applyScale}
+      />
+      <div
+        ref={stageRef}
+        className={`wf-image-stage${pannable ? ' is-pannable' : ''}${panning ? ' is-panning' : ''}`}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={endPan}
+        onPointerCancel={endPan}
+        onLostPointerCapture={endPan}
+      >
+        {failed
+          ? <div className="wf-empty wf-error">无法显示此图片</div>
+          : <div className="wf-image-frame" style={{ visibility: width === null ? 'hidden' : 'visible' }}>
+            <div className="wf-image-surface" ref={surfaceRef} style={width === null ? undefined : { width }}>
+              <img
+                src={dataUrl}
+                alt={file.name}
+                draggable={false}
+                onLoad={event => setIntrinsic({
+                  width: event.currentTarget.naturalWidth,
+                  height: event.currentTarget.naturalHeight,
+                })}
+                onError={() => setFailed(true)}
+              />
+            </div>
+          </div>}
+      </div>
+    </div>
+  );
+}
+
+/** docx 预览：raw URL 取字节流交给 docx-preview 保留排版渲染。
+ *  DSH 的 word 方案是 LibreOffice 转 PDF（本机无该引擎），此处取等效浏览器端渲染：
+ *  页面按固定页宽产出，面板再以 CSS zoom 把整页缩到可视宽——保留 Word 的
+ *  分页与版心比例，而不是让正文按窄栏重排。渲染库按需动态 import。 */
+function DocxView({ file, tabId, view, onScaleChange }: {
+  file: FileTab;
+  tabId: string;
+  view: ViewScale;
+  onScaleChange: (tabId: string, next: ViewScale) => void;
+}) {
+  const url = file.preview.state === 'docx' ? file.preview.url : '';
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const pagesRef = useRef<HTMLDivElement | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [rendering, setRendering] = useState(true);
+  const [pageWidth, setPageWidth] = useState(0);
+  const [pageCount, setPageCount] = useState(0);
+  const [available, setAvailable] = useState(0);
+  useClientWidth(scrollRef, setAvailable);
+  useEffect(() => {
+    const container = pagesRef.current;
     if (!container) return;
     let cancelled = false;
     setError(null);
+    setRendering(true);
+    setPageWidth(0);
+    setPageCount(0);
     container.replaceChildren();
     (async () => {
       try {
         const [response, module] = await Promise.all([fetch(url), import('docx-preview')]);
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         if (cancelled) return;
-        await module.renderAsync(await response.arrayBuffer(), container, undefined, {
-          inWrapper: true, ignoreWidth: false, ignoreHeight: false, ignoreFonts: false,
+        await module.renderAsync(await response.arrayBuffer(), container, container, {
+          // 不用库自带 wrapper：它是灰底 + 30px 内边距 + 固定页宽居中，窄面板下
+          // 页面两侧会被裁掉且左缘无法滚回。页容器与留白由面板自己掌握。
+          inWrapper: false, ignoreWidth: false, ignoreHeight: false, ignoreFonts: false,
+          breakPages: true, renderHeaders: true, renderFooters: true,
         });
+        if (cancelled) return;
+        setPageCount(container.querySelectorAll('section').length);
+        setRendering(false);
       } catch (cause) {
-        if (!cancelled) setError(cause instanceof Error ? cause.message : String(cause));
+        if (cancelled) return;
+        setRendering(false);
+        setError(cause instanceof Error ? cause.message : String(cause));
       }
     })();
     return () => { cancelled = true; };
   }, [url]);
-  if (error) return <div className="wf-empty wf-error">无法渲染文档：{error}</div>;
-  return <div className="wf-docx-scroll" ref={containerRef} aria-label={name} />;
+  // 页面基准宽单独观测：非激活页签是 display:none，渲染完成时 offsetWidth 为 0；
+  // 挂到页容器上后，页签激活（尺寸从 0 变为实际值）时重新取一次。offsetWidth
+  // 是未缩放的布局宽（CSS zoom 不影响它），可以直接当 100% 基准。
+  useEffect(() => {
+    const container = pagesRef.current;
+    if (!container) return;
+    const measure = () => {
+      const first = container.querySelector('section');
+      const width = first ? Math.ceil((first as HTMLElement).offsetWidth) : 0;
+      if (width > 0) setPageWidth(current => current === width ? current : width);
+    };
+    measure();
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, [url, rendering]);
+  const fitScale = pageWidth > 0 && available > 0
+    ? Math.min(1, Math.max(1, available - DOC_INSET) / pageWidth)
+    : 1;
+  const scale = view.kind === 'fit' ? fitScale : view.scale;
+  const applyScale = useCallback(
+    (next: number) => onScaleChange(tabId, { kind: 'fixed', scale: clampZoom(next) }),
+    [onScaleChange, tabId],
+  );
+  useWheelZoom(scrollRef, scale, applyScale);
+
+  return (
+    <div className="wf-doc-view">
+      <DocumentBar
+        meta={pageCount > 0 ? `${pageCount} 页` : (error ? file.name : '正在读取文档…')}
+        scale={scale}
+        fit={view.kind === 'fit'}
+        onFit={() => onScaleChange(tabId, FIT_VIEW)}
+        onScale={applyScale}
+      />
+      {error
+        ? <div className="wf-empty wf-error">无法渲染文档：{error}</div>
+        : <div className="wf-docx-stage">
+          <div className="wf-docx-scroll" ref={scrollRef} aria-label={file.name}>
+            <div
+              className="wf-docx-pages"
+              ref={pagesRef}
+              style={{ '--wf-docx-scale': String(scale) } as CSSProperties}
+            />
+          </div>
+          {rendering && <div className="wf-docx-status" role="status">正在排版文档…</div>}
+        </div>}
+    </div>
+  );
 }
 
 /** xlsx 预览：SheetJS 读取首个工作表，按单元格数据自渲染表格（复用 CSV 表样式，
@@ -282,32 +633,23 @@ function CodeView({ path, content }: { path: string; content: string }) {
   );
 }
 
-function FileView({ file, imageMode, onToggleImageMode }: {
+function FileView({ file, tabId, view, onScaleChange }: {
   file: FileTab;
-  imageMode: 'fit' | 'full';
-  onToggleImageMode: (path: string) => void;
+  tabId: string;
+  view: ViewScale;
+  onScaleChange: (tabId: string, next: ViewScale) => void;
 }) {
   const preview = file.preview;
   if (preview.state === 'loading') return <div className="wf-empty">正在读取文件…</div>;
   if (preview.state === 'error') return <div className="wf-empty wf-error">无法打开文件：{preview.message}</div>;
   if (preview.state === 'image') {
-    return <>
-      <div className="wf-image-bar">
-        <button type="button" className="wf-image-toggle" onClick={() => onToggleImageMode(file.path)}>
-          {imageMode === 'fit' ? '原始大小' : '适应窗口'}
-        </button>
-        <span className="wf-image-meta">{imageMode === 'fit' ? '适应窗口' : '原始大小'}</span>
-      </div>
-      <div className={`wf-image-stage${imageMode === 'full' ? ' is-full' : ''}`}>
-        <img src={preview.dataUrl} alt={file.name} draggable={false} />
-      </div>
-    </>;
+    return <ImageView file={file} tabId={tabId} view={view} onScaleChange={onScaleChange} />;
   }
-  if (preview.state === 'pdf') {
+  if (preview.state === 'pdf' || preview.state === 'office-pdf') {
     return <iframe className="wf-binary-frame" src={preview.url} title={file.name} />;
   }
   if (preview.state === 'docx') {
-    return <DocxView url={preview.url} name={file.name} />;
+    return <DocxView file={file} tabId={tabId} view={view} onScaleChange={onScaleChange} />;
   }
   if (preview.state === 'xlsx') {
     return <XlsxView url={preview.url} name={file.name} />;
@@ -394,10 +736,10 @@ function WorkspaceFiles({ panelContext: initialPanelContext = {} }: { panelConte
         if (cached) {
           setTree(cached.tree); setExpanded(cached.expanded); setFiles(cached.files); setPanes(cached.panes);
           setActivePaneId(cached.activePaneId); setSplitRatio(cached.splitRatio); setSplitDirection(cached.splitDirection);
-          setImageModes(cached.imageModes); nextPaneId.current = cached.nextPaneId;
+          setViewScales(cached.viewScales ?? {}); nextPaneId.current = cached.nextPaneId;
         } else {
           setTree({}); setExpanded(new Set([''])); setFiles({}); setPanes([{ id: 1, tabs: [TREE_TAB], active: TREE_TAB }]);
-          setActivePaneId(1); setSplitRatio(0.5); setSplitDirection('horizontal'); setImageModes({}); nextPaneId.current = 2;
+          setActivePaneId(1); setSplitRatio(0.5); setSplitDirection('horizontal'); setViewScales({}); nextPaneId.current = 2;
         }
       }
     };
@@ -422,7 +764,7 @@ function WorkspaceFiles({ panelContext: initialPanelContext = {} }: { panelConte
   const dragArmOrigin = useRef<{ x: number; y: number } | null>(null);
   const dragStartOrigin = useRef<{ x: number; y: number } | null>(null);
   const [dockHint, setDockHint] = useState<DockHint | null>(null);
-  const [imageModes, setImageModes] = useState<Record<string, 'fit' | 'full'>>({});
+  const [viewScales, setViewScales] = useState<Record<string, ViewScale>>({});
   const paneRowRef = useRef<HTMLDivElement | null>(null);
   const tabstripRefs = useRef(new Map<number, HTMLDivElement | null>());
   const [tabRows, setTabRows] = useState<Record<number, string[][]>>({});
@@ -552,7 +894,7 @@ function WorkspaceFiles({ panelContext: initialPanelContext = {} }: { panelConte
   useEffect(() => {
     if (stateKeyRef.current === null) return;
     sessionStateCache.set(stateKeyRef.current, {
-      tree, expanded, files, panes, activePaneId, splitRatio, splitDirection, imageModes, nextPaneId: nextPaneId.current,
+      tree, expanded, files, panes, activePaneId, splitRatio, splitDirection, viewScales, nextPaneId: nextPaneId.current,
     });
   });
 
@@ -587,7 +929,7 @@ function WorkspaceFiles({ panelContext: initialPanelContext = {} }: { panelConte
       setActivePaneId(cached.activePaneId);
       setSplitRatio(cached.splitRatio);
       setSplitDirection(cached.splitDirection ?? 'horizontal');
-      setImageModes(cached.imageModes);
+      setViewScales(cached.viewScales ?? {});
       nextPaneId.current = cached.nextPaneId;
     } else {
       setTree(identity.agentId && identity.sessionId ? { '': { loading: true } } : {});
@@ -597,7 +939,7 @@ function WorkspaceFiles({ panelContext: initialPanelContext = {} }: { panelConte
       setActivePaneId(1);
       setSplitRatio(0.5);
       setSplitDirection('horizontal');
-      setImageModes({});
+      setViewScales({});
       nextPaneId.current = 2;
     }
     stateKeyRef.current = identityKey;
@@ -653,11 +995,13 @@ function WorkspaceFiles({ panelContext: initialPanelContext = {} }: { panelConte
         body: JSON.stringify({ ...identity, path: entry.path }),
       });
       const body = await response.json();
-      if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
+      if (!response.ok) throw new Error(previewErrorMessage(String(body.error || `HTTP ${response.status}`)));
       if (!identityGuarded()) return;
       let preview: Preview;
       if (body.kind === 'image') {
         preview = { state: 'image', dataUrl: String(body.dataUrl || ''), mimeType: String(body.mimeType || '') };
+      } else if (body.kind === 'office-pdf') {
+        preview = { state: 'office-pdf', url: officePdfUrl(identity, entry.path), mimeType: 'application/pdf' };
       } else if (body.kind === 'pdf' || body.kind === 'video' || body.kind === 'audio'
         || body.kind === 'docx' || body.kind === 'xlsx') {
         preview = { state: body.kind, url: rawFileUrl(identity, entry.path), mimeType: String(body.mimeType || '') };
@@ -691,7 +1035,7 @@ function WorkspaceFiles({ panelContext: initialPanelContext = {} }: { panelConte
       delete next[tabId];
       return next;
     });
-    setImageModes(current => {
+    setViewScales(current => {
       const next = { ...current };
       delete next[tabId];
       return next;
@@ -1005,9 +1349,16 @@ function WorkspaceFiles({ panelContext: initialPanelContext = {} }: { panelConte
     (event.currentTarget as HTMLElement).releasePointerCapture(event.pointerId);
   };
 
-  const toggleImageMode = (path: string) => {
-    setImageModes(current => ({ ...current, [path]: current[path] === 'full' ? 'fit' : 'full' }));
-  };
+  const setViewScale = useCallback((tabId: string, next: ViewScale) => {
+    setViewScales(current => {
+      const previous = current[tabId];
+      if (previous && previous.kind === next.kind
+        && (previous.kind === 'fit' || (next.kind === 'fixed' && Math.abs(previous.scale - next.scale) < 0.001))) {
+        return current;
+      }
+      return { ...current, [tabId]: next };
+    });
+  }, []);
 
   const renderTreeEntries = (directory: string, depth = 0): ReactNode => {
     const node = tree[directory];
@@ -1046,7 +1397,7 @@ function WorkspaceFiles({ panelContext: initialPanelContext = {} }: { panelConte
     }
     const file = files[tabId];
     if (!file) return <div className="wf-empty">页签已失效</div>;
-    return <FileView file={file} imageMode={imageModes[tabId] ?? 'fit'} onToggleImageMode={toggleImageMode} />;
+    return <FileView file={file} tabId={tabId} view={viewScales[tabId] ?? FIT_VIEW} onScaleChange={setViewScale} />;
   };
 
   return (
