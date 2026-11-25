@@ -83,11 +83,16 @@ for (const entry of entries) {
   });
   const jsPath = path.join(outputDir, 'index.js');
   let js = await readFile(jsPath, 'utf8');
+  // 相对路径是子路径部署的硬约束：根绝对路径（/src/...）会被浏览器按 origin
+  // 解析，丢失网关挂载前缀（如 /advclaw/）——入口 URL 由前端经
+  // __PROTOCLAW_APP_URL__ 带前缀加载，但模块内部静态 import 逃不出这层。
+  // 相对说明符按导入模块自身 URL 解析（<base> 与 fetch patch 都管不到模块图），
+  // 根路径与子路径部署通用。
   const requiredImports = [
-    ['react', '/src/react-panels-dist/shared/react.js'],
-    ['react/jsx-runtime', '/src/react-panels-dist/shared/react-jsx-runtime.js'],
-    ['react-dom/client', '/src/react-panels-dist/shared/react-dom-client.js'],
-    ['react-dom', '/src/react-panels-dist/shared/react-dom.js'],
+    ['react', '../shared/react.js'],
+    ['react/jsx-runtime', '../shared/react-jsx-runtime.js'],
+    ['react-dom/client', '../shared/react-dom-client.js'],
+    ['react-dom', '../shared/react-dom.js'],
   ];
   let rewrittenImports = 0;
   for (const [specifier, publicPath] of requiredImports) {

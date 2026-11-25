@@ -94,11 +94,28 @@ function checkWebSocket(content) {
   return hits;
 }
 
+/**
+ * 规则：ESM 静态 import / export-from 的说明符不允许根路径字面量。
+ * 静态边由浏览器按导入方模块 URL 解析（根绝对形态则按 origin 解析），
+ * <base> 与 fetch patch 都不覆盖模块图——子路径部署下根路径静态 import
+ * 必脱离前缀 404。相对说明符是唯一跨部署形态（react-panels 构建产物即此契约，
+ * 历史事故：构建脚本把共享 React import 重写为 /src/... 在网关前缀部署下 404）。
+ */
+function checkStaticImport(content) {
+  const re = /(?:(?:^|[^\w$.])from|^\s*import)\s*(['"`])\//gm;
+  const hits = [];
+  for (const m of content.matchAll(re)) {
+    hits.push({ line: lineOf(content, m.index), snippet: content.slice(m.index, m.index + 80).split('\n')[0] });
+  }
+  return hits;
+}
+
 const RULES = [
   { id: 'dynamic-import', check: checkDynamicImport },
   { id: 'event-source', check: checkEventSource },
   { id: 'send-beacon', check: checkSendBeacon },
   { id: 'web-socket', check: checkWebSocket },
+  { id: 'static-import', check: checkStaticImport },
 ];
 
 describe('base-path 门禁规则自测（规则的辨别力，防规则写坏导致恒绿）', () => {
@@ -120,6 +137,17 @@ describe('base-path 门禁规则自测（规则的辨别力，防规则写坏导
   it('sendBeacon：根路径字面量命中', () => {
     assert.equal(checkSendBeacon("navigator.sendBeacon('/protoclaw/x', blob)").length, 1);
     assert.equal(checkSendBeacon('navigator.sendBeacon(mappedUrl, blob)').length, 0);
+  });
+
+  it('静态 import/export-from：根路径字面量命中（含压缩无空格形态），相对与完整 URL 放行', () => {
+    assert.equal(checkStaticImport('import { useState } from "/src/react-panels-dist/shared/react.js?v=^19.3.1";').length, 1, '历史事故形态应命中');
+    assert.equal(checkStaticImport('import{useId as p}from"/src/shared/react.js";').length, 1, '压缩形态应命中');
+    assert.equal(checkStaticImport('import "/src/polyfill.js";').length, 1, '副作用导入命中');
+    assert.equal(checkStaticImport('export * from "/src/shared/index.js";').length, 1, 'export-from 命中');
+    assert.equal(checkStaticImport('import { useState } from "../shared/react.js?v=1";').length, 0, '相对说明符合法（react-panels 契约）');
+    assert.equal(checkStaticImport('import defaultExport from "https://cdn.example/x.js";').length, 0, '完整 URL 合法');
+    assert.equal(checkStaticImport('import("./settings.js")').length, 0, '动态 import 由 dynamic-import 规则管辖');
+    assert.equal(checkStaticImport('const m = obj.from("/x");').length, 0, '属性访问不命中');
   });
 
   it('WebSocket：窗口内根路径字符串命中，过 helper 的窗口放行', () => {

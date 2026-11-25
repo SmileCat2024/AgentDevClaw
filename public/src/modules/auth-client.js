@@ -4,7 +4,10 @@
  * 三项职责：
  *   1. 认证闸：读 /protoclaw/auth/status，经 `authReady`（桥键
  *      `window.__clawAuthReady`）放行编排域启动与 SSE 建连；
- *   2. `window.fetch` 的 401 拦截：认证路径与远程命名空间以外的 401 触发登录浮层；
+ *   2. `window.fetch` 的 401 拦截：认证路径与远程命名空间以外，且响应体带
+ *      认证层标记 `code:'AUTH_REQUIRED'` 的 401 才触发登录浮层——业务路由的
+ *      401 与经网关漏到其他服务的 401 都不是本机会话过期，不弹（见
+ *      `isAuthLayerUnauthorized`）；
  *   3. 设置面（openAuthSettings / closeAuthSettings）与 `authClient.*` 动作。
  *
  * ## 装载相位（本文件最关键的一条约束）
@@ -276,9 +279,30 @@ window.ClawFW.actions.registerMany({
   'authClient.logout': () => authApi.logout(),
 });
 
+// 401 甄别：认证层的 401（authMiddleware 与路由级会话检查）响应体一律带
+// code:'AUTH_REQUIRED'，只有这类才代表本机访问保护会话过期，该弹登录浮层。
+// 业务路由不得复用 401 表达业务状态（历史事故：model_catalog/codex 的
+// 「上游账号未登录」401 被误弹成密码框）；经网关漏到其他服务的 401 也无此
+// 标记。读体走 response.clone()，原始响应流不被消费，调用方照常读自己的响应；
+// 体不可读（非 JSON / 流损坏）时按业务错误处理，不弹浮层。
+function isAuthLayerUnauthorized(response) {
+  try {
+    return response.clone().json().then(
+      (body) => body?.code === 'AUTH_REQUIRED',
+      () => false,
+    );
+  } catch {
+    return Promise.resolve(false);
+  }
+}
+
 window.fetch = function(input, init) {
   return nativeFetch(input, init).then((response) => {
-    if (response.status === 401) handleUnauthorized(input);
+    if (response.status === 401) {
+      isAuthLayerUnauthorized(response).then((authLayer) => {
+        if (authLayer) handleUnauthorized(input);
+      });
+    }
     return response;
   });
 };
