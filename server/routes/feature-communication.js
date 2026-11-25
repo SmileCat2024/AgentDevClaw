@@ -48,7 +48,9 @@ export function setupFeatureCommunicationRoutes(app, express, { communicationSto
   });
 
   app.get('/protoclaw/feature-comms/channels', (req, res) => {
-    if (isAuthEnabled() && resolveRequestAuth(req)?.kind !== 'session') return res.status(401).end();
+    // 与 authMiddleware 同口径的认证层 401：带 code:'AUTH_REQUIRED' 供前端
+    // 全局 401 拦截器甄别（裸 401 会被业务错误误伤或反向漏判）。
+    if (isAuthEnabled() && resolveRequestAuth(req)?.kind !== 'session') return res.status(401).json({ ok: false, error: 'Authentication required', code: 'AUTH_REQUIRED' });
     const agentId = String(req.query?.agentId || '').trim();
     const sessionId = String(req.query?.sessionId || '').trim();
     if (!agentId || !sessionId) return badRequest(res, 'agentId and sessionId are required');
@@ -84,7 +86,9 @@ export function setupFeatureCommunicationRoutes(app, express, { communicationSto
     // Session requirement applies only when host auth is enabled; with auth
     // disabled the middleware never sets req.auth and every browser session is
     // trusted (same posture as the rest of the protected surface).
-    if (isAuthEnabled() && resolveRequestAuth(req)?.kind !== 'session') return res.status(401).end();
+    // 与 authMiddleware 同口径的认证层 401：带 code:'AUTH_REQUIRED' 供前端
+    // 全局 401 拦截器甄别（裸 401 会被业务错误误伤或反向漏判）。
+    if (isAuthEnabled() && resolveRequestAuth(req)?.kind !== 'session') return res.status(401).json({ ok: false, error: 'Authentication required', code: 'AUTH_REQUIRED' });
     let target;
     try { target = normalizeFeatureCommunicationTarget(req.query || {}); }
     catch (error) { return badRequest(res, error.message); }

@@ -845,7 +845,11 @@ export function setupModelConfigRoutes(app, express) {
           accessToken = resolveAccessTokenSync(providerName, DEFAULT_CLIENT_ID);
           if (accessToken) break;
         }
-        if (!accessToken) return res.status(401).json({ error: 'No Codex account is logged in' });
+        // 400 而非 401：这是服务端业务前置状态（无已登录 Codex 账号），不是调用方
+        // 未认证。401 会被前端全局 fetch 拦截器判为「访问保护会话过期」弹登录浮层
+        // （历史事故：打开 Codex 设置页被误弹密码框）。认证层 401 一律带
+        // code:'AUTH_REQUIRED'，业务错误不复用该状态码。
+        if (!accessToken) return res.status(400).json({ error: 'No Codex account is logged in', code: 'codex_account_required' });
         const result = await fetchCodexModelCatalog(accessToken);
         if (result.error) return res.status(result.status).json({ error: result.error });
         return res.json({ models: result.models });
@@ -1109,7 +1113,9 @@ export function setupModelConfigRoutes(app, express) {
       const providerName = cleanSessionText(req.body?.providerName);
       if (!providerName) return res.status(400).json({ error: 'providerName is required' });
       const accessToken = resolveAccessTokenSync(providerName, DEFAULT_CLIENT_ID);
-      if (!accessToken) return res.status(401).json({ error: 'OpenAI OAuth account is not logged in' });
+      // 400 而非 401：同 model_catalog/codex——上游账号未登录是业务前置状态，
+      // 401 语义只留给调用方认证（认证层响应带 code:'AUTH_REQUIRED'）。
+      if (!accessToken) return res.status(400).json({ error: 'OpenAI OAuth account is not logged in', code: 'openai_account_required' });
 
       const result = await fetchCodexModelCatalog(accessToken);
       if (result.error) return res.status(result.status).json({ error: result.error });
